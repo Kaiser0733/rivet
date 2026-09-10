@@ -24,7 +24,7 @@ internal class GeminiClient(
         http.quick().await(request).use { r ->
             if (!r.isSuccessful) throw httpError(r.code, r.body?.string())
             val text = r.body?.string() ?: throw ProviderError.InvalidResponse("no body")
-            val models = Json.parseToJsonElement(text).jsonObject["models"]?.arr() ?: return emptyList()
+            val models = parseJsonObject(text)?.get("models")?.arr() ?: throw ProviderError.InvalidResponse("not a JSON object")
             return models.mapNotNull { el ->
                 val o = el.obj() ?: return@mapNotNull null
                 if ("generateContent" !in (o["supportedGenerationMethods"]?.arr()

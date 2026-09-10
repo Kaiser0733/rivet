@@ -24,7 +24,7 @@ internal class OpenAiCompatibleClient(
         http.quick().await(request).use { r ->
             if (!r.isSuccessful) throw httpError(r.code, r.body?.string())
             val text = r.body?.string() ?: throw ProviderError.InvalidResponse("no body")
-            val data = Json.parseToJsonElement(text).jsonObject["data"]?.arr() ?: return emptyList()
+            val data = parseJsonObject(text)?.get("data")?.arr() ?: throw ProviderError.InvalidResponse("not a JSON object")
             return data.mapNotNull { el ->
                 el.obj()?.get("id")?.str()?.let { ModelInfo(it, it) }
             }.sortedBy { it.id.lowercase() }
