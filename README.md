@@ -4,16 +4,25 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: early development.** Current phase: 1 of 8 (Foundation) — see
-[MASTER_ROADMAP.md](MASTER_ROADMAP.md).
+**Status: early development.** Current phase: 2 of 8 (Provider Engine) —
+see [MASTER_ROADMAP.md](MASTER_ROADMAP.md).
 
 ## What works today
 
-The application shell only: it installs and launches, shows the Chat /
-Files / Changes / Terminal navigation frame with honest empty states,
-adapts between phone and tablet layouts, and reports its version in
-Settings. There is no provider, agent, runtime, or project
-functionality yet; those arrive in later phases.
+- Multi-provider chat: OpenAI, OpenRouter, Anthropic (native Messages
+  API), Google Gemini (native generateContent), and any
+  OpenAI-compatible endpoint with a custom base URL.
+- API keys stored in Android-backed encrypted storage, never in
+  plaintext.
+- Model discovery where the provider supports listing, manual model entry
+  everywhere else.
+- Live streaming responses with stop control; provider and model
+  switchable between messages.
+- One persistent conversation; configuration and selection survive
+  restart.
+
+The coding agent, project files, terminal, and Git integration are not
+implemented yet — those arrive in later phases.
 
 ## Building
 

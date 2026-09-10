@@ -3,39 +3,76 @@
 Describes what exists today. Phase-by-phase growth is recorded in
 MASTER_ROADMAP.md; anything not listed here is not in the tree.
 
-## Current shape (Phase 1: Foundation)
+## Current shape (Phase 2: Provider Engine)
 
 One Android module, `:app`, package `com.kaiser.rivet`.
 
 ```
 app/src/main/java/com/kaiser/rivet/
-    MainActivity.kt      # single activity, reads installed versionName
+    MainActivity.kt            # single activity, supplies ViewModels + version
+    provider/
+        ProviderClient.kt     # client interface + request/result types + factory fn
+        ProviderConfig.kt     # config model, types, reasoning levels, header rules
+        ProviderError.kt     # sealed error taxonomy + user-facing text
+        Endpoints.kt         # all URL construction, centralized
+        Http.kt              # OkHttp client, await(), SSE reader
+        Json.kt               # tolerant JSON accessors
+        OpenAiCompatibleClient.kt  # OpenAI / OpenRouter / compatible endpoints
+        AnthropicClient.kt   # native Messages API
+        GeminiClient.kt      # native generateContent
+    chat/
+        ChatMessage.kt        # message + role model
+        ChatViewModel.kt     # send/cancel/state; send-time provider snapshot
+    storage/
+        ProviderStore.kt     # DataStore: provider configs + active id
+        SecretStore.kt       # EncryptedSharedPreferences for API keys
+        ChatStore.kt         # DataStore: one persistent conversation
     ui/
-        RivetApp.kt      # shell: top bar, adaptive nav, empty states, settings
-        RivetDestination.kt  # tab model (label, empty-state text, icon)
-        Theme.kt         # dark color scheme, shape set
-app/src/test/java/com/kaiser/rivet/ui/
-    RivetDestinationTest.kt  # tab order + per-tab resource distinctness
+        RivetApp.kt           # shell: nav, screen routing, settings entry
+        RivetDestination.kt  # tab model
+        Theme.kt             # dark color scheme, shape set
+        chat/ChatScreen.kt   # message list, input, model selector
+        provider/SettingsScreen.kt    # provider list, add/edit/delete
+        provider/ProviderEditor.kt    # provider form, test, fetch models
+        provider/ProvidersViewModel.kt
+        provider/ProviderEditorState.kt
 ```
 
-- `MainActivity` obtains the installed `versionName` from the package
-  manager and hands it to the shell; there is no other state.
-- `RivetApp` keeps the selected tab in `rememberSaveable`, so navigation
-  survives process death and rotation for free.
-- Layout adapts by width: `NavigationBar` under 600dp, `NavigationRail`
-  at 600dp and above. Both orientations on phone and tablet get this from
-  the same code path; there are no separate layout resources.
-- Icons are hand-authored vector strokes under `res/drawable` — no icon
-  library dependency.
-- `scripts/verify_apk.py` proves the built APK's package identity,
-  version, and signer certificate in CI.
+## Provider boundary
+
+`ProviderClient` is the one interface with multiple implementations:
+`listModels`, `testConnection`, `streamChat`. All three transports share
+`Http.kt` (OkHttp, SSE reader) and `Endpoints.kt`; OpenAI, OpenRouter, and
+custom endpoints share one client class — only Anthropic and Gemini get
+their own request shapes.
+
+Streaming: the client accumulates and returns the full response text while
+invoking `onDelta` per chunk; the ViewModel appends into UI state. The SSE
+loop lives on OkHttp's callback thread; coroutine cancellation cancels the
+underlying call, which unblocks the reader.
+
+Send-time snapshot: `ChatViewModel.send` captures provider + model before
+the request starts. Switching provider/model mid-stream affects the next
+message only; the active request completes (or is stopped) on its own.
+
+## Persistence
+
+- Provider configs + active selection: DataStore Preferences, keys
+  `configs` / `active_id`, JSON-encoded list.
+- Chat history: DataStore Preferences, key `messages`, JSON list. One
+  conversation.
+- API keys: EncryptedSharedPreferences (`rivet_secrets`), AndroidKeyStore
+  AES-256. Never serialized into configs, chat, logs, or saved state.
+
+## UI shell
+
+Single-activity Compose. Width >= 600dp uses NavigationRail, else
+NavigationBar. Chat and Settings screens cap content width at 640dp on
+wide layouts instead of stretching phone-width fields across a tablet.
+Rotation and process death: navigation tab and screen are
+`rememberSaveable`; async work lives in ViewModels.
 
 ## Planned boundaries
 
-Two boundaries the next phases will fill, already agreed:
-
-- `provider/` — model providers, custom OpenAI-compatible endpoints,
-  model listing and selection.
-- `workspace/` — project filesystem access and change tracking.
-
-They do not exist yet. No code anywhere references them.
+`workspace/` — project filesystem access and change tracking (Phase 3).
+It does not exist yet; nothing references it.

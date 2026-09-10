@@ -3,16 +3,18 @@
 Eight phases. Each phase lands working, buildable software; none leaves
 the repository in a state that does not compile.
 
-## Phase 1 — Foundation (current, complete)
+## Phase 1 — Foundation (complete)
 
 Android application shell: Gradle build, CI, release signing scheme,
 versioning rules, navigation frame with empty states for the four future
 modules, documentation set. No feature systems.
 
-## Phase 2 — Provider Engine
+## Phase 2 — Provider Engine (complete)
 
 Multiple LLM providers, custom OpenAI-compatible providers, model
-fetch/selection, mid-session switching, credential storage.
+fetch/selection, mid-session switching, credential storage, streaming
+text chat with cancellation, persistent configuration and one persistent
+conversation.
 
 ## Phase 3 — Project Workspace
 

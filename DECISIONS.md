@@ -86,3 +86,47 @@ Why: simple, auditable, impossible to get wrong silently.
 What: UI iconography is vector drawables.
 Why: consistency and a deliberate visual identity instead of a generic
 icon look.
+
+## D13 — OkHttp 4 single networking stack, no retries
+
+What: one OkHttp client serves every provider; no per-provider HTTP code.
+Why: streaming, cancellation, and timeouts are solved once; SSE parsing is
+the only per-transport variation.
+Change trigger: a provider requiring a genuinely different transport (e.g.
+WebSocket) — still shared infrastructure, not a parallel client stack.
+No automatic retry of user messages: one transparent failure beats hidden
+duplicate sends.
+
+## D14 — API keys in EncryptedSharedPreferences, never in DataStore
+
+What: `SecretStore` (security-crypto, AndroidKeyStore-backed) holds keys,
+keyed by provider id; `ProviderStore` stores only non-secret config.
+Why: keys are the only secret; the UI reads only `hasApiKey`, and logs
+carry exception categories, never bodies or headers.
+Change trigger: security-crypto deprecation with a maintained successor.
+
+## D15 — Reasoning: send only what the provider documents
+
+What: OpenAI-compatible path sends `reasoning_effort` (low/medium/high,
+xhigh on OpenRouter); Anthropic sends `thinking.budget_tokens`; Gemini
+sends nothing (no documented user-facing effort control).
+Why: unsent fields cannot 400; unsupported values are hidden in the UI per
+provider type, not sent speculatively.
+Change trigger: a provider shipping a documented control Rivet lacks.
+
+## D16 — Send-time provider/model snapshot
+
+What: the active request keeps the provider and model captured when Send
+was pressed; selection changes apply to the next message.
+Why: mid-stream redirects corrupt an active request and double-bill;
+documented behavior beats implicit behavior.
+Change trigger: none expected.
+
+## D17 — DataStore Preferences for non-secret persistence
+
+What: provider configs, active provider id, and the one chat conversation
+live in three Preference DataStores with stable string keys.
+Why: small data, reactive, schema-evolution via JSON list decode with
+`ignoreUnknownKeys`; a database is unjustified for this size.
+Change trigger: multi-session chat (Phase 4+) demanding relational storage.
+
