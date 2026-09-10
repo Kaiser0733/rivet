@@ -1,0 +1,22 @@
+*.iml
+.gradle/
+local.properties
+.idea/
+.kotlin/
+.DS_Store
+build/
+app/build/
+captures/
+.externalNativeBuild/
+.cxx/
+*.apk
+
+# keystores: the pinned debug key is committed on purpose (public
+# android/android credentials, see DECISIONS.md); every other key stays out
+*.keystore
+*.jks
+!debug.keystore
+release.keystore
+
+# machine-local verification ledger
+.receipts/
