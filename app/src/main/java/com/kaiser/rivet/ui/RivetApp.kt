@@ -1,8 +1,6 @@
 package com.kaiser.rivet.ui
 
-import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -17,10 +15,9 @@ import androidx.compose.material3.NavigationBarItem
 import androidx.compose.material3.NavigationRail
 import androidx.compose.material3.NavigationRailItem
 import androidx.compose.material3.Scaffold
-import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
-import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -31,18 +28,48 @@ import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
 import com.kaiser.rivet.R
+import com.kaiser.rivet.chat.ChatViewModel
+import com.kaiser.rivet.ui.chat.ChatScreen
+import com.kaiser.rivet.ui.provider.ProviderEditor
+import com.kaiser.rivet.ui.provider.ProvidersViewModel
+import com.kaiser.rivet.ui.provider.SettingsScreen
 
 private const val RAIL_MIN_WIDTH_DP = 600
 
 @Composable
-fun RivetApp(versionName: String) {
+fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel) {
     RivetTheme {
         var current by rememberSaveable { mutableStateOf(RivetDestination.Chat.name) }
-        var showSettings by rememberSaveable { mutableStateOf(false) }
+        var screen by rememberSaveable { mutableStateOf("tabs") } // tabs | settings | editor
         val destination = RivetDestination.entries.firstOrNull { it.name == current } ?: RivetDestination.Chat
         val wide = LocalConfiguration.current.screenWidthDp >= RAIL_MIN_WIDTH_DP
+        val editor by providersViewModel.editorState.collectAsState()
+        // After process death the saveable screen restores as "editor" but
+        // the editor state resets; an editor without a config id must not
+        // render (an empty id could be saved as a bogus provider).
+        val editing = screen == "editor" && editor.config.id.isNotEmpty()
+
+        if (screen == "settings" || editing) {
+            if (editing) {
+                ProviderEditor(viewModel = providersViewModel, onDone = { screen = "tabs" })
+            } else {
+                SettingsScreen(
+                    viewModel = providersViewModel,
+                    versionName = versionName,
+                    onClose = { screen = "tabs" },
+                    onEditProvider = {
+                        providersViewModel.startEdit(it)
+                        screen = "editor"
+                    },
+                    onNewProvider = {
+                        providersViewModel.startNewProvider(it)
+                        screen = "editor"
+                    },
+                )
+            }
+            return@RivetTheme
+        }
 
         Scaffold(
             topBar = {
@@ -52,7 +79,7 @@ fun RivetApp(versionName: String) {
                 ) {
                     Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge)
                     Spacer(Modifier.weight(1f))
-                    IconButton(onClick = { showSettings = true }) {
+                    IconButton(onClick = { screen = "settings" }) {
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings))
                     }
                 }
@@ -85,39 +112,24 @@ fun RivetApp(versionName: String) {
                         }
                     }
                 }
-                Box(Modifier.weight(1f).fillMaxSize(), contentAlignment = Alignment.Center) {
-                    Text(
-                        stringResource(destination.emptyTextRes),
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodyMedium,
-                    )
-                }
-            }
-        }
-
-        if (showSettings) {
-            SettingsDialog(versionName, onDismiss = { showSettings = false })
-        }
-    }
-}
-
-@Composable
-private fun SettingsDialog(versionName: String, onDismiss: () -> Unit) {
-    Dialog(onDismissRequest = onDismiss) {
-        Surface(shape = MaterialTheme.shapes.medium, color = MaterialTheme.colorScheme.surfaceContainer) {
-            Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                Text(stringResource(R.string.settings), style = MaterialTheme.typography.titleMedium)
-                Text(
-                    stringResource(R.string.settings_version, versionName),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                )
-                Text(
-                    stringResource(R.string.settings_provider_pending),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodyMedium,
-                )
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    TextButton(onClick = onDismiss) { Text(stringResource(R.string.close)) }
+                Box(Modifier.weight(1f).fillMaxSize()) {
+                    when (destination) {
+                        RivetDestination.Chat -> ChatScreen(
+                            chatViewModel = chatViewModel,
+                            providersViewModel = providersViewModel,
+                            onOpenSettings = { screen = "settings" },
+                        )
+                        RivetDestination.Files, RivetDestination.Changes, RivetDestination.Terminal -> Box(
+                            Modifier.fillMaxSize(),
+                            contentAlignment = Alignment.Center,
+                        ) {
+                            Text(
+                                stringResource(destination.emptyTextRes),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodyMedium,
+                            )
+                        }
+                    }
                 }
             }
         }

@@ -1,15 +1,55 @@
 <resources>
+
     <string name="app_name">Rivet</string>
     <string name="nav_chat">Chat</string>
     <string name="nav_files">Files</string>
     <string name="nav_changes">Changes</string>
     <string name="nav_terminal">Terminal</string>
-    <string name="empty_chat">Agent sessions will appear here.</string>
+    <string name="empty_chat">No messages yet.</string>
     <string name="empty_files">Open a project to browse files.</string>
     <string name="empty_changes">Project changes will appear here.</string>
     <string name="empty_terminal">Runtime is not installed.</string>
     <string name="settings">Settings</string>
-    <string name="settings_version">Version %1$s</string>
-    <string name="settings_provider_pending">Provider settings arrive in Phase 2.</string>
     <string name="close">Close</string>
-</resources>
+
+    <string name="type_openai_compatible">OpenAI-compatible</string>
+    <string name="type_openai">OpenAI</string>
+    <string name="type_anthropic">Anthropic</string>
+    <string name="type_gemini">Gemini</string>
+    <string name="type_openrouter">OpenRouter</string>
+
+    <string name="provider_section">Providers</string>
+    <string name="provider_add">Add provider</string>
+    <string name="provider_new">New provider</string>
+    <string name="provider_edit">Edit provider</string>
+    <string name="provider_name_label">Name</string>
+    <string name="provider_base_url_label">Base URL</string>
+    <string name="provider_api_key_label">API key</string>
+    <string name="provider_api_key_present">A key is stored. Leave blank to keep it.</string>
+    <string name="provider_model_label">Model</string>
+    <string name="provider_model_hint">Model ID</string>
+    <string name="provider_fetch_models">Fetch models</string>
+    <string name="provider_test">Test connection</string>
+    <string name="provider_reasoning_label">Reasoning</string>
+    <string name="provider_headers_label">Extra headers</string>
+    <string name="provider_headers_hint">Header: value — one per line</string>
+    <string name="provider_save">Save</string>
+    <string name="provider_delete">Delete</string>
+    <string name="provider_delete_confirm">Delete this provider? Its stored API key is removed too.</string>
+    <string name="provider_cancel">Cancel</string>
+    <string name="provider_none">No providers configured.</string>
+    <string name="provider_none_hint">Add one to start chatting.</string>
+    <string name="provider_models_loaded">%1$d models available</string>
+    <string name="provider_edit_action">Edit</string>
+    <string name="provider_delete_action">Delete</string>
+    <string name="provider_hint_version">Rivet %1$s</string>
+
+    <string name="chat_input_hint">Message</string>
+    <string name="chat_send">Send</string>
+    <string name="chat_stop">Stop</string>
+    <string name="chat_no_provider">No provider configured.</string>
+    <string name="chat_no_provider_hint">Add a provider in Settings to start chatting.</string>
+    <string name="chat_open_settings">Open Settings</string>
+    <string name="chat_error_dismiss">Dismiss</string>
+    <string name="chat_clear">Clear conversation</string>
+    <string name="model_switch">Switch provider</string></resources>
