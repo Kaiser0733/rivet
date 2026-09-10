@@ -99,13 +99,15 @@ internal class AnthropicClient(
     }
 }
 
-internal fun anthropicDelta(payload: String): String? = try {
-    val obj = Json.parseToJsonElement(payload).jsonObject
-    if (obj["type"]?.str() != "content_block_delta") return null
-    if (obj["delta"]?.obj()?.get("type")?.str() != "text_delta") return null
-    obj["delta"]?.obj()?.get("text")?.str()
-} catch (e: Exception) {
-    null
+internal fun anthropicDelta(payload: String): String? {
+    return try {
+        val obj = Json.parseToJsonElement(payload).jsonObject
+        if (obj["type"]?.str() != "content_block_delta") return null
+        if (obj["delta"]?.obj()?.get("type")?.str() != "text_delta") return null
+        obj["delta"]?.obj()?.get("text")?.str()
+    } catch (e: Exception) {
+        null
+    }
 }
 
 private val ReasoningLevel.anthropicBudget: Int

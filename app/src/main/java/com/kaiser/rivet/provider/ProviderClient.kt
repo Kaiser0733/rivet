@@ -20,7 +20,9 @@ interface ProviderClient {
 
     suspend fun testConnection(): TestResult
 
-    suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit)
+    // Returns the full accumulated response text; onDelta receives each
+    // chunk as it arrives.
+    suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit): String
 }
 
 fun providerClient(config: ProviderConfig, apiKey: String): ProviderClient =

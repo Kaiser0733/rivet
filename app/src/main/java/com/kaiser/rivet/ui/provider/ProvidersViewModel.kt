@@ -6,6 +6,7 @@ import androidx.lifecycle.viewModelScope
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.TestResult
+import com.kaiser.rivet.provider.parseHeaders
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore

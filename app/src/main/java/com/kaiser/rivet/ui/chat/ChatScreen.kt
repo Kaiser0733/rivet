@@ -4,7 +4,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -61,7 +60,12 @@ fun ChatScreen(
     }
 
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
-        ModelSelector(providersViewModel)
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            ModelSelector(Modifier.weight(1f), providersViewModel)
+            IconButton(onClick = chatViewModel::clearChat) {
+                Icon(painterResource(R.drawable.ic_delete), stringResource(R.string.chat_clear))
+            }
+        }
         MessageList(
             messages = chatState.messages,
             streamText = chatState.streamText,
@@ -93,13 +97,13 @@ private fun NoProviderState(onOpenSettings: () -> Unit) {
 }
 
 @Composable
-private fun ModelSelector(providersViewModel: ProvidersViewModel) {
+private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewModel) {
     val listState by providersViewModel.listState.collectAsState()
     val active = listState.configs.firstOrNull { it.id == listState.activeId }
     var open by remember { mutableStateOf(false) }
 
     Row(
-        Modifier.fillMaxWidth().padding(start = 20.dp, top = 4.dp, bottom = 4.dp),
+        modifier,
         verticalAlignment = Alignment.CenterVertically,
     ) {
         Box {
@@ -126,10 +130,6 @@ private fun ModelSelector(providersViewModel: ProvidersViewModel) {
                     )
                 }
             }
-        }
-        Spacer(Modifier.weight(1f))
-        IconButton(onClick = chatViewModel::clearChat) {
-            Icon(painterResource(R.drawable.ic_delete), stringResource(R.string.chat_clear))
         }
     }
 }
