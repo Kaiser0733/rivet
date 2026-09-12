@@ -96,10 +96,15 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             val state = _editorState.value
             val config = state.config
             if (config.model.isBlank()) return@launch
-            store.save(config)
-            if (state.keyInput.isNotBlank()) {
-                secrets.saveApiKey(config.id, state.keyInput.trim())
+            if (state.keyInput.isNotBlank() &&
+                !secrets.saveApiKey(config.id, state.keyInput.trim())
+            ) {
+                _editorState.update {
+                    it.copy(test = TestUi(false, "Unable to store the API key securely."))
+                }
+                return@launch
             }
+            store.save(config)
             if (state.isNew) {
                 store.setActive(config.id)
             }
