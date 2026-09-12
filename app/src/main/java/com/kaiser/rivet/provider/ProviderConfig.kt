@@ -30,11 +30,54 @@ data class ProviderConfig(
     val headers: List<ProviderHeader> = emptyList(),
 )
 
-// "Max" maps to OpenRouter's documented xhigh enum; every other transport
-// only gets the portable low/medium/high subset, so the option is hidden.
-fun offeredReasoning(type: ProviderType): List<ReasoningLevel> =
-    if (type == ProviderType.OpenRouter) ReasoningLevel.entries
-    else ReasoningLevel.entries.filter { it != ReasoningLevel.Max }
+private val standardReasoning = listOf(
+    ReasoningLevel.Default,
+    ReasoningLevel.Low,
+    ReasoningLevel.Medium,
+    ReasoningLevel.High,
+)
+
+internal enum class AnthropicThinkingMode { Unsupported, Manual, Adaptive }
+
+fun offeredReasoning(type: ProviderType, model: String): List<ReasoningLevel> = when (type) {
+    ProviderType.OpenAiCompatible, ProviderType.Gemini -> listOf(ReasoningLevel.Default)
+    ProviderType.OpenRouter -> ReasoningLevel.entries
+    ProviderType.OpenAi -> if (openAiSupportsReasoning(model)) standardReasoning else listOf(ReasoningLevel.Default)
+    ProviderType.Anthropic -> when (anthropicThinkingMode(model)) {
+        AnthropicThinkingMode.Manual, AnthropicThinkingMode.Adaptive -> standardReasoning
+        AnthropicThinkingMode.Unsupported -> listOf(ReasoningLevel.Default)
+    }
+}
+
+internal fun openAiSupportsReasoning(model: String): Boolean {
+    val id = model.lowercase().substringAfterLast('/')
+    return id == "o1" || id.startsWith("o1-") ||
+        id == "o3" || id.startsWith("o3-") ||
+        id == "o4" || id.startsWith("o4-") ||
+        id == "gpt-5" || id.startsWith("gpt-5-") || id.startsWith("gpt-5.")
+}
+
+internal fun anthropicThinkingMode(model: String): AnthropicThinkingMode {
+    val id = model.lowercase().substringAfterLast('/')
+    if (Regex("^claude-(opus|sonnet|fable|mythos)-5(?:-|$)").containsMatchIn(id)) {
+        return AnthropicThinkingMode.Adaptive
+    }
+    val fourthGeneration = Regex("^claude-(opus|sonnet)-4-(\\d+)(?:-|$)").find(id)
+    val minor = fourthGeneration?.groupValues?.get(2)
+    if (minor != null && minor.length <= 2 && minor.toInt() >= 6) {
+        return AnthropicThinkingMode.Adaptive
+    }
+    if (id.startsWith("claude-3-7-sonnet-") || id == "claude-3-7-sonnet") {
+        return AnthropicThinkingMode.Manual
+    }
+    if (Regex("^claude-(opus|sonnet)-4-(?:[1-5])(?:-|$)").containsMatchIn(id) ||
+        Regex("^claude-(opus|sonnet)-4-\\d{8}$").containsMatchIn(id) ||
+        Regex("^claude-haiku-4-5(?:-|$)").containsMatchIn(id)
+    ) {
+        return AnthropicThinkingMode.Manual
+    }
+    return AnthropicThinkingMode.Unsupported
+}
 
 // Free-form headers may never override a transport's auth headers; a stray
 // Authorization here could shadow or resend the stored key.

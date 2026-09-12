@@ -161,7 +161,7 @@ fun ProviderEditor(
             }
         }
 
-        val reasoningOptions = offeredReasoning(config.type)
+        val reasoningOptions = offeredReasoning(config.type, config.model)
         if (reasoningOptions.size > 1) {
             Text(
                 stringResource(R.string.provider_reasoning_label),

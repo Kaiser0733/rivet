@@ -10,10 +10,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-// Covers OpenAI, OpenRouter, and any OpenAI-compatible endpoint. Only
-// low/medium/high/xhigh are ever sent; servers that don't know the field
-// ignore it, and a 400 naming "reasoning_effort" surfaces the provider's
-// own error text.
+// Covers OpenAI, OpenRouter, and custom OpenAI-compatible endpoints.
+// Optional reasoning fields are limited to presets with documented support;
+// a custom endpoint receives the baseline chat-completions shape.
 internal class OpenAiCompatibleClient(
     private val config: ProviderConfig,
     private val apiKey: String,
@@ -62,8 +61,8 @@ internal class OpenAiCompatibleClient(
                     })
                 }
             })
-            if (request.reasoning != ReasoningLevel.Default) {
-                put("reasoning_effort", request.reasoning.wireEffort)
+            reasoningEffort(config.type, request.model, request.reasoning)?.let {
+                put("reasoning_effort", it)
             }
         }
         val httpRequest = base(Endpoints.openAiChat(config.baseUrl))
@@ -99,6 +98,19 @@ internal fun openAiDelta(payload: String): String? = try {
         ?.str()
 } catch (e: Exception) {
     null
+}
+
+private fun reasoningEffort(
+    type: ProviderType,
+    model: String,
+    level: ReasoningLevel,
+): String? {
+    if (level == ReasoningLevel.Default) return null
+    if (type == ProviderType.OpenRouter) return level.wireEffort
+    if (type == ProviderType.OpenAi && openAiSupportsReasoning(model)) {
+        return if (level == ReasoningLevel.Max) null else level.wireEffort
+    }
+    return null
 }
 
 private val ReasoningLevel.wireEffort: String

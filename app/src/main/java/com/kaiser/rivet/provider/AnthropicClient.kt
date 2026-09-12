@@ -10,9 +10,10 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-// Anthropic Messages API in its native shape: x-api-key header, system as a
-// top-level field, thinking via budget_tokens. Thinking deltas are ignored;
-// only text deltas render.
+// Anthropic Messages API in its native shape. Reasoning is selected by
+// documented model family: manual budgets on older models, adaptive thinking
+// plus output_config.effort on current models, and no optional fields when
+// capability is unknown. Thinking deltas are not rendered.
 internal class AnthropicClient(
     private val config: ProviderConfig,
     private val apiKey: String,
@@ -51,20 +52,30 @@ internal class AnthropicClient(
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)
-            // The API requires max_tokens strictly greater than any thinking
-            // budget; deriving it from the budget keeps that invariant true.
-            val thinking = request.reasoning != ReasoningLevel.Default
-            val budget = if (thinking) request.reasoning.anthropicBudget else 0
+            val thinkingMode = if (request.reasoning == ReasoningLevel.Default) {
+                AnthropicThinkingMode.Unsupported
+            } else {
+                anthropicThinkingMode(request.model)
+            }
+            val budget = if (thinkingMode == AnthropicThinkingMode.Manual) {
+                request.reasoning.anthropicBudget
+            } else {
+                0
+            }
             put("max_tokens", budget + 8192)
             if (request.system.isNotEmpty()) put("system", request.system)
-            if (thinking) {
-                put("thinking", buildJsonObject {
+            when (thinkingMode) {
+                AnthropicThinkingMode.Manual -> put("thinking", buildJsonObject {
                     put("type", "enabled")
-                    // 4.6-era models accept budget_tokens; 4.7+ reject the
-                    // whole thinking block — surfaced as the provider's own
-                    // 400 message rather than a crash.
                     put("budget_tokens", budget)
                 })
+                AnthropicThinkingMode.Adaptive -> {
+                    put("thinking", buildJsonObject { put("type", "adaptive") })
+                    put("output_config", buildJsonObject {
+                        put("effort", request.reasoning.anthropicEffort)
+                    })
+                }
+                AnthropicThinkingMode.Unsupported -> Unit
             }
             put("messages", buildJsonArray {
                 request.messages.forEach { m ->
@@ -109,6 +120,14 @@ internal fun anthropicDelta(payload: String): String? {
         null
     }
 }
+
+private val ReasoningLevel.anthropicEffort: String
+    get() = when (this) {
+        ReasoningLevel.Low -> "low"
+        ReasoningLevel.Medium -> "medium"
+        ReasoningLevel.High, ReasoningLevel.Max -> "high"
+        ReasoningLevel.Default -> "high"
+    }
 
 private val ReasoningLevel.anthropicBudget: Int
     get() = when (this) {
