@@ -54,7 +54,7 @@ class GeminiClientTest {
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val full = GeminiClient(config(), "key").streamChat(
-            ChatRequest("gemini-x", emptyList(), "sys", ReasoningLevel.Default),
+            ChatRequest("gemini-x", emptyList(), "sys", ReasoningLevel.High),
         ) {}
         assertEquals("Hi there!", full)
 
@@ -64,6 +64,9 @@ class GeminiClientTest {
         assertEquals("key", recorded.getHeader("x-goog-api-key"))
         val body = recorded.body.readUtf8()
         assertTrue(body.contains("\"systemInstruction\""))
+        assertTrue(!body.contains("reasoning"))
+        assertTrue(!body.contains("thinking"))
+        assertTrue(!body.contains("effort"))
     }
 
     @Test

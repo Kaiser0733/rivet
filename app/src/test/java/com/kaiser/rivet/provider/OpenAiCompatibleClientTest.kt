@@ -24,12 +24,15 @@ class OpenAiCompatibleClientTest {
         server.shutdown()
     }
 
-    private fun config() = ProviderConfig(
+    private fun config(
+        type: ProviderType = ProviderType.OpenAiCompatible,
+        model: String = "test-model",
+    ) = ProviderConfig(
         id = "test",
-        type = ProviderType.OpenAiCompatible,
+        type = type,
         name = "test",
         baseUrl = server.url("/v1").toString().trimEnd('/'),
-        model = "test-model",
+        model = model,
     )
 
     @Test
@@ -79,13 +82,39 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun streamChatSendsReasoningEffort() = runTest {
+    fun genericProviderOmitsReasoningEffort() = runTest {
         server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
         OpenAiCompatibleClient(config(), "key").streamChat(
             ChatRequest("test-model", emptyList(), "", ReasoningLevel.High),
         ) {}
         val body = server.takeRequest().body.readUtf8()
+        assertTrue(!body.contains("reasoning_effort"))
+    }
+
+    @Test
+    fun openAiReasoningModelSendsReasoningEffort() = runTest {
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
+        OpenAiCompatibleClient(
+            config(ProviderType.OpenAi, "gpt-5"),
+            "key",
+        ).streamChat(
+            ChatRequest("gpt-5", emptyList(), "", ReasoningLevel.High),
+        ) {}
+        val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"reasoning_effort\":\"high\""))
+    }
+
+    @Test
+    fun openRouterSendsMaxReasoningEffort() = runTest {
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
+        OpenAiCompatibleClient(
+            config(ProviderType.OpenRouter),
+            "key",
+        ).streamChat(
+            ChatRequest("test-model", emptyList(), "", ReasoningLevel.Max),
+        ) {}
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"reasoning_effort\":\"xhigh\""))
     }
 
     @Test

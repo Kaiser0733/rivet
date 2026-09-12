@@ -60,10 +60,43 @@ class ProviderConfigTest {
     }
 
     @Test
-    fun openRouterExposesMaxReasoningOthersDoNot() {
-        assertTrue(offeredReasoning(ProviderType.OpenRouter).contains(ReasoningLevel.Max))
-        assertTrue(!offeredReasoning(ProviderType.OpenAiCompatible).contains(ReasoningLevel.Max))
-        assertTrue(!offeredReasoning(ProviderType.Anthropic).contains(ReasoningLevel.Max))
-        assertTrue(!offeredReasoning(ProviderType.Gemini).contains(ReasoningLevel.Max))
+    fun genericAndGeminiExposeNoReasoningControl() {
+        assertEquals(
+            listOf(ReasoningLevel.Default),
+            offeredReasoning(ProviderType.OpenAiCompatible, "custom-model"),
+        )
+        assertEquals(
+            listOf(ReasoningLevel.Default),
+            offeredReasoning(ProviderType.Gemini, "gemini-2.5-pro"),
+        )
+    }
+
+    @Test
+    fun documentedOpenAiPresetsExposeReasoning() {
+        assertEquals(
+            listOf(ReasoningLevel.Default, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High),
+            offeredReasoning(ProviderType.OpenAi, "gpt-5"),
+        )
+        assertEquals(
+            listOf(ReasoningLevel.Default),
+            offeredReasoning(ProviderType.OpenAi, "gpt-4o"),
+        )
+        assertTrue(offeredReasoning(ProviderType.OpenRouter, "any-model").contains(ReasoningLevel.Max))
+    }
+
+    @Test
+    fun anthropicReasoningIsConservativeForUnknownModels() {
+        assertEquals(
+            listOf(ReasoningLevel.Default),
+            offeredReasoning(ProviderType.Anthropic, "claude-unknown"),
+        )
+        assertTrue(
+            offeredReasoning(ProviderType.Anthropic, "claude-3-7-sonnet-latest")
+                .contains(ReasoningLevel.High),
+        )
+        assertTrue(
+            offeredReasoning(ProviderType.Anthropic, "claude-opus-4-8")
+                .contains(ReasoningLevel.High),
+        )
     }
 }

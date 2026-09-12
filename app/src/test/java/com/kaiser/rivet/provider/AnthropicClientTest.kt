@@ -24,12 +24,12 @@ class AnthropicClientTest {
         server.shutdown()
     }
 
-    private fun config() = ProviderConfig(
+    private fun config(model: String = "claude-x") = ProviderConfig(
         id = "t",
         type = ProviderType.Anthropic,
         name = "t",
         baseUrl = server.url("/").toString().trimEnd('/'),
-        model = "claude-x",
+        model = model,
     )
 
     @Test
@@ -66,14 +66,39 @@ class AnthropicClientTest {
     }
 
     @Test
-    fun reasoningAddsThinkingBlock() = runTest {
+    fun olderModelUsesManualThinkingBudget() = runTest {
         server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
-        AnthropicClient(config(), "key").streamChat(
-            ChatRequest("claude-x", emptyList(), "", ReasoningLevel.High),
+        AnthropicClient(config("claude-3-7-sonnet-latest"), "key").streamChat(
+            ChatRequest("claude-3-7-sonnet-latest", emptyList(), "", ReasoningLevel.High),
         ) {}
         val body = server.takeRequest().body.readUtf8()
-        assertTrue(body.contains("\"thinking\""))
-        assertTrue(body.contains("\"budget_tokens\""))
+        assertTrue(body.contains("\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":32768}"))
+        assertTrue(!body.contains("output_config"))
+        assertTrue(body.contains("\"max_tokens\":40960"))
+    }
+
+    @Test
+    fun currentModelUsesAdaptiveThinkingAndEffort() = runTest {
+        server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
+        AnthropicClient(config("claude-opus-4-8"), "key").streamChat(
+            ChatRequest("claude-opus-4-8", emptyList(), "", ReasoningLevel.High),
+        ) {}
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"thinking\":{\"type\":\"adaptive\"}"))
+        assertTrue(body.contains("\"output_config\":{\"effort\":\"high\"}"))
+        assertTrue(!body.contains("budget_tokens"))
+    }
+
+    @Test
+    fun unknownModelOmitsReasoningConfiguration() = runTest {
+        server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
+        AnthropicClient(config("claude-unknown"), "key").streamChat(
+            ChatRequest("claude-unknown", emptyList(), "", ReasoningLevel.High),
+        ) {}
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(!body.contains("\"thinking\""))
+        assertTrue(!body.contains("output_config"))
+        assertTrue(body.contains("\"max_tokens\":8192"))
     }
 
     @Test
