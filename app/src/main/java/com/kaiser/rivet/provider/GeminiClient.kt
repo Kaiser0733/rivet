@@ -12,8 +12,8 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 // Gemini generateContent in its native shape: model in the path, key in the
 // x-goog-api-key header, SSE chunks that each carry a full response object.
-// Gemini exposes no user-facing reasoning effort, so ReasoningLevel is
-// intentionally ignored by this transport.
+// The editor exposes no Gemini reasoning control and this transport emits no
+// reasoning configuration.
 internal class GeminiClient(
     private val config: ProviderConfig,
     private val apiKey: String,

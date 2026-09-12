@@ -18,7 +18,8 @@ see [MASTER_ROADMAP.md](MASTER_ROADMAP.md).
   everywhere else.
 - Live streaming responses with stop control; provider and model
   switchable between messages.
-- One persistent conversation; configuration and selection survive
+- One persistent conversation; completed chat history, provider
+  configuration, and selection restore from app-private storage after a
   restart.
 
 The coding agent, project files, terminal, and Git integration are not

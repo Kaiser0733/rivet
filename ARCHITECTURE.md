@@ -25,7 +25,7 @@ app/src/main/java/com/kaiser/rivet/
         ChatViewModel.kt     # send/cancel/state; send-time provider snapshot
     storage/
         ProviderStore.kt     # DataStore: provider configs + active id
-        SecretStore.kt       # EncryptedSharedPreferences for API keys
+        SecretStore.kt       # Android Keystore + AES-GCM API-key storage
         ChatStore.kt         # DataStore: one persistent conversation
     ui/
         RivetApp.kt           # shell: nav, screen routing, settings entry
@@ -61,16 +61,24 @@ message only; the active request completes (or is stopped) on its own.
   `configs` / `active_id`, JSON-encoded list.
 - Chat history: DataStore Preferences, key `messages`, JSON list. One
   conversation.
-- API keys: EncryptedSharedPreferences (`rivet_secrets`), AndroidKeyStore
-  AES-256. Never serialized into configs, chat, logs, or saved state.
+- API keys: app-private preferences contain versioned IV+ciphertext records.
+  A non-exportable AES-256 key in AndroidKeyStore encrypts each value with
+  AES/GCM/NoPadding; the provider id is authenticated as associated data.
+  Missing or corrupt records read as absent and never trigger a store-wide
+  deletion. Keys never enter provider configs, chat storage, logs, or saved
+  state. The earlier development build's EncryptedSharedPreferences data is
+  not migrated; its credentials must be entered once into the new store.
 
 ## UI shell
 
 Single-activity Compose. Width >= 600dp uses NavigationRail, else
 NavigationBar. Chat and Settings screens cap content width at 640dp on
 wide layouts instead of stretching phone-width fields across a tablet.
-Rotation and process death: navigation tab and screen are
-`rememberSaveable`; async work lives in ViewModels.
+Rotation: ViewModels and their active work survive activity recreation, while
+`rememberSaveable` may restore the selected tab and screen. System-initiated
+process death destroys the ViewModels and terminates any active stream. A new
+process reloads completed provider configuration and chat history from
+DataStore; streams are not resumed or reconstructed.
 
 ## Planned boundaries
 

@@ -28,8 +28,9 @@ data class ChatUiState(
     val error: String? = null,
 )
 
-// Retained across rotation and process death by the ViewModelStore; all
-// streaming work survives configuration changes without duplication.
+// ViewModel state and an active stream survive activity recreation during a
+// configuration change. System-initiated process death destroys both; a new
+// instance reloads only completed messages from ChatStore.
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val providerStore = ProviderStore(app)
     private val chatStore = ChatStore(app)

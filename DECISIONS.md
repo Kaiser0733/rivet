@@ -97,22 +97,30 @@ WebSocket) — still shared infrastructure, not a parallel client stack.
 No automatic retry of user messages: one transparent failure beats hidden
 duplicate sends.
 
-## D14 — API keys in EncryptedSharedPreferences, never in DataStore
+## D14 — API keys encrypted with Android Keystore, never in DataStore
 
-What: `SecretStore` (security-crypto, AndroidKeyStore-backed) holds keys,
-keyed by provider id; `ProviderStore` stores only non-secret config.
-Why: keys are the only secret; the UI reads only `hasApiKey`, and logs
-carry exception categories, never bodies or headers.
-Change trigger: security-crypto deprecation with a maintained successor.
+What: `SecretStore` generates a non-exportable AES-256 key directly in
+AndroidKeyStore and uses AES/GCM/NoPadding. App-private preferences contain
+only versioned IV+ciphertext records keyed by provider id; the id is also
+authenticated as associated data.
+Why: platform APIs provide the required boundary without the deprecated
+security-crypto wrappers. A malformed record affects only that credential;
+unrelated failures never wipe the store.
+Migration: no production release used the former EncryptedSharedPreferences
+format. Development installs must enter credentials once into the new store.
 
-## D15 — Reasoning: send only what the provider documents
+## D15 — Reasoning: capability-gated per provider and model
 
-What: OpenAI-compatible path sends `reasoning_effort` (low/medium/high,
-xhigh on OpenRouter); Anthropic sends `thinking.budget_tokens`; Gemini
-sends nothing (no documented user-facing effort control).
-Why: unsent fields cannot 400; unsupported values are hidden in the UI per
-provider type, not sent speculatively.
-Change trigger: a provider shipping a documented control Rivet lacks.
+What: custom OpenAI-compatible providers and Gemini expose no reasoning
+control and receive no optional reasoning field. Known OpenAI reasoning-model
+families use `reasoning_effort`; OpenRouter retains its documented shorthand,
+including `xhigh`. Anthropic models through 4.5 use manual
+`thinking.budget_tokens`; documented 4.6+ families use adaptive thinking with
+`output_config.effort`; unknown Anthropic models receive neither.
+Why: a baseline chat request must work on providers that reject unknown
+fields. Unknown capability always degrades to provider-default behavior.
+Change trigger: model metadata is persisted reliably enough to replace the
+conservative model-family checks.
 
 ## D16 — Send-time provider/model snapshot
 
