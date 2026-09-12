@@ -68,8 +68,8 @@ class AnthropicClientTest {
     @Test
     fun olderModelUsesManualThinkingBudget() = runTest {
         server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
-        AnthropicClient(config("claude-3-7-sonnet-latest"), "key").streamChat(
-            ChatRequest("claude-3-7-sonnet-latest", emptyList(), "", ReasoningLevel.High),
+        AnthropicClient(config("claude-haiku-4-5-20251001"), "key").streamChat(
+            ChatRequest("claude-haiku-4-5-20251001", emptyList(), "", ReasoningLevel.High),
         ) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":32768}"))
@@ -92,8 +92,8 @@ class AnthropicClientTest {
     @Test
     fun unknownModelOmitsReasoningConfiguration() = runTest {
         server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
-        AnthropicClient(config("claude-unknown"), "key").streamChat(
-            ChatRequest("claude-unknown", emptyList(), "", ReasoningLevel.High),
+        AnthropicClient(config("claude-opus-4-9"), "key").streamChat(
+            ChatRequest("claude-opus-4-9", emptyList(), "", ReasoningLevel.High),
         ) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(!body.contains("\"thinking\""))

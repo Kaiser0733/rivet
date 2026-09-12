@@ -114,9 +114,10 @@ format. Development installs must enter credentials once into the new store.
 What: custom OpenAI-compatible providers and Gemini expose no reasoning
 control and receive no optional reasoning field. Known OpenAI reasoning-model
 families use `reasoning_effort`; OpenRouter retains its documented shorthand,
-including `xhigh`. Anthropic models through 4.5 use manual
-`thinking.budget_tokens`; documented 4.6+ families use adaptive thinking with
-`output_config.effort`; unknown Anthropic models receive neither.
+including `xhigh`. A strict current Anthropic allowlist uses manual
+`thinking.budget_tokens` for documented 4.5 aliases/snapshots and adaptive
+thinking with `output_config.effort` for documented 4.6+ aliases; retired,
+unknown, or merely family-shaped ids receive neither.
 Why: a baseline chat request must work on providers that reject unknown
 fields. Unknown capability always degrades to provider-default behavior.
 Change trigger: model metadata is persisted reliably enough to replace the

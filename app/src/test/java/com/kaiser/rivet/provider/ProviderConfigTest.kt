@@ -85,18 +85,48 @@ class ProviderConfigTest {
     }
 
     @Test
-    fun anthropicReasoningIsConservativeForUnknownModels() {
-        assertEquals(
-            listOf(ReasoningLevel.Default),
-            offeredReasoning(ProviderType.Anthropic, "claude-unknown"),
+    fun anthropicReasoningUsesOnlyDocumentedCurrentModelIds() {
+        val reasoning = listOf(
+            ReasoningLevel.Default,
+            ReasoningLevel.Low,
+            ReasoningLevel.Medium,
+            ReasoningLevel.High,
         )
-        assertTrue(
-            offeredReasoning(ProviderType.Anthropic, "claude-3-7-sonnet-latest")
-                .contains(ReasoningLevel.High),
-        )
-        assertTrue(
-            offeredReasoning(ProviderType.Anthropic, "claude-opus-4-8")
-                .contains(ReasoningLevel.High),
-        )
+        listOf(
+            "claude-opus-4-5",
+            "claude-opus-4-5-20251101",
+            "claude-sonnet-4-5",
+            "claude-sonnet-4-5-20250929",
+            "claude-haiku-4-5",
+            "claude-haiku-4-5-20251001",
+            "claude-opus-4-6",
+            "claude-sonnet-4-6",
+            "claude-opus-4-7",
+            "claude-opus-4-8",
+            "claude-sonnet-5",
+            "claude-opus-5",
+            "claude-fable-5",
+            "claude-mythos-5",
+            "claude-fable-5-1",
+            "claude-mythos-5-1",
+            "claude-mythos-preview",
+        ).forEach { model ->
+            assertEquals(model, reasoning, offeredReasoning(ProviderType.Anthropic, model))
+        }
+
+        listOf(
+            "claude-unknown",
+            "claude-3-7-sonnet-latest",
+            "claude-sonnet-4-4",
+            "claude-opus-4-9",
+            "claude-opus-4-5-future",
+            "claude-opus-5-future",
+        ).forEach { model ->
+            assertEquals(
+                model,
+                listOf(ReasoningLevel.Default),
+                offeredReasoning(ProviderType.Anthropic, model),
+            )
+        }
     }
 }

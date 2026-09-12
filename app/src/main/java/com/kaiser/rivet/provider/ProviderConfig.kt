@@ -57,26 +57,30 @@ internal fun openAiSupportsReasoning(model: String): Boolean {
         id == "gpt-5" || id.startsWith("gpt-5-") || id.startsWith("gpt-5.")
 }
 
+private val anthropicAdaptiveModels = setOf(
+    "claude-fable-5-1",
+    "claude-mythos-5-1",
+    "claude-fable-5",
+    "claude-mythos-5",
+    "claude-mythos-preview",
+    "claude-opus-5",
+    "claude-sonnet-5",
+    "claude-opus-4-8",
+    "claude-opus-4-7",
+    "claude-opus-4-6",
+    "claude-sonnet-4-6",
+)
+
+private val anthropicManualModel =
+    Regex("^claude-(?:opus|sonnet|haiku)-4-5(?:-\\d{8})?$")
+
 internal fun anthropicThinkingMode(model: String): AnthropicThinkingMode {
     val id = model.lowercase().substringAfterLast('/')
-    if (Regex("^claude-(opus|sonnet|fable|mythos)-5(?:-|$)").containsMatchIn(id)) {
-        return AnthropicThinkingMode.Adaptive
+    return when {
+        id in anthropicAdaptiveModels -> AnthropicThinkingMode.Adaptive
+        anthropicManualModel.matches(id) -> AnthropicThinkingMode.Manual
+        else -> AnthropicThinkingMode.Unsupported
     }
-    val fourthGeneration = Regex("^claude-(opus|sonnet)-4-(\\d+)(?:-|$)").find(id)
-    val minor = fourthGeneration?.groupValues?.get(2)
-    if (minor != null && minor.length <= 2 && minor.toInt() >= 6) {
-        return AnthropicThinkingMode.Adaptive
-    }
-    if (id.startsWith("claude-3-7-sonnet-") || id == "claude-3-7-sonnet") {
-        return AnthropicThinkingMode.Manual
-    }
-    if (Regex("^claude-(opus|sonnet)-4-(?:[1-5])(?:-|$)").containsMatchIn(id) ||
-        Regex("^claude-(opus|sonnet)-4-\\d{8}$").containsMatchIn(id) ||
-        Regex("^claude-haiku-4-5(?:-|$)").containsMatchIn(id)
-    ) {
-        return AnthropicThinkingMode.Manual
-    }
-    return AnthropicThinkingMode.Unsupported
 }
 
 // Free-form headers may never override a transport's auth headers; a stray
