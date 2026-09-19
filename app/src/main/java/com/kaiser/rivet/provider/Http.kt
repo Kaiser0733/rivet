@@ -111,7 +111,7 @@ internal suspend fun Call.await(): Response =
                     response.close()
                     return
                 }
-                cont.resume(response) { _, rejected, _ -> rejected.close() }
+                cont.resume(response) { response.close() }
             }
         })
     }
