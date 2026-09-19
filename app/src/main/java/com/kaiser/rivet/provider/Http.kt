@@ -14,8 +14,11 @@ import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLException
+import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
 // One client, one connection pool for the whole app; per-call timeouts are
 // derived with quick().
@@ -87,26 +90,28 @@ internal suspend fun OkHttpClient.await(request: Request): Response = newCall(re
 
 internal suspend fun Call.await(): Response =
     suspendCancellableCoroutine { cont ->
+        val terminal = AtomicBoolean(false)
         val deliveredResponse = AtomicReference<Response?>(null)
         cont.invokeOnCancellation {
+            terminal.set(true)
             cancel()
             deliveredResponse.getAndSet(null)?.close()
         }
         enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                val token = cont.tryResumeWithException(networkError(e)) ?: return
-                cont.completeResume(token)
+                if (terminal.compareAndSet(false, true)) {
+                    cont.resumeWithException(networkError(e))
+                }
             }
 
             override fun onResponse(call: Call, response: Response) {
                 deliveredResponse.set(response)
-                val token = cont.tryResume(response)
-                if (token == null) {
+                if (!terminal.compareAndSet(false, true)) {
                     deliveredResponse.compareAndSet(response, null)
                     response.close()
                     return
                 }
-                cont.completeResume(token)
+                cont.resume(response) { _, rejected, _ -> rejected.close() }
             }
         })
     }
@@ -117,11 +122,16 @@ internal suspend fun Call.await(): Response =
 internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Unit) {
     suspendCancellableCoroutine { cont ->
         val call = newCall(request)
-        cont.invokeOnCancellation { call.cancel() }
+        val terminal = AtomicBoolean(false)
+        cont.invokeOnCancellation {
+            terminal.set(true)
+            call.cancel()
+        }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                val token = cont.tryResumeWithException(networkError(e)) ?: return
-                cont.completeResume(token)
+                if (terminal.compareAndSet(false, true)) {
+                    cont.resumeWithException(networkError(e))
+                }
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -129,23 +139,22 @@ internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Uni
                     try {
                         if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
                         val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
-                        while (cont.isActive) {
+                        while (!terminal.get()) {
                             val line = source.readUtf8Line() ?: break
                             if (line.startsWith("data:")) {
                                 val payload = line.removePrefix("data:").trim()
-                                if (cont.isActive && payload.isNotEmpty() && payload != "[DONE]") {
+                                if (!terminal.get() && payload.isNotEmpty() && payload != "[DONE]") {
                                     onEvent(payload)
                                 }
                             }
                         }
-                        val token = cont.tryResume(Unit) ?: return
-                        cont.completeResume(token)
+                        if (terminal.compareAndSet(false, true)) cont.resume(Unit)
                     } catch (e: IOException) {
-                        val token = cont.tryResumeWithException(networkError(e)) ?: return
-                        cont.completeResume(token)
+                        if (terminal.compareAndSet(false, true)) {
+                            cont.resumeWithException(networkError(e))
+                        }
                     } catch (e: ProviderError) {
-                        val token = cont.tryResumeWithException(e) ?: return
-                        cont.completeResume(token)
+                        if (terminal.compareAndSet(false, true)) cont.resumeWithException(e)
                     }
                 }
             }
