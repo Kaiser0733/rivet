@@ -80,7 +80,7 @@ internal class GeminiClient(
     }
 
     private fun base(url: String): Request.Builder {
-        val b = Request.Builder().url(url)
+        val b = requestBuilder(url)
             .header("x-goog-api-key", apiKey)
         config.headers.sanitized().forEach { b.header(it.name, it.value) }
         return b

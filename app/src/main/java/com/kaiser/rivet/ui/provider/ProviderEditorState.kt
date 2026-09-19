@@ -23,3 +23,16 @@ data class ProviderEditorState(
 )
 
 data class TestUi(val ok: Boolean, val message: String)
+
+internal fun ProviderEditorState.withConfigUpdate(
+    transform: (ProviderConfig) -> ProviderConfig,
+): ProviderEditorState {
+    val next = transform(config)
+    val endpointChanged = next.type != config.type || next.baseUrl != config.baseUrl
+    return copy(
+        config = next,
+        test = null,
+        fetchError = null,
+        models = if (endpointChanged) emptyList() else models,
+    )
+}

@@ -97,10 +97,16 @@ fun ProviderEditor(
             Modifier.fillMaxWidth().padding(top = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedButton(onClick = viewModel::testConnection, enabled = !state.busy) {
+            OutlinedButton(
+                onClick = viewModel::testConnection,
+                enabled = !state.busy && !state.fetching,
+            ) {
                 Text(stringResource(R.string.provider_test))
             }
-            OutlinedButton(onClick = viewModel::fetchModels, enabled = !state.fetching) {
+            OutlinedButton(
+                onClick = viewModel::fetchModels,
+                enabled = !state.busy && !state.fetching,
+            ) {
                 Text(stringResource(R.string.provider_fetch_models))
             }
         }
