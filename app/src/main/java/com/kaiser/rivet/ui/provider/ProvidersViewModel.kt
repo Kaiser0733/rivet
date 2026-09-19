@@ -83,14 +83,21 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     fun updateConfig(transform: (ProviderConfig) -> ProviderConfig) {
         cancelEditorRequests()
-        _editorState.update { it.copy(config = transform(it.config)) }
+        _editorState.update { it.withConfigUpdate(transform) }
     }
 
     // Blank means "keep the existing stored key" for an edit; only a
     // non-empty value replaces it.
     fun setKeyInput(value: String) {
         cancelEditorRequests()
-        _editorState.update { it.copy(keyInput = value) }
+        _editorState.update {
+            it.copy(
+                keyInput = value,
+                test = null,
+                models = emptyList(),
+                fetchError = null,
+            )
+        }
     }
 
     fun save(onSaved: () -> Unit) {
@@ -212,7 +219,13 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     fun updateHeadersText(text: String) {
         cancelEditorRequests()
         _editorState.update {
-            it.copy(headersText = text, config = it.config.copy(headers = parseHeaders(text)))
+            it.copy(
+                headersText = text,
+                config = it.config.copy(headers = parseHeaders(text)),
+                test = null,
+                models = emptyList(),
+                fetchError = null,
+            )
         }
     }
 
@@ -233,7 +246,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun editorError(error: Exception): String = when (error) {
         is ProviderError -> error.text()
-        is IllegalArgumentException -> ProviderError.MalformedUrl(_editorState.value.config.baseUrl).text()
+        is IllegalArgumentException -> "Provider configuration contains an invalid header or value."
         is SecurityException -> ProviderError.Network("permission").text()
         else -> "Unexpected error (${error.javaClass.simpleName})."
     }

@@ -86,6 +86,12 @@ fun networkError(e: IOException): ProviderError = when {
     else -> ProviderError.Network(e.javaClass.simpleName)
 }
 
+internal fun requestBuilder(url: String): Request.Builder = try {
+    Request.Builder().url(url)
+} catch (e: IllegalArgumentException) {
+    throw ProviderError.MalformedUrl(url)
+}
+
 internal suspend fun OkHttpClient.await(request: Request): Response = newCall(request).await()
 
 internal suspend fun Call.await(): Response =
