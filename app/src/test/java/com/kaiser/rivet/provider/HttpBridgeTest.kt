@@ -86,6 +86,16 @@ class HttpBridgeTest {
         assertSame(expected, call.await())
     }
 
+    @Test
+    fun malformedRequestUrlMapsToProviderError() {
+        try {
+            requestBuilder("not a URL")
+            throw AssertionError("expected malformed URL")
+        } catch (error: ProviderError.MalformedUrl) {
+            assertEquals("The base URL is not a valid URL.", error.text())
+        }
+    }
+
     private fun response(): Response {
         val request = Request.Builder().url("https://localhost/").build()
         return Response.Builder()
