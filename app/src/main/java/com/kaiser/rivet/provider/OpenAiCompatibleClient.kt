@@ -81,7 +81,7 @@ internal class OpenAiCompatibleClient(
     }
 
     private fun base(url: String): Request.Builder {
-        val b = Request.Builder().url(url)
+        val b = requestBuilder(url)
             .header("Authorization", "Bearer $apiKey")
         config.headers.sanitized().forEach { b.header(it.name, it.value) }
         return b
