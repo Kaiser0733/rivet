@@ -14,9 +14,8 @@ import java.net.ConnectException
 import java.net.SocketTimeoutException
 import java.net.UnknownHostException
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 import javax.net.ssl.SSLException
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 // One client, one connection pool for the whole app; per-call timeouts are
 // derived with quick().
@@ -24,6 +23,15 @@ internal val http: OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(15, TimeUnit.SECONDS)
     .readTimeout(300, TimeUnit.SECONDS) // SSE streams idle between deltas
     .writeTimeout(30, TimeUnit.SECONDS)
+    .addInterceptor { chain ->
+        try {
+            chain.proceed(chain.request())
+        } catch (e: SecurityException) {
+            // Android socket permission failures otherwise escape OkHttp's
+            // callback path as an uncaught dispatcher-thread exception.
+            throw IOException("socket permission denied", e)
+        }
+    }
     .build()
 
 internal fun OkHttpClient.quick(): OkHttpClient =
@@ -66,43 +74,54 @@ private fun extractModelName(detail: String): String {
     return detail.take(60)
 }
 
-fun networkError(e: IOException): ProviderError = when (e) {
-    is UnknownHostException -> ProviderError.Network("dns")
-    is ConnectException -> ProviderError.Network("connect")
-    is SocketTimeoutException -> ProviderError.Timeout()
-    is SSLException -> ProviderError.Network("tls")
+fun networkError(e: IOException): ProviderError = when {
+    e.cause is SecurityException -> ProviderError.Network("permission")
+    e is UnknownHostException -> ProviderError.Network("dns")
+    e is ConnectException -> ProviderError.Network("connect")
+    e is SocketTimeoutException -> ProviderError.Timeout()
+    e is SSLException -> ProviderError.Network("tls")
     else -> ProviderError.Network(e.javaClass.simpleName)
 }
 
-internal suspend fun OkHttpClient.await(request: Request): Response =
+internal suspend fun OkHttpClient.await(request: Request): Response = newCall(request).await()
+
+internal suspend fun Call.await(): Response =
     suspendCancellableCoroutine { cont ->
-        val call = newCall(request)
-        cont.invokeOnCancellation { call.cancel() }
-        call.enqueue(object : Callback {
+        val deliveredResponse = AtomicReference<Response?>(null)
+        cont.invokeOnCancellation {
+            cancel()
+            deliveredResponse.getAndSet(null)?.close()
+        }
+        enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                if (call.isCanceled()) cont.resumeWithException(ProviderError.Cancelled)
-                else cont.resumeWithException(networkError(e))
+                val token = cont.tryResumeWithException(networkError(e)) ?: return
+                cont.completeResume(token)
             }
 
             override fun onResponse(call: Call, response: Response) {
-                // If cancellation won the race, resume is a no-op and the
-                // body must be closed here or it leaks.
-                if (!cont.isActive) response.close() else cont.resume(response)
+                deliveredResponse.set(response)
+                val token = cont.tryResume(response)
+                if (token == null) {
+                    deliveredResponse.compareAndSet(response, null)
+                    response.close()
+                    return
+                }
+                cont.completeResume(token)
             }
         })
     }
 
 // Reads an SSE body, invoking onEvent for each non-empty data payload.
-// Coroutine cancellation cancels the OkHttp call, which unblocks the reader
-// loop and resumes normally — cancellation never surfaces as an error.
+// Coroutine cancellation cancels the OkHttp call and remains a
+// CancellationException; callback completion can never resume twice.
 internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Unit) {
     suspendCancellableCoroutine { cont ->
         val call = newCall(request)
         cont.invokeOnCancellation { call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, e: IOException) {
-                if (call.isCanceled()) cont.resume(Unit)
-                else cont.resumeWithException(networkError(e))
+                val token = cont.tryResumeWithException(networkError(e)) ?: return
+                cont.completeResume(token)
             }
 
             override fun onResponse(call: Call, response: Response) {
@@ -110,19 +129,23 @@ internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Uni
                     try {
                         if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
                         val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
-                        while (true) {
+                        while (cont.isActive) {
                             val line = source.readUtf8Line() ?: break
                             if (line.startsWith("data:")) {
                                 val payload = line.removePrefix("data:").trim()
-                                if (payload.isNotEmpty() && payload != "[DONE]") onEvent(payload)
+                                if (cont.isActive && payload.isNotEmpty() && payload != "[DONE]") {
+                                    onEvent(payload)
+                                }
                             }
                         }
-                        cont.resume(Unit)
+                        val token = cont.tryResume(Unit) ?: return
+                        cont.completeResume(token)
                     } catch (e: IOException) {
-                        if (call.isCanceled()) cont.resume(Unit)
-                        else cont.resumeWithException(networkError(e))
+                        val token = cont.tryResumeWithException(networkError(e)) ?: return
+                        cont.completeResume(token)
                     } catch (e: ProviderError) {
-                        cont.resumeWithException(e)
+                        val token = cont.tryResumeWithException(e) ?: return
+                        cont.completeResume(token)
                     }
                 }
             }
