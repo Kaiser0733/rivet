@@ -11,7 +11,6 @@ sealed class ProviderError(message: String) : Exception(message) {
     class Timeout : ProviderError("timeout")
     class InvalidResponse(val detail: String) : ProviderError("invalid response: $detail")
     class Server(val status: Int) : ProviderError("server error: $status")
-    object Cancelled : ProviderError("cancelled")
     object EmptyResponse : ProviderError("empty response")
     class ProviderMessage(val text: String) : ProviderError(text)
 
@@ -28,12 +27,12 @@ sealed class ProviderError(message: String) : Exception(message) {
             "dns" -> "Could not resolve the host. Check the base URL and connection."
             "connect" -> "Could not connect to the provider."
             "tls" -> "The TLS connection to the provider failed."
+            "permission" -> "Android blocked network access for Rivet."
             else -> "The network request failed."
         }
         is Timeout -> "The provider took too long to respond."
         is InvalidResponse -> "The provider returned a response Rivet could not parse."
         is Server -> "Provider server error (HTTP $status)."
-        Cancelled -> "Cancelled."
         EmptyResponse -> "The provider returned an empty response."
         is ProviderMessage -> text
     }
