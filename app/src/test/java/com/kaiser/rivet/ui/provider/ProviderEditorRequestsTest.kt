@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.provider.ModelInfo
+import com.kaiser.rivet.provider.ProviderConfig
+import com.kaiser.rivet.provider.ProviderType
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.test.advanceUntilIdle
@@ -49,5 +52,48 @@ class ProviderEditorRequestsTest {
         owner.cancel {}
 
         assertFalse(owner.isCurrent(oldTicket, "provider-b"))
+    }
+
+    @Test
+    fun changingEndpointClearsResultsFromOldConfiguration() {
+        val state = ProviderEditorState(
+            config = ProviderConfig(
+                id = "provider-a",
+                type = ProviderType.OpenAiCompatible,
+                name = "A",
+                baseUrl = "https://old.example/v1",
+                model = "old-model",
+            ),
+            test = TestUi(true, "old result"),
+            models = listOf(ModelInfo("old-model", "Old")),
+            fetchError = "old error",
+        )
+
+        val changed = state.withConfigUpdate {
+            it.copy(baseUrl = "https://new.example/v1")
+        }
+
+        assertTrue(changed.models.isEmpty())
+        assertTrue(changed.test == null)
+        assertTrue(changed.fetchError == null)
+    }
+
+    @Test
+    fun changingOnlyModelKeepsFetchedChoices() {
+        val models = listOf(ModelInfo("model-a", "A"), ModelInfo("model-b", "B"))
+        val state = ProviderEditorState(
+            config = ProviderConfig(
+                id = "provider-a",
+                type = ProviderType.OpenAiCompatible,
+                name = "A",
+                baseUrl = "https://example.test/v1",
+                model = "model-a",
+            ),
+            models = models,
+        )
+
+        val changed = state.withConfigUpdate { it.copy(model = "model-b") }
+
+        assertTrue(changed.models === models)
     }
 }
