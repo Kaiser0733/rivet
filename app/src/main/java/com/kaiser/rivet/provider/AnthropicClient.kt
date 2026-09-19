@@ -102,7 +102,7 @@ internal class AnthropicClient(
     }
 
     private fun base(url: String): Request.Builder {
-        val b = Request.Builder().url(url)
+        val b = requestBuilder(url)
             .header("x-api-key", apiKey)
             .header("anthropic-version", "2023-06-01")
         config.headers.sanitized().forEach { b.header(it.name, it.value) }
