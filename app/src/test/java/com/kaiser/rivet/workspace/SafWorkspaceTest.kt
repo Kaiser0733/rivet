@@ -42,7 +42,7 @@ class SafWorkspaceTest {
     @Test fun providerContractSupportsFrameworkQueryAndCreation() {
         val resolver = RuntimeEnvironment.getApplication().contentResolver
         val root = DocumentsContract.buildDocumentUriUsingTree(tree, "root")
-        resolver.query(root, arrayOf(DocumentsContract.Document.COLUMN_FLAGS), null, null, null, android.os.CancellationSignal())!!.use {
+        resolver.query(root, arrayOf(DocumentsContract.Document.COLUMN_FLAGS), null, android.os.CancellationSignal())!!.use {
             assertTrue(it.moveToFirst())
             assertTrue(it.getInt(0) and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE != 0)
         }

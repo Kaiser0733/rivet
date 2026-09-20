@@ -196,7 +196,7 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         val writable = requireGrant()
         val context = currentCoroutineContext()
         return signalled { signal ->
-            resolver.query(target, projection, null, null, null, signal)?.use { cursor ->
+            resolver.query(target, projection, null, signal)?.use { cursor ->
                 val entries = mutableListOf<WorkspaceEntry>()
                 while (cursor.moveToNext()) {
                     context.ensureActive()
