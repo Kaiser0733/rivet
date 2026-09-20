@@ -57,6 +57,16 @@ class WorkspaceSearchTest {
         assertTrue(listings <= 2)
         assertTrue(result.entriesVisited <= 5)
     }
+    @Test fun unknownLengthOversizeReadsStayWithinTotalBudget() = runTest {
+        var consumed = 0
+        val result = searchWorkspace("none", WorkspacePath.ROOT,
+            SearchLimits(maxBytes = 5, perFileBytes = 4),
+            { _, _ -> listOf(entry("a"), entry("b")) },
+            { _, cap -> consumed += cap + 1; throw WorkspaceFailure(WorkspaceFailure.Reason.TOO_LARGE) })
+        assertTrue("Consumed $consumed bytes", consumed <= 5)
+        assertTrue(result.bytesScanned <= 5)
+        assertTrue(result.limited)
+    }
     @Test fun epochsRejectStaleResults() {
         val epoch = WorkspaceEpoch()
         val old = epoch.next()
