@@ -7,7 +7,7 @@ import java.nio.charset.CharacterCodingException
 import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 
- data class TextSnapshot(val path: WorkspacePath, val text: String, val sha256: String, val size: Long, val modifiedTime: Long?)
+data class TextSnapshot(val path: WorkspacePath, val text: String, val sha256: String, val size: Long, val modifiedTime: Long?)
 data class TextEdit(val oldText: String, val newText: String)
 
 object WorkspaceText {
