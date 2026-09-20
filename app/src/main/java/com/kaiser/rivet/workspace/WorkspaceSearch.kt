@@ -58,9 +58,9 @@ suspend fun searchWorkspace(
                 pending.add(entry.path)
                 continue
             }
-            if (files >= limits.maxFiles || bytes >= limits.maxBytes) { limited = true; break@outer }
+            if (files >= limits.maxFiles || bytes >= limits.maxBytes - 1) { limited = true; break@outer }
             files++
-            val allowance = minOf(limits.perFileBytes.toLong(), limits.maxBytes - bytes).toInt()
+            val allowance = minOf(limits.perFileBytes.toLong(), limits.maxBytes - bytes - 1).toInt()
             if (entry.size != null && entry.size > allowance) { skipped++; limited = true; continue }
             val content = try {
                 val raw = read(entry, allowance)
@@ -69,7 +69,7 @@ suspend fun searchWorkspace(
                 WorkspaceText.decode(raw)
             } catch (e: WorkspaceFailure) {
                 // Failed reads may have consumed their entire allowance. Charge conservatively.
-                if (e.reason != WorkspaceFailure.Reason.BINARY) bytes += allowance
+                if (e.reason != WorkspaceFailure.Reason.BINARY) bytes += allowance + 1
                 if (e.reason == WorkspaceFailure.Reason.TOO_LARGE) limited = true
                 skipped++
                 continue

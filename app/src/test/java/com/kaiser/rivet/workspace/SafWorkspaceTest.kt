@@ -39,6 +39,17 @@ class SafWorkspaceTest {
         try { operation(); fail("Expected $reason") } catch (e: WorkspaceFailure) { assertEquals(reason, e.reason) }
     }
 
+    @Test fun providerContractSupportsFrameworkQueryAndCreation() {
+        val resolver = RuntimeEnvironment.getApplication().contentResolver
+        val root = DocumentsContract.buildDocumentUriUsingTree(tree, "root")
+        resolver.query(root, arrayOf(DocumentsContract.Document.COLUMN_FLAGS), null, null, null, android.os.CancellationSignal())!!.use {
+            assertTrue(it.moveToFirst())
+            assertTrue(it.getInt(0) and DocumentsContract.Document.FLAG_DIR_SUPPORTS_CREATE != 0)
+        }
+        val created = DocumentsContract.createDocument(resolver, root, "text/plain", "probe")!!
+        assertTrue(DocumentsContract.deleteDocument(resolver, created))
+    }
+
     @Test fun nativeCreateListReadWriteRenameMoveDelete() = runBlocking {
         workspace.createDirectory(path("src"))
         workspace.createFile(path("notes.kt"))

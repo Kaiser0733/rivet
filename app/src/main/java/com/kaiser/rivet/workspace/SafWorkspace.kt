@@ -7,6 +7,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
 import java.io.FileNotFoundException
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
@@ -157,8 +158,8 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
     suspend fun search(query: String, startPath: WorkspacePath = WorkspacePath.ROOT,
         limits: SearchLimits = SearchLimits()): SearchReport = io {
         searchWorkspace(query, startPath, limits,
-            { path, cap -> children(resolve(path), cap) },
-            { entry, cap -> read(entry, cap) })
+            { path, cap -> io { children(resolve(path), cap) } },
+            { entry, cap -> io { read(entry, cap) } })
     }
 
     private suspend fun absent(parent: WorkspaceEntry, name: String) {
@@ -227,19 +228,25 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         if (entry.directory) fail(WorkspaceFailure.Reason.BINARY)
         if (entry.size != null && entry.size > limit) fail(WorkspaceFailure.Reason.TOO_LARGE)
         val context = currentCoroutineContext()
-        return signalled { signal ->
+        val activeInput = AtomicReference<ParcelFileDescriptor.AutoCloseInputStream?>()
+        return signalled(onCancel = { activeInput.getAndSet(null)?.close() }) { signal ->
             val descriptor = resolver.openFileDescriptor(uri(entry.documentId), "r", signal)
                 ?: fail(WorkspaceFailure.Reason.PROVIDER)
             ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                activeInput.set(input)
+                context.ensureActive()
                 WorkspaceText.readBounded(input, limit) { context.ensureActive() }
             }
         }
     }
 
-    private suspend fun <T> signalled(block: (CancellationSignal) -> T): T = coroutineScope {
+    private suspend fun <T> signalled(onCancel: () -> Unit = {}, block: (CancellationSignal) -> T): T = coroutineScope {
         val signal = CancellationSignal()
         val cancellation = launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
-            try { awaitCancellation() } finally { signal.cancel() }
+            try { awaitCancellation() } finally {
+                signal.cancel()
+                try { onCancel() } catch (_: java.io.IOException) { }
+            }
         }
         try { block(signal) } finally { cancellation.cancel() }
     }
