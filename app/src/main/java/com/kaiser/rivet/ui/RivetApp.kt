@@ -1,10 +1,9 @@
 package com.kaiser.rivet.ui
 
-import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.TextButton
-import androidx.compose.ui.platform.LocalContext
+import androidx.activity.compose.LocalActivity
 import com.kaiser.rivet.ui.files.FilesScreen
 import com.kaiser.rivet.ui.files.FilesViewModel
 import androidx.compose.foundation.layout.Box
@@ -58,7 +57,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewMod
         val editing = screen == "editor" && editor.config.id.isNotEmpty()
         val files by filesViewModel.state.collectAsState()
         var confirmExit by rememberSaveable { mutableStateOf(false) }
-        val activity = LocalContext.current as? Activity
+        val activity = LocalActivity.current
         BackHandler(files.dirty || files.mutating) {
             if (!files.mutating) confirmExit = true
         }
