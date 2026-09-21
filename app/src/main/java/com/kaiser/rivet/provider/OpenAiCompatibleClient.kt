@@ -135,6 +135,11 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
+        root["error"]?.let { error ->
+            val message = error.obj()?.get("message")?.str()
+                ?: throw ProviderError.InvalidResponse("invalid stream error")
+            throw ProviderError.ProviderMessage(message)
+        }
         val delta = root["choices"]?.arr()?.firstOrNull()?.obj()?.get("delta")?.obj() ?: return
         delta["content"]?.str()?.takeIf { it.isNotEmpty() }?.let { value ->
             text.append(value); onDelta(value)
