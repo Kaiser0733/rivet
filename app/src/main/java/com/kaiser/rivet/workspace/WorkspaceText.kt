@@ -45,7 +45,13 @@ object WorkspaceText {
 
     fun encode(text: String): ByteArray {
         if (text.length > MAX_BYTES) throw WorkspaceFailure(WorkspaceFailure.Reason.TOO_LARGE)
-        val bytes = text.toByteArray(Charsets.UTF_8)
+        val bytes = try {
+            val encoded = Charsets.UTF_8.newEncoder().onMalformedInput(CodingErrorAction.REPORT)
+                .onUnmappableCharacter(CodingErrorAction.REPORT).encode(java.nio.CharBuffer.wrap(text))
+            ByteArray(encoded.remaining()).also { encoded.get(it) }
+        } catch (_: CharacterCodingException) {
+            throw WorkspaceFailure(WorkspaceFailure.Reason.BINARY)
+        }
         decode(bytes)
         return bytes
     }

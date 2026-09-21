@@ -49,6 +49,9 @@ class WorkspaceTextTest {
         }
         assertFalse(wrote)
     }
+    @Test fun malformedUtf16CannotBeSilentlyReplacedDuringSave() {
+        assertThrows(WorkspaceFailure::class.java) { WorkspaceText.encode("\uD800") }
+    }
     @Test fun encodedWritesCannotExceedLimit() {
         assertThrows(WorkspaceFailure::class.java) { WorkspaceText.encode("λ".repeat(WorkspaceText.MAX_BYTES)) }
     }

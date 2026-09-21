@@ -36,11 +36,15 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                 else {
                     workspace = restored.first
                     mutable.value = FilesState(selected = true)
-                    navigate(restored.second)
+                    navigate(restored.second, restored.third)
                 }
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) { mutable.value = FilesState(error = message(e)) }
         }
+    }
+
+    fun pickerUnavailable() {
+        mutable.update { it.copy(error = "The system folder picker is unavailable. Enable a document provider and try again.") }
     }
 
     fun select(uri: Uri, flags: Int) {
@@ -66,7 +70,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
         cancelSearch()
     }
 
-    fun navigate(path: WorkspacePath) {
+    fun navigate(path: WorkspacePath, reopen: WorkspacePath? = null) {
         val selected = workspace ?: return
         if (mutable.value.mutating || mutable.value.dirty) return
         invalidate()
@@ -80,7 +84,8 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                 ensureActive()
                 if (navigation.isCurrent(ticket)) {
                     mutable.update { it.copy(folder = folder, entries = entries) }
-                    selection.rememberDirectory(selected, path)
+                    selection.rememberLocation(selected, path)
+                    if (reopen != null) open(reopen)
                 }
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
@@ -103,6 +108,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
                 if (!navigation.isCurrent(ticket)) return@launch
                 if (entry.directory) { navigate(path); return@launch }
                 mutable.update { it.copy(opened = entry) }
+                selection.rememberLocation(selected, mutable.value.directory, path)
                 val snapshot = selected.readTextFile(path)
                 ensureActive()
                 if (navigation.isCurrent(ticket)) mutable.update { it.copy(snapshot = snapshot, draft = snapshot.text) }
@@ -136,7 +142,7 @@ class FilesViewModel(application: Application) : AndroidViewModel(application) {
             try {
                 val saved = selected.writeTextFile(snapshot.path, current.draft, snapshot.sha256)
                 ensureActive()
-                if (navigation.isCurrent(ticket)) mutable.update { it.copy(snapshot = saved, draft = saved.text) }
+                if (navigation.isCurrent(ticket)) mutable.update { it.copy(snapshot = saved, draft = saved.text, opened = it.opened?.copy(size = saved.size, modifiedTime = saved.modifiedTime)) }
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 if (navigation.isCurrent(ticket)) mutable.update { it.copy(error = message(e)) }

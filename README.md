@@ -4,7 +4,7 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: early development.** Current phase: 2 of 8 (Provider Engine) —
+**Status: early development.** Current phase: 3 of 8 (Project Workspace) —
 see [MASTER_ROADMAP.md](MASTER_ROADMAP.md).
 
 ## What works today
@@ -22,8 +22,16 @@ see [MASTER_ROADMAP.md](MASTER_ROADMAP.md).
   configuration, and selection restore from app-private storage after a
   restart.
 
-The coding agent, project files, terminal, and Git integration are not
-implemented yet — those arrive in later phases.
+- Native project-folder selection through Android's Storage Access Framework;
+  nested browsing, UTF-8 editing, create/rename/delete, and provider-native moves.
+- SHA-256-checked saves, exact-context patches, and bounded literal project search.
+
+The coding agent, model workspace tools, terminal/runtime, and Git integration
+are not implemented. Workspace access stays inside the selected document tree;
+no broad storage permission is requested. Files above 1 MiB and binary/non-UTF-8
+files cannot be edited. Read-only/cloud providers may reject mutations. Save
+conflicts retain the draft; SAF writes are not universally atomic. Unsaved
+drafts survive rotation, not process death. See ARCHITECTURE.md for limits.
 
 ## Building
 

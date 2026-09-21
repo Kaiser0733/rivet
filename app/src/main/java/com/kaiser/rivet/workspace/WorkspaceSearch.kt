@@ -22,15 +22,15 @@ data class SearchReport(val hits: List<SearchHit>, val filesScanned: Int, val by
 
 suspend fun searchWorkspace(
     query: String,
-    start: WorkspacePath,
+    start: WorkspaceEntry,
     limits: SearchLimits,
-    list: suspend (WorkspacePath, Int) -> List<WorkspaceEntry>,
+    list: suspend (WorkspaceEntry, Int) -> List<WorkspaceEntry>,
     read: suspend (WorkspaceEntry, Int) -> ByteArray,
 ): SearchReport {
     require(query.isNotEmpty() && query.length <= 256)
     val hits = mutableListOf<SearchHit>()
-    val pending = ArrayDeque<WorkspacePath>().apply { add(start) }
-    val visited = mutableSetOf<String>()
+    val pending = ArrayDeque<WorkspaceEntry>().apply { add(start) }
+    val visited = mutableSetOf(start.documentId)
     var files = 0
     var bytes = 0L
     var entries = 0
@@ -43,9 +43,11 @@ suspend fun searchWorkspace(
         val children = try {
             list(directory, limits.maxEntries - entries).sortedWith(WorkspaceEntry.ORDER)
         } catch (e: WorkspaceFailure) {
-            if (e.reason == WorkspaceFailure.Reason.LIMIT) limited = true
+            // A failed provider listing can already have enumerated every allowed row.
+            entries = limits.maxEntries
+            limited = true
             skipped++
-            continue
+            break
         }
         for (entry in children) {
             currentCoroutineContext().ensureActive()
@@ -55,7 +57,7 @@ suspend fun searchWorkspace(
             if (entry.path.value.contains(query)) hits.add(SearchHit(entry.path, null, entry.path.value.take(240), entry.directory))
             if (hits.size >= limits.maxResults) { limited = true; break@outer }
             if (entry.directory) {
-                pending.add(entry.path)
+                pending.add(entry)
                 continue
             }
             if (files >= limits.maxFiles || bytes >= limits.maxBytes - 1) { limited = true; break@outer }
@@ -87,5 +89,5 @@ suspend fun searchWorkspace(
             if (hits.size >= limits.maxResults) { limited = true; break@outer }
         }
     }
-    return SearchReport(hits, files, bytes, entries, skipped, limited)
+    return SearchReport(hits, files, bytes, entries, skipped, limited || entries >= limits.maxEntries)
 }
