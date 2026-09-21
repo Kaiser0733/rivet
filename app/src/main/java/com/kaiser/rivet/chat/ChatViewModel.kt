@@ -4,151 +4,245 @@ import android.app.Application
 import android.util.Log
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
-import com.kaiser.rivet.provider.ChatRequest
+import com.kaiser.rivet.agent.AgentApprovalGate
+import com.kaiser.rivet.agent.AgentApprovalRequest
+import com.kaiser.rivet.agent.AgentLoop
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.AgentRunResult
+import com.kaiser.rivet.agent.AgentStopReason
+import com.kaiser.rivet.agent.AgentToolExecutor
+import com.kaiser.rivet.agent.AgentToolResult
+import com.kaiser.rivet.agent.PreparedAgentTool
+import com.kaiser.rivet.agent.SafAgentWorkspace
+import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.providerClient
-import com.kaiser.rivet.storage.ChatStore
+import com.kaiser.rivet.storage.AgentSessionStore
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
+import com.kaiser.rivet.workspace.WorkspaceSelection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 
 data class ChatUiState(
-    val messages: List<ChatMessage> = emptyList(),
+    val messages: List<AgentMessage> = emptyList(),
+    val ready: Boolean = false,
     val streaming: Boolean = false,
     val streamText: String = "",
+    val pendingApproval: AgentApprovalRequest? = null,
     val error: String? = null,
 )
 
-// ViewModel state and an active stream survive activity recreation during a
-// configuration change. System-initiated process death destroys both; a new
-// instance reloads only completed messages from ChatStore.
 class ChatViewModel(app: Application) : AndroidViewModel(app) {
     private val providerStore = ProviderStore(app)
-    private val chatStore = ChatStore(app)
+    private val sessionStore = AgentSessionStore(app)
     private val secrets = SecretStore(app)
+    private val workspaceSelection = WorkspaceSelection(app)
+    private val approvals = AgentApprovalGate()
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     private var sendJob: Job? = null
-
-    // Honest and tool-free: the model is a coding-oriented conversational
-    // assistant inside Rivet, nothing more. No tool, file, or terminal
-    // claims until Phase 4 gives it any.
-    private val systemInstruction =
-        "You are a coding assistant inside Rivet, an Android app. Keep answers clear and concise. You do not have access to tools, files, or a terminal."
+    private var generation = 0L
 
     init {
         viewModelScope.launch {
-            chatStore.messages.collect { stored ->
-                // The live list is authoritative while streaming; storage
-                // catches up on completion.
-                if (!_uiState.value.streaming) {
-                    _uiState.update { it.copy(messages = stored) }
+            val ticket = generation
+            val restored = sessionStore.load()
+            if (ticket == generation) {
+                _uiState.update { state ->
+                    state.copy(
+                        messages = restored.messages,
+                        ready = true,
+                        error = if (restored.interrupted) "Previous agent turn was interrupted." else state.error,
+                    )
                 }
+                if (restored.interrupted) sessionStore.markInterrupted(false)
+            }
+        }
+        viewModelScope.launch {
+            approvals.pending.collect { pending ->
+                _uiState.update { it.copy(pendingApproval = pending) }
             }
         }
     }
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _uiState.value.streaming) return
+        if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready) return
+        val ticket = ++generation
         sendJob = viewModelScope.launch {
-            // Snapshot the provider and model at send time so changing
-            // selection mid-stream cannot redirect an active request;
-            // changes apply to the NEXT send.
-            val activeId = providerStore.activeIdSnapshot() ?: run {
-                _uiState.update { it.copy(error = "No provider selected. Add one in Settings.") }
-                return@launch
+            val snapshot = providerSnapshot() ?: return@launch
+            val restoredWorkspace = try {
+                workspaceSelection.restore()
+            } catch (_: Exception) {
+                null
             }
-            val config: ProviderConfig =
-                providerStore.configSnapshot().firstOrNull { it.id == activeId } ?: run {
-                    _uiState.update { it.copy(error = "The selected provider no longer exists.") }
-                    return@launch
-                }
-            val apiKey = secrets.apiKey(config.id) ?: run {
-                _uiState.update { it.copy(error = "No API key stored for \"${config.name}\".") }
-                return@launch
-            }
-
-            val outgoing = _uiState.value.messages + ChatMessage(ChatRole.User, trimmed)
+            val workspace = restoredWorkspace?.first
+            val workspaceId = workspace?.tree?.toString()
+            val executor = workspace?.let { AgentToolExecutor(SafAgentWorkspace(it)) }
+            val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
+            val client = providerClient(snapshot.config, snapshot.apiKey)
+            val durable = (_uiState.value.messages + AgentMessage.user(trimmed)).toMutableList()
             _uiState.update {
-                it.copy(
-                    messages = outgoing,
-                    streaming = true,
-                    streamText = "",
-                    error = null,
-                )
+                it.copy(messages = durable.toList(), streaming = true, streamText = "", error = null)
             }
-            chatStore.save(outgoing)
+            sessionStore.save(durable, interrupted = true)
 
-            // Appended from the SSE reader thread; StringBuffer keeps the
-            // concurrent read in the cancel path safe.
-            val accumulated = StringBuffer()
-            try {
-                providerClient(config, apiKey).streamChat(
-                    ChatRequest(
-                        model = config.model,
-                        messages = outgoing,
-                        system = systemInstruction,
-                        reasoning = config.reasoning,
-                    ),
-                ) { delta ->
-                    accumulated.append(delta)
-                    _uiState.update { it.copy(streamText = accumulated.toString()) }
-                }
-                val full = accumulated.toString()
-                if (full.isBlank()) {
-                    _uiState.update {
-                        it.copy(streaming = false, error = ProviderError.EmptyResponse.text())
+            val loop = AgentLoop(
+                requestModel = { messages, definitions, onText ->
+                    client.streamAgent(
+                        AgentRequest(
+                            model = snapshot.config.model,
+                            messages = messages,
+                            system = systemInstruction(workspace != null),
+                            reasoning = snapshot.config.reasoning,
+                            tools = definitions,
+                        ),
+                        onText,
+                    )
+                },
+                prepareTool = { call ->
+                    executor?.prepare(call) ?: PreparedAgentTool(call, null) {
+                        AgentToolResult(
+                            call.id,
+                            call.name,
+                            "{\"error\":\"workspace_unavailable\"}",
+                            error = true,
+                            summary = "Failed  ${call.name}",
+                        )
                     }
-                } else {
-                    val completed = outgoing + ChatMessage(ChatRole.Assistant, full)
-                    _uiState.update { it.copy(messages = completed, streaming = false, streamText = "") }
-                    chatStore.save(completed)
+                },
+                requestApproval = approvals::await,
+                workspaceIsCurrent = {
+                    workspaceId == null || workspaceSelection.currentIdentity() == workspaceId
+                },
+            )
+            val streamed = StringBuffer()
+            try {
+                val runLoop: suspend () -> AgentRunResult = {
+                    loop.run(
+                        initial = durable,
+                        tools = tools,
+                        onText = { delta ->
+                            if (ticket == generation) {
+                                streamed.append(delta)
+                                _uiState.update { it.copy(streamText = streamed.toString()) }
+                            }
+                        },
+                        onMessage = { message ->
+                            if (ticket == generation) {
+                                durable += message
+                                if (message.role == AgentRole.Assistant) streamed.setLength(0)
+                                _uiState.update { it.copy(messages = durable.toList(), streamText = streamed.toString()) }
+                                sessionStore.save(durable, interrupted = true)
+                            }
+                        },
+                    )
                 }
-            } catch (e: CancellationException) {
-                // Mid-stream stop: keep whatever arrived as the reply.
-                val partial = accumulated.toString()
-                withContext(NonCancellable) {
-                    if (partial.isNotBlank()) {
-                        val stopped = outgoing + ChatMessage(ChatRole.Assistant, partial)
-                        _uiState.update {
-                            it.copy(messages = stopped, streaming = false, streamText = "")
+                val result = if (workspaceId == null) runLoop() else coroutineScope {
+                    val running = async { runLoop() }
+                    val changed = async { workspaceSelection.awaitIdentityChange(workspaceId) }
+                    select {
+                        running.onAwait { completed ->
+                            changed.cancelAndJoin()
+                            completed
                         }
-                        chatStore.save(stopped)
-                    } else {
-                        _uiState.update { it.copy(streaming = false, streamText = "") }
+                        changed.onAwait {
+                            approvals.cancel()
+                            running.cancelAndJoin()
+                            AgentRunResult(durable.toList(), AgentStopReason.WorkspaceChanged, 0, 0)
+                        }
+                    }
+                }
+                if (ticket == generation) finish(result, durable)
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    if (ticket == generation) {
+                        sessionStore.save(durable, interrupted = false)
+                        _uiState.update { it.copy(streaming = false, streamText = "", pendingApproval = null) }
                     }
                 }
                 throw e
             } catch (e: ProviderError) {
-                // Category only; never body text or key material.
-                Log.w("RivetChat", "stream failed: ${e.javaClass.simpleName}")
-                _uiState.update { it.copy(streaming = false, streamText = "", error = e.text()) }
+                Log.w("RivetChat", "agent request failed: ${e.javaClass.simpleName}")
+                stableFailure(ticket, durable, e.text())
             } catch (e: Exception) {
-                Log.w("RivetChat", "unexpected failure: ${e.javaClass.simpleName}")
-                _uiState.update {
-                    it.copy(
-                        streaming = false,
-                        streamText = "",
-                        error = "Unexpected error (${e.javaClass.simpleName}).",
-                    )
-                }
+                Log.w("RivetChat", "agent turn failed: ${e.javaClass.simpleName}")
+                stableFailure(ticket, durable, "Unexpected error (${e.javaClass.simpleName}).")
+            } finally {
+                approvals.cancel()
             }
         }
     }
 
+    private suspend fun finish(result: AgentRunResult, durable: List<AgentMessage>) {
+        val error = when (result.stopReason) {
+            AgentStopReason.Completed -> {
+                val last = result.messages.lastOrNull()
+                if (last?.role == AgentRole.Assistant && last.text.isBlank() && last.toolCalls.isEmpty()) {
+                    ProviderError.EmptyResponse.text()
+                } else null
+            }
+            AgentStopReason.IterationLimit -> "Agent stopped after ${AgentLoop.MAX_MODEL_ITERATIONS} model iterations."
+            AgentStopReason.ToolCallLimit -> "Agent stopped after ${AgentLoop.MAX_TOOL_CALLS} tool calls."
+            AgentStopReason.WorkspaceChanged -> "Workspace changed. The agent turn was stopped."
+        }
+        val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
+        sessionStore.save(persisted, interrupted = false)
+        _uiState.update {
+            it.copy(messages = persisted, streaming = false, streamText = "", pendingApproval = null, error = error)
+        }
+    }
+
+    private suspend fun stableFailure(ticket: Long, durable: List<AgentMessage>, message: String) {
+        if (ticket != generation) return
+        sessionStore.save(durable, interrupted = false)
+        _uiState.update {
+            it.copy(messages = durable, streaming = false, streamText = "", pendingApproval = null, error = message)
+        }
+    }
+
+    private suspend fun providerSnapshot(): ProviderSnapshot? {
+        val activeId = providerStore.activeIdSnapshot() ?: return failBeforeStart(
+            "No provider selected. Add one in Settings.",
+        )
+        val config: ProviderConfig = providerStore.configSnapshot().firstOrNull { it.id == activeId }
+            ?: return failBeforeStart("The selected provider no longer exists.")
+        val apiKey = secrets.apiKey(config.id)
+            ?: return failBeforeStart("No API key stored for \"${config.name}\".")
+        return ProviderSnapshot(config, apiKey)
+    }
+
+    private fun failBeforeStart(message: String): Nothing? {
+        _uiState.update { it.copy(error = message) }
+        return null
+    }
+
+    fun approve(callId: String) {
+        approvals.resolve(callId, approved = true)
+    }
+
+    fun deny(callId: String) {
+        approvals.resolve(callId, approved = false)
+    }
+
     fun cancel() {
+        approvals.cancel()
         sendJob?.cancel()
     }
 
@@ -157,9 +251,24 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun clearChat() {
-        sendJob?.cancel()
-        _uiState.value = ChatUiState()
-        viewModelScope.launch { chatStore.clear() }
+        val ticket = ++generation
+        approvals.cancel()
+        viewModelScope.launch {
+            sendJob?.cancelAndJoin()
+            if (ticket == generation) {
+                sessionStore.clear()
+                _uiState.value = ChatUiState(ready = true)
+            }
+        }
+    }
+
+    private data class ProviderSnapshot(val config: ProviderConfig, val apiKey: String)
+
+    companion object {
+        private fun systemInstruction(workspace: Boolean): String = if (workspace) {
+            "You are a coding agent inside Rivet. Inspect relevant files before editing. Paths are relative to the selected workspace. Prefer targeted edits. Tool results are authoritative and mutations require approval. You have no terminal, shell, Git, build, or test execution. Never claim commands ran or invent file contents."
+        } else {
+            "You are a coding assistant inside Rivet. Keep answers clear and concise. No workspace is selected, and you have no file, terminal, shell, Git, build, or test access."
+        }
     }
 }
-

@@ -1,6 +1,9 @@
 package com.kaiser.rivet.provider
 
 import com.kaiser.rivet.chat.ChatMessage
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentResponse
+import com.kaiser.rivet.agent.AgentToolDefinition
 
 data class ModelInfo(val id: String, val label: String)
 
@@ -15,6 +18,14 @@ data class ChatRequest(
     val reasoning: ReasoningLevel,
 )
 
+data class AgentRequest(
+    val model: String,
+    val messages: List<AgentMessage>,
+    val system: String,
+    val reasoning: ReasoningLevel,
+    val tools: List<AgentToolDefinition>,
+)
+
 interface ProviderClient {
     suspend fun listModels(): List<ModelInfo>
 
@@ -23,6 +34,8 @@ interface ProviderClient {
     // Returns the full accumulated response text; onDelta receives each
     // chunk as it arrives.
     suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit): String
+
+    suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse
 }
 
 fun providerClient(config: ProviderConfig, apiKey: String): ProviderClient =

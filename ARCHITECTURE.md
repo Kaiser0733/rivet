@@ -3,7 +3,7 @@
 Describes what exists today. Phase-by-phase growth is recorded in
 MASTER_ROADMAP.md; anything not listed here is not in the tree.
 
-## Current shape (Phase 3: Project Workspace)
+## Current shape (Phase 4: Agent Loop)
 
 One Android module, `:app`, package `com.kaiser.rivet`.
 
@@ -22,11 +22,17 @@ app/src/main/java/com/kaiser/rivet/
         GeminiClient.kt      # native generateContent
     chat/
         ChatMessage.kt        # message + role model
-        ChatViewModel.kt     # send/cancel/state; send-time provider snapshot
+        ChatViewModel.kt     # agent orchestration, snapshots, cancellation
+    agent/
+        AgentProtocol.kt      # persisted provider-neutral transcript
+        AgentLoop.kt          # capped model/tool/result loop
+        AgentApprovalGate.kt  # one-shot mutation approval authority
+        AgentToolExecutor.kt  # strict workspace tool schemas and validation
+        SafAgentWorkspace.kt  # adapter to the trusted SAF boundary
     storage/
         ProviderStore.kt     # DataStore: provider configs + active id
         SecretStore.kt       # Android Keystore + AES-GCM API-key storage
-        ChatStore.kt         # DataStore: one persistent conversation
+        ChatStore.kt         # legacy chat plus migrated agent session
     workspace/
         SafWorkspace.kt       # native SAF traversal and document operations
         WorkspaceSelection.kt # persisted tree grant and directory navigation
@@ -50,7 +56,7 @@ app/src/main/java/com/kaiser/rivet/
 ## Provider boundary
 
 `ProviderClient` is the one interface with multiple implementations:
-`listModels`, `testConnection`, `streamChat`. All three transports share
+`listModels`, `testConnection`, `streamChat`, and `streamAgent`. All three transports share
 `Http.kt` (OkHttp, SSE reader) and `Endpoints.kt`; OpenAI, OpenRouter, and
 custom endpoints share one client class — only Anthropic and Gemini get
 their own request shapes.
@@ -60,7 +66,14 @@ invoking `onDelta` per chunk; the ViewModel appends into UI state. The SSE
 loop lives on OkHttp's callback thread; coroutine cancellation cancels the
 underlying call, which unblocks the reader.
 
-Send-time snapshot: `ChatViewModel.send` captures provider + model before
+The agent transcript represents user and assistant text, structured tool calls,
+and correlated tool results without provider wire syntax. Adapters translate it
+to Chat Completions tools, Anthropic `tool_use` / `tool_result` blocks, or Gemini
+function calls and responses. Stream parsers retain call IDs, multiple calls,
+fragmented arguments, Anthropic thinking blocks, and Gemini thought signatures.
+
+Send-time snapshot: `ChatViewModel.send` captures provider, model, reasoning,
+credential, and workspace before
 the request starts. Switching provider/model mid-stream affects the next
 message only; the active request completes (or is stopped) on its own.
 
@@ -68,8 +81,9 @@ message only; the active request completes (or is stopped) on its own.
 
 - Provider configs + active selection: DataStore Preferences, keys
   `configs` / `active_id`, JSON-encoded list.
-- Chat history: DataStore Preferences, key `messages`, JSON list. One
-  conversation.
+- Agent history: DataStore Preferences, provider-neutral JSON under
+  `agent_messages`. The former `messages` list is imported once and is not
+  deleted by migration. One conversation.
 - API keys: app-private preferences contain versioned IV+ciphertext records.
   A non-exportable AES-256 key in AndroidKeyStore encrypts each value with
   AES/GCM/NoPadding; the provider id is authenticated as associated data.
@@ -86,8 +100,25 @@ wide layouts instead of stretching phone-width fields across a tablet.
 Rotation: ViewModels and their active work survive activity recreation, while
 `rememberSaveable` may restore the selected tab and screen. System-initiated
 process death destroys the ViewModels and terminates any active stream. A new
-process reloads completed provider configuration and chat history from
-DataStore; streams are not resumed or reconstructed.
+process reloads completed provider configuration and agent history from
+DataStore. An interrupted marker is shown once; streams and approvals are never
+resumed or reconstructed.
+
+## Agent execution boundary
+
+`AgentLoop` allows 20 model iterations and 50 requested tools per user turn.
+Read-only `list_directory`, `read_file`, and `search_files` calls run directly.
+Every write, exact patch, create, rename, move, and delete waits for a one-shot
+Approve or Deny decision. A repeated identical denial within the turn stays
+denied. Tool validation rejects unknown names, extra or missing JSON fields,
+invalid paths, hashes, and oversized input before SAF is called.
+
+The workspace identity is checked before every tool and again after approval.
+Changing the selected tree stops the turn instead of redirecting work. Stop
+cancels the provider request, pending approval, future calls, and cancellable
+reads. A SAF commit that already began retains Phase 3 non-cancellable commit
+semantics, and its completed result is persisted. Tool errors remain correlated
+results so the same model can inspect and recover.
 
 ## Workspace boundary
 
@@ -142,6 +173,7 @@ FilesViewModel survives rotation with navigation, draft, and active operation
 state. Navigation and search epochs reject late results; saves/mutations block
 editor navigation until completion. Back navigation/discard and deletion require
 confirmation. Process death ends asynchronous work and loses unsaved drafts;
-only the selected tree, directory, and file path restore (file bytes are reread). Whole project contents are not
-persisted. There is no indexing database, model workspace access, agent loop,
-terminal/shell/runtime integration, Git, or diff tracking.
+only the selected tree, directory, and file path restore (file bytes are reread).
+Whole project contents are not persisted. Model access is limited to the ten
+declared workspace tools and never exposes URIs or document IDs. There is no
+indexing database, terminal/shell/runtime integration, Git, or diff tracking.

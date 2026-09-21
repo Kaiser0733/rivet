@@ -1,6 +1,7 @@
 package com.kaiser.rivet.workspace
 
 import android.content.Intent
+import android.content.Context
 import android.content.pm.ProviderInfo
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -9,6 +10,7 @@ import androidx.lifecycle.ViewModelStore
 import com.kaiser.rivet.ui.files.FilesState
 import com.kaiser.rivet.ui.files.FilesViewModel
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -16,6 +18,7 @@ import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.yield
 import org.junit.After
 import org.junit.Assert.*
 import org.junit.Before
@@ -103,5 +106,17 @@ class FilesViewModelTest {
         assertTrue(rejected.selected)
         assertEquals("keep me", rejected.draft)
         assertEquals("a.kt", rejected.opened?.path?.value)
+    }
+
+    @Test fun workspaceIdentityWaiterCompletesOnReplacement() = runBlocking {
+        val selection = WorkspaceSelection(app)
+        val expected = selection.currentIdentity()!!
+        val changed = async { selection.awaitIdentityChange(expected) }
+        yield()
+
+        app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+            .putString("tree", "content://replacement/tree/root").commit()
+
+        withTimeout(1000) { changed.await() }
     }
 }
