@@ -1,5 +1,11 @@
 package com.kaiser.rivet.ui
 
+import androidx.activity.compose.BackHandler
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.TextButton
+import androidx.activity.compose.LocalActivity
+import com.kaiser.rivet.ui.files.FilesScreen
+import com.kaiser.rivet.ui.files.FilesViewModel
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -38,7 +44,7 @@ import com.kaiser.rivet.ui.provider.SettingsScreen
 private const val RAIL_MIN_WIDTH_DP = 600
 
 @Composable
-fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel) {
+fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel, filesViewModel: FilesViewModel) {
     RivetTheme {
         var current by rememberSaveable { mutableStateOf(RivetDestination.Chat.name) }
         var screen by rememberSaveable { mutableStateOf("tabs") } // tabs | settings | editor
@@ -49,6 +55,23 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewMod
         // the editor state resets; an editor without a config id must not
         // render (an empty id could be saved as a bogus provider).
         val editing = screen == "editor" && editor.config.id.isNotEmpty()
+        val files by filesViewModel.state.collectAsState()
+        var confirmExit by rememberSaveable { mutableStateOf(false) }
+        val activity = LocalActivity.current
+        BackHandler(files.dirty || files.mutating) {
+            if (!files.mutating) confirmExit = true
+        }
+        if (confirmExit) {
+            AlertDialog(onDismissRequest = { confirmExit = false },
+                title = { Text("Unsaved file changes") },
+                text = { Text("Exit without saving your file draft?") },
+                confirmButton = { TextButton(onClick = {
+                    filesViewModel.discard(); confirmExit = false; activity?.finish()
+                }) { Text("Discard and exit") } },
+                dismissButton = { TextButton(onClick = {
+                    confirmExit = false; screen = "tabs"; current = RivetDestination.Files.name
+                }) { Text("Return to editor") } })
+        }
 
         if (screen == "settings" || editing) {
             if (editing) {
@@ -119,7 +142,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewMod
                             providersViewModel = providersViewModel,
                             onOpenSettings = { screen = "settings" },
                         )
-                        RivetDestination.Files, RivetDestination.Changes, RivetDestination.Terminal -> Box(
+                        RivetDestination.Files -> FilesScreen(filesViewModel)
+                        RivetDestination.Changes, RivetDestination.Terminal -> Box(
                             Modifier.fillMaxSize(),
                             contentAlignment = Alignment.Center,
                         ) {

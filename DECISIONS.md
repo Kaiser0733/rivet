@@ -139,3 +139,37 @@ Why: small data, reactive, schema-evolution via JSON list decode with
 `ignoreUnknownKeys`; a database is unjustified for this size.
 Change trigger: multi-session chat (Phase 4+) demanding relational storage.
 
+## D18 — SAF tree as the workspace boundary
+
+What: native DocumentsContract operations under a persistently granted tree URI;
+no raw filesystem paths, shell commands, or broad storage permissions.
+Why: scoped storage and read-only/cloud provider compatibility. Relative paths
+resolve one directory at a time, and provider metadata carries capabilities.
+Change trigger: a new Android storage contract, not a runtime shortcut.
+
+## D19 — Bounded UTF-8 snapshots and optimistic conflict detection
+
+What: 1 MiB editable-file limit, strict UTF-8 decoding, original-byte SHA-256
+snapshots. Saves recheck the hash and verify the resulting bytes. Exact patches
+validate sequential unique matches entirely in memory before saving.
+Why: bounded Android memory use and explicit external-change conflicts. SAF
+cannot guarantee atomic writes or lock out external writers; provider failure
+may leave partial content. Drafts remain in memory on save errors.
+
+## D20 — Native moves only, capability-gated mutations
+
+What: create/delete/rename/move use platform document APIs; no copy/delete move
+fallback. Returned identities are resolved again; the root is immutable.
+Why: provider rejection is safer than a partial fallback that loses source data.
+Change trigger: a demonstrated need for a separately verified, recoverable copy
+protocol, with explicit directory semantics.
+
+## D21 — ViewModel drafts and bounded unindexed search
+
+What: activity-scoped workspace state, generation-checked reads/searches,
+serialized mutations, and persisted URI/directory/file paths only. Search has explicit
+file/entry/byte/result limits and cancellation. Test-only Robolectric runs a
+small disposable DocumentsProvider to exercise the native contract.
+Why: rotation keeps edits and jobs without saving whole project contents;
+process death does not pretend to preserve drafts or active asynchronous work.
+No workspace operations are exposed to models in this phase.
