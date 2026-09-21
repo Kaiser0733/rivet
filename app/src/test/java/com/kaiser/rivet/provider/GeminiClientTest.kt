@@ -1,6 +1,12 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolDefinition
+import com.kaiser.rivet.agent.AgentToolResult
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -81,5 +87,32 @@ class GeminiClientTest {
         } catch (e: ProviderError.ProviderMessage) {
             assertTrue(e.message!!.contains("Resource exhausted"))
         }
+    }
+
+    @Test
+    fun nativeFunctionCallsAndResponsesPreserveIds() = runTest {
+        val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
+            "{\"text\":\"Inspecting\"},{\"functionCall\":{\"id\":\"g-1\",\"name\":\"read_file\",\"args\":{\"path\":\"A.kt\"}},\"thoughtSignature\":\"sig\"}" +
+            "]}}]}\n\n"
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+        val client = GeminiClient(config(), "key")
+        val response = client.streamAgent(AgentRequest(
+            "gemini-x", emptyList(), "sys", ReasoningLevel.Default,
+            listOf(AgentToolDefinition("read_file", "Read", buildJsonObject { put("type", "object") })),
+        )) {}
+        assertEquals("Inspecting", response.text)
+        assertEquals(AgentToolCall("g-1", "read_file", "{\"path\":\"A.kt\"}"), response.toolCalls.single())
+        server.takeRequest()
+
+        server.enqueue(MockResponse().setBody("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]}}]}\n\n"))
+        client.streamAgent(AgentRequest(
+            "gemini-x",
+            listOf(AgentMessage.assistant("", response.toolCalls, response.transportState), AgentMessage.tools(listOf(
+                AgentToolResult("g-1", "read_file", "{\"text\":\"x\"}"),
+            ))), "", ReasoningLevel.Default, emptyList(),
+        )) {}
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"thoughtSignature\":\"sig\""))
+        assertTrue(body.contains("\"functionResponse\":{\"id\":\"g-1\",\"name\":\"read_file\""))
     }
 }
