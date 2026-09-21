@@ -28,6 +28,10 @@ class WorkspaceSelection(context: Context) {
         Triple(SafWorkspace(resolver, Uri.parse(stored)), path, file)
     }
 
+    suspend fun currentIdentity(): String? = withContext(Dispatchers.IO) {
+        preferences.getString("tree", null)
+    }
+
     suspend fun select(uri: Uri, returnedFlags: Int): SafWorkspace = withContext(Dispatchers.IO) {
         if (uri.scheme != "content" || !DocumentsContract.isTreeUri(uri) ||
             returnedFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION == 0 ||
