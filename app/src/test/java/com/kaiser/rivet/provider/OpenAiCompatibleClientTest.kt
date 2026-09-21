@@ -204,4 +204,20 @@ class OpenAiCompatibleClientTest {
         assertEquals("read_file", response.toolCalls[0].name)
         assertEquals("search_files", response.toolCalls[1].name)
     }
+
+    @Test
+    fun streamErrorSurfacesProviderMessage() = runTest {
+        server.enqueue(MockResponse().setBody(
+            "data: {\"error\":{\"message\":\"Tools are unsupported\"}}\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
+
+        try {
+            OpenAiCompatibleClient(config(), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            throw AssertionError("expected ProviderMessage")
+        } catch (e: ProviderError.ProviderMessage) {
+            assertTrue(e.text.contains("unsupported"))
+        }
+    }
 }
