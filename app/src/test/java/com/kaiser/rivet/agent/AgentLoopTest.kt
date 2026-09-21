@@ -271,10 +271,14 @@ class AgentLoopTest {
     @Test
     fun cancellationWhileWaitingForApprovalStartsNoMutation() = runTest {
         val entered = CompletableDeferred<Unit>()
+        val completed = mutableListOf<AgentMessage>()
         var executions = 0
-        val call = AgentToolCall("edit", "delete_path", "{}")
+        val calls = listOf(
+            AgentToolCall("edit", "delete_path", "{}"),
+            AgentToolCall("next", "write_file", "{}"),
+        )
         val loop = AgentLoop(
-            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = calls) },
             prepareTool = { requested -> PreparedAgentTool(
                 requested,
                 AgentApprovalRequest(requested, "Delete", "A.kt"),
@@ -284,12 +288,21 @@ class AgentLoopTest {
             } },
             requestApproval = { entered.complete(Unit); awaitCancellation() },
         )
-        val running = async { loop.run(listOf(AgentMessage.user("Delete")), emptyList()) }
+        val running = async {
+            loop.run(
+                listOf(AgentMessage.user("Delete")),
+                emptyList(),
+                onMessage = { completed += it },
+            )
+        }
         entered.await()
 
         running.cancelAndJoin()
 
         assertEquals(0, executions)
+        val results = completed.flatMap { it.toolResults }
+        assertEquals(listOf("edit", "next"), results.map { it.callId })
+        assertTrue(results.all { it.error && "cancelled" in it.content })
     }
 
     @Test
