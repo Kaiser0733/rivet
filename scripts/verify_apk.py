@@ -42,6 +42,9 @@ for expected in (
     assert expected in badging, f"badging mismatch: expected {expected} in {badging}"
 permission = "uses-permission: name='android.permission.INTERNET'"
 assert permission in badging_lines, f"APK missing required permission: {permission}"
+for forbidden in ("MANAGE_EXTERNAL_STORAGE", "READ_EXTERNAL_STORAGE", "WRITE_EXTERNAL_STORAGE"):
+    assert not any(f"android.permission.{forbidden}" in line for line in badging_lines), f"Forbidden permission: {forbidden}"
+print("broad-storage permissions: absent")
 
 signing = run(str(tools / "apksigner"), "verify", "--print-certs", apk)
 certificate = subprocess.check_output(

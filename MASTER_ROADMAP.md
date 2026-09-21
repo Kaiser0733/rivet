@@ -18,8 +18,11 @@ conversation.
 
 ## Phase 3 — Project Workspace
 
-Selecting a project on device, filesystem browsing, file viewing and
-editing.
+Native SAF selection with persisted tree permission, nested browsing, bounded
+UTF-8 reading/editing, fingerprint conflicts, native create/delete/rename/move,
+literal search, and exact-context patching. No model workspace access or runtime.
+Implementation is covered by JVM logic and simulated DocumentsProvider tests;
+physical-device/provider compatibility validation remains required.
 
 ## Phase 4 — Agent Loop
 
