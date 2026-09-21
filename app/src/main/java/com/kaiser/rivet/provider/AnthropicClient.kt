@@ -137,9 +137,10 @@ private fun anthropicMessage(message: AgentMessage): JsonObject = when (message.
         put("role", "assistant")
         put("content", buildJsonArray {
             message.transportState?.let { raw ->
-                val state = try { Json.parseToJsonElement(raw) as? JsonArray } catch (_: Exception) { null }
-                    ?: throw ProviderError.InvalidResponse("invalid continuation state")
-                state.forEach(::add)
+                val state = try { Json.parseToJsonElement(raw) as? JsonObject } catch (_: Exception) { null }
+                if (state?.get("provider")?.str() == "anthropic") {
+                    state["blocks"]?.arr()?.forEach(::add)
+                }
             }
             if (message.text.isNotEmpty()) add(buildJsonObject { put("type", "text"); put("text", message.text) })
             message.toolCalls.forEach { call ->
@@ -180,6 +181,11 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
         when (root["type"]?.str()) {
+            "error" -> {
+                val message = root["error"]?.obj()?.get("message")?.str()
+                    ?: throw ProviderError.InvalidResponse("stream error")
+                throw ProviderError.ProviderMessage(message)
+            }
             "content_block_start" -> {
                 val index = root["index"]?.jsonPrimitive?.intOrNull
                     ?: throw ProviderError.InvalidResponse("content index missing")
@@ -223,13 +229,17 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
             }
             AgentToolCall(tool.id, tool.name, arguments)
         }
-        val state = thinking.values.map { block -> buildJsonObject {
+        val blocks = thinking.values.map { block -> buildJsonObject {
             put("type", block.type)
             if (block.type == "thinking") {
                 put("thinking", block.thinking.toString())
                 block.signature?.let { put("signature", it) }
             } else block.data?.let { put("data", it) }
-        } }.takeIf { it.isNotEmpty() }?.let(::JsonArray)?.toString()
+        } }
+        val state = blocks.takeIf { it.isNotEmpty() }?.let { values -> buildJsonObject {
+            put("provider", "anthropic")
+            put("blocks", JsonArray(values))
+        }.toString() }
         return AgentResponse(text.toString(), calls, state)
     }
 }

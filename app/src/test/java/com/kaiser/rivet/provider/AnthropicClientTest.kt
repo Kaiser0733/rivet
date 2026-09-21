@@ -173,4 +173,20 @@ class AnthropicClientTest {
         assertEquals(listOf("{\"path\":\"A.kt\"}", "{\"path\":\"B.kt\"}"),
             response.toolCalls.map { it.arguments })
     }
+
+    @Test
+    fun streamErrorSurfacesProviderMessage() = runTest {
+        server.enqueue(MockResponse().setBody(
+            "data: {\"type\":\"error\",\"error\":{\"message\":\"Overloaded mid-stream\"}}\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
+
+        try {
+            AnthropicClient(config(), "key").streamAgent(
+                AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            throw AssertionError("expected ProviderMessage")
+        } catch (e: ProviderError.ProviderMessage) {
+            assertTrue(e.text.contains("Overloaded"))
+        }
+    }
 }
