@@ -41,19 +41,19 @@ class WorkspaceSelection(context: Context) {
             if (!candidate.stat(WorkspacePath.ROOT).directory) throw WorkspaceFailure(WorkspaceFailure.Reason.NOT_DIRECTORY)
             withContext(NonCancellable) {
                 persistence.withLock {
-                val previous = preferences.getString("tree", null)
-                if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").remove("file").commit()) {
-                    throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
-                }
-                if (previous != null && previous != uri.toString()) {
-                    try {
-                        resolver.persistedUriPermissions.firstOrNull { it.uri.toString() == previous }?.let {
-                            val previousFlags = (if (it.isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
-                                (if (it.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
-                            resolver.releasePersistableUriPermission(it.uri, previousFlags)
-                        }
-                    } catch (_: Exception) { /* Releasing an obsolete grant cannot undo the new selection. */ }
-                }
+                    val previous = preferences.getString("tree", null)
+                    if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").remove("file").commit()) {
+                        throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
+                    }
+                    if (previous != null && previous != uri.toString()) {
+                        try {
+                            resolver.persistedUriPermissions.firstOrNull { it.uri.toString() == previous }?.let {
+                                val previousFlags = (if (it.isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+                                    (if (it.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+                                resolver.releasePersistableUriPermission(it.uri, previousFlags)
+                            }
+                        } catch (_: Exception) { /* Releasing an obsolete grant cannot undo the new selection. */ }
+                    }
                 }
             }
             candidate

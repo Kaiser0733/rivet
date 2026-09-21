@@ -30,6 +30,13 @@ object WorkspaceText {
         return output.toByteArray()
     }
 
+    fun isBinaryMime(mime: String): Boolean {
+        val type = mime.substringBefore(';').trim().lowercase(java.util.Locale.ROOT)
+        if (type.endsWith("+xml")) return false
+        return type.startsWith("image/") || type.startsWith("audio/") || type.startsWith("video/") ||
+            type.startsWith("font/") || type in setOf("application/pdf", "application/zip", "application/gzip")
+    }
+
     fun decode(bytes: ByteArray): String {
         if (bytes.size > MAX_BYTES) throw WorkspaceFailure(WorkspaceFailure.Reason.TOO_LARGE)
         if (bytes.any { (it.toInt() and 255) in 0..8 || (it.toInt() and 255) in 14..31 || it == 127.toByte() }) {
