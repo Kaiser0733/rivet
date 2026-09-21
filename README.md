@@ -4,7 +4,7 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: early development.** Current phase: 3 of 8 (Project Workspace) —
+**Status: early development.** Current phase: 4 of 8 (Agent Loop) —
 see [MASTER_ROADMAP.md](MASTER_ROADMAP.md).
 
 ## What works today
@@ -25,9 +25,14 @@ see [MASTER_ROADMAP.md](MASTER_ROADMAP.md).
 - Native project-folder selection through Android's Storage Access Framework;
   nested browsing, UTF-8 editing, create/rename/delete, and provider-native moves.
 - SHA-256-checked saves, exact-context patches, and bounded literal project search.
+- Native structured workspace tools across OpenAI-compatible, OpenRouter,
+  Anthropic, and Gemini transports.
+- Automatic bounded reads and explicit approval for every file mutation, with
+  stop control and workspace binding for active turns.
+- Provider-neutral agent history, including tool calls and results, with one-time
+  migration of existing chat history.
 
-The coding agent, model workspace tools, terminal/runtime, and Git integration
-are not implemented. Workspace access stays inside the selected document tree;
+Terminal/runtime and Git integration are not implemented. Workspace access stays inside the selected document tree;
 no broad storage permission is requested. Files above 1 MiB and binary/non-UTF-8
 files cannot be edited. Read-only/cloud providers may reject mutations. Save
 conflicts retain the draft; SAF writes are not universally atomic. Unsaved

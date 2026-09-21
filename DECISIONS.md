@@ -172,4 +172,29 @@ file/entry/byte/result limits and cancellation. Test-only Robolectric runs a
 small disposable DocumentsProvider to exercise the native contract.
 Why: rotation keeps edits and jobs without saving whole project contents;
 process death does not pretend to preserve drafts or active asynchronous work.
-No workspace operations are exposed to models in this phase.
+Phase 4 reuses these operations through the separately approved agent boundary.
+
+## D22 — Provider-neutral transcripts, native provider tools
+
+What: persisted agent messages contain neutral text, calls, IDs, and results.
+OpenAI-compatible, Anthropic, and Gemini syntax stays inside their adapters;
+opaque continuation state is secondary metadata for signed reasoning blocks.
+Why: the loop has one execution model while each transport preserves its native
+structured protocol. Assistant prose is never parsed or executed as a tool.
+
+## D23 — SAF remains authoritative for agent tools
+
+What: three read-only tools run automatically. Seven mutations require a fresh,
+one-shot approval and retain hash, patch, path, capability, root, and move rules
+from `SafWorkspace`. Turns bind to the tree selected at Send.
+Why: model arguments are untrusted. Approval and identity checks prevent an old
+turn from changing a replacement workspace or replaying after process death.
+
+## D24 — Durable completed events, interrupted turns do not resume
+
+What: DataStore holds one provider-neutral transcript plus an active-turn marker.
+Legacy text chat imports once. Completed assistant/tool events persist; pending
+approvals and partial tool calls do not. Restart reports interruption and never
+resumes work.
+Why: process death cannot safely reconstruct network or mutation authority, while
+completed context and existing user data must survive an in-place update.
