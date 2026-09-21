@@ -5,20 +5,27 @@ import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
 class WorkspaceSelection(context: Context) {
+    private val persistence = Mutex()
     private val app = context.applicationContext
     private val preferences by lazy { app.getSharedPreferences("workspace", Context.MODE_PRIVATE) }
     private val resolver get() = app.contentResolver
 
-    suspend fun restore(): Pair<SafWorkspace, WorkspacePath>? = withContext(Dispatchers.IO) {
+    suspend fun restore(): Triple<SafWorkspace, WorkspacePath, WorkspacePath?>? = withContext(Dispatchers.IO) {
         val stored = preferences.getString("tree", null) ?: return@withContext null
         val path = try { WorkspacePath.parse(preferences.getString("directory", "") ?: "") }
             catch (_: WorkspaceFailure) { WorkspacePath.ROOT }
-        SafWorkspace(resolver, Uri.parse(stored)) to path
+        val file = try { preferences.getString("file", null)?.let(WorkspacePath::parse) }
+            catch (_: WorkspaceFailure) { null }
+        Triple(SafWorkspace(resolver, Uri.parse(stored)), path, file)
     }
 
     suspend fun select(uri: Uri, returnedFlags: Int): SafWorkspace = withContext(Dispatchers.IO) {
@@ -33,8 +40,9 @@ class WorkspaceSelection(context: Context) {
             val candidate = SafWorkspace(resolver, uri)
             if (!candidate.stat(WorkspacePath.ROOT).directory) throw WorkspaceFailure(WorkspaceFailure.Reason.NOT_DIRECTORY)
             withContext(NonCancellable) {
+                persistence.withLock {
                 val previous = preferences.getString("tree", null)
-                if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").commit()) {
+                if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").remove("file").commit()) {
                     throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
                 }
                 if (previous != null && previous != uri.toString()) {
@@ -44,7 +52,8 @@ class WorkspaceSelection(context: Context) {
                                 (if (it.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
                             resolver.releasePersistableUriPermission(it.uri, previousFlags)
                         }
-                    } catch (_: SecurityException) { /* The previous grant may already be revoked. */ }
+                    } catch (_: Exception) { /* Releasing an obsolete grant cannot undo the new selection. */ }
+                }
                 }
             }
             candidate
@@ -53,10 +62,13 @@ class WorkspaceSelection(context: Context) {
         } catch (_: Exception) { throw WorkspaceFailure(WorkspaceFailure.Reason.PERMISSION) }
     }
 
-    suspend fun rememberDirectory(workspace: SafWorkspace, path: WorkspacePath) = withContext(Dispatchers.IO) {
-        if (preferences.getString("tree", null) == workspace.tree.toString()) {
-            if (!preferences.edit().putString("directory", path.value).commit()) {
-                throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
+    suspend fun rememberLocation(workspace: SafWorkspace, directory: WorkspacePath, file: WorkspacePath? = null) = withContext(Dispatchers.IO) {
+        persistence.withLock {
+            currentCoroutineContext().ensureActive()
+            if (preferences.getString("tree", null) == workspace.tree.toString()) {
+                if (!preferences.edit().putString("directory", directory.value).putString("file", file?.value).commit()) {
+                    throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
+                }
             }
         }
     }

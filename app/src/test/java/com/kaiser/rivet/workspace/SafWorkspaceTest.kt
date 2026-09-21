@@ -125,15 +125,26 @@ class SafWorkspaceTest {
         provider.nodes[entry.documentId]!!.bytes.writeBytes(ByteArray(WorkspaceText.MAX_BYTES + 1))
         failure(WorkspaceFailure.Reason.TOO_LARGE) { workspace.readTextFile(entry.path) }
     }
+    @Test fun searchDoesNotResolveEveryDirectoryFromRoot() = runBlocking {
+        workspace.createDirectory(path("src"))
+        workspace.createDirectory(path("src/nested"))
+        workspace.createFile(path("src/nested/readme"))
+        provider.childQueries = 0
+        val report = workspace.search("readme")
+        assertEquals(1, report.hits.size)
+        assertEquals(3, provider.childQueries)
+    }
     @Test fun persistedSelectionRestoresAndRevocationIsRecoverable() = runBlocking {
         val app = RuntimeEnvironment.getApplication()
         val selection = WorkspaceSelection(app)
         val selected = selection.select(tree, grantFlags or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         selected.createDirectory(path("src"))
-        selection.rememberDirectory(selected, path("src"))
+        selected.createFile(path("src/a"))
+        selection.rememberLocation(selected, path("src"), path("src/a"))
         val restored = WorkspaceSelection(app).restore()!!
         assertEquals(tree, restored.first.tree)
         assertEquals("src", restored.second.value)
+        assertEquals("src/a", restored.third?.value)
         app.contentResolver.releasePersistableUriPermission(tree, grantFlags)
         failure(WorkspaceFailure.Reason.PERMISSION) { restored.first.stat(WorkspacePath.ROOT) }
     }

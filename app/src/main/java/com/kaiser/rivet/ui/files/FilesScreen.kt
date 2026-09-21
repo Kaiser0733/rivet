@@ -16,7 +16,6 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
-import com.kaiser.rivet.workspace.WorkspaceEntry
 import com.kaiser.rivet.workspace.WorkspacePath
 
 @Composable
@@ -24,7 +23,9 @@ fun FilesScreen(viewModel: FilesViewModel) {
     val state by viewModel.state.collectAsState()
     var pending by remember { mutableStateOf<(() -> Unit)?>(null) }
     var action by rememberSaveable { mutableStateOf("") }
-    var target by remember { mutableStateOf<WorkspaceEntry?>(null) }
+    var targetPath by rememberSaveable { mutableStateOf<String?>(null) }
+    var targetId by rememberSaveable { mutableStateOf<String?>(null) }
+    val target = state.entries.firstOrNull { it.path.value == targetPath && it.documentId == targetId }
     var input by rememberSaveable { mutableStateOf("") }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         if (result.resultCode == Activity.RESULT_OK) {
@@ -39,7 +40,9 @@ fun FilesScreen(viewModel: FilesViewModel) {
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-        picker.launch(intent)
+        try { picker.launch(intent) }
+        catch (_: android.content.ActivityNotFoundException) { viewModel.pickerUnavailable() }
+        catch (_: SecurityException) { viewModel.pickerUnavailable() }
     }
     fun back() = guarded {
         viewModel.discard()
@@ -58,7 +61,7 @@ fun FilesScreen(viewModel: FilesViewModel) {
                     TextButton(onClick = { guarded { viewModel.discard(); viewModel.navigate(path) } }, enabled = !state.mutating) { Text("/ $segment") }
                 }
             }
-            TextButton(onClick = { guarded { choose() } }, enabled = !state.mutating && !state.loading) {
+            TextButton(onClick = { guarded { choose() } }, enabled = !state.mutating) {
                 Text(if (state.selected) "Change workspace" else "Select project folder")
             }
         }
@@ -94,7 +97,7 @@ fun FilesScreen(viewModel: FilesViewModel) {
             }
             if (state.folder != null && state.folder?.capabilities?.create != true) Text("Folder creation unavailable or read-only", style = MaterialTheme.typography.bodySmall)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                OutlinedTextField(state.query, viewModel::setQuery, Modifier.weight(1f), singleLine = true, label = { Text("Literal project search") })
+                OutlinedTextField(state.query, viewModel::setQuery, Modifier.weight(1f), singleLine = true, label = { Text("Search this folder recursively") })
                 TextButton(onClick = if (state.searching) viewModel::cancelSearch else viewModel::search,
                     enabled = state.query.isNotEmpty() && !state.mutating && !state.loading) { Text(if (state.searching) "Cancel" else "Search") }
             }
@@ -118,7 +121,7 @@ fun FilesScreen(viewModel: FilesViewModel) {
                 LazyColumn(Modifier.weight(1f)) {
                     items(state.entries, key = { it.documentId + "|" + it.path.value }) { entry ->
                         FileRow(entry, enabled = !state.mutating && !state.loading, onOpen = { viewModel.open(entry.path) }, onAction = {
-                            target = entry; action = it; input = if (it == "Rename") entry.path.name else ""
+                            targetPath = entry.path.value; targetId = entry.documentId; action = it; input = if (it == "Rename") entry.path.name else ""
                         })
                     }
                 }

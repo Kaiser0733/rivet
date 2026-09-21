@@ -23,6 +23,7 @@ import kotlinx.coroutines.withContext
 
 class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
     private val mutations = Mutex()
+    private val providerIo = Dispatchers.IO.limitedParallelism(2)
     private val projection = arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME,
         Document.COLUMN_MIME_TYPE, Document.COLUMN_SIZE, Document.COLUMN_LAST_MODIFIED, Document.COLUMN_FLAGS)
 
@@ -157,8 +158,8 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
 
     suspend fun search(query: String, startPath: WorkspacePath = WorkspacePath.ROOT,
         limits: SearchLimits = SearchLimits()): SearchReport = io {
-        searchWorkspace(query, startPath, limits,
-            { path, cap -> io { children(resolve(path), cap) } },
+        searchWorkspace(query, resolve(startPath), limits,
+            { directory, cap -> io { children(directory, cap, truncate = true) } },
             { entry, cap -> io { read(entry, cap) } })
     }
 
@@ -186,31 +187,46 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         }
         return entry
     }
-    private suspend fun children(parent: WorkspaceEntry, cap: Int): List<WorkspaceEntry> {
+    private suspend fun children(parent: WorkspaceEntry, cap: Int, truncate: Boolean = false): List<WorkspaceEntry> {
         if (!parent.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
-        return query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent.documentId), parent.path, true, cap)
+        return query(DocumentsContract.buildChildDocumentsUriUsingTree(tree, parent.documentId), parent.path, true, cap, truncate)
             .sortedWith(WorkspaceEntry.ORDER)
     }
 
-    private suspend fun query(target: Uri, path: WorkspacePath, childQuery: Boolean, cap: Int): List<WorkspaceEntry> {
+    private suspend fun query(target: Uri, path: WorkspacePath, childQuery: Boolean, cap: Int, truncate: Boolean = false): List<WorkspaceEntry> {
         val writable = requireGrant()
         val context = currentCoroutineContext()
         return signalled { signal ->
             resolver.query(target, projection, null, signal)?.use { cursor ->
+                if (cursor.extras.getBoolean(DocumentsContract.EXTRA_LOADING, false) ||
+                    !cursor.extras.getString(DocumentsContract.EXTRA_ERROR).isNullOrEmpty()) {
+                    fail(WorkspaceFailure.Reason.PROVIDER)
+                }
+                val indices = projection.map(cursor::getColumnIndex)
+                fun string(column: Int): String? = indices[column].takeIf { it >= 0 }?.let {
+                    if (cursor.isNull(it)) null else cursor.getString(it)
+                }
+                fun number(column: Int): Long? = indices[column].takeIf { it >= 0 }?.let {
+                    if (cursor.isNull(it)) null else cursor.getLong(it)
+                }
                 val entries = mutableListOf<WorkspaceEntry>()
-                while (cursor.moveToNext()) {
+                while (true) {
                     context.ensureActive()
-                    if (entries.size >= cap) fail(WorkspaceFailure.Reason.LIMIT)
-                    val id = cursor.getString(0) ?: fail(WorkspaceFailure.Reason.PROVIDER)
-                    val name = cursor.getString(1) ?: fail(WorkspaceFailure.Reason.PROVIDER)
-                    val mime = cursor.getString(2) ?: "application/octet-stream"
-                    val flags = if (cursor.isNull(5)) 0 else cursor.getInt(5)
+                    if (entries.size >= cap) {
+                        if (!childQuery || truncate) break
+                        fail(WorkspaceFailure.Reason.LIMIT)
+                    }
+                    if (!cursor.moveToNext()) break
+                    val id = string(0) ?: fail(WorkspaceFailure.Reason.PROVIDER)
+                    val name = string(1) ?: fail(WorkspaceFailure.Reason.PROVIDER)
+                    val mime = string(2) ?: "application/octet-stream"
+                    val flags = number(5)?.toInt() ?: 0
                     fun flag(value: Int) = writable && flags and value != 0
                     val entryPath = if (childQuery) path.child(name) else path
                     val directory = mime == Document.MIME_TYPE_DIR
                     entries.add(WorkspaceEntry(entryPath, id, directory, mime,
-                        if (cursor.isNull(3)) null else cursor.getLong(3).takeIf { it >= 0 },
-                        if (cursor.isNull(4)) null else cursor.getLong(4).takeIf { it > 0 },
+                        number(3)?.takeIf { it >= 0 },
+                        number(4)?.takeIf { it > 0 },
                         WorkspaceCapabilities(
                             create = directory && flag(Document.FLAG_DIR_SUPPORTS_CREATE),
                             write = !directory && flag(Document.FLAG_SUPPORTS_WRITE),
@@ -251,7 +267,7 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         try { block(signal) } finally { cancellation.cancel() }
     }
 
-    private suspend fun <T> io(block: suspend () -> T): T = withContext(Dispatchers.IO) {
+    private suspend fun <T> io(block: suspend () -> T): T = withContext(providerIo) {
         try {
             requireGrant()
             block()
