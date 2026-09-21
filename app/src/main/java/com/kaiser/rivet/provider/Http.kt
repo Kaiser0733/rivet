@@ -161,6 +161,10 @@ internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Uni
                         }
                     } catch (e: ProviderError) {
                         if (terminal.compareAndSet(false, true)) cont.resumeWithException(e)
+                    } catch (_: Exception) {
+                        if (terminal.compareAndSet(false, true)) {
+                            cont.resumeWithException(ProviderError.InvalidResponse("malformed stream event"))
+                        }
                     }
                 }
             }

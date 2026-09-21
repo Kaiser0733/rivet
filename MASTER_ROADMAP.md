@@ -16,7 +16,7 @@ fetch/selection, mid-session switching, credential storage, streaming
 text chat with cancellation, persistent configuration and one persistent
 conversation.
 
-## Phase 3 — Project Workspace
+## Phase 3 — Project Workspace (complete)
 
 Native SAF selection with persisted tree permission, nested browsing, bounded
 UTF-8 reading/editing, fingerprint conflicts, native create/delete/rename/move,
@@ -24,10 +24,11 @@ literal search, and exact-context patching. No model workspace access or runtime
 Implementation is covered by JVM logic and simulated DocumentsProvider tests;
 physical-device/provider compatibility validation remains required.
 
-## Phase 4 — Agent Loop
+## Phase 4 — Agent Loop (complete)
 
-Coding-agent conversation over the selected provider, streaming chat UI,
-session persistence.
+Provider-neutral coding-agent conversation with native structured calls for all
+supported transports, bounded workspace tools, mutation approvals, cancellation,
+streaming activity UI, and migrated persistent transcripts.
 
 ## Phase 5 — Embedded Runtime
 
@@ -37,8 +38,7 @@ GPL-adjacent components happens before a single line is incorporated.
 
 ## Phase 6 — Coding-Agent Features
 
-Tool execution with approval controls, diff viewing and application,
-Git integration.
+Diff viewing and application, Git integration, and higher-level coding workflows.
 
 ## Phase 7 — Android Product Hardening
 

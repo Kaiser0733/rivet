@@ -3,7 +3,9 @@ package com.kaiser.rivet.provider
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.withTimeout
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.OkHttpClient
@@ -93,6 +95,26 @@ class HttpBridgeTest {
             throw AssertionError("expected malformed URL")
         } catch (error: ProviderError.MalformedUrl) {
             assertEquals("The base URL is not a valid URL.", error.text())
+        }
+    }
+
+    @Test
+    fun malformedStreamEventFailureResumesWithProviderError() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("data: {}\n\n").setHeader("Content-Type", "text/event-stream"))
+        server.start()
+        try {
+            val request = Request.Builder().url(server.url("/stream")).build()
+            try {
+                withTimeout(2_000) {
+                    OkHttpClient().sse(request) { throw IllegalArgumentException("bad field type") }
+                }
+                throw AssertionError("expected invalid response")
+            } catch (_: ProviderError.InvalidResponse) {
+                Unit
+            }
+        } finally {
+            server.shutdown()
         }
     }
 

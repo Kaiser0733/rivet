@@ -12,6 +12,9 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 
 class WorkspaceSelection(context: Context) {
     private val persistence = Mutex()
@@ -26,6 +29,33 @@ class WorkspaceSelection(context: Context) {
         val file = try { preferences.getString("file", null)?.let(WorkspacePath::parse) }
             catch (_: WorkspaceFailure) { null }
         Triple(SafWorkspace(resolver, Uri.parse(stored)), path, file)
+    }
+
+    suspend fun currentIdentity(): String? = withContext(Dispatchers.IO) {
+        preferences.getString("tree", null)
+    }
+
+    suspend fun awaitIdentityChange(expected: String) {
+        suspendCancellableCoroutine { continuation ->
+            val completed = AtomicBoolean(false)
+            lateinit var listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener
+            fun check() {
+                if (preferences.getString("tree", null) != expected && completed.compareAndSet(false, true)) {
+                    preferences.unregisterOnSharedPreferenceChangeListener(listener)
+                    continuation.resume(Unit)
+                }
+            }
+            listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (key == "tree") check()
+            }
+            preferences.registerOnSharedPreferenceChangeListener(listener)
+            continuation.invokeOnCancellation {
+                if (completed.compareAndSet(false, true)) {
+                    preferences.unregisterOnSharedPreferenceChangeListener(listener)
+                }
+            }
+            check()
+        }
     }
 
     suspend fun select(uri: Uri, returnedFlags: Int): SafWorkspace = withContext(Dispatchers.IO) {

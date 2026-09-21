@@ -1,6 +1,12 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolDefinition
+import com.kaiser.rivet.agent.AgentToolResult
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -119,5 +125,68 @@ class AnthropicClientTest {
         val result = AnthropicClient(config(), "key").testConnection()
         assertEquals(false, result.ok)
         assertTrue(result.message.isNotEmpty())
+    }
+
+    @Test
+    fun streamedToolInputIsReconstructedAndResultUsesToolResultBlock() = runTest {
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Inspecting"}}""",
+            """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"read_file","input":{}}}""",
+            """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}""",
+            """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"A.kt\"}"}}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+        val client = AnthropicClient(config(), "key")
+        val response = client.streamAgent(AgentRequest(
+            "claude-x", emptyList(), "sys", ReasoningLevel.Default,
+            listOf(AgentToolDefinition("read_file", "Read", buildJsonObject { put("type", "object") })),
+        )) {}
+        assertEquals("Inspecting", response.text)
+        assertEquals(AgentToolCall("tool-1", "read_file", "{\"path\":\"A.kt\"}"), response.toolCalls.single())
+        server.takeRequest()
+
+        server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
+        client.streamAgent(AgentRequest(
+            "claude-x",
+            listOf(AgentMessage.assistant("", response.toolCalls), AgentMessage.tools(listOf(
+                AgentToolResult("tool-1", "read_file", "{\"text\":\"x\"}"),
+            ))), "", ReasoningLevel.Default, emptyList(),
+        )) {}
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"type\":\"tool_result\",\"tool_use_id\":\"tool-1\""))
+    }
+
+    @Test
+    fun multipleToolUsesRemainDistinct() = runTest {
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"read_file","input":{"path":"A.kt"}}}""",
+            """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"b","name":"read_file","input":{"path":"B.kt"}}}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+
+        val response = AnthropicClient(config(), "key").streamAgent(
+            AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
+        ) {}
+
+        assertEquals(listOf("a", "b"), response.toolCalls.map { it.id })
+        assertEquals(listOf("{\"path\":\"A.kt\"}", "{\"path\":\"B.kt\"}"),
+            response.toolCalls.map { it.arguments })
+    }
+
+    @Test
+    fun streamErrorSurfacesProviderMessage() = runTest {
+        server.enqueue(MockResponse().setBody(
+            "data: {\"type\":\"error\",\"error\":{\"message\":\"Overloaded mid-stream\"}}\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
+
+        try {
+            AnthropicClient(config(), "key").streamAgent(
+                AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            throw AssertionError("expected ProviderMessage")
+        } catch (e: ProviderError.ProviderMessage) {
+            assertTrue(e.text.contains("Overloaded"))
+        }
     }
 }
