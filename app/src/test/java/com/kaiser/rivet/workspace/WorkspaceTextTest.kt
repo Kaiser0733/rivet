@@ -13,6 +13,13 @@ class WorkspaceTextTest {
         assertEquals(42L, snapshot.modifiedTime)
         assertEquals("e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", WorkspaceText.sha256(byteArrayOf()))
     }
+    @Test fun knownBinaryMimeTypesAreRejectedButSourceFormatsRemainReadable() {
+        assertTrue(WorkspaceText.isBinaryMime("application/pdf"))
+        assertTrue(WorkspaceText.isBinaryMime("image/png"))
+        assertFalse(WorkspaceText.isBinaryMime("image/svg+xml"))
+        assertFalse(WorkspaceText.isBinaryMime("application/json"))
+        assertFalse(WorkspaceText.isBinaryMime("application/octet-stream"))
+    }
     @Test fun binaryAndMalformedUtf8AreRejected() {
         listOf(byteArrayOf(0, 2, 3), byteArrayOf(0xc3.toByte(), 0x28), byteArrayOf(1, 2)).forEach {
             assertEquals(WorkspaceFailure.Reason.BINARY, assertThrows(WorkspaceFailure::class.java) {

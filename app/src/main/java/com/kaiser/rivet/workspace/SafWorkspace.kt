@@ -241,7 +241,7 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
 
     private suspend fun read(entry: WorkspaceEntry, limit: Int): ByteArray {
         requireGrant()
-        if (entry.directory) fail(WorkspaceFailure.Reason.BINARY)
+        if (entry.directory || WorkspaceText.isBinaryMime(entry.mimeType)) fail(WorkspaceFailure.Reason.BINARY)
         if (entry.size != null && entry.size > limit) fail(WorkspaceFailure.Reason.TOO_LARGE)
         val context = currentCoroutineContext()
         val activeInput = AtomicReference<ParcelFileDescriptor.AutoCloseInputStream?>()
