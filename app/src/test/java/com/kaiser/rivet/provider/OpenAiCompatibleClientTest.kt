@@ -189,8 +189,8 @@ class OpenAiCompatibleClientTest {
     @Test
     fun streamedToolFragmentsAndMultipleCallsAreReconstructed() = runTest {
         val sse = listOf(
-            """{"choices":[{"delta":{"content":"Checking ","tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}""",
-            """{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"search_files","arguments":"{\"query\":\"x\"}"}},{"index":0,"function":{"arguments":"th\":\"A.kt\"}"}}]}}]}""",
+            """{"choices":[{"delta":{"content":"Checking ","tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read_","arguments":"{\"pa"}}]}}]}""",
+            """{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"search_files","arguments":"{\"query\":\"x\"}"}},{"index":0,"function":{"name":"file","arguments":"th\":\"A.kt\"}"}}]}}]}""",
         ).joinToString("") { "data: $it\n\n" } + "data: [DONE]\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
 
@@ -201,6 +201,7 @@ class OpenAiCompatibleClientTest {
         assertEquals("Checking ", response.text)
         assertEquals(listOf("a", "b"), response.toolCalls.map { it.id })
         assertEquals("{\"path\":\"A.kt\"}", response.toolCalls[0].arguments)
+        assertEquals("read_file", response.toolCalls[0].name)
         assertEquals("search_files", response.toolCalls[1].name)
     }
 }

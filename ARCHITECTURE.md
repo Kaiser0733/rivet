@@ -82,8 +82,8 @@ message only; the active request completes (or is stopped) on its own.
 - Provider configs + active selection: DataStore Preferences, keys
   `configs` / `active_id`, JSON-encoded list.
 - Agent history: DataStore Preferences, provider-neutral JSON under
-  `agent_messages`. The former `messages` list is imported once and retained
-  until the new transcript is saved. One conversation.
+  `agent_messages`. The former `messages` list is imported once and is not
+  deleted by migration. One conversation.
 - API keys: app-private preferences contain versioned IV+ciphertext records.
   A non-exportable AES-256 key in AndroidKeyStore encrypts each value with
   AES/GCM/NoPadding; the provider id is authenticated as associated data.

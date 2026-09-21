@@ -4,12 +4,10 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -127,7 +125,11 @@ private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (mess
 }
 
 private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
-    private data class Pending(var id: String? = null, var name: String? = null, val arguments: StringBuilder = StringBuilder())
+    private data class Pending(
+        var id: String? = null,
+        val name: StringBuilder = StringBuilder(),
+        val arguments: StringBuilder = StringBuilder(),
+    )
     private val text = StringBuilder()
     private val tools = sortedMapOf<Int, Pending>()
 
@@ -144,7 +146,7 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
             val pending = tools.getOrPut(index) { Pending() }
             value["id"]?.str()?.let { pending.id = it }
             value["function"]?.obj()?.let { function ->
-                function["name"]?.str()?.let { pending.name = it }
+                function["name"]?.str()?.let(pending.name::append)
                 function["arguments"]?.str()?.let(pending.arguments::append)
             }
         }
@@ -156,24 +158,12 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
             AgentToolCall(
                 pending.id?.takeIf { it.isNotBlank() }
                     ?: throw ProviderError.InvalidResponse("tool id missing"),
-                pending.name?.takeIf { it.isNotBlank() }
+                pending.name.toString().takeIf { it.isNotBlank() }
                     ?: throw ProviderError.InvalidResponse("tool name missing"),
                 pending.arguments.toString(),
             )
         },
     )
-}
-
-// Tolerant extraction of the assistant delta from one streaming chunk;
-// unknown shapes are skipped, never fatal.
-internal fun openAiDelta(payload: String): String? = try {
-    Json.parseToJsonElement(payload).jsonObject["choices"]
-        ?.arr()?.firstOrNull()
-        ?.obj()?.get("delta")
-        ?.obj()?.get("content")
-        ?.str()
-} catch (e: Exception) {
-    null
 }
 
 private fun reasoningEffort(

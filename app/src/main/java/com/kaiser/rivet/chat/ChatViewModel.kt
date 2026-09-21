@@ -26,16 +26,20 @@ import com.kaiser.rivet.workspace.WorkspaceSelection
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 
 data class ChatUiState(
     val messages: List<AgentMessage> = emptyList(),
+    val ready: Boolean = false,
     val streaming: Boolean = false,
     val streamText: String = "",
     val pendingApproval: AgentApprovalRequest? = null,
@@ -57,14 +61,18 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
+            val ticket = generation
             val restored = sessionStore.load()
-            _uiState.update { state ->
-                state.copy(
-                    messages = restored.messages,
-                    error = if (restored.interrupted) "Previous agent turn was interrupted." else state.error,
-                )
+            if (ticket == generation) {
+                _uiState.update { state ->
+                    state.copy(
+                        messages = restored.messages,
+                        ready = true,
+                        error = if (restored.interrupted) "Previous agent turn was interrupted." else state.error,
+                    )
+                }
+                if (restored.interrupted) sessionStore.markInterrupted(false)
             }
-            if (restored.interrupted) sessionStore.markInterrupted(false)
         }
         viewModelScope.launch {
             approvals.pending.collect { pending ->
@@ -75,7 +83,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _uiState.value.streaming) return
+        if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready) return
         val ticket = ++generation
         sendJob = viewModelScope.launch {
             val snapshot = providerSnapshot() ?: return@launch
@@ -126,24 +134,41 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             )
             val streamed = StringBuffer()
             try {
-                val result = loop.run(
-                    initial = durable,
-                    tools = tools,
-                    onText = { delta ->
-                        if (ticket == generation) {
-                            streamed.append(delta)
-                            _uiState.update { it.copy(streamText = streamed.toString()) }
+                val runLoop: suspend () -> AgentRunResult = {
+                    loop.run(
+                        initial = durable,
+                        tools = tools,
+                        onText = { delta ->
+                            if (ticket == generation) {
+                                streamed.append(delta)
+                                _uiState.update { it.copy(streamText = streamed.toString()) }
+                            }
+                        },
+                        onMessage = { message ->
+                            if (ticket == generation) {
+                                durable += message
+                                if (message.role == AgentRole.Assistant) streamed.setLength(0)
+                                _uiState.update { it.copy(messages = durable.toList(), streamText = streamed.toString()) }
+                                sessionStore.save(durable, interrupted = true)
+                            }
+                        },
+                    )
+                }
+                val result = if (workspaceId == null) runLoop() else coroutineScope {
+                    val running = async { runLoop() }
+                    val changed = async { workspaceSelection.awaitIdentityChange(workspaceId) }
+                    select {
+                        running.onAwait { completed ->
+                            changed.cancelAndJoin()
+                            completed
                         }
-                    },
-                    onMessage = { message ->
-                        if (ticket == generation) {
-                            durable += message
-                            if (message.role == AgentRole.Assistant) streamed.setLength(0)
-                            _uiState.update { it.copy(messages = durable.toList(), streamText = streamed.toString()) }
-                            sessionStore.save(durable, interrupted = true)
+                        changed.onAwait {
+                            approvals.cancel()
+                            running.cancelAndJoin()
+                            AgentRunResult(durable.toList(), AgentStopReason.WorkspaceChanged, 0, 0)
                         }
-                    },
-                )
+                    }
+                }
                 if (ticket == generation) finish(result, durable)
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
@@ -177,9 +202,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             AgentStopReason.ToolCallLimit -> "Agent stopped after ${AgentLoop.MAX_TOOL_CALLS} tool calls."
             AgentStopReason.WorkspaceChanged -> "Workspace changed. The agent turn was stopped."
         }
-        sessionStore.save(durable, interrupted = false)
+        val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
+        sessionStore.save(persisted, interrupted = false)
         _uiState.update {
-            it.copy(messages = durable, streaming = false, streamText = "", pendingApproval = null, error = error)
+            it.copy(messages = persisted, streaming = false, streamText = "", pendingApproval = null, error = error)
         }
     }
 
@@ -231,7 +257,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             sendJob?.cancelAndJoin()
             if (ticket == generation) {
                 sessionStore.clear()
-                _uiState.value = ChatUiState()
+                _uiState.value = ChatUiState(ready = true)
             }
         }
     }
