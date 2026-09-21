@@ -71,7 +71,6 @@ fun ChatScreen(
             messages = chatState.messages,
             streamText = chatState.streamText,
             streaming = chatState.streaming,
-            ready = chatState.ready,
             error = chatState.error,
             pendingApproval = chatState.pendingApproval,
             onApprove = chatViewModel::approve,
@@ -81,6 +80,7 @@ fun ChatScreen(
         )
         InputBar(
             streaming = chatState.streaming,
+            ready = chatState.ready,
             onSend = chatViewModel::send,
             onCancel = chatViewModel::cancel,
         )

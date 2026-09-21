@@ -13,6 +13,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.util.concurrent.atomic.AtomicBoolean
+import kotlin.coroutines.resume
 
 class WorkspaceSelection(context: Context) {
     private val persistence = Mutex()
@@ -35,13 +37,12 @@ class WorkspaceSelection(context: Context) {
 
     suspend fun awaitIdentityChange(expected: String) {
         suspendCancellableCoroutine { continuation ->
+            val completed = AtomicBoolean(false)
             lateinit var listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener
             fun check() {
-                if (preferences.getString("tree", null) != expected) {
-                    continuation.tryResume(Unit)?.let { token ->
-                        preferences.unregisterOnSharedPreferenceChangeListener(listener)
-                        continuation.completeResume(token)
-                    }
+                if (preferences.getString("tree", null) != expected && completed.compareAndSet(false, true)) {
+                    preferences.unregisterOnSharedPreferenceChangeListener(listener)
+                    continuation.resume(Unit)
                 }
             }
             listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
@@ -49,7 +50,9 @@ class WorkspaceSelection(context: Context) {
             }
             preferences.registerOnSharedPreferenceChangeListener(listener)
             continuation.invokeOnCancellation {
-                preferences.unregisterOnSharedPreferenceChangeListener(listener)
+                if (completed.compareAndSet(false, true)) {
+                    preferences.unregisterOnSharedPreferenceChangeListener(listener)
+                }
             }
             check()
         }
