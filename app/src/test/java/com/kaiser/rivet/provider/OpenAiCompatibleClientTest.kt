@@ -1,6 +1,12 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolDefinition
+import com.kaiser.rivet.agent.AgentToolResult
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -159,5 +165,42 @@ class OpenAiCompatibleClientTest {
         val result = OpenAiCompatibleClient(config(), "key").testConnection()
         assertEquals(false, result.ok)
         assertTrue(result.message.contains("manually"))
+    }
+
+    @Test
+    fun agentToolsAndResultsUseChatCompletionsFormat() = runTest {
+        server.enqueue(MockResponse().setBody("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\ndata: [DONE]\n\n"))
+        val call = AgentToolCall("call-1", "read_file", "{\"path\":\"A.kt\"}")
+        OpenAiCompatibleClient(config(), "key").streamAgent(AgentRequest(
+            "test-model",
+            listOf(AgentMessage.assistant("", listOf(call)), AgentMessage.tools(listOf(
+                AgentToolResult("call-1", "read_file", "{\"text\":\"x\"}"),
+            ))),
+            "sys", ReasoningLevel.Default,
+            listOf(AgentToolDefinition("read_file", "Read", buildJsonObject { put("type", "object") })),
+        )) {}
+
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"tools\":[{\"type\":\"function\""))
+        assertTrue(body.contains("\"tool_calls\":[{\"id\":\"call-1\""))
+        assertTrue(body.contains("\"role\":\"tool\",\"tool_call_id\":\"call-1\""))
+    }
+
+    @Test
+    fun streamedToolFragmentsAndMultipleCallsAreReconstructed() = runTest {
+        val sse = listOf(
+            """{"choices":[{"delta":{"content":"Checking ","tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read_file","arguments":"{\"pa"}}]}}]}""",
+            """{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"search_files","arguments":"{\"query\":\"x\"}"}},{"index":0,"function":{"arguments":"th\":\"A.kt\"}"}}]}}]}""",
+        ).joinToString("") { "data: $it\n\n" } + "data: [DONE]\n\n"
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+
+        val response = OpenAiCompatibleClient(config(), "key").streamAgent(
+            AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+        ) {}
+
+        assertEquals("Checking ", response.text)
+        assertEquals(listOf("a", "b"), response.toolCalls.map { it.id })
+        assertEquals("{\"path\":\"A.kt\"}", response.toolCalls[0].arguments)
+        assertEquals("search_files", response.toolCalls[1].name)
     }
 }

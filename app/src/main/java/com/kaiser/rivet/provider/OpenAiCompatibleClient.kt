@@ -1,10 +1,17 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentResponse
+import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.AgentToolCall
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.intOrNull
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -46,6 +53,22 @@ internal class OpenAiCompatibleClient(
     }
 
     override suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit): String {
+        return streamAgent(
+            AgentRequest(
+                request.model,
+                request.messages.map { message -> AgentMessage(
+                    if (message.role.wireName == "assistant") AgentRole.Assistant else AgentRole.User,
+                    text = message.text,
+                ) },
+                request.system,
+                request.reasoning,
+                emptyList(),
+            ),
+            onDelta,
+        ).text
+    }
+
+    override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)
@@ -54,12 +77,16 @@ internal class OpenAiCompatibleClient(
                     put("role", "system")
                     put("content", request.system)
                 })
-                request.messages.forEach { m ->
-                    add(buildJsonObject {
-                        put("role", m.role.wireName)
-                        put("content", m.text)
+                request.messages.forEach { message -> openAiMessages(message).forEach(::add) }
+            })
+            if (request.tools.isNotEmpty()) put("tools", buildJsonArray {
+                request.tools.forEach { tool -> add(buildJsonObject {
+                    put("type", "function")
+                    put("function", buildJsonObject {
+                        put("name", tool.name); put("description", tool.description)
+                        put("parameters", tool.parameters)
                     })
-                }
+                }) }
             })
             reasoningEffort(config.type, request.model, request.reasoning)?.let {
                 put("reasoning_effort", it)
@@ -68,16 +95,11 @@ internal class OpenAiCompatibleClient(
         val httpRequest = base(Endpoints.openAiChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val out = StringBuilder()
+        val stream = OpenAiAgentStream(onDelta)
         http.sse(httpRequest) { payload ->
-            openAiDelta(payload)?.let {
-                if (it.isNotEmpty()) {
-                    out.append(it)
-                    onDelta(it)
-                }
-            }
+            stream.accept(payload)
         }
-        return out.toString()
+        return stream.response()
     }
 
     private fun base(url: String): Request.Builder {
@@ -86,6 +108,60 @@ internal class OpenAiCompatibleClient(
         config.headers.sanitized().forEach { b.header(it.name, it.value) }
         return b
     }
+}
+
+private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (message.role) {
+    AgentRole.User -> listOf(buildJsonObject { put("role", "user"); put("content", message.text) })
+    AgentRole.Assistant -> listOf(buildJsonObject {
+        put("role", "assistant"); put("content", message.text)
+        if (message.toolCalls.isNotEmpty()) put("tool_calls", buildJsonArray {
+            message.toolCalls.forEach { call -> add(buildJsonObject {
+                put("id", call.id); put("type", "function")
+                put("function", buildJsonObject { put("name", call.name); put("arguments", call.arguments) })
+            }) }
+        })
+    })
+    AgentRole.Tool -> message.toolResults.map { result -> buildJsonObject {
+        put("role", "tool"); put("tool_call_id", result.callId); put("content", result.content)
+    } }
+}
+
+private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
+    private data class Pending(var id: String? = null, var name: String? = null, val arguments: StringBuilder = StringBuilder())
+    private val text = StringBuilder()
+    private val tools = sortedMapOf<Int, Pending>()
+
+    fun accept(payload: String) {
+        val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
+        val delta = root["choices"]?.arr()?.firstOrNull()?.obj()?.get("delta")?.obj() ?: return
+        delta["content"]?.str()?.takeIf { it.isNotEmpty() }?.let { value ->
+            text.append(value); onDelta(value)
+        }
+        delta["tool_calls"]?.arr()?.forEach { element ->
+            val value = element.obj() ?: throw ProviderError.InvalidResponse("invalid tool delta")
+            val index = value["index"]?.jsonPrimitive?.intOrNull
+                ?: throw ProviderError.InvalidResponse("tool index missing")
+            val pending = tools.getOrPut(index) { Pending() }
+            value["id"]?.str()?.let { pending.id = it }
+            value["function"]?.obj()?.let { function ->
+                function["name"]?.str()?.let { pending.name = it }
+                function["arguments"]?.str()?.let(pending.arguments::append)
+            }
+        }
+    }
+
+    fun response(): AgentResponse = AgentResponse(
+        text = text.toString(),
+        toolCalls = tools.values.map { pending ->
+            AgentToolCall(
+                pending.id?.takeIf { it.isNotBlank() }
+                    ?: throw ProviderError.InvalidResponse("tool id missing"),
+                pending.name?.takeIf { it.isNotBlank() }
+                    ?: throw ProviderError.InvalidResponse("tool name missing"),
+                pending.arguments.toString(),
+            )
+        },
+    )
 }
 
 // Tolerant extraction of the assistant delta from one streaming chunk;
