@@ -72,6 +72,7 @@ class GeminiClientTest {
         assertEquals("key", recorded.getHeader("x-goog-api-key"))
         val body = recorded.body.readUtf8()
         assertTrue(body.contains("\"systemInstruction\""))
+        assertTrue(!body.contains("parametersJsonSchema"))
         assertTrue(!body.contains("reasoning"))
         assertTrue(!body.contains("thinking"))
         assertTrue(!body.contains("effort"))
@@ -116,6 +117,32 @@ class GeminiClientTest {
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"thoughtSignature\":\"sig\""))
         assertTrue(body.contains("\"functionResponse\":{\"id\":\"g-1\",\"name\":\"read_file\""))
+    }
+
+    @Test
+    fun toolSchemaUsesJsonSchemaFieldAndTextSignatureIsReturned() = runTest {
+        val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
+            "{\"text\":\"\",\"thoughtSignature\":\"text-sig\"}," +
+            "{\"functionCall\":{\"id\":\"g-1\",\"name\":\"list_directory\",\"args\":{}}}" +
+            "]}}]}\n\n"
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+        val client = GeminiClient(config(), "key")
+        val definition = AgentToolDefinition(
+            "list_directory", "List", buildJsonObject { put("type", "object"); put("additionalProperties", false) },
+        )
+        val response = client.streamAgent(AgentRequest(
+            "gemini-x", emptyList(), "", ReasoningLevel.Default, listOf(definition),
+        )) {}
+        val firstBody = server.takeRequest().body.readUtf8()
+        assertTrue(firstBody.contains("\"parametersJsonSchema\""))
+        assertTrue(!firstBody.contains("\"parameters\":"))
+
+        server.enqueue(MockResponse().setBody("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]}}]}\n\n"))
+        client.streamAgent(AgentRequest(
+            "gemini-x", listOf(AgentMessage.assistant("", response.toolCalls, response.transportState)),
+            "", ReasoningLevel.Default, emptyList(),
+        )) {}
+        assertTrue(server.takeRequest().body.readUtf8().contains("\"thoughtSignature\":\"text-sig\""))
     }
 
     @Test

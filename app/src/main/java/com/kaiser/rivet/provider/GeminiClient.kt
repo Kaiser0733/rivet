@@ -82,7 +82,7 @@ internal class GeminiClient(
                 add(buildJsonObject { put("functionDeclarations", buildJsonArray {
                     request.tools.forEach { tool -> add(buildJsonObject {
                         put("name", tool.name); put("description", tool.description)
-                        put("parameters", tool.parameters)
+                        put("parametersJsonSchema", tool.parameters)
                     }) }
                 }) })
             })
@@ -106,9 +106,13 @@ internal class GeminiClient(
 }
 
 private fun geminiMessage(message: AgentMessage): JsonObject {
-    val signatures = message.transportState?.let { raw ->
+    val state = message.transportState?.let { raw ->
         try { Json.parseToJsonElement(raw) as? JsonObject } catch (_: Exception) { null }
     } ?: buildJsonObject {}
+    val signatures = state.takeIf { it["provider"]?.str() == "gemini" }
+        ?.get("call_signatures")?.obj() ?: buildJsonObject {}
+    val textSignature = state.takeIf { it["provider"]?.str() == "gemini" }
+        ?.get("text_signature")?.str()
     return when (message.role) {
         AgentRole.User -> buildJsonObject {
             put("role", "user"); put("parts", buildJsonArray { add(buildJsonObject { put("text", message.text) }) })
@@ -116,13 +120,17 @@ private fun geminiMessage(message: AgentMessage): JsonObject {
         AgentRole.Assistant -> buildJsonObject {
             put("role", "model")
             put("parts", buildJsonArray {
-                if (message.text.isNotEmpty()) add(buildJsonObject { put("text", message.text) })
+                if (message.text.isNotEmpty() || textSignature != null) add(buildJsonObject {
+                    put("text", message.text)
+                    textSignature?.let { put("thoughtSignature", it) }
+                })
                 message.toolCalls.forEach { call ->
                     val args = try { Json.parseToJsonElement(call.arguments) as? JsonObject } catch (_: Exception) { null }
                         ?: throw ProviderError.InvalidResponse("invalid function arguments")
                     add(buildJsonObject {
                         put("functionCall", buildJsonObject {
-                            put("id", call.id); put("name", call.name); put("args", args)
+                            if (!call.id.startsWith(GEMINI_LOCAL_ID_PREFIX)) put("id", call.id)
+                            put("name", call.name); put("args", args)
                         })
                         signatures[call.id]?.str()?.let { put("thoughtSignature", it) }
                     })
@@ -135,7 +143,8 @@ private fun geminiMessage(message: AgentMessage): JsonObject {
                 val parsed = try { Json.parseToJsonElement(result.content) } catch (_: Exception) { null }
                 val response = parsed as? JsonObject ?: buildJsonObject { put("output", result.content) }
                 add(buildJsonObject { put("functionResponse", buildJsonObject {
-                    put("id", result.callId); put("name", result.name); put("response", response)
+                    if (!result.callId.startsWith(GEMINI_LOCAL_ID_PREFIX)) put("id", result.callId)
+                    put("name", result.name); put("response", response)
                 }) })
             } })
         }
@@ -146,6 +155,7 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
     private val text = StringBuilder()
     private val calls = mutableListOf<AgentToolCall>()
     private val signatures = linkedMapOf<String, String>()
+    private var textSignature: String? = null
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
@@ -154,12 +164,20 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
             ?.get("content")?.obj()?.get("parts")?.arr() ?: return
         parts.forEach { element ->
             val part = element.obj() ?: throw ProviderError.InvalidResponse("invalid response part")
-            part["text"]?.str()?.takeIf { it.isNotEmpty() }?.let { value -> text.append(value); onDelta(value) }
-            part["functionCall"]?.obj()?.let { function ->
-                val id = function["id"]?.str()?.takeIf { it.isNotBlank() } ?: "gemini-${calls.size + 1}"
+            part["text"]?.str()?.let { value ->
+                if (value.isNotEmpty()) { text.append(value); onDelta(value) }
+            }
+            val function = part["functionCall"]?.obj()
+            if (function == null) {
+                part["thoughtSignature"]?.str()?.let { textSignature = it }
+            } else {
+                val id = function["id"]?.str()?.takeIf { it.isNotBlank() }
+                    ?: "$GEMINI_LOCAL_ID_PREFIX${calls.size + 1}"
                 val name = function["name"]?.str()?.takeIf { it.isNotBlank() }
                     ?: throw ProviderError.InvalidResponse("function name missing")
-                val args = function["args"]?.obj() ?: throw ProviderError.InvalidResponse("function arguments missing")
+                val args = function["args"]?.let { value ->
+                    value.obj() ?: throw ProviderError.InvalidResponse("invalid function arguments")
+                } ?: buildJsonObject {}
                 calls += AgentToolCall(id, name, args.toString())
                 part["thoughtSignature"]?.str()?.let { signatures[id] = it }
             }
@@ -169,8 +187,16 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
     fun response() = AgentResponse(
         text.toString(),
         calls.toList(),
-        signatures.takeIf { it.isNotEmpty() }?.let { values ->
-            buildJsonObject { values.forEach { (id, signature) -> put(id, signature) } }.toString()
+        signatures.takeIf { it.isNotEmpty() }.let { values ->
+            if (values == null && textSignature == null) null else buildJsonObject {
+                put("provider", "gemini")
+                values?.let { callSignatures -> put("call_signatures", buildJsonObject {
+                    callSignatures.forEach { (id, signature) -> put(id, signature) }
+                }) }
+                textSignature?.let { put("text_signature", it) }
+            }.toString()
         },
     )
 }
+
+private const val GEMINI_LOCAL_ID_PREFIX = "_rivet_gemini_"
