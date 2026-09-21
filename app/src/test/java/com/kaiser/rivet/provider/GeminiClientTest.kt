@@ -6,6 +6,8 @@ import com.kaiser.rivet.agent.AgentToolDefinition
 import com.kaiser.rivet.agent.AgentToolResult
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
@@ -114,5 +116,23 @@ class GeminiClientTest {
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"thoughtSignature\":\"sig\""))
         assertTrue(body.contains("\"functionResponse\":{\"id\":\"g-1\",\"name\":\"read_file\""))
+    }
+
+    @Test
+    fun multipleFunctionCallsRemainDistinct() = runTest {
+        val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
+            "{\"functionCall\":{\"id\":\"a\",\"name\":\"read_file\",\"args\":{\"path\":\"A.kt\"}}}," +
+            "{\"functionCall\":{\"id\":\"b\",\"name\":\"read_file\",\"args\":{\"path\":\"B.kt\"}}}" +
+            "]}}]}\n\n"
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+
+        val response = GeminiClient(config(), "key").streamAgent(
+            AgentRequest("gemini-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
+        ) {}
+
+        assertEquals(listOf("a", "b"), response.toolCalls.map { it.id })
+        assertEquals(listOf("A.kt", "B.kt"), response.toolCalls.map {
+            kotlinx.serialization.json.Json.parseToJsonElement(it.arguments).jsonObject["path"]!!.jsonPrimitive.content
+        })
     }
 }

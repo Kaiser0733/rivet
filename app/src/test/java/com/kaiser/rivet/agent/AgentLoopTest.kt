@@ -4,6 +4,8 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
@@ -358,5 +360,41 @@ class AgentLoopTest {
         assertEquals(AgentStopReason.Completed, result.stopReason)
         assertTrue(result.messages.flatMap { it.toolResults }.first().error)
         assertEquals("Recovered", result.messages.last().text)
+    }
+
+    @Test
+    fun cancellationAfterMutationCommitPersistsItsResult() = runTest {
+        val committed = CompletableDeferred<Unit>()
+        val release = CompletableDeferred<Unit>()
+        val completed = mutableListOf<AgentMessage>()
+        val call = AgentToolCall("edit", "write_file", "{}")
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            prepareTool = { requested -> PreparedAgentTool(
+                requested,
+                AgentApprovalRequest(requested, "Edit", "A.kt"),
+            ) {
+                withContext(NonCancellable) {
+                    committed.complete(Unit)
+                    release.await()
+                    AgentToolResult(requested.id, requested.name, "{\"ok\":true}")
+                }
+            } },
+            requestApproval = { true },
+        )
+        val running = async {
+            loop.run(
+                listOf(AgentMessage.user("Edit")),
+                emptyList(),
+                onMessage = { completed += it },
+            )
+        }
+        committed.await()
+
+        running.cancel()
+        release.complete(Unit)
+        running.cancelAndJoin()
+
+        assertEquals("edit", completed.flatMap { it.toolResults }.single().callId)
     }
 }

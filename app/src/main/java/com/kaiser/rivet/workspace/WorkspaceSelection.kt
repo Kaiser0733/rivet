@@ -12,6 +12,7 @@ import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.suspendCancellableCoroutine
 
 class WorkspaceSelection(context: Context) {
     private val persistence = Mutex()
@@ -30,6 +31,28 @@ class WorkspaceSelection(context: Context) {
 
     suspend fun currentIdentity(): String? = withContext(Dispatchers.IO) {
         preferences.getString("tree", null)
+    }
+
+    suspend fun awaitIdentityChange(expected: String) {
+        suspendCancellableCoroutine { continuation ->
+            lateinit var listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener
+            fun check() {
+                if (preferences.getString("tree", null) != expected) {
+                    continuation.tryResume(Unit)?.let { token ->
+                        preferences.unregisterOnSharedPreferenceChangeListener(listener)
+                        continuation.completeResume(token)
+                    }
+                }
+            }
+            listener = android.content.SharedPreferences.OnSharedPreferenceChangeListener { _, key ->
+                if (key == "tree") check()
+            }
+            preferences.registerOnSharedPreferenceChangeListener(listener)
+            continuation.invokeOnCancellation {
+                preferences.unregisterOnSharedPreferenceChangeListener(listener)
+            }
+            check()
+        }
     }
 
     suspend fun select(uri: Uri, returnedFlags: Int): SafWorkspace = withContext(Dispatchers.IO) {

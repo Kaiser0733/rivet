@@ -10,7 +10,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -232,17 +231,6 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
             } else block.data?.let { put("data", it) }
         } }.takeIf { it.isNotEmpty() }?.let(::JsonArray)?.toString()
         return AgentResponse(text.toString(), calls, state)
-    }
-}
-
-internal fun anthropicDelta(payload: String): String? {
-    return try {
-        val obj = Json.parseToJsonElement(payload).jsonObject
-        if (obj["type"]?.str() != "content_block_delta") return null
-        if (obj["delta"]?.obj()?.get("type")?.str() != "text_delta") return null
-        obj["delta"]?.obj()?.get("text")?.str()
-    } catch (e: Exception) {
-        null
     }
 }
 

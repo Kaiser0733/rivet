@@ -156,4 +156,21 @@ class AnthropicClientTest {
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"type\":\"tool_result\",\"tool_use_id\":\"tool-1\""))
     }
+
+    @Test
+    fun multipleToolUsesRemainDistinct() = runTest {
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"read_file","input":{"path":"A.kt"}}}""",
+            """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"b","name":"read_file","input":{"path":"B.kt"}}}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+
+        val response = AnthropicClient(config(), "key").streamAgent(
+            AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
+        ) {}
+
+        assertEquals(listOf("a", "b"), response.toolCalls.map { it.id })
+        assertEquals(listOf("{\"path\":\"A.kt\"}", "{\"path\":\"B.kt\"}"),
+            response.toolCalls.map { it.arguments })
+    }
 }

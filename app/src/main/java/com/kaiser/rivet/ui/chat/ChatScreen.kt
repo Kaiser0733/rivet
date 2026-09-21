@@ -71,6 +71,7 @@ fun ChatScreen(
             messages = chatState.messages,
             streamText = chatState.streamText,
             streaming = chatState.streaming,
+            ready = chatState.ready,
             error = chatState.error,
             pendingApproval = chatState.pendingApproval,
             onApprove = chatViewModel::approve,
@@ -280,7 +281,7 @@ private fun ErrorRow(error: String, onDismiss: () -> Unit) {
 }
 
 @Composable
-private fun InputBar(streaming: Boolean, onSend: (String) -> Unit, onCancel: () -> Unit) {
+private fun InputBar(streaming: Boolean, ready: Boolean, onSend: (String) -> Unit, onCancel: () -> Unit) {
     var draft by remember { mutableStateOf("") }
     Row(
         Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -302,7 +303,7 @@ private fun InputBar(streaming: Boolean, onSend: (String) -> Unit, onCancel: () 
                     draft = ""
                 }
             },
-            enabled = streaming || draft.isNotBlank(),
+            enabled = streaming || (ready && draft.isNotBlank()),
         ) {
             if (streaming) {
                 Icon(painterResource(R.drawable.ic_stop), stringResource(R.string.chat_stop))

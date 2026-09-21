@@ -9,7 +9,6 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
@@ -174,24 +173,4 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
             buildJsonObject { values.forEach { (id, signature) -> put(id, signature) } }.toString()
         },
     )
-}
-
-// Each SSE chunk is a full GenerateContentResponse; concatenate every text
-// part of the first candidate. Error chunks ({"error":{...}}) surface their
-// message as a stream failure instead of masquerading as content.
-internal fun geminiDelta(payload: String): String? {
-    val obj = try {
-        Json.parseToJsonElement(payload).jsonObject
-    } catch (e: Exception) {
-        return null
-    }
-    obj["error"]?.obj()?.get("message")?.str()?.let { throw ProviderError.ProviderMessage(it) }
-    return try {
-        obj["candidates"]?.arr()?.firstOrNull()?.obj()
-            ?.get("content")?.obj()?.get("parts")?.arr()
-            ?.mapNotNull { it.obj()?.get("text")?.str() }
-            ?.joinToString("")
-    } catch (e: Exception) {
-        null
-    }
 }

@@ -121,6 +121,20 @@ class AgentLoop(
                 val denialKey = "${call.name}\n${call.arguments}"
                 val denied = prepared.approval != null &&
                     (denialKey in deniedMutations || !requestApproval(prepared.approval))
+                if (!workspaceIsCurrent()) {
+                    response.toolCalls.drop(index).forEachIndexed { offset, rejected ->
+                        if (offset > 0) toolCalls++
+                        results += AgentToolResult(
+                            callId = rejected.id,
+                            name = rejected.name,
+                            content = "{\"error\":\"workspace_changed\"}",
+                            error = true,
+                            summary = "Stopped  workspace changed",
+                        )
+                    }
+                    workspaceChanged = true
+                    break
+                }
                 if (denied) {
                     deniedMutations += denialKey
                     results += AgentToolResult(
@@ -131,20 +145,6 @@ class AgentLoop(
                         summary = "Denied  ${call.name}",
                     )
                 } else {
-                    if (!workspaceIsCurrent()) {
-                        response.toolCalls.drop(index).forEach { rejected ->
-                            if (rejected !== call) toolCalls++
-                            results += AgentToolResult(
-                                callId = rejected.id,
-                                name = rejected.name,
-                                content = "{\"error\":\"workspace_changed\"}",
-                                error = true,
-                                summary = "Stopped  workspace changed",
-                            )
-                        }
-                        workspaceChanged = true
-                        break
-                    }
                     results += try {
                         prepared.execute()
                     } catch (e: CancellationException) {
