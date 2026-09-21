@@ -37,10 +37,17 @@ class AgentLoop(
         onMessage: suspend (AgentMessage) -> Unit = {},
     ): AgentRunResult {
         val messages = initial.toMutableList()
+        suspend fun append(message: AgentMessage) {
+            messages += message
+            // Completed protocol events must remain durable when cancellation
+            // arrives during their persistence callback.
+            withContext(NonCancellable) { onMessage(message) }
+        }
         val deniedMutations = mutableSetOf<String>()
         var modelIterations = 0
         var toolCalls = 0
         while (modelIterations < MAX_MODEL_ITERATIONS) {
+            currentCoroutineContext().ensureActive()
             val streamed = StringBuffer()
             val response = try {
                 requestModel(messages.toList(), tools) { delta ->
@@ -51,8 +58,7 @@ class AgentLoop(
                 val partial = streamed.toString()
                 if (partial.isNotBlank()) {
                     val assistant = AgentMessage.assistant(partial)
-                    messages += assistant
-                    withContext(NonCancellable) { onMessage(assistant) }
+                    append(assistant)
                 }
                 throw e
             }
@@ -62,8 +68,7 @@ class AgentLoop(
                 toolCalls = response.toolCalls,
                 transportState = response.transportState,
             )
-            messages += assistant
-            onMessage(assistant)
+            append(assistant)
             if (response.toolCalls.isEmpty()) {
                 return AgentRunResult(
                     messages = messages,
@@ -82,8 +87,7 @@ class AgentLoop(
                         summary = "Stopped  tool call limit",
                     )
                 })
-                messages += rejected
-                onMessage(rejected)
+                append(rejected)
                 return AgentRunResult(
                     messages = messages,
                     stopReason = AgentStopReason.ToolCallLimit,
@@ -93,72 +97,85 @@ class AgentLoop(
             }
             val results = mutableListOf<AgentToolResult>()
             var workspaceChanged = false
-            for ((index, call) in response.toolCalls.withIndex()) {
-                currentCoroutineContext().ensureActive()
-                if (!workspaceIsCurrent()) {
-                    response.toolCalls.drop(index).forEach { rejected ->
-                        toolCalls++
-                        results += AgentToolResult(
-                            callId = rejected.id,
-                            name = rejected.name,
-                            content = "{\"error\":\"workspace_changed\"}",
-                            error = true,
-                            summary = "Stopped  workspace changed",
-                        )
+            try {
+                for ((index, call) in response.toolCalls.withIndex()) {
+                    currentCoroutineContext().ensureActive()
+                    if (!workspaceIsCurrent()) {
+                        response.toolCalls.drop(index).forEach { rejected ->
+                            toolCalls++
+                            results += AgentToolResult(
+                                callId = rejected.id,
+                                name = rejected.name,
+                                content = "{\"error\":\"workspace_changed\"}",
+                                error = true,
+                                summary = "Stopped  workspace changed",
+                            )
+                        }
+                        workspaceChanged = true
+                        break
                     }
-                    workspaceChanged = true
-                    break
-                }
-                toolCalls++
-                val prepared = try {
-                    prepareTool(call)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    results += failed(call)
-                    continue
-                }
-                val denialKey = "${call.name}\n${call.arguments}"
-                val denied = prepared.approval != null &&
-                    (denialKey in deniedMutations || !requestApproval(prepared.approval))
-                if (!workspaceIsCurrent()) {
-                    response.toolCalls.drop(index).forEachIndexed { offset, rejected ->
-                        if (offset > 0) toolCalls++
-                        results += AgentToolResult(
-                            callId = rejected.id,
-                            name = rejected.name,
-                            content = "{\"error\":\"workspace_changed\"}",
-                            error = true,
-                            summary = "Stopped  workspace changed",
-                        )
-                    }
-                    workspaceChanged = true
-                    break
-                }
-                if (denied) {
-                    deniedMutations += denialKey
-                    results += AgentToolResult(
-                        callId = call.id,
-                        name = call.name,
-                        content = "{\"error\":\"denied\"}",
-                        error = true,
-                        summary = "Denied  ${call.name}",
-                    )
-                } else {
-                    results += try {
-                        prepared.execute()
+                    toolCalls++
+                    val prepared = try {
+                        prepareTool(call)
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
-                        failed(call)
+                        results += failed(call)
+                        continue
+                    }
+                    val denialKey = "${call.name}\n${call.arguments}"
+                    val denied = prepared.approval != null &&
+                        (denialKey in deniedMutations || !requestApproval(prepared.approval))
+                    if (!workspaceIsCurrent()) {
+                        response.toolCalls.drop(index).forEachIndexed { offset, rejected ->
+                            if (offset > 0) toolCalls++
+                            results += AgentToolResult(
+                                callId = rejected.id,
+                                name = rejected.name,
+                                content = "{\"error\":\"workspace_changed\"}",
+                                error = true,
+                                summary = "Stopped  workspace changed",
+                            )
+                        }
+                        workspaceChanged = true
+                        break
+                    }
+                    if (denied) {
+                        deniedMutations += denialKey
+                        results += AgentToolResult(
+                            callId = call.id,
+                            name = call.name,
+                            content = "{\"error\":\"denied\"}",
+                            error = true,
+                            summary = "Denied  ${call.name}",
+                        )
+                    } else {
+                        results += try {
+                            prepared.execute()
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (_: Exception) {
+                            failed(call)
+                        }
                     }
                 }
+            } catch (e: CancellationException) {
+                response.toolCalls.drop(results.size).forEach { call ->
+                    results += AgentToolResult(
+                        callId = call.id,
+                        name = call.name,
+                        content = "{\"error\":\"cancelled\"}",
+                        error = true,
+                        summary = "Stopped  ${call.name}",
+                    )
+                }
+                append(AgentMessage.tools(results))
+                throw e
             }
             val toolMessage = AgentMessage.tools(results)
-            messages += toolMessage
             // A SAF mutation can finish inside its non-cancellable commit section.
             // Persist its correlated result even if cancellation arrived at that boundary.
-            withContext(NonCancellable) { onMessage(toolMessage) }
+            append(toolMessage)
             if (workspaceChanged) {
                 return AgentRunResult(
                     messages = messages,
