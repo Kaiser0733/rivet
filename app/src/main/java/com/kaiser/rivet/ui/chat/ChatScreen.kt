@@ -37,8 +37,9 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
-import com.kaiser.rivet.chat.ChatMessage
-import com.kaiser.rivet.chat.ChatRole
+import com.kaiser.rivet.agent.AgentApprovalRequest
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 
@@ -71,6 +72,9 @@ fun ChatScreen(
             streamText = chatState.streamText,
             streaming = chatState.streaming,
             error = chatState.error,
+            pendingApproval = chatState.pendingApproval,
+            onApprove = chatViewModel::approve,
+            onDeny = chatViewModel::deny,
             onDismissError = chatViewModel::clearError,
             modifier = Modifier.weight(1f),
         )
@@ -136,10 +140,13 @@ private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewM
 
 @Composable
 private fun MessageList(
-    messages: List<ChatMessage>,
+    messages: List<AgentMessage>,
     streamText: String,
     streaming: Boolean,
     error: String?,
+    pendingApproval: AgentApprovalRequest?,
+    onApprove: (String) -> Unit,
+    onDeny: (String) -> Unit,
     onDismissError: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
@@ -180,6 +187,9 @@ private fun MessageList(
                     )
                 }
             }
+            if (pendingApproval != null) {
+                item { ApprovalRow(pendingApproval, onApprove, onDeny) }
+            }
             if (error != null && !streaming) {
                 item {
                     ErrorRow(error, onDismissError)
@@ -190,8 +200,8 @@ private fun MessageList(
 }
 
 @Composable
-private fun MessageRow(message: ChatMessage) {
-    if (message.role == ChatRole.User) {
+private fun MessageRow(message: AgentMessage) {
+    if (message.role == AgentRole.User) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             Surface(
                 color = MaterialTheme.colorScheme.surfaceContainer,
@@ -205,12 +215,44 @@ private fun MessageRow(message: ChatMessage) {
                 )
             }
         }
-    } else {
+    } else if (message.role == AgentRole.Assistant && message.text.isNotEmpty()) {
         Text(
             message.text,
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurface,
         )
+    } else if (message.role == AgentRole.Tool) {
+        Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
+            message.toolResults.forEach { result ->
+                Text(
+                    result.summary,
+                    style = MaterialTheme.typography.labelMedium,
+                    color = if (result.error) MaterialTheme.colorScheme.error
+                    else MaterialTheme.colorScheme.onSurfaceVariant,
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ApprovalRow(
+    request: AgentApprovalRequest,
+    onApprove: (String) -> Unit,
+    onDeny: (String) -> Unit,
+) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(6.dp),
+    ) {
+        Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
+            Text(request.title, style = MaterialTheme.typography.titleSmall)
+            Text(request.detail, style = MaterialTheme.typography.bodySmall)
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = { onApprove(request.call.id) }) { Text("Approve") }
+                TextButton(onClick = { onDeny(request.call.id) }) { Text("Deny") }
+            }
+        }
     }
 }
 
