@@ -1,8 +1,9 @@
 package com.kaiser.rivet.storage
 
 import android.content.Context
-import androidx.datastore.preferences.core.clear
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.stringPreferencesKey
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.chat.ChatMessage
@@ -22,7 +23,12 @@ class AgentSessionStoreTest {
     private val context: Context = RuntimeEnvironment.getApplication()
 
     private suspend fun resetStore() {
-        context.chatData.edit { it.clear() }
+        context.chatData.edit { prefs ->
+            prefs.remove(stringPreferencesKey("messages"))
+            prefs.remove(stringPreferencesKey("agent_messages"))
+            prefs.remove(booleanPreferencesKey("agent_interrupted"))
+            prefs.remove(booleanPreferencesKey("agent_migrated"))
+        }
     }
 
     @Test
