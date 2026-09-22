@@ -85,6 +85,49 @@ class SafWorkspaceTest {
         assertEquals(1, provider.createCalls)
         assertEquals(listOf("review.md.txt"), workspace.listDirectory(WorkspacePath.ROOT).map { it.path.value })
     }
+    @Test fun normalizedDirectoryCreateReturnsTheActualPath() = runBlocking {
+        provider.normalizeDirectoryNames = true
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        val result = executor.prepare(AgentToolCall(
+            "mkdir", "create_directory", """{"path":"docs"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertFalse(result.error)
+        assertEquals("docs.folder", content["path"]!!.jsonPrimitive.content)
+        assertEquals("docs", content["requested_path"]!!.jsonPrimitive.content)
+    }
+    @Test fun normalizedRenameReturnsTheActualPath() = runBlocking {
+        workspace.createFile(path("draft"))
+        provider.normalizeRenamedNames = true
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        val result = executor.prepare(AgentToolCall(
+            "rename", "rename_path", """{"path":"draft","new_name":"final"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertFalse(result.error)
+        assertEquals("final.txt", content["path"]!!.jsonPrimitive.content)
+        assertEquals("draft", content["source_path"]!!.jsonPrimitive.content)
+        assertEquals("final", content["requested_name"]!!.jsonPrimitive.content)
+    }
+    @Test fun moveReturnsTheConfirmedDestinationPath() = runBlocking {
+        workspace.createDirectory(path("src"))
+        workspace.createFile(path("draft"))
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        val result = executor.prepare(AgentToolCall(
+            "move", "move_path", """{"path":"draft","destination":"src"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertFalse(result.error)
+        assertEquals("src/draft", content["path"]!!.jsonPrimitive.content)
+        assertEquals("draft", content["source_path"]!!.jsonPrimitive.content)
+        assertEquals("src", content["destination"]!!.jsonPrimitive.content)
+    }
     @Test fun listingQueriesOnlyOneDirectChildCollection() = runBlocking {
         workspace.createFile(path("z"))
         workspace.createFile(path("a"))

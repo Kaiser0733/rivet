@@ -18,6 +18,8 @@ class TestDocumentsProvider : DocumentsProvider() {
     var childQueries = 0
     var createCalls = 0
     var normalizeTextFileNames = false
+    var normalizeDirectoryNames = false
+    var normalizeRenamedNames = false
     private var nextId = 0
     private val allFlags = Document.FLAG_SUPPORTS_WRITE or Document.FLAG_SUPPORTS_DELETE or
         Document.FLAG_SUPPORTS_RENAME or Document.FLAG_SUPPORTS_MOVE or Document.FLAG_DIR_SUPPORTS_CREATE
@@ -64,7 +66,11 @@ class TestDocumentsProvider : DocumentsProvider() {
         check(writable)
         createCalls++
         val id = "doc-${++nextId}"
-        val actualName = if (normalizeTextFileNames && mimeType == "text/plain") "$displayName.txt" else displayName
+        val actualName = when {
+            normalizeTextFileNames && mimeType == "text/plain" -> "$displayName.txt"
+            normalizeDirectoryNames && mimeType == Document.MIME_TYPE_DIR -> "$displayName.folder"
+            else -> displayName
+        }
         nodes[id] = Node(actualName, parentDocumentId, mimeType == Document.MIME_TYPE_DIR,
             File.createTempFile("workspace-document", ".test", context!!.cacheDir))
         return id
@@ -77,7 +83,7 @@ class TestDocumentsProvider : DocumentsProvider() {
     }
     override fun renameDocument(documentId: String, displayName: String): String {
         val node = nodes.remove(documentId)!!
-        node.name = displayName
+        node.name = if (normalizeRenamedNames) "$displayName.txt" else displayName
         val id = "doc-${++nextId}"
         nodes[id] = node
         nodes.values.filter { it.parent == documentId }.forEach { it.parent = id }
