@@ -75,5 +75,6 @@ data class AgentApprovalRequest(
 class PreparedAgentTool(
     val call: AgentToolCall,
     val approval: AgentApprovalRequest?,
+    val resultContentLimitBytes: Int = AgentLoop.MAX_TOOL_RESULT_BYTES,
     val execute: suspend () -> AgentToolResult,
 )

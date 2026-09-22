@@ -98,7 +98,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                 "write_file" -> {
                     val args = json.decodeFromString<WriteArgs>(call.arguments)
                     val path = path(args.path); hash(args.expectedSha256)
-                    mutation(call, "Edit", path) {
+                    mutation(call, "Edit", path, path.length) {
                         snapshot(call, workspace.write(path, args.content, args.expectedSha256), "Edited  $path")
                     }
                 }
@@ -107,13 +107,13 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                     val path = path(args.path); hash(args.expectedSha256)
                     require(args.edits.isNotEmpty() && args.edits.size <= 100)
                     val edits = args.edits.map { require(it.oldText.isNotEmpty()); AgentTextEdit(it.oldText, it.newText) }
-                    mutation(call, "Edit", "$path\n${edits.size} exact replacement${if (edits.size == 1) "" else "s"}") {
+                    mutation(call, "Edit", "$path\n${edits.size} exact replacement${if (edits.size == 1) "" else "s"}", path.length) {
                         snapshot(call, workspace.patch(path, args.expectedSha256, edits), "Edited  $path")
                     }
                 }
                 "create_file" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
-                    mutation(call, "Create file", path) {
+                    mutation(call, "Create file", path, path.length * 2 + 255) {
                         val created = workspace.createFile(path)
                         success(call, buildJsonObject {
                             put("path", created.path)
@@ -125,7 +125,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                 }
                 "create_directory" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
-                    mutation(call, "Create folder", path) {
+                    mutation(call, "Create folder", path, path.length * 2 + 255) {
                         val created = workspace.createDirectory(path)
                         success(call, entryValue(created, requestedPath = path), "Created  ${created.path}")
                     }
@@ -133,7 +133,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                 "rename_path" -> {
                     val args = json.decodeFromString<RenameArgs>(call.arguments)
                     val path = path(args.path); name(args.newName)
-                    mutation(call, "Rename", "$path\n→ ${args.newName}") {
+                    mutation(call, "Rename", "$path\n→ ${args.newName}", path.length * 2 + 765) {
                         val renamed = workspace.rename(path, args.newName)
                         val actualName = renamed.path.substringAfterLast('/')
                         success(call, buildJsonObject {
@@ -148,7 +148,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                 "move_path" -> {
                     val args = json.decodeFromString<MoveArgs>(call.arguments)
                     val path = path(args.path); val destination = path(args.destination, root = true)
-                    mutation(call, "Move", "$path\n→ ${destination.ifEmpty { "." }}") {
+                    mutation(call, "Move", "$path\n→ ${destination.ifEmpty { "." }}", path.length + destination.length * 2 + 256) {
                         val moved = workspace.move(path, destination)
                         success(call, buildJsonObject {
                             put("source_path", path)
@@ -160,7 +160,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                 }
                 "delete_path" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
-                    mutation(call, "Delete", path) {
+                    mutation(call, "Delete", path, path.length) {
                         workspace.delete(path)
                         success(call, buildJsonObject { put("path", path); put("deleted", true) }, "Deleted  $path")
                     }
@@ -183,8 +183,14 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         call: AgentToolCall,
         title: String,
         detail: String,
+        resultPathChars: Int,
         action: suspend () -> AgentToolResult,
-    ) = PreparedAgentTool(call, AgentApprovalRequest(call, title, detail)) { execute(call, action) }
+    ) = PreparedAgentTool(
+        call, AgentApprovalRequest(call, title, detail),
+        // Paths contain no controls: three UTF-8 bytes per UTF-16 unit covers
+        // their JSON representation. Fixed fields, hashes and numbers fit in 512.
+        resultContentLimitBytes = minOf(AgentLoop.MAX_TOOL_RESULT_BYTES, 512 + resultPathChars * 3),
+    ) { execute(call, action) }
 
     private suspend fun execute(call: AgentToolCall, action: suspend () -> AgentToolResult): AgentToolResult = try {
         action()
@@ -200,7 +206,8 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         PreparedAgentTool(call, null) { failure(call, code) }
 
     private fun failure(call: AgentToolCall, code: String) = AgentToolResult(
-        call.id, call.name, buildJsonObject { put("error", code) }.toString(), true, "Failed  ${call.name}",
+        call.id, call.name, if (code == "output_limit") AgentLoop.OUTPUT_LIMIT_CONTENT
+        else buildJsonObject { put("error", code) }.toString(), true, "Failed  ${call.name}",
     )
 
     private fun success(call: AgentToolCall, value: JsonObject, summary: String) =

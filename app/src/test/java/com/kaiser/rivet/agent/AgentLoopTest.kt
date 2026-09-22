@@ -1,5 +1,6 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.storage.AgentSessionCodec
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -225,29 +226,64 @@ class AgentLoopTest {
     }
 
     @Test
-    fun repeatedToolResultsStayWithinTurnOutputBudgetAndLoopRecovers() = runTest {
-        val calls = (1..4).map { AgentToolCall("read-$it", "read_file", "{}") }
-        val responses = ArrayDeque(listOf(
-            AgentResponse(toolCalls = calls),
-            AgentResponse(text = "I reached the output limit and can continue selectively."),
-        ))
+    fun largeReadsDoNotStarveLaterSmallToolsOrApprovedMutation() = runTest {
+        val calls = (1..10).map { AgentToolCall("read-$it", "read_file", """{"path":"A.kt"}""") } + listOf(
+            AgentToolCall("list", "list_directory", "{}"),
+            AgentToolCall("search", "search_files", """{"query":"content"}"""),
+            AgentToolCall("edit", "write_file", """{"path":"A.kt","content":"new","expected_sha256":"${"a".repeat(64)}"}"""),
+        )
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = calls), AgentResponse(text = "Finished")))
+        val executed = mutableListOf<String>()
+        val workspace = AgentToolExecutorTest.FakeWorkspace(text = "文".repeat(30_000))
+        val executor = AgentToolExecutor(workspace)
+        var approvals = 0
         val loop = AgentLoop(
             requestModel = { _, _, _ -> responses.removeFirst() },
-            prepareTool = { call -> PreparedAgentTool(call, null) {
-                AgentToolResult(call.id, call.name, "x".repeat(20_000))
-            } },
-            requestApproval = { error("No approval") },
+            prepareTool = { call ->
+                val prepared = executor.prepare(call)
+                PreparedAgentTool(call, prepared.approval, prepared.resultContentLimitBytes) {
+                    executed += call.id
+                    prepared.execute()
+                }
+            },
+            requestApproval = { approvals++; true },
+            canPersistToolOutput = { candidate, reserve -> AgentSessionCodec.fits(candidate, reserve) },
         )
 
-        val result = loop.run(listOf(AgentMessage.user("Read repeatedly")), emptyList())
+        val result = loop.run(listOf(AgentMessage.user("Inspect and edit")), emptyList())
         val toolResults = result.messages.flatMap { it.toolResults }
-
-        assertTrue(toolResults.sumOf { it.content.toByteArray(Charsets.UTF_8).size } <= 64 * 1024)
-        assertEquals(calls.map { it.id }, toolResults.map { it.callId })
-        assertTrue(toolResults.last().error)
-        assertTrue("output_limit" in toolResults.last().content)
+        assertTrue(toolResults.sumOf { it.content.toByteArray(Charsets.UTF_8).size } > 64 * 1024)
+        assertEquals(calls.map { it.id }, executed)
+        assertEquals(executed, toolResults.map { it.callId })
+        assertTrue(toolResults.none { it.error })
+        assertEquals(1, approvals)
+        assertEquals(1, workspace.writes)
         assertEquals(AgentStopReason.Completed, result.stopReason)
-        assertEquals("I reached the output limit and can continue selectively.", result.messages.last().text)
+        AgentSessionCodec.encode(result.messages)
+    }
+
+    @Test
+    fun sixtyCallsAcrossThirtyIterationsCompleteNormally() = runTest {
+        var requests = 0
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ < 30) AgentResponse(toolCalls = (1..2).map {
+                    AgentToolCall("$requests-$it", "list_directory", "{}")
+                }) else AgentResponse(text = "Finished")
+            },
+            prepareTool = { call -> PreparedAgentTool(call, null) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { error("No approval") },
+            canPersistToolOutput = { candidate, reserve -> AgentSessionCodec.fits(candidate, reserve) },
+        )
+        val result = loop.run(listOf(AgentMessage.user("Inspect")), emptyList())
+        assertEquals(60, executions)
+        assertEquals(31, result.modelIterations)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertTrue(result.messages.flatMap { it.toolResults }.none { it.error })
     }
 
     @Test
@@ -255,60 +291,113 @@ class AgentLoopTest {
         val call = AgentToolCall("giant", "search_files", "{}")
         val responses = ArrayDeque(listOf(
             AgentResponse(toolCalls = listOf(call)),
+            AgentResponse(toolCalls = listOf(AgentToolCall("small", "list_directory", "{}"))),
             AgentResponse(text = "Recovered"),
         ))
         val loop = AgentLoop(
             requestModel = { _, _, _ -> responses.removeFirst() },
             prepareTool = { requested -> PreparedAgentTool(requested, null) {
-                AgentToolResult(requested.id, requested.name, "x".repeat(100_000))
+                AgentToolResult(requested.id, requested.name, if (requested.id == "giant") "x".repeat(100_000) else "{}")
             } },
             requestApproval = { error("No approval") },
         )
 
         val result = loop.run(listOf(AgentMessage.user("Search")), emptyList())
-        val limited = result.messages.flatMap { it.toolResults }.single()
+        val limited = result.messages.flatMap { it.toolResults }.first()
 
         assertEquals("giant", limited.callId)
         assertTrue(limited.error)
-        assertEquals("{\"error\":\"output_limit\"}", limited.content)
+        assertEquals(AgentLoop.OUTPUT_LIMIT_CONTENT, limited.content)
         assertTrue(limited.content.toByteArray(Charsets.UTF_8).size <= 24 * 1024)
         assertEquals("Recovered", result.messages.last().text)
+        assertEquals("{}", result.messages.flatMap { it.toolResults }.last().content)
     }
 
     @Test
-    fun exhaustedOutputBudgetDoesNotRequestOrExecuteMutation() = runTest {
-        val reads = (1..3).map { AgentToolCall("read-$it", "read_file", "{}") }
-        val mutation = AgentToolCall("edit", "write_file", "{}")
-        val responses = ArrayDeque(listOf(
-            AgentResponse(toolCalls = reads + mutation),
-            AgentResponse(text = "Stopped before editing."),
-        ))
+    fun mutationReserveFailureKeepsDurableHistoryAndRejectsRemainingCalls() = runTest {
+        val calls = listOf(AgentToolCall("edit", "write_file", "{}"), AgentToolCall("next", "read_file", "{}"))
+        val initial = listOf(AgentMessage.user("x".repeat(AgentSessionCodec.MAX_SERIALIZED_BYTES - 2000)))
+        var durable = initial
         var approvals = 0
-        var mutations = 0
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = calls) },
+            prepareTool = { call -> PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "A.kt"),
+                resultContentLimitBytes = 1024,
+            ) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; true },
+            canPersistToolOutput = { candidate, reserve -> AgentSessionCodec.fits(candidate, reserve) },
+        )
+        val result = loop.run(initial, emptyList(), onMessage = { message ->
+            val candidate = durable + message
+            AgentSessionCodec.encode(candidate)
+            durable = candidate
+        })
+        assertEquals(AgentStopReason.SessionLimit, result.stopReason)
+        assertEquals(0, approvals)
+        assertEquals(0, executions)
+        assertEquals(initial.single(), durable.first())
+        assertEquals(result.messages, durable)
+        assertEquals(calls.map { it.id }, durable.last().toolResults.map { it.callId })
+        assertTrue(durable.last().toolResults.all { it.error && "session_limit" in it.content })
+    }
+
+    @Test
+    fun smallMutationFitsNearSessionCapWithoutMaximumReadReserve() = runTest {
+        val call = AgentToolCall("create", "create_file", """{"path":"A.kt"}""")
+        val initial = listOf(AgentMessage.user("x".repeat(AgentSessionCodec.MAX_SERIALIZED_BYTES - 8000)))
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace())
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "Finished")))
+        var durable = initial
+        var approvals = 0
         val loop = AgentLoop(
             requestModel = { _, _, _ -> responses.removeFirst() },
-            prepareTool = { call ->
-                if (call == mutation) PreparedAgentTool(
-                    call,
-                    AgentApprovalRequest(call, "Edit", "A.kt"),
-                ) {
-                    mutations++
-                    AgentToolResult(call.id, call.name, "{\"ok\":true}")
-                } else PreparedAgentTool(call, null) {
-                    AgentToolResult(call.id, call.name, "x".repeat(20_000))
-                }
-            },
+            prepareTool = executor::prepare,
             requestApproval = { approvals++; true },
+            canPersistToolOutput = { candidate, reserve -> AgentSessionCodec.fits(candidate, reserve) },
         )
+        val result = loop.run(initial, emptyList(), onMessage = { message ->
+            val candidate = durable + message
+            AgentSessionCodec.encode(candidate)
+            durable = candidate
+        })
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(1, approvals)
+        assertTrue(durable.flatMap { it.toolResults }.none { it.error })
+        assertEquals(result.messages, durable)
+    }
 
-        val result = loop.run(listOf(AgentMessage.user("Read then edit")), emptyList())
-        val mutationResult = result.messages.flatMap { it.toolResults }.last()
-
-        assertEquals(0, approvals)
-        assertEquals(0, mutations)
-        assertEquals("edit", mutationResult.callId)
-        assertEquals("{\"error\":\"output_limit\"}", mutationResult.content)
-        assertEquals("Stopped before editing.", result.messages.last().text)
+    @Test
+    fun readOnlySessionExhaustionPreservesEarlierMutationResult() = runTest {
+        val calls = listOf(AgentToolCall("edit", "write_file", "{}"), AgentToolCall("read", "read_file", "{}"))
+        val initial = listOf(AgentMessage.user("x".repeat(AgentSessionCodec.MAX_SERIALIZED_BYTES - 8000)))
+        var durable = initial
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = calls) },
+            prepareTool = { call -> PreparedAgentTool(call,
+                if (call.id == "edit") AgentApprovalRequest(call, "Edit", "A.kt") else null,
+                resultContentLimitBytes = if (call.id == "edit") 1024 else AgentLoop.MAX_TOOL_RESULT_BYTES,
+            ) {
+                AgentToolResult(call.id, call.name,
+                    if (call.id == "edit") "{\"sha256\":\"${"a".repeat(64)}\"}" else "x".repeat(20_000))
+            } },
+            requestApproval = { true },
+            canPersistToolOutput = { candidate, reserve -> AgentSessionCodec.fits(candidate, reserve) },
+        )
+        val result = loop.run(initial, emptyList(), onMessage = { message ->
+            val candidate = durable + message
+            AgentSessionCodec.encode(candidate)
+            durable = candidate
+        })
+        assertEquals(AgentStopReason.SessionLimit, result.stopReason)
+        val results = durable.last().toolResults
+        assertEquals("edit", results[0].callId)
+        assertTrue(!results[0].error && "sha256" in results[0].content)
+        assertTrue(results[1].error && "session_limit" in results[1].content)
+        assertEquals(result.messages, durable)
     }
 
     @Test
@@ -419,7 +508,36 @@ class AgentLoopTest {
     }
 
     @Test
-    fun iterationLimitStopsAfterTwentyModelRequests() = runTest {
+    fun stopStillCancelsAfterMoreThanFiftyOperations() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val completed = mutableListOf<AgentMessage>()
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(
+                AgentToolCall("read-${executions + 1}", "read_file", "{}"),
+            )) },
+            prepareTool = { call -> PreparedAgentTool(call, null) {
+                if (++executions == 60) {
+                    entered.complete(Unit)
+                    awaitCancellation()
+                }
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { error("No approval") },
+        )
+        val running = async {
+            loop.run(listOf(AgentMessage.user("Inspect")), emptyList(), onMessage = { completed += it })
+        }
+        entered.await()
+        running.cancelAndJoin()
+        assertEquals(60, executions)
+        assertEquals(59, completed.flatMap { it.toolResults }.count { !it.error })
+        assertEquals("read-60", completed.last().toolResults.single().callId)
+        assertTrue("cancelled" in completed.last().toolResults.single().content)
+    }
+
+    @Test
+    fun emergencyIterationWatchdogStopsPathologicalLoop() = runTest {
         var requests = 0
         val loop = AgentLoop(
             requestModel = { _, _, _ ->
@@ -434,14 +552,14 @@ class AgentLoopTest {
 
         val result = loop.run(listOf(AgentMessage.user("Loop")), emptyList())
 
-        assertEquals(AgentLoop.MAX_MODEL_ITERATIONS, requests)
-        assertEquals(AgentStopReason.IterationLimit, result.stopReason)
-        assertEquals(20, result.toolCalls)
+        assertEquals(AgentLoop.RUNAWAY_MODEL_ITERATIONS, requests)
+        assertEquals(AgentStopReason.RunawayGuard, result.stopReason)
+        assertEquals(AgentLoop.RUNAWAY_MODEL_ITERATIONS, result.toolCalls)
     }
 
     @Test
     fun oversizedToolBatchStopsWithoutExecutingAndKeepsCorrelation() = runTest {
-        val calls = (1..51).map { AgentToolCall("c-$it", "read_file", "{}") }
+        val calls = (1..AgentLoop.RUNAWAY_TOOL_CALLS + 1).map { AgentToolCall("c-$it", "read_file", "{}") }
         var executions = 0
         val loop = AgentLoop(
             requestModel = { _, _, _ -> AgentResponse(toolCalls = calls) },
@@ -455,7 +573,7 @@ class AgentLoopTest {
         val result = loop.run(listOf(AgentMessage.user("Loop")), emptyList())
 
         assertEquals(0, executions)
-        assertEquals(AgentStopReason.ToolCallLimit, result.stopReason)
+        assertEquals(AgentStopReason.RunawayGuard, result.stopReason)
         assertEquals(calls.map { it.id }, result.messages.last().toolResults.map { it.callId })
     }
 
@@ -521,6 +639,8 @@ class AgentLoopTest {
         release.complete(Unit)
         running.cancelAndJoin()
 
-        assertEquals("edit", completed.flatMap { it.toolResults }.single().callId)
+        val result = completed.flatMap { it.toolResults }.single()
+        assertEquals("edit", result.callId)
+        assertTrue(!result.error && "ok" in result.content)
     }
 }
