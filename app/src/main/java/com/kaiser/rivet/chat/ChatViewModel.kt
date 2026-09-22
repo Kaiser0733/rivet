@@ -20,6 +20,8 @@ import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.storage.AgentSessionStore
+import com.kaiser.rivet.storage.AgentSessionLimitException
+import com.kaiser.rivet.storage.AgentSessionPersistence
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import com.kaiser.rivet.workspace.WorkspaceSelection
@@ -46,11 +48,52 @@ data class ChatUiState(
     val error: String? = null,
 )
 
-class ChatViewModel(app: Application) : AndroidViewModel(app) {
+internal sealed interface ProviderRuntimeResult {
+    data class Ready(val config: ProviderConfig, val apiKey: String) : ProviderRuntimeResult
+    data class Failure(val message: String) : ProviderRuntimeResult
+}
+
+internal fun interface ProviderRuntimeSource {
+    suspend fun load(): ProviderRuntimeResult
+}
+
+private class StoredProviderRuntimeSource(app: Application) : ProviderRuntimeSource {
     private val providerStore = ProviderStore(app)
-    private val sessionStore = AgentSessionStore(app)
     private val secrets = SecretStore(app)
-    private val workspaceSelection = WorkspaceSelection(app)
+
+    override suspend fun load(): ProviderRuntimeResult {
+        val activeId = providerStore.activeIdSnapshot()
+            ?: return ProviderRuntimeResult.Failure("No provider selected. Add one in Settings.")
+        val config = providerStore.configSnapshot().firstOrNull { it.id == activeId }
+            ?: return ProviderRuntimeResult.Failure("The selected provider no longer exists.")
+        val apiKey = secrets.apiKey(config.id)
+            ?: return ProviderRuntimeResult.Failure("No API key stored for \"${config.name}\".")
+        return ProviderRuntimeResult.Ready(config, apiKey)
+    }
+}
+
+class ChatViewModel private constructor(
+    app: Application,
+    private val sessionStore: AgentSessionPersistence,
+    private val providerSource: ProviderRuntimeSource,
+    private val workspaceSelection: WorkspaceSelection,
+    private val clientFactory: (ProviderConfig, String) -> com.kaiser.rivet.provider.ProviderClient,
+) : AndroidViewModel(app) {
+    constructor(app: Application) : this(
+        app,
+        AgentSessionStore(app),
+        StoredProviderRuntimeSource(app),
+        WorkspaceSelection(app),
+        ::providerClient,
+    )
+
+    internal constructor(
+        app: Application,
+        sessionPersistence: AgentSessionPersistence,
+        providerSource: ProviderRuntimeSource,
+        clientFactory: (ProviderConfig, String) -> com.kaiser.rivet.provider.ProviderClient,
+    ) : this(app, sessionPersistence, providerSource, WorkspaceSelection(app), clientFactory)
+
     private val approvals = AgentApprovalGate()
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -62,7 +105,14 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
     init {
         viewModelScope.launch {
             val ticket = generation
-            val restored = sessionStore.load()
+            val restored = try {
+                sessionStore.load()
+            } catch (_: AgentSessionLimitException) {
+                if (ticket == generation) {
+                    _uiState.update { it.copy(ready = true, error = CONTEXT_LIMIT_ERROR) }
+                }
+                return@launch
+            }
             if (ticket == generation) {
                 _uiState.update { state ->
                     state.copy(
@@ -96,12 +146,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             val workspaceId = workspace?.tree?.toString()
             val executor = workspace?.let { AgentToolExecutor(SafAgentWorkspace(it)) }
             val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
-            val client = providerClient(snapshot.config, snapshot.apiKey)
             val durable = (_uiState.value.messages + AgentMessage.user(trimmed)).toMutableList()
+            try {
+                sessionStore.save(durable, interrupted = true)
+            } catch (_: AgentSessionLimitException) {
+                if (ticket == generation) {
+                    _uiState.update {
+                        it.copy(streaming = false, streamText = "", pendingApproval = null, error = CONTEXT_LIMIT_ERROR)
+                    }
+                }
+                return@launch
+            }
             _uiState.update {
                 it.copy(messages = durable.toList(), streaming = true, streamText = "", error = null)
             }
-            sessionStore.save(durable, interrupted = true)
+            val client = clientFactory(snapshot.config, snapshot.apiKey)
 
             val loop = AgentLoop(
                 requestModel = { messages, definitions, onText ->
@@ -131,6 +190,12 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                 workspaceIsCurrent = {
                     workspaceId == null || workspaceSelection.currentIdentity() == workspaceId
                 },
+                canPersistToolOutput = { assistant, correlatedErrors ->
+                    sessionStore.canSaveWithReserve(
+                        durable + assistant + correlatedErrors,
+                        AgentLoop.MAX_ENCODED_TOOL_OUTPUT_RESERVE_BYTES,
+                    )
+                },
             )
             val streamed = StringBuffer()
             try {
@@ -146,10 +211,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                         },
                         onMessage = { message ->
                             if (ticket == generation) {
+                                val candidate = durable + message
+                                sessionStore.save(candidate, interrupted = true)
                                 durable += message
                                 if (message.role == AgentRole.Assistant) streamed.setLength(0)
                                 _uiState.update { it.copy(messages = durable.toList(), streamText = streamed.toString()) }
-                                sessionStore.save(durable, interrupted = true)
                             }
                         },
                     )
@@ -170,6 +236,21 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
                     }
                 }
                 if (ticket == generation) finish(result, durable)
+            } catch (_: AgentSessionLimitException) {
+                withContext(NonCancellable) {
+                    if (ticket == generation) {
+                        sessionStore.markInterrupted(false)
+                        _uiState.update {
+                            it.copy(
+                                messages = durable.toList(),
+                                streaming = false,
+                                streamText = "",
+                                pendingApproval = null,
+                                error = CONTEXT_LIMIT_ERROR,
+                            )
+                        }
+                    }
+                }
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     if (ticket == generation) {
@@ -201,6 +282,7 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
             AgentStopReason.IterationLimit -> "Agent stopped after ${AgentLoop.MAX_MODEL_ITERATIONS} model iterations."
             AgentStopReason.ToolCallLimit -> "Agent stopped after ${AgentLoop.MAX_TOOL_CALLS} tool calls."
             AgentStopReason.WorkspaceChanged -> "Workspace changed. The agent turn was stopped."
+            AgentStopReason.SessionLimit -> CONTEXT_LIMIT_ERROR
         }
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
         sessionStore.save(persisted, interrupted = false)
@@ -217,15 +299,11 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private suspend fun providerSnapshot(): ProviderSnapshot? {
-        val activeId = providerStore.activeIdSnapshot() ?: return failBeforeStart(
-            "No provider selected. Add one in Settings.",
-        )
-        val config: ProviderConfig = providerStore.configSnapshot().firstOrNull { it.id == activeId }
-            ?: return failBeforeStart("The selected provider no longer exists.")
-        val apiKey = secrets.apiKey(config.id)
-            ?: return failBeforeStart("No API key stored for \"${config.name}\".")
-        return ProviderSnapshot(config, apiKey)
+    private suspend fun providerSnapshot(): ProviderRuntimeResult.Ready? {
+        return when (val result = providerSource.load()) {
+            is ProviderRuntimeResult.Ready -> result
+            is ProviderRuntimeResult.Failure -> failBeforeStart(result.message)
+        }
     }
 
     private fun failBeforeStart(message: String): Nothing? {
@@ -262,9 +340,10 @@ class ChatViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private data class ProviderSnapshot(val config: ProviderConfig, val apiKey: String)
-
     companion object {
+        internal const val CONTEXT_LIMIT_ERROR =
+            "This conversation reached Rivet's current context limit. Start a new session to continue."
+
         private fun systemInstruction(workspace: Boolean): String = if (workspace) {
             "You are a coding agent inside Rivet. Inspect relevant files before editing. Paths are relative to the selected workspace. Prefer targeted edits. Tool results are authoritative and mutations require approval. You have no terminal, shell, Git, build, or test execution. Never claim commands ran or invent file contents."
         } else {
