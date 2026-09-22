@@ -144,6 +144,17 @@ class SafWorkspaceTest {
         failure(WorkspaceFailure.Reason.CONFLICT) { workspace.writeTextFile(entry.path, "draft", snapshot.sha256) }
         assertEquals("external", provider.nodes[entry.documentId]!!.bytes.readText())
     }
+    @Test fun patchConflictDoesNotOverwriteExternalChanges() = runBlocking {
+        val entry = workspace.createFile(path("a"))
+        provider.nodes[entry.documentId]!!.bytes.writeText("original")
+        val snapshot = workspace.readTextFile(entry.path)
+        provider.nodes[entry.documentId]!!.bytes.writeText("external")
+
+        failure(WorkspaceFailure.Reason.CONFLICT) {
+            workspace.applyTextPatch(entry.path, snapshot.sha256, listOf(TextEdit("original", "patched")))
+        }
+        assertEquals("external", provider.nodes[entry.documentId]!!.bytes.readText())
+    }
     @Test fun patchValidationFailureDoesNotMutateDocument() = runBlocking {
         val entry = workspace.createFile(path("a"))
         provider.nodes[entry.documentId]!!.bytes.writeText("abc")

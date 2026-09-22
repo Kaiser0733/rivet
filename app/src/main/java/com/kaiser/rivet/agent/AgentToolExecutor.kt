@@ -33,9 +33,9 @@ interface AgentWorkspace {
     suspend fun write(path: String, content: String, expectedHash: String): AgentFileSnapshot
     suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>): AgentFileSnapshot
     suspend fun createFile(path: String): AgentFileSnapshot
-    suspend fun createDirectory(path: String)
-    suspend fun rename(path: String, newName: String)
-    suspend fun move(path: String, destination: String)
+    suspend fun createDirectory(path: String): AgentWorkspaceEntry
+    suspend fun rename(path: String, newName: String): AgentWorkspaceEntry
+    suspend fun move(path: String, destination: String): AgentWorkspaceEntry
     suspend fun delete(path: String)
 }
 
@@ -126,24 +126,36 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                 "create_directory" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
                     mutation(call, "Create folder", path) {
-                        workspace.createDirectory(path)
-                        success(call, buildJsonObject { put("path", path); put("type", "directory") }, "Created  $path")
+                        val created = workspace.createDirectory(path)
+                        success(call, entryValue(created, requestedPath = path), "Created  ${created.path}")
                     }
                 }
                 "rename_path" -> {
                     val args = json.decodeFromString<RenameArgs>(call.arguments)
                     val path = path(args.path); name(args.newName)
                     mutation(call, "Rename", "$path\n→ ${args.newName}") {
-                        workspace.rename(path, args.newName)
-                        success(call, buildJsonObject { put("path", path); put("new_name", args.newName) }, "Renamed  $path")
+                        val renamed = workspace.rename(path, args.newName)
+                        val actualName = renamed.path.substringAfterLast('/')
+                        success(call, buildJsonObject {
+                            put("source_path", path)
+                            put("path", renamed.path)
+                            put("new_name", actualName)
+                            if (actualName != args.newName) put("requested_name", args.newName)
+                            put("type", if (renamed.directory) "directory" else "file")
+                        }, "Renamed  ${renamed.path}")
                     }
                 }
                 "move_path" -> {
                     val args = json.decodeFromString<MoveArgs>(call.arguments)
                     val path = path(args.path); val destination = path(args.destination, root = true)
                     mutation(call, "Move", "$path\n→ ${destination.ifEmpty { "." }}") {
-                        workspace.move(path, destination)
-                        success(call, buildJsonObject { put("path", path); put("destination", destination) }, "Moved  $path")
+                        val moved = workspace.move(path, destination)
+                        success(call, buildJsonObject {
+                            put("source_path", path)
+                            put("destination", destination)
+                            put("path", moved.path)
+                            put("type", if (moved.directory) "directory" else "file")
+                        }, "Moved  ${moved.path}")
                     }
                 }
                 "delete_path" -> {
@@ -197,6 +209,13 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
     private fun snapshot(call: AgentToolCall, file: AgentFileSnapshot, summary: String) = success(call, buildJsonObject {
         put("path", file.path); put("sha256", file.sha256); put("size", file.size)
     }, summary)
+
+    private fun entryValue(entry: AgentWorkspaceEntry, requestedPath: String? = null) = buildJsonObject {
+        put("path", entry.path)
+        if (requestedPath != null && entry.path != requestedPath) put("requested_path", requestedPath)
+        put("type", if (entry.directory) "directory" else "file")
+        if (!entry.directory) entry.size?.let { put("size", it) }
+    }
 
     private fun path(value: String, root: Boolean = false): String {
         if (value.isEmpty()) {

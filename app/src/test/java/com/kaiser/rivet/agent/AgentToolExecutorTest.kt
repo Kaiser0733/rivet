@@ -52,9 +52,17 @@ class AgentToolExecutorTest {
         override suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>) =
             write(path, edits.single().newText, expectedHash)
         override suspend fun createFile(path: String) = AgentFileSnapshot(createdPath ?: path, "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0)
-        override suspend fun createDirectory(path: String) = Unit
-        override suspend fun rename(path: String, newName: String) = Unit
-        override suspend fun move(path: String, destination: String) = Unit
+        override suspend fun createDirectory(path: String) = AgentWorkspaceEntry(path, directory = true, size = null)
+        override suspend fun rename(path: String, newName: String) = AgentWorkspaceEntry(
+            path.substringBeforeLast('/', "").let { parent -> if (parent.isEmpty()) newName else "$parent/$newName" },
+            directory = false,
+            size = 0,
+        )
+        override suspend fun move(path: String, destination: String) = AgentWorkspaceEntry(
+            if (destination.isEmpty()) path.substringAfterLast('/') else "$destination/${path.substringAfterLast('/')}",
+            directory = false,
+            size = 0,
+        )
         override suspend fun delete(path: String) = Unit
     }
 
@@ -222,6 +230,10 @@ class AgentToolExecutorTest {
         assertTrue(result.content.toByteArray(Charsets.UTF_8).size <= AgentLoop.MAX_TOOL_RESULT_BYTES)
         assertTrue(hits.isNotEmpty())
         assertTrue(hits.size < workspace.searchHits.size)
+        assertEquals(
+            workspace.searchHits.take(hits.size).map { it.path },
+            hits.map { it.jsonObject["path"]!!.jsonPrimitive.content },
+        )
         assertTrue(content["limited"]!!.jsonPrimitive.content.toBoolean())
     }
 
