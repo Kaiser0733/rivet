@@ -1,6 +1,8 @@
 package com.kaiser.rivet.agent
 
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
@@ -16,10 +18,18 @@ class AgentToolExecutorTest {
     ) : AgentWorkspace {
         var writes = 0
         var failure: String? = null
-
-        override suspend fun list(path: String) = listOf(
-            AgentWorkspaceEntry("$path/Main.kt".trimStart('/'), directory = false, size = 12),
+        var listedEntries = listOf(
+            AgentWorkspaceEntry("Main.kt", directory = false, size = 12),
         )
+        var searchHits = listOf(AgentSearchHit("src/Main.kt", 2, "content"))
+        var searchLimited = false
+        var searchFilesScanned = 3
+        var searchEntriesVisited = 4
+        var searchBytesScanned = 5L
+        var searchSkipped = 1
+        var createdPath: String? = null
+
+        override suspend fun list(path: String) = listedEntries
         override suspend fun read(path: String) = AgentFileSnapshot(
             path,
             text,
@@ -27,7 +37,12 @@ class AgentToolExecutorTest {
             text.toByteArray(Charsets.UTF_8).size.toLong(),
         )
         override suspend fun search(path: String, query: String) = AgentSearchReport(
-            listOf(AgentSearchHit("src/Main.kt", 2, query)), limited = false,
+            searchHits,
+            limited = searchLimited,
+            filesScanned = searchFilesScanned,
+            entriesVisited = searchEntriesVisited,
+            bytesScanned = searchBytesScanned,
+            skipped = searchSkipped,
         )
         override suspend fun write(path: String, content: String, expectedHash: String): AgentFileSnapshot {
             failure?.let { throw AgentWorkspaceFailure(it) }
@@ -36,10 +51,18 @@ class AgentToolExecutorTest {
         }
         override suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>) =
             write(path, edits.single().newText, expectedHash)
-        override suspend fun createFile(path: String) = AgentFileSnapshot(path, "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0)
-        override suspend fun createDirectory(path: String) = Unit
-        override suspend fun rename(path: String, newName: String) = Unit
-        override suspend fun move(path: String, destination: String) = Unit
+        override suspend fun createFile(path: String) = AgentFileSnapshot(createdPath ?: path, "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0)
+        override suspend fun createDirectory(path: String) = AgentWorkspaceEntry(path, directory = true, size = null)
+        override suspend fun rename(path: String, newName: String) = AgentWorkspaceEntry(
+            path.substringBeforeLast('/', "").let { parent -> if (parent.isEmpty()) newName else "$parent/$newName" },
+            directory = false,
+            size = 0,
+        )
+        override suspend fun move(path: String, destination: String) = AgentWorkspaceEntry(
+            if (destination.isEmpty()) path.substringAfterLast('/') else "$destination/${path.substringAfterLast('/')}",
+            directory = false,
+            size = 0,
+        )
         override suspend fun delete(path: String) = Unit
     }
 
@@ -156,6 +179,80 @@ class AgentToolExecutorTest {
     }
 
     @Test
+    fun listOmitsDirectorySizeButKeepsFileSize() = runTest {
+        val workspace = FakeWorkspace().apply {
+            listedEntries = listOf(
+                AgentWorkspaceEntry("src", directory = true, size = 4096),
+                AgentWorkspaceEntry("README.md", directory = false, size = 42),
+            )
+        }
+
+        val result = AgentToolExecutor(workspace).prepare(AgentToolCall(
+            "list", "list_directory", "{}",
+        )).execute()
+        val entries = Json.parseToJsonElement(result.content).jsonObject["entries"]!!.jsonArray
+
+        assertEquals(null, entries[0].jsonObject["size"])
+        assertEquals("42", entries[1].jsonObject["size"]!!.jsonPrimitive.content)
+    }
+
+    @Test
+    fun searchExposesCompletenessAndScanMetadata() = runTest {
+        val workspace = FakeWorkspace()
+
+        val result = AgentToolExecutor(workspace).prepare(AgentToolCall(
+            "search", "search_files", """{"query":"content"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertEquals("3", content["files_scanned"]?.jsonPrimitive?.content)
+        assertEquals("4", content["entries_visited"]?.jsonPrimitive?.content)
+        assertEquals("5", content["bytes_scanned"]?.jsonPrimitive?.content)
+        assertEquals("1", content["skipped"]?.jsonPrimitive?.content)
+        assertFalse(content["limited"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun broadSearchReturnsBoundedCompleteHitsInsteadOfOutputLimit() = runTest {
+        val workspace = FakeWorkspace().apply {
+            searchHits = (1..200).map { index ->
+                AgentSearchHit("src/${"p".repeat(120)}-$index.kt", index, "x".repeat(240))
+            }
+        }
+
+        val result = AgentToolExecutor(workspace).prepare(AgentToolCall(
+            "broad", "search_files", """{"query":"x"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+        val hits = content["hits"]!!.jsonArray
+
+        assertFalse(result.error)
+        assertTrue(result.content.toByteArray(Charsets.UTF_8).size <= AgentLoop.MAX_TOOL_RESULT_BYTES)
+        assertTrue(hits.isNotEmpty())
+        assertTrue(hits.size < workspace.searchHits.size)
+        assertEquals(
+            workspace.searchHits.take(hits.size).map { it.path },
+            hits.map { it.jsonObject["path"]!!.jsonPrimitive.content },
+        )
+        assertTrue(content["limited"]!!.jsonPrimitive.content.toBoolean())
+    }
+
+    @Test
+    fun normalizedCreateResultNamesTheRequestedAndActualPaths() = runTest {
+        val workspace = FakeWorkspace().apply { createdPath = "review.md.txt" }
+
+        val result = AgentToolExecutor(workspace).prepare(AgentToolCall(
+            "create", "create_file", """{"path":"review.md"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertFalse(result.error)
+        assertEquals("review.md.txt", content["path"]!!.jsonPrimitive.content)
+        assertEquals("review.md", content["requested_path"]!!.jsonPrimitive.content)
+        assertEquals("Created  review.md.txt", result.summary)
+    }
+
+    @Test
     fun mutationIsPreparedButCannotExecuteBeforeCallerApproval() = runTest {
         val workspace = FakeWorkspace()
         val executor = AgentToolExecutor(workspace)
@@ -211,5 +308,20 @@ class AgentToolExecutorTest {
         assertEquals(listOf("list_directory", "read_file", "search_files", "write_file", "apply_patch",
             "create_file", "create_directory", "rename_path", "move_path", "delete_path"), names)
         assertTrue(names.none { it in setOf("shell", "terminal", "run_command", "exec", "bash") })
+    }
+
+    @Test
+    fun catalogDocumentsSearchAndPatchContracts() {
+        val descriptions = AgentToolExecutor.definitions.associate { it.name to it.description }
+
+        assertTrue(descriptions.getValue("search_files").contains("literal"))
+        assertTrue(descriptions.getValue("search_files").contains("case-sensitive"))
+        listOf("limited", "files_scanned", "entries_visited", "bytes_scanned", "skipped").forEach {
+            assertTrue(descriptions.getValue("search_files").contains(it))
+        }
+        assertTrue(descriptions.getValue("apply_patch").contains("sequentially"))
+        assertTrue(descriptions.getValue("apply_patch").contains("later edit"))
+        assertTrue(descriptions.getValue("apply_patch").contains("before the final write"))
+        assertTrue(descriptions.getValue("apply_patch").contains("hash"))
     }
 }

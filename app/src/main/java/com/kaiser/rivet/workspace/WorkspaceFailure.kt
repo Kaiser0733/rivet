@@ -6,6 +6,7 @@ class WorkspaceFailure(val reason: Reason) : Exception(reason.message) {
         PERMISSION("Workspace access was lost. Select the project folder again."),
         MISSING("The file or folder no longer exists. Refresh its parent folder."),
         NOT_DIRECTORY("The parent is not a directory."),
+        NOT_FILE("This path is not a file."),
         DUPLICATE("An entry with this name already exists."),
         UNSUPPORTED("This document provider does not support this operation."),
         ROOT("The workspace root cannot be deleted, renamed, or moved."),

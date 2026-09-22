@@ -139,7 +139,8 @@ and sort directories first with locale-independent name ordering.
 exact text patches. Mutations recheck current capabilities and duplicate names.
 Root deletion/rename/move is forbidden. Moves use the provider's native API only;
 there is no copy/delete fallback. Returned identities are resolved again after
-creation, rename, and move. Unknown size/time metadata remains nullable.
+creation, rename, and move, and agent tool results report the provider-confirmed
+path. Unknown size/time metadata remains nullable.
 
 ## Text and mutation limits
 
@@ -165,7 +166,8 @@ fallback is attempted.
 Literal case-sensitive search covers paths/names and text lines under the current
 directory. Defaults: 1,000 files, 5,000 entries, 8 MiB total reads, 256 KiB per
 file, 200 hits, and 240-character contexts. Binary/inaccessible entries are
-skipped; limits are reported. Directory listings are capped at 5,000 entries.
+skipped; limits and bounded scan totals are reported. Directory listings are
+capped at 5,000 entries.
 Provider I/O runs on Dispatchers.IO. Cancellation signals and closing active
 read descriptors support cancellation; providers can delay or ignore requests.
 
