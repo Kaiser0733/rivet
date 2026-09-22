@@ -58,14 +58,25 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                     }
                 }
                 "read_file" -> {
-                    val args = json.decodeFromString<PathArgs>(call.arguments)
+                    val args = json.decodeFromString<ReadArgs>(call.arguments)
                     val path = path(args.path)
+                    require(args.offset >= 0)
                     readOnly(call) {
                         val file = workspace.read(path)
-                        success(call, buildJsonObject {
-                            put("path", file.path); put("text", file.text)
-                            put("sha256", file.sha256); put("size", file.size)
-                        }, "Read  $path")
+                        val source = file.text.toByteArray(Charsets.UTF_8)
+                        if (args.offset > source.size || !isUtf8Boundary(source, args.offset)) {
+                            throw AgentWorkspaceFailure("invalid_offset")
+                        }
+                        var end = minOf(args.offset + MAX_READ_CHUNK_BYTES, source.size)
+                        while (!isUtf8Boundary(source, end)) end--
+                        var value = readValue(file, source, args.offset, end)
+                        while (value.toString().toByteArray(Charsets.UTF_8).size > AgentLoop.MAX_TOOL_RESULT_BYTES) {
+                            if (end == args.offset) throw AgentWorkspaceFailure("output_limit")
+                            end = args.offset + (end - args.offset) / 2
+                            while (!isUtf8Boundary(source, end)) end--
+                            value = readValue(file, source, args.offset, end)
+                        }
+                        success(call, value, "Read  $path")
                     }
                 }
                 "search_files" -> {
@@ -198,10 +209,26 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
 
     private fun hash(value: String) = require(HASH.matches(value))
 
+    private fun isUtf8Boundary(bytes: ByteArray, offset: Int) =
+        offset == bytes.size || bytes[offset].toInt() and 0xC0 != 0x80
+
+    private fun readValue(file: AgentFileSnapshot, source: ByteArray, offset: Int, end: Int) = buildJsonObject {
+        val bytes = source.copyOfRange(offset, end)
+        put("path", file.path)
+        put("text", bytes.toString(Charsets.UTF_8))
+        put("sha256", file.sha256)
+        put("size", file.size)
+        put("offset", offset)
+        put("bytes", bytes.size)
+        put("eof", end == source.size)
+        if (end < source.size) put("next_offset", end)
+    }
+
     private class InvalidPath : Exception()
 
     @Serializable private data class ListArgs(val path: String = "")
     @Serializable private data class PathArgs(val path: String)
+    @Serializable private data class ReadArgs(val path: String, val offset: Int = 0)
     @Serializable private data class SearchArgs(val query: String, val path: String = "")
     @Serializable private data class WriteArgs(
         val path: String,
@@ -228,6 +255,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         private val HASH = Regex("[0-9a-f]{64}")
         private const val MAX_ARGUMENT_BYTES = 1_200_000
         private const val MAX_LIST_ENTRIES = 200
+        private const val MAX_READ_CHUNK_BYTES = 8 * 1024
 
         private fun schema(required: List<String>, vararg fields: Pair<String, JsonObject>) = buildJsonObject {
             put("type", "object")
@@ -236,11 +264,16 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
             put("additionalProperties", false)
         }
         private val string = buildJsonObject { put("type", "string") }
+        private val nonNegativeInteger = buildJsonObject { put("type", "integer"); put("minimum", 0) }
         private val path = "path" to string
 
         val definitions = listOf(
             AgentToolDefinition("list_directory", "List a workspace directory.", schema(emptyList(), path)),
-            AgentToolDefinition("read_file", "Read a UTF-8 workspace file with its SHA-256 hash.", schema(listOf("path"), path)),
+            AgentToolDefinition(
+                "read_file",
+                "Read a bounded UTF-8 chunk of a workspace file. Offset and next_offset are UTF-8 byte positions. Start at 0, then continue with next_offset until eof is true. Every chunk includes the full-file SHA-256.",
+                schema(listOf("path"), path, "offset" to nonNegativeInteger),
+            ),
             AgentToolDefinition("search_files", "Search bounded workspace paths and text.", schema(listOf("query"), path, "query" to string)),
             AgentToolDefinition("write_file", "Replace an existing text file when its hash still matches.",
                 schema(listOf("path", "content", "expected_sha256"), path, "content" to string, "expected_sha256" to string)),

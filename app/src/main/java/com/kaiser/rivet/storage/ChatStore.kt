@@ -52,18 +52,26 @@ data class AgentSession(
     val interrupted: Boolean = false,
 )
 
-class AgentSessionStore(private val context: Context) {
+internal interface AgentSessionPersistence {
+    suspend fun load(): AgentSession
+    suspend fun save(messages: List<AgentMessage>, interrupted: Boolean)
+    fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean
+    suspend fun markInterrupted(interrupted: Boolean)
+    suspend fun clear()
+}
+
+internal class AgentSessionStore(private val context: Context) : AgentSessionPersistence {
     private val json = Json { ignoreUnknownKeys = true }
     private val agentKey = stringPreferencesKey("agent_messages")
     private val interruptedKey = androidx.datastore.preferences.core.booleanPreferencesKey("agent_interrupted")
     private val migratedKey = androidx.datastore.preferences.core.booleanPreferencesKey("agent_migrated")
     private val legacyKey = stringPreferencesKey("messages")
 
-    suspend fun load(): AgentSession {
+    override suspend fun load(): AgentSession {
         val updated = context.chatData.edit { prefs ->
             if (prefs[agentKey] == null && prefs[migratedKey] != true) {
                 val legacy = decodeLegacy(prefs[legacyKey])
-                prefs[agentKey] = encode(legacy.map { message ->
+                val migrated = legacy.map { message ->
                     AgentMessage(
                         role = if (message.role == ChatRole.User) {
                             com.kaiser.rivet.agent.AgentRole.User
@@ -72,45 +80,40 @@ class AgentSessionStore(private val context: Context) {
                         },
                         text = message.text,
                     )
-                })
+                }
+                prefs[agentKey] = AgentSessionCodec.encode(migrated).value
                 prefs[migratedKey] = true
             }
         }
         return AgentSession(
-            messages = decode(updated[agentKey]),
+            messages = AgentSessionCodec.decode(updated[agentKey]),
             interrupted = updated[interruptedKey] == true,
         )
     }
 
-    suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) {
+    override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) {
+        val encoded = AgentSessionCodec.encode(messages)
         context.chatData.edit { prefs ->
-            prefs[agentKey] = encode(messages)
+            prefs[agentKey] = encoded.value
             prefs[interruptedKey] = interrupted
             prefs[migratedKey] = true
         }
     }
 
-    suspend fun markInterrupted(interrupted: Boolean) {
+    override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean =
+        AgentSessionCodec.fits(messages, reservedEncodedBytes)
+
+    override suspend fun markInterrupted(interrupted: Boolean) {
         context.chatData.edit { it[interruptedKey] = interrupted }
     }
 
-    suspend fun clear() {
+    override suspend fun clear() {
         context.chatData.edit { prefs ->
             prefs.remove(agentKey)
             prefs.remove(legacyKey)
             prefs.remove(interruptedKey)
             prefs[migratedKey] = true
         }
-    }
-
-    private fun encode(messages: List<AgentMessage>) =
-        json.encodeToString(ListSerializer(AgentMessage.serializer()), messages)
-
-    private fun decode(raw: String?): List<AgentMessage> = try {
-        if (raw == null) emptyList()
-        else json.decodeFromString(ListSerializer(AgentMessage.serializer()), raw)
-    } catch (_: Exception) {
-        emptyList()
     }
 
     private fun decodeLegacy(raw: String?): List<ChatMessage> = try {
