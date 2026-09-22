@@ -225,6 +225,119 @@ class AgentLoopTest {
     }
 
     @Test
+    fun repeatedToolResultsStayWithinTurnOutputBudgetAndLoopRecovers() = runTest {
+        val calls = (1..4).map { AgentToolCall("read-$it", "read_file", "{}") }
+        val responses = ArrayDeque(listOf(
+            AgentResponse(toolCalls = calls),
+            AgentResponse(text = "I reached the output limit and can continue selectively."),
+        ))
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = { call -> PreparedAgentTool(call, null) {
+                AgentToolResult(call.id, call.name, "x".repeat(20_000))
+            } },
+            requestApproval = { error("No approval") },
+        )
+
+        val result = loop.run(listOf(AgentMessage.user("Read repeatedly")), emptyList())
+        val toolResults = result.messages.flatMap { it.toolResults }
+
+        assertTrue(toolResults.sumOf { it.content.toByteArray(Charsets.UTF_8).size } <= 64 * 1024)
+        assertEquals(calls.map { it.id }, toolResults.map { it.callId })
+        assertTrue(toolResults.last().error)
+        assertTrue("output_limit" in toolResults.last().content)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals("I reached the output limit and can continue selectively.", result.messages.last().text)
+    }
+
+    @Test
+    fun oversizedIndividualResultBecomesCorrelatedStructuredError() = runTest {
+        val call = AgentToolCall("giant", "search_files", "{}")
+        val responses = ArrayDeque(listOf(
+            AgentResponse(toolCalls = listOf(call)),
+            AgentResponse(text = "Recovered"),
+        ))
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = { requested -> PreparedAgentTool(requested, null) {
+                AgentToolResult(requested.id, requested.name, "x".repeat(100_000))
+            } },
+            requestApproval = { error("No approval") },
+        )
+
+        val result = loop.run(listOf(AgentMessage.user("Search")), emptyList())
+        val limited = result.messages.flatMap { it.toolResults }.single()
+
+        assertEquals("giant", limited.callId)
+        assertTrue(limited.error)
+        assertEquals("{\"error\":\"output_limit\"}", limited.content)
+        assertTrue(limited.content.toByteArray(Charsets.UTF_8).size <= 24 * 1024)
+        assertEquals("Recovered", result.messages.last().text)
+    }
+
+    @Test
+    fun exhaustedOutputBudgetDoesNotRequestOrExecuteMutation() = runTest {
+        val reads = (1..3).map { AgentToolCall("read-$it", "read_file", "{}") }
+        val mutation = AgentToolCall("edit", "write_file", "{}")
+        val responses = ArrayDeque(listOf(
+            AgentResponse(toolCalls = reads + mutation),
+            AgentResponse(text = "Stopped before editing."),
+        ))
+        var approvals = 0
+        var mutations = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = { call ->
+                if (call == mutation) PreparedAgentTool(
+                    call,
+                    AgentApprovalRequest(call, "Edit", "A.kt"),
+                ) {
+                    mutations++
+                    AgentToolResult(call.id, call.name, "{\"ok\":true}")
+                } else PreparedAgentTool(call, null) {
+                    AgentToolResult(call.id, call.name, "x".repeat(20_000))
+                }
+            },
+            requestApproval = { approvals++; true },
+        )
+
+        val result = loop.run(listOf(AgentMessage.user("Read then edit")), emptyList())
+        val mutationResult = result.messages.flatMap { it.toolResults }.last()
+
+        assertEquals(0, approvals)
+        assertEquals(0, mutations)
+        assertEquals("edit", mutationResult.callId)
+        assertEquals("{\"error\":\"output_limit\"}", mutationResult.content)
+        assertEquals("Stopped before editing.", result.messages.last().text)
+    }
+
+    @Test
+    fun sessionReserveFailureStopsBeforePersistingCallOrPreparingMutation() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        var prepared = 0
+        var approvals = 0
+        val initial = listOf(AgentMessage.user("Edit"))
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            prepareTool = {
+                prepared++
+                PreparedAgentTool(it, AgentApprovalRequest(it, "Edit", "A.kt")) {
+                    error("Mutation must not execute")
+                }
+            },
+            requestApproval = { approvals++; true },
+            canPersistToolOutput = { _, _ -> false },
+        )
+
+        val result = loop.run(initial, emptyList())
+
+        assertEquals(AgentStopReason.SessionLimit, result.stopReason)
+        assertEquals(initial, result.messages)
+        assertEquals(0, prepared)
+        assertEquals(0, approvals)
+    }
+
+    @Test
     fun executionFailureBecomesCorrelatedToolError() = runTest {
         val call = AgentToolCall("bad", "read_file", "{}")
         val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "Recovered")))
