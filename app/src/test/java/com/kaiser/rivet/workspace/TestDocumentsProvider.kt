@@ -18,6 +18,11 @@ class TestDocumentsProvider : DocumentsProvider() {
     var childQueries = 0
     var createCalls = 0
     var normalizeTextFileNames = false
+    var normalizeAllFileNames = false
+    var rejectRename = false
+    var renameSupported = true
+    var renameCalls = 0
+    val createdMimeTypes = mutableListOf<String>()
     var normalizeDirectoryNames = false
     var normalizeRenamedNames = false
     private var nextId = 0
@@ -42,7 +47,7 @@ class TestDocumentsProvider : DocumentsProvider() {
                     Document.COLUMN_DOCUMENT_ID -> id
                     Document.COLUMN_DISPLAY_NAME -> node.name
                     Document.COLUMN_MIME_TYPE -> if (node.directory) Document.MIME_TYPE_DIR else "text/plain"
-                    Document.COLUMN_FLAGS -> if (writable) allFlags else 0
+                    Document.COLUMN_FLAGS -> if (writable) { if (renameSupported) allFlags else allFlags and Document.FLAG_SUPPORTS_RENAME.inv() } else 0
                     Document.COLUMN_SIZE -> if (reportMetadata) node.bytes.length() else null
                     Document.COLUMN_LAST_MODIFIED -> if (reportMetadata) node.bytes.lastModified() else null
                     else -> null
@@ -65,8 +70,10 @@ class TestDocumentsProvider : DocumentsProvider() {
     override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String {
         check(writable)
         createCalls++
+        createdMimeTypes += mimeType
         val id = "doc-${++nextId}"
         val actualName = when {
+            normalizeAllFileNames && mimeType != Document.MIME_TYPE_DIR -> "$displayName.txt"
             normalizeTextFileNames && mimeType == "text/plain" -> "$displayName.txt"
             normalizeDirectoryNames && mimeType == Document.MIME_TYPE_DIR -> "$displayName.folder"
             else -> displayName
@@ -82,6 +89,8 @@ class TestDocumentsProvider : DocumentsProvider() {
         }
     }
     override fun renameDocument(documentId: String, displayName: String): String {
+        renameCalls++
+        if (rejectRename) throw UnsupportedOperationException("rename refused")
         val node = nodes.remove(documentId)!!
         node.name = if (normalizeRenamedNames) "$displayName.txt" else displayName
         val id = "doc-${++nextId}"
