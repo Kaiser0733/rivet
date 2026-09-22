@@ -146,6 +146,23 @@ class SafWorkspaceTest {
         provider.nodes[entry.documentId]!!.bytes.writeBytes(ByteArray(WorkspaceText.MAX_BYTES + 1))
         failure(WorkspaceFailure.Reason.TOO_LARGE) { workspace.readTextFile(entry.path) }
     }
+    @Test fun directoryAndBinaryReadErrorsRemainDistinct() = runBlocking {
+        workspace.createDirectory(path("src"))
+        val binary = workspace.createFile(path("image.bin"))
+        provider.nodes[binary.documentId]!!.bytes.writeBytes(byteArrayOf(0, 1))
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        suspend fun readError(target: String): String {
+            val result = executor.prepare(AgentToolCall(
+                target, "read_file", """{"path":"$target"}""",
+            )).execute()
+            assertTrue(result.error)
+            return Json.parseToJsonElement(result.content).jsonObject["error"]!!.jsonPrimitive.content
+        }
+
+        assertEquals("not_file", readError("src"))
+        assertEquals("binary", readError("image.bin"))
+    }
     @Test fun searchDoesNotResolveEveryDirectoryFromRoot() = runBlocking {
         workspace.createDirectory(path("src"))
         workspace.createDirectory(path("src/nested"))
