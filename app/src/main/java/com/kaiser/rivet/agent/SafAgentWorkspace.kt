@@ -23,6 +23,10 @@ class SafAgentWorkspace(private val workspace: SafWorkspace) : AgentWorkspace {
             AgentSearchReport(
                 report.hits.map { AgentSearchHit(it.path.value, it.line, it.context) },
                 report.limited,
+                report.filesScanned,
+                report.entriesVisited,
+                report.bytesScanned,
+                report.skipped,
             )
         }
     }
@@ -40,8 +44,8 @@ class SafAgentWorkspace(private val workspace: SafWorkspace) : AgentWorkspace {
     }
 
     override suspend fun createFile(path: String): AgentFileSnapshot = call {
-        workspace.createFile(WorkspacePath.parse(path))
-        workspace.readTextFile(WorkspacePath.parse(path)).let {
+        val created = workspace.createFile(WorkspacePath.parse(path))
+        workspace.readTextFile(created.path).let {
             AgentFileSnapshot(it.path.value, it.text, it.sha256, it.size)
         }
     }
