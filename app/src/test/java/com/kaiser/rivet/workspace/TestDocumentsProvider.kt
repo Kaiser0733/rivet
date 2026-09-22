@@ -16,6 +16,8 @@ class TestDocumentsProvider : DocumentsProvider() {
     var rejectDelete = false
     var reportMetadata = true
     var childQueries = 0
+    var createCalls = 0
+    var normalizeTextFileNames = false
     private var nextId = 0
     private val allFlags = Document.FLAG_SUPPORTS_WRITE or Document.FLAG_SUPPORTS_DELETE or
         Document.FLAG_SUPPORTS_RENAME or Document.FLAG_SUPPORTS_MOVE or Document.FLAG_DIR_SUPPORTS_CREATE
@@ -60,8 +62,10 @@ class TestDocumentsProvider : DocumentsProvider() {
     }
     override fun createDocument(parentDocumentId: String, mimeType: String, displayName: String): String {
         check(writable)
+        createCalls++
         val id = "doc-${++nextId}"
-        nodes[id] = Node(displayName, parentDocumentId, mimeType == Document.MIME_TYPE_DIR,
+        val actualName = if (normalizeTextFileNames && mimeType == "text/plain") "$displayName.txt" else displayName
+        nodes[id] = Node(actualName, parentDocumentId, mimeType == Document.MIME_TYPE_DIR,
             File.createTempFile("workspace-document", ".test", context!!.cacheDir))
         return id
     }

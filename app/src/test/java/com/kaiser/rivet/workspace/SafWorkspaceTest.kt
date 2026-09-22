@@ -3,7 +3,13 @@ package com.kaiser.rivet.workspace
 import android.content.Intent
 import android.content.pm.ProviderInfo
 import android.provider.DocumentsContract
+import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolExecutor
+import com.kaiser.rivet.agent.SafAgentWorkspace
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -63,6 +69,21 @@ class SafWorkspaceTest {
         assertEquals(saved.sha256, workspace.readTextFile(moved.path).sha256)
         workspace.delete(moved.path)
         assertTrue(workspace.listDirectory(path("src")).isEmpty())
+    }
+    @Test fun normalizedCreateReturnsTheActualPathWithoutRetrying() = runBlocking {
+        provider.normalizeTextFileNames = true
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        val result = executor.prepare(AgentToolCall(
+            "create", "create_file", """{"path":"review.md"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertFalse(result.error)
+        assertEquals("review.md.txt", content["path"]!!.jsonPrimitive.content)
+        assertEquals("review.md", content["requested_path"]!!.jsonPrimitive.content)
+        assertEquals(1, provider.createCalls)
+        assertEquals(listOf("review.md.txt"), workspace.listDirectory(WorkspacePath.ROOT).map { it.path.value })
     }
     @Test fun listingQueriesOnlyOneDirectChildCollection() = runBlocking {
         workspace.createFile(path("z"))
