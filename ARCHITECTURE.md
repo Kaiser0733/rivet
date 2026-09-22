@@ -106,7 +106,14 @@ resumed or reconstructed.
 
 ## Agent execution boundary
 
-`AgentLoop` allows 20 model iterations and 50 requested tools per user turn.
+`AgentLoop` has emergency runaway ceilings of 200 model responses and 1,000
+requested tools per turn. There is no cumulative tool-output quota. Individual
+results remain capped at 24 KiB of encoded UTF-8 JSON; the persisted session
+remains capped at 512 KiB. Read-only results are checked at their actual size.
+Before approval, mutations reserve space for their bounded result contract and
+all remaining correlated results. Session exhaustion stops the turn without
+executing the mutation. Workspace file text is untrusted project data; tool
+results establish observed state, not higher-priority instructions.
 Read-only `list_directory`, `read_file`, and `search_files` calls run directly.
 Every write, exact patch, create, rename, move, and delete waits for a one-shot
 Approve or Deny decision. A repeated identical denial within the turn stays
@@ -141,6 +148,12 @@ Root deletion/rename/move is forbidden. Moves use the provider's native API only
 there is no copy/delete fallback. Returned identities are resolved again after
 creation, rename, and move, and agent tool results report the provider-confirmed
 path. Unknown size/time metadata remains nullable.
+
+Empty files are created with `application/octet-stream` to avoid MIME-driven
+suffixes on coding filenames. If a provider normalizes the name and supports
+rename, one correction is attempted and its returned identity is verified.
+Creation is never retried; an uncorrectable name is returned as the actual path
+alongside the requested path, with the empty-file SHA and size preserved.
 
 ## Text and mutation limits
 

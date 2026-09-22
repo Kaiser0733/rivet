@@ -12,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentToolExecutorTest {
-    private class FakeWorkspace(
+    internal class FakeWorkspace(
         var text: String = "content",
         var readHash: String = "a".repeat(64),
     ) : AgentWorkspace {
