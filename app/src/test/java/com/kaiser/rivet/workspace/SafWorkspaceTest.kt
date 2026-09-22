@@ -70,8 +70,9 @@ class SafWorkspaceTest {
         workspace.delete(moved.path)
         assertTrue(workspace.listDirectory(path("src")).isEmpty())
     }
-    @Test fun normalizedCreateReturnsTheActualPathWithoutRetrying() = runBlocking {
-        provider.normalizeTextFileNames = true
+    @Test fun uncorrectableCreateReturnsTheActualPathWithoutRetrying() = runBlocking {
+        provider.normalizeAllFileNames = true
+        provider.normalizeRenamedNames = true
         val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
 
         val result = executor.prepare(AgentToolCall(
@@ -84,6 +85,59 @@ class SafWorkspaceTest {
         assertEquals("review.md", content["requested_path"]!!.jsonPrimitive.content)
         assertEquals(1, provider.createCalls)
         assertEquals(listOf("review.md.txt"), workspace.listDirectory(WorkspacePath.ROOT).map { it.path.value })
+    }
+    @Test fun codingNamesAvoidTextSuffixAndKeepHashHandoff() = runBlocking {
+        provider.normalizeTextFileNames = true
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+        val names = listOf("review.md", "README.md", "Main.kt", "index.ts", "package.json", ".gitignore", "Makefile")
+        for (name in names) {
+            val created = executor.prepare(AgentToolCall("create-$name", "create_file", """{"path":"$name"}""")).execute()
+            val value = Json.parseToJsonElement(created.content).jsonObject
+            assertFalse(created.error)
+            assertEquals(name, value["path"]!!.jsonPrimitive.content)
+            assertEquals("0", value["size"]!!.jsonPrimitive.content)
+            val hash = value["sha256"]!!.jsonPrimitive.content
+            assertEquals(WorkspaceText.sha256(byteArrayOf()), hash)
+            val written = executor.prepare(AgentToolCall("write-$name", "write_file",
+                """{"path":"$name","content":"hello","expected_sha256":"$hash"}""")).execute()
+            assertFalse(written.error)
+            assertEquals("hello", workspace.readTextFile(path(name)).text)
+        }
+        assertEquals(names.size, provider.createCalls)
+        assertEquals(0, provider.renameCalls)
+        assertTrue(provider.createdMimeTypes.all { it == "application/octet-stream" })
+    }
+    @Test fun normalizedCodingNamesAreCorrectedOnceWithoutDuplicates() = runBlocking {
+        provider.normalizeAllFileNames = true
+        val names = listOf("review.md", "Main.kt", "index.ts", "package.json", ".gitignore", "Makefile")
+        for (name in names) assertEquals(name, workspace.createFile(path(name)).path.value)
+        assertEquals(names.size, provider.createCalls)
+        assertEquals(names.size, provider.renameCalls)
+        assertEquals(names.toSet(), workspace.listDirectory(WorkspacePath.ROOT).map { it.path.value }.toSet())
+    }
+    @Test fun refusedCorrectionStillReturnsCreatedFileAndHash() = runBlocking {
+        provider.normalizeAllFileNames = true
+        provider.rejectRename = true
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+        val result = executor.prepare(AgentToolCall("create", "create_file", """{"path":"review.md"}""")).execute()
+        val value = Json.parseToJsonElement(result.content).jsonObject
+        assertFalse(result.error)
+        assertEquals("review.md.txt", value["path"]!!.jsonPrimitive.content)
+        assertEquals("review.md", value["requested_path"]!!.jsonPrimitive.content)
+        val hash = value["sha256"]!!.jsonPrimitive.content
+        assertEquals(WorkspaceText.sha256(byteArrayOf()), hash)
+        assertFalse(executor.prepare(AgentToolCall("write", "write_file",
+            """{"path":"review.md.txt","content":"edited","expected_sha256":"$hash"}""")).execute().error)
+        assertEquals(1, provider.createCalls)
+        assertEquals(1, provider.renameCalls)
+        assertEquals(1, workspace.listDirectory(WorkspacePath.ROOT).size)
+    }
+    @Test fun providerWithoutRenameKeepsConfirmedName() = runBlocking {
+        provider.normalizeAllFileNames = true
+        provider.renameSupported = false
+        assertEquals("review.md.txt", workspace.createFile(path("review.md")).path.value)
+        assertEquals(1, provider.createCalls)
+        assertEquals(0, provider.renameCalls)
     }
     @Test fun normalizedDirectoryCreateReturnsTheActualPath() = runBlocking {
         provider.normalizeDirectoryNames = true

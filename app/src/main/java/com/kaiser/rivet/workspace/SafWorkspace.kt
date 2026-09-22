@@ -78,7 +78,9 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         }
     }
 
-    suspend fun createFile(path: WorkspacePath): WorkspaceEntry = create(path, "text/plain")
+    // A text MIME can append .txt; extension lookup can also misclassify source
+    // files (for example .ts as video). Let the requested name stand on its own.
+    suspend fun createFile(path: WorkspacePath): WorkspaceEntry = create(path, "application/octet-stream")
     suspend fun createDirectory(path: WorkspacePath): WorkspaceEntry = create(path, Document.MIME_TYPE_DIR)
 
     private suspend fun create(path: WorkspacePath, mime: String): WorkspaceEntry = io {
@@ -92,7 +94,20 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
             withContext(NonCancellable) {
                 val created = DocumentsContract.createDocument(resolver, uri(parent.documentId), mime, path.name)
                     ?: fail(WorkspaceFailure.Reason.PROVIDER)
-                returnedChild(parent, created)
+                val confirmed = returnedChild(parent, created)
+                if (mime != Document.MIME_TYPE_DIR && confirmed.path.name != path.name &&
+                    confirmed.capabilities.rename && children(parent, 5000).none { it.path.name == path.name }) {
+                    // One correction, within the same approved create. A refusal must
+                    // not turn a successful create into a retry that duplicates it.
+                    val renamed = try {
+                        DocumentsContract.renameDocument(resolver, uri(confirmed.documentId), path.name)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        null
+                    }
+                    returnedChild(parent, renamed ?: uri(confirmed.documentId))
+                } else confirmed
             }
         }
     }
