@@ -316,7 +316,9 @@ class AgentToolExecutorTest {
 
         assertTrue(descriptions.getValue("search_files").contains("literal"))
         assertTrue(descriptions.getValue("search_files").contains("case-sensitive"))
-        assertTrue(descriptions.getValue("search_files").contains("limited"))
+        listOf("limited", "files_scanned", "entries_visited", "bytes_scanned", "skipped").forEach {
+            assertTrue(descriptions.getValue("search_files").contains(it))
+        }
         assertTrue(descriptions.getValue("apply_patch").contains("sequentially"))
         assertTrue(descriptions.getValue("apply_patch").contains("later edit"))
         assertTrue(descriptions.getValue("apply_patch").contains("before the final write"))

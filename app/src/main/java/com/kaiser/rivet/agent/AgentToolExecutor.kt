@@ -323,7 +323,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
             ),
             AgentToolDefinition(
                 "search_files",
-                "Search workspace paths and text literally and case-sensitively. Broad searches may be limited; inspect limited and scan metadata for completeness.",
+                "Search workspace paths and text literally and case-sensitively. Broad searches may be limited; inspect limited, files_scanned, entries_visited, bytes_scanned, and skipped for completeness.",
                 schema(listOf("query"), path, "query" to string),
             ),
             AgentToolDefinition("write_file", "Replace an existing text file when its hash still matches.",
