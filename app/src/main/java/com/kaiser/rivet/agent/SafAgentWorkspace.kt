@@ -50,16 +50,22 @@ class SafAgentWorkspace(private val workspace: SafWorkspace) : AgentWorkspace {
         }
     }
 
-    override suspend fun createDirectory(path: String) = call<Unit> {
-        workspace.createDirectory(WorkspacePath.parse(path)); Unit
+    override suspend fun createDirectory(path: String): AgentWorkspaceEntry = call {
+        workspace.createDirectory(WorkspacePath.parse(path)).let {
+            AgentWorkspaceEntry(it.path.value, it.directory, it.size)
+        }
     }
 
-    override suspend fun rename(path: String, newName: String) = call<Unit> {
-        workspace.rename(WorkspacePath.parse(path), newName); Unit
+    override suspend fun rename(path: String, newName: String): AgentWorkspaceEntry = call {
+        workspace.rename(WorkspacePath.parse(path), newName).let {
+            AgentWorkspaceEntry(it.path.value, it.directory, it.size)
+        }
     }
 
-    override suspend fun move(path: String, destination: String) = call<Unit> {
-        workspace.move(WorkspacePath.parse(path), WorkspacePath.parse(destination)); Unit
+    override suspend fun move(path: String, destination: String): AgentWorkspaceEntry = call {
+        workspace.move(WorkspacePath.parse(path), WorkspacePath.parse(destination)).let {
+            AgentWorkspaceEntry(it.path.value, it.directory, it.size)
+        }
     }
 
     override suspend fun delete(path: String) = call<Unit> {
