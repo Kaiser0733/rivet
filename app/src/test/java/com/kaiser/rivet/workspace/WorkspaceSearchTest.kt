@@ -21,6 +21,14 @@ class WorkspaceSearchTest {
         assertEquals(2, result.hits.last().line)
         assertEquals("needle here", result.hits.last().context)
     }
+    @Test fun searchIsLiteralAndCaseSensitive() = runTest {
+        val result = searchWorkspace("needle", entry("", true, "root"), SearchLimits(),
+            { _, _ -> listOf(entry("Needle.kt")) },
+            { _, _ -> "Needle here".toByteArray() })
+
+        assertTrue(result.hits.isEmpty())
+        assertFalse(result.limited)
+    }
     @Test fun fileResultAndByteBudgetsAreEnforced() = runTest {
         var read = 0
         val result = searchWorkspace("hit", entry("", true, "root"),

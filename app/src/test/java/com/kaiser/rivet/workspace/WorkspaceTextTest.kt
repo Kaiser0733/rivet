@@ -40,6 +40,9 @@ class WorkspaceTextTest {
     @Test fun exactPatchReturnsCompleteReplacement() {
         assertEquals("one TWO three!", WorkspaceText.patch("one two three", listOf(TextEdit("two", "TWO"), TextEdit("three", "three!"))))
     }
+    @Test fun laterPatchEditsObserveEarlierEdits() {
+        assertEquals("Qbc", WorkspaceText.patch("abc", listOf(TextEdit("a", "Z"), TextEdit("Z", "Q"))))
+    }
     @Test fun absentAndAmbiguousMatchesFail() {
         listOf("missing", "a").forEach { old ->
             assertThrows(WorkspaceFailure::class.java) { WorkspaceText.patch("a a", listOf(TextEdit(old, "b"))) }

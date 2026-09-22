@@ -3,7 +3,13 @@ package com.kaiser.rivet.workspace
 import android.content.Intent
 import android.content.pm.ProviderInfo
 import android.provider.DocumentsContract
+import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolExecutor
+import com.kaiser.rivet.agent.SafAgentWorkspace
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.*
 import org.junit.Before
 import org.junit.Test
@@ -64,6 +70,64 @@ class SafWorkspaceTest {
         workspace.delete(moved.path)
         assertTrue(workspace.listDirectory(path("src")).isEmpty())
     }
+    @Test fun normalizedCreateReturnsTheActualPathWithoutRetrying() = runBlocking {
+        provider.normalizeTextFileNames = true
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        val result = executor.prepare(AgentToolCall(
+            "create", "create_file", """{"path":"review.md"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertFalse(result.error)
+        assertEquals("review.md.txt", content["path"]!!.jsonPrimitive.content)
+        assertEquals("review.md", content["requested_path"]!!.jsonPrimitive.content)
+        assertEquals(1, provider.createCalls)
+        assertEquals(listOf("review.md.txt"), workspace.listDirectory(WorkspacePath.ROOT).map { it.path.value })
+    }
+    @Test fun normalizedDirectoryCreateReturnsTheActualPath() = runBlocking {
+        provider.normalizeDirectoryNames = true
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        val result = executor.prepare(AgentToolCall(
+            "mkdir", "create_directory", """{"path":"docs"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertFalse(result.error)
+        assertEquals("docs.folder", content["path"]!!.jsonPrimitive.content)
+        assertEquals("docs", content["requested_path"]!!.jsonPrimitive.content)
+    }
+    @Test fun normalizedRenameReturnsTheActualPath() = runBlocking {
+        workspace.createFile(path("draft"))
+        provider.normalizeRenamedNames = true
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        val result = executor.prepare(AgentToolCall(
+            "rename", "rename_path", """{"path":"draft","new_name":"final"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertFalse(result.error)
+        assertEquals("final.txt", content["path"]!!.jsonPrimitive.content)
+        assertEquals("draft", content["source_path"]!!.jsonPrimitive.content)
+        assertEquals("final", content["requested_name"]!!.jsonPrimitive.content)
+    }
+    @Test fun moveReturnsTheConfirmedDestinationPath() = runBlocking {
+        workspace.createDirectory(path("src"))
+        workspace.createFile(path("draft"))
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        val result = executor.prepare(AgentToolCall(
+            "move", "move_path", """{"path":"draft","destination":"src"}""",
+        )).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+
+        assertFalse(result.error)
+        assertEquals("src/draft", content["path"]!!.jsonPrimitive.content)
+        assertEquals("draft", content["source_path"]!!.jsonPrimitive.content)
+        assertEquals("src", content["destination"]!!.jsonPrimitive.content)
+    }
     @Test fun listingQueriesOnlyOneDirectChildCollection() = runBlocking {
         workspace.createFile(path("z"))
         workspace.createFile(path("a"))
@@ -78,6 +142,17 @@ class SafWorkspaceTest {
         val snapshot = workspace.readTextFile(entry.path)
         provider.nodes[entry.documentId]!!.bytes.writeText("external")
         failure(WorkspaceFailure.Reason.CONFLICT) { workspace.writeTextFile(entry.path, "draft", snapshot.sha256) }
+        assertEquals("external", provider.nodes[entry.documentId]!!.bytes.readText())
+    }
+    @Test fun patchConflictDoesNotOverwriteExternalChanges() = runBlocking {
+        val entry = workspace.createFile(path("a"))
+        provider.nodes[entry.documentId]!!.bytes.writeText("original")
+        val snapshot = workspace.readTextFile(entry.path)
+        provider.nodes[entry.documentId]!!.bytes.writeText("external")
+
+        failure(WorkspaceFailure.Reason.CONFLICT) {
+            workspace.applyTextPatch(entry.path, snapshot.sha256, listOf(TextEdit("original", "patched")))
+        }
         assertEquals("external", provider.nodes[entry.documentId]!!.bytes.readText())
     }
     @Test fun patchValidationFailureDoesNotMutateDocument() = runBlocking {
@@ -124,6 +199,23 @@ class SafWorkspaceTest {
         failure(WorkspaceFailure.Reason.BINARY) { workspace.readTextFile(entry.path) }
         provider.nodes[entry.documentId]!!.bytes.writeBytes(ByteArray(WorkspaceText.MAX_BYTES + 1))
         failure(WorkspaceFailure.Reason.TOO_LARGE) { workspace.readTextFile(entry.path) }
+    }
+    @Test fun directoryAndBinaryReadErrorsRemainDistinct() = runBlocking {
+        workspace.createDirectory(path("src"))
+        val binary = workspace.createFile(path("image.bin"))
+        provider.nodes[binary.documentId]!!.bytes.writeBytes(byteArrayOf(0, 1))
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+
+        suspend fun readError(target: String): String {
+            val result = executor.prepare(AgentToolCall(
+                target, "read_file", """{"path":"$target"}""",
+            )).execute()
+            assertTrue(result.error)
+            return Json.parseToJsonElement(result.content).jsonObject["error"]!!.jsonPrimitive.content
+        }
+
+        assertEquals("not_file", readError("src"))
+        assertEquals("binary", readError("image.bin"))
     }
     @Test fun searchDoesNotResolveEveryDirectoryFromRoot() = runBlocking {
         workspace.createDirectory(path("src"))
