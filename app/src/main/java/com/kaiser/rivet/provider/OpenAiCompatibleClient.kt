@@ -142,7 +142,7 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
         root["error"]?.let { error ->
             val message = error.obj()?.get("message")?.str()
                 ?: throw ProviderError.InvalidResponse("invalid stream error")
-            throw ProviderError.ProviderMessage(message)
+            throw providerMessage(message, error.obj()?.get("code")?.str())
         }
         openAiUsage(root)?.let { usage = it }
         val delta = root["choices"]?.arr()?.firstOrNull()?.obj()?.get("delta")?.obj() ?: return

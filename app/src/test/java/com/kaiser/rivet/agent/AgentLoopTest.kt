@@ -1,6 +1,7 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.storage.AgentSessionCodec
+import com.kaiser.rivet.provider.ProviderError
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -15,6 +16,35 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentLoopTest {
+    @Test fun contextOverflowCompactsAndRetriesOnlyTheModelRequest() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        var requests = 0
+        var mutations = 0
+        val seen = mutableListOf<List<AgentMessage>>()
+        val result = AgentLoop(
+            requestModel = { messages, _, _ ->
+                requests++
+                seen += messages
+                when (requests) {
+                    1 -> AgentResponse(toolCalls = listOf(call))
+                    2 -> throw ProviderError.ContextOverflow()
+                    else -> AgentResponse(text = "done")
+                }
+            },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "file")) {
+                mutations++
+                AgentToolResult(call.id, call.name, "x".repeat(3_000))
+            } },
+            requestApproval = { true },
+            compactContext = { messages, force -> if (force) messages.take(1) else messages },
+        ).run(listOf(AgentMessage.user("edit")), emptyList())
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(3, requests)
+        assertEquals(1, mutations)
+        assertEquals(listOf(AgentMessage.user("edit")), seen.last())
+    }
+
     @Test fun compactionReplacesOnlyActiveContextBeforeNextModelRequest() = runTest {
         val old = listOf(AgentMessage.user("older"), AgentMessage.assistant("done"), AgentMessage.user("current"))
         val seen = mutableListOf<List<AgentMessage>>()

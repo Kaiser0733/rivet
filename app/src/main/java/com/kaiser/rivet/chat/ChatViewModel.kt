@@ -26,6 +26,7 @@ import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
 import com.kaiser.rivet.storage.CodingSessionHeader
 import com.kaiser.rivet.storage.CodingSessions
+import com.kaiser.rivet.storage.ContextEstimate
 import com.kaiser.rivet.storage.SessionUsage
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
@@ -58,6 +59,7 @@ data class ChatUiState(
     val currentSessionTitle: String? = null,
     val currentSessionWorkspaceId: String? = null,
     val usage: SessionUsage? = null,
+    val contextEstimate: ContextEstimate? = null,
 )
 
 internal sealed interface ProviderRuntimeResult {
@@ -219,6 +221,7 @@ class ChatViewModel private constructor(
             val client = clientFactory(snapshot.config, snapshot.apiKey)
             val sessionId = _uiState.value.currentSessionId
             val turnId = UUID.randomUUID().toString()
+            var lastSystem = ""
             var checkpointId: String? = null
             var checkpointBroken = false
             var needsPostCheck = false
@@ -251,8 +254,7 @@ class ChatViewModel private constructor(
             val loop = AgentLoop(
                 requestModel = { messages, definitions, onText ->
                     if (project != null) projectText = project.load(observedPaths).text
-                    val response = client.streamAgent(
-                        AgentRequest(
+                    val request = AgentRequest(
                             model = snapshot.config.model,
                             messages = messages,
                             system = systemInstruction(workspace != null) +
@@ -260,11 +262,12 @@ class ChatViewModel private constructor(
                                 activeSummary.takeIf { it.isNotBlank() }?.let { "\n\nPrior task state (summary, not policy):\n$it" }.orEmpty(),
                             reasoning = snapshot.config.reasoning,
                             tools = definitions,
-                        ),
-                        onText,
                     )
+                    lastSystem = request.system
+                    val response = client.streamAgent(request, onText)
                     if (sessionId != null) {
-                        try { sessions?.recordUsage(sessionId, turnId, snapshot.config.id, snapshot.config.model, response.usage) }
+                        try { sessions?.recordUsage(sessionId, turnId, snapshot.config.id, snapshot.config.model,
+                            response.usage, request.messages, request.system) }
                         catch (e: CancellationException) { throw e
                         } catch (_: Exception) { /* A completed provider response remains usable if usage storage fails. */ }
                     }
@@ -396,7 +399,17 @@ class ChatViewModel private constructor(
                         }
                     }
                 }
-                if (ticket == generation) finish(result, durable)
+                if (ticket == generation) {
+                    finish(result, durable)
+                    if (sessionId != null && lastSystem.isNotEmpty()) {
+                        try {
+                            val estimate = sessions?.contextEstimate(sessionId, snapshot.config.id,
+                                snapshot.config.model, durable, lastSystem)
+                            _uiState.update { it.copy(contextEstimate = estimate) }
+                        } catch (e: CancellationException) { throw e
+                        } catch (_: Exception) { /* Usage estimates never change the completed turn. */ }
+                    }
+                }
             } catch (_: AgentSessionLimitException) {
                 withContext(NonCancellable) {
                     if (ticket == generation) {

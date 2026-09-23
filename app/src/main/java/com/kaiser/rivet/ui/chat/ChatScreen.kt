@@ -80,6 +80,14 @@ fun ChatScreen(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
+        chatState.contextEstimate?.let { estimate ->
+            estimate.tokens?.let { tokens ->
+                Text("Active context: ${if (estimate.source == "reported") "" else "≈"}$tokens tokens · ${estimate.source}",
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         MessageList(
             messages = chatState.messages,
             streamText = chatState.streamText,

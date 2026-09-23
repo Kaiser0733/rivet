@@ -137,4 +137,24 @@ class CodingSessionsTest {
         assertEquals(original, sessions.load().messages)
         assertEquals(2, sessions.fullEventCount(id))
     }
+
+    @Test fun usageAnchorPricesOnlyNewDeltaAndInvalidatesOnCompactionOrModelSwitch() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        var active = listOf(AgentMessage.user("initial request"))
+        sessions.save(active, interrupted = true)
+        sessions.recordUsage(id, "turn", "provider-a", "model-a", AgentUsage(100, 25), active, "system")
+        assertEquals(ContextEstimate(125, "reported"),
+            sessions.contextEstimate(id, "provider-a", "model-a", active, "system"))
+        active = active + AgentMessage.assistant("answer") + AgentMessage.user("more " + "x".repeat(400))
+        sessions.save(active, interrupted = false)
+        val delta = sessions.contextEstimate(id, "provider-a", "model-a", active, "system")
+        assertEquals("estimated", delta.source)
+        assertTrue(delta.tokens!! > 125)
+        assertEquals("estimated", sessions.contextEstimate(id, "provider-a", "model-b", active, "system").source)
+
+        val retained = listOf(active.last())
+        sessions.compact(active, retained, "short summary")
+        assertEquals("estimated", sessions.contextEstimate(id, "provider-a", "model-a", retained, "system").source)
+    }
 }
