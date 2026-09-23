@@ -14,10 +14,13 @@ class TestDocumentsProvider : DocumentsProvider() {
     val nodes = linkedMapOf<String, Node>()
     var writable = true
     var rejectDelete = false
+    var rejectRead = false
     var reportMetadata = true
     var childQueries = 0
     var createCalls = 0
     var normalizeTextFileNames = false
+    var videoMimeForTs = false
+    var binaryMimeByExtension = false
     var normalizeAllFileNames = false
     var rejectRename = false
     var renameSupported = true
@@ -46,7 +49,13 @@ class TestDocumentsProvider : DocumentsProvider() {
                 addRow(columns.map { column -> when (column) {
                     Document.COLUMN_DOCUMENT_ID -> id
                     Document.COLUMN_DISPLAY_NAME -> node.name
-                    Document.COLUMN_MIME_TYPE -> if (node.directory) Document.MIME_TYPE_DIR else "text/plain"
+                    Document.COLUMN_MIME_TYPE -> when {
+                        node.directory -> Document.MIME_TYPE_DIR
+                        videoMimeForTs && node.name.endsWith(".ts") -> "video/mp2t"
+                        binaryMimeByExtension && node.name.endsWith(".png") -> "image/png"
+                        binaryMimeByExtension && node.name.endsWith(".mp4") -> "video/mp4"
+                        else -> "text/plain"
+                    }
                     Document.COLUMN_FLAGS -> if (writable) { if (renameSupported) allFlags else allFlags and Document.FLAG_SUPPORTS_RENAME.inv() } else 0
                     Document.COLUMN_SIZE -> if (reportMetadata) node.bytes.length() else null
                     Document.COLUMN_LAST_MODIFIED -> if (reportMetadata) node.bytes.lastModified() else null
@@ -56,6 +65,7 @@ class TestDocumentsProvider : DocumentsProvider() {
         }
     }
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
+        if (rejectRead && mode == "r") throw java.io.FileNotFoundException("read refused")
         val node = nodes[documentId] ?: throw java.io.FileNotFoundException()
         return ParcelFileDescriptor.open(node.bytes, ParcelFileDescriptor.parseMode(mode))
     }

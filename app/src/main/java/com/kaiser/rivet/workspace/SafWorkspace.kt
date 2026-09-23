@@ -42,6 +42,11 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         val entry = resolve(path)
         WorkspaceText.snapshot(path, read(entry, WorkspaceText.MAX_BYTES), entry.modifiedTime)
     }
+    suspend fun readCreatedFile(path: WorkspacePath): TextSnapshot = io {
+        val entry = resolve(path)
+        val bytes = read(entry, WorkspaceText.MAX_BYTES, checkMime = false)
+        TextSnapshot(path, "", WorkspaceText.sha256(bytes), bytes.size.toLong(), entry.modifiedTime)
+    }
 
     suspend fun writeTextFile(path: WorkspacePath, content: String, expectedHash: String): TextSnapshot = io {
         mutations.withLock { write(path, content, expectedHash) }
@@ -148,8 +153,8 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
     suspend fun move(source: WorkspacePath, destination: WorkspacePath): WorkspaceEntry = io {
         mutations.withLock {
             requireNonRoot(source)
-            if (destination.isWithin(source) || destination == source.parent()) fail(WorkspaceFailure.Reason.INVALID_PATH)
             val entry = resolve(source)
+            if (destination.isWithin(source) || destination == source.parent()) fail(WorkspaceFailure.Reason.INVALID_PATH)
             val target = resolve(destination)
             if (!target.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
             if (!entry.capabilities.move || !target.capabilities.create) fail(WorkspaceFailure.Reason.UNSUPPORTED)
@@ -254,10 +259,10 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         }
     }
 
-    private suspend fun read(entry: WorkspaceEntry, limit: Int): ByteArray {
+    private suspend fun read(entry: WorkspaceEntry, limit: Int, checkMime: Boolean = true): ByteArray {
         requireGrant()
         if (entry.directory) fail(WorkspaceFailure.Reason.NOT_FILE)
-        if (WorkspaceText.isBinaryMime(entry.mimeType)) fail(WorkspaceFailure.Reason.BINARY)
+        if (checkMime && WorkspaceText.isBinaryMime(entry.mimeType, entry.path.name)) fail(WorkspaceFailure.Reason.BINARY)
         if (entry.size != null && entry.size > limit) fail(WorkspaceFailure.Reason.TOO_LARGE)
         val context = currentCoroutineContext()
         val activeInput = AtomicReference<ParcelFileDescriptor.AutoCloseInputStream?>()
