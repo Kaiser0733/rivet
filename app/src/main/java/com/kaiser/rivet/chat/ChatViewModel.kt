@@ -114,6 +114,8 @@ class ChatViewModel private constructor(
     private var sendJob: Job? = null
     private var generation = 0L
     private var runtimeController: RuntimeController? = null
+    private var activeMessages: List<AgentMessage> = emptyList()
+    private var activeSummary: String = ""
 
     fun attachRuntime(controller: RuntimeController) {
         runtimeController = controller
@@ -138,9 +140,12 @@ class ChatViewModel private constructor(
             }
             if (ticket == generation) {
                 val usage = restored.id?.let { sessions?.usage(it) }
+                activeMessages = restored.messages
+                activeSummary = restored.summary
+                val visible = restored.id?.let { sessions?.recent(it) } ?: restored.messages
                 _uiState.update { state ->
                     state.copy(
-                        messages = restored.messages,
+                        messages = visible,
                         ready = true,
                         sessions = history,
                         currentSessionId = restored.id,
@@ -194,7 +199,7 @@ class ChatViewModel private constructor(
                 )
             }
             val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
-            val durable = (_uiState.value.messages + AgentMessage.user(trimmed)).toMutableList()
+            val durable = (activeMessages + AgentMessage.user(trimmed)).toMutableList()
             try {
                 sessionStore.save(durable, interrupted = true)
             } catch (_: AgentSessionLimitException) {
@@ -206,8 +211,10 @@ class ChatViewModel private constructor(
                 return@launch
             }
             _uiState.update {
-                it.copy(messages = durable.toList(), streaming = true, streamText = "", error = null)
+                it.copy(messages = (it.messages + durable.last()).takeLast(100), streaming = true,
+                    streamText = "", error = null)
             }
+            activeMessages = durable.toList()
             val client = clientFactory(snapshot.config, snapshot.apiKey)
             val sessionId = _uiState.value.currentSessionId
             val turnId = UUID.randomUUID().toString()
@@ -308,8 +315,10 @@ class ChatViewModel private constructor(
                                 val candidate = durable + message
                                 sessionStore.save(candidate, interrupted = true)
                                 durable += message
+                                activeMessages = durable.toList()
                                 if (message.role == AgentRole.Assistant) streamed.setLength(0)
-                                _uiState.update { it.copy(messages = durable.toList(), streamText = streamed.toString()) }
+                                _uiState.update { it.copy(messages = (it.messages + message).takeLast(100),
+                                    streamText = streamed.toString()) }
                                 val id = checkpointId
                                 if (message.role == AgentRole.Tool && mutationStartedSincePost && id != null && runtime != null && workspaceId != null && !checkpointBroken) {
                                     try {
@@ -403,10 +412,12 @@ class ChatViewModel private constructor(
         }
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
         sessionStore.save(persisted, interrupted = false)
+        activeMessages = persisted
         val history = sessions?.list()
         val usage = _uiState.value.currentSessionId?.let { sessions?.usage(it) }
+        val visible = _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: persisted
         _uiState.update {
-            it.copy(messages = persisted, streaming = false, streamText = "", pendingApproval = null,
+            it.copy(messages = visible, streaming = false, streamText = "", pendingApproval = null,
                 sessions = history ?: it.sessions, usage = usage, error = error)
         }
     }
@@ -414,8 +425,10 @@ class ChatViewModel private constructor(
     private suspend fun stableFailure(ticket: Long, durable: List<AgentMessage>, message: String) {
         if (ticket != generation) return
         sessionStore.save(durable, interrupted = false)
+        activeMessages = durable
+        val visible = _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: durable
         _uiState.update {
-            it.copy(messages = durable, streaming = false, streamText = "", pendingApproval = null, error = message)
+            it.copy(messages = visible, streaming = false, streamText = "", pendingApproval = null, error = message)
         }
     }
 
@@ -456,6 +469,8 @@ class ChatViewModel private constructor(
             if (ticket == generation) {
                 sessionStore.clear()
                 val selected = sessionStore.load()
+                activeMessages = selected.messages
+                activeSummary = selected.summary
                 val usage = selected.id?.let { sessions?.usage(it) }
                 _uiState.value = ChatUiState(ready = true, sessions = sessions?.list().orEmpty(),
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
@@ -496,8 +511,11 @@ class ChatViewModel private constructor(
                 val selected = action(store)
                 val history = store.list()
                 val usage = selected.id?.let { store.usage(it) }
+                activeMessages = selected.messages
+                activeSummary = selected.summary
+                val visible = selected.id?.let { store.recent(it) } ?: selected.messages
                 if (ticket == generation) _uiState.value = ChatUiState(
-                    messages = selected.messages, ready = true, sessions = history,
+                    messages = visible, ready = true, sessions = history,
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
                     currentSessionWorkspaceId = selected.workspaceId,
                     usage = usage,

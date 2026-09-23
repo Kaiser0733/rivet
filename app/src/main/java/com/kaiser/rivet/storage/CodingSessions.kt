@@ -40,19 +40,22 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     private val lock = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
     private var initialized = false
+    @Volatile private var summaryBytes = 0
 
     override suspend fun load(): AgentSession = onDatabase { db ->
         val id = activeId(db)
         val header = header(db, id)
-        AgentSession(messages(db, id), header.interrupted, header.id, header.title, header.workspaceId)
+        val summary = summary(db, id)
+        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
+        AgentSession(activeMessages(db, id), header.interrupted, header.id, header.title, header.workspaceId, summary)
     }
 
     override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) = onDatabase { db ->
         val id = activeId(db)
-        val count = db.rawQuery("SELECT COUNT(*) FROM events WHERE session_id=?", arrayOf(id)).use {
+        val count = db.rawQuery("SELECT COUNT(*) FROM active_events WHERE session_id=?", arrayOf(id)).use {
             it.moveToFirst(); it.getInt(0)
         }
-        val tail = db.rawQuery("SELECT id,payload FROM events WHERE session_id=? ORDER BY id DESC LIMIT 2", arrayOf(id)).use {
+        val tail = db.rawQuery("SELECT id,payload FROM active_events WHERE session_id=? ORDER BY id DESC LIMIT 2", arrayOf(id)).use {
             buildList { while (it.moveToNext()) add(it.getLong(0) to decode(it.getString(1))) }
         }
         val last = tail.firstOrNull()?.second
@@ -64,14 +67,23 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         }
         // Until context compaction lands, the active model transcript keeps the
         // Phase 4 limit. The database's complete event history has no such cap.
-        AgentSessionCodec.encode(messages)
+        if (!AgentSessionCodec.fits(messages, summary(db, id).toByteArray(Charsets.UTF_8).size)) {
+            throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
+        }
         db.beginTransaction()
         try {
-            if (retractEmpty) db.delete("events", "id=?", arrayOf(tail.first().first.toString()))
+            if (retractEmpty) {
+                db.delete("active_events", "id=?", arrayOf(tail.first().first.toString()))
+                db.execSQL("DELETE FROM events WHERE id=(SELECT MAX(id) FROM events WHERE session_id=?)", arrayOf(id))
+            }
             messages.drop(count).forEach { message ->
+                val payload = json.encodeToString(AgentMessage.serializer(), message)
                 db.insertOrThrow("events", null, ContentValues().apply {
                     put("session_id", id)
-                    put("payload", json.encodeToString(AgentMessage.serializer(), message))
+                    put("payload", payload)
+                })
+                db.insertOrThrow("active_events", null, ContentValues().apply {
+                    put("session_id", id); put("payload", payload)
                 })
             }
             db.execSQL("UPDATE sessions SET interrupted=?, updated_at=? WHERE id=?",
@@ -81,7 +93,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean =
-        AgentSessionCodec.fits(messages, reservedEncodedBytes)
+        AgentSessionCodec.fits(messages, reservedEncodedBytes + summaryBytes)
 
     override suspend fun markInterrupted(interrupted: Boolean) = onDatabase { db ->
         db.execSQL("UPDATE sessions SET interrupted=? WHERE id=?",
@@ -93,8 +105,10 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.beginTransaction()
         try {
             db.delete("events", "session_id=?", arrayOf(id))
-            db.execSQL("UPDATE sessions SET interrupted=0, updated_at=? WHERE id=?",
+            db.delete("active_events", "session_id=?", arrayOf(id))
+            db.execSQL("UPDATE sessions SET interrupted=0, summary='', updated_at=? WHERE id=?",
                 arrayOf(System.currentTimeMillis(), id))
+            summaryBytes = 0
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -112,13 +126,16 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             setActive(db, id)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        summaryBytes = 0
         AgentSession(id = id, title = "New session", workspaceId = workspaceId)
     }
 
     suspend fun select(id: String): AgentSession = onDatabase { db ->
         val selected = header(db, id)
         setActive(db, id)
-        AgentSession(messages(db, id), selected.interrupted, id, selected.title, selected.workspaceId)
+        val summary = summary(db, id)
+        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
+        AgentSession(activeMessages(db, id), selected.interrupted, id, selected.title, selected.workspaceId, summary)
     }
 
     suspend fun rename(id: String, title: String) = onDatabase { db ->
@@ -143,7 +160,9 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         } finally { db.endTransaction() }
         val active = activeId(db)
         val selected = header(db, active)
-        AgentSession(messages(db, active), selected.interrupted, active, selected.title, selected.workspaceId)
+        val summary = summary(db, active)
+        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
+        AgentSession(activeMessages(db, active), selected.interrupted, active, selected.title, selected.workspaceId, summary)
     }
 
     suspend fun recent(id: String, limit: Int = 100): List<AgentMessage> = onDatabase { db ->
@@ -151,6 +170,44 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.rawQuery("SELECT payload FROM events WHERE session_id=? ORDER BY id DESC LIMIT ?",
             arrayOf(id, limit.toString())).use { cursor ->
             buildList { while (cursor.moveToNext()) add(decode(cursor.getString(0))) }.asReversed()
+        }
+    }
+
+    suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String) = onDatabase { db ->
+        val id = activeId(db)
+        require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
+        require(retained.size < expected.size)
+        require(validRetained(expected, retained))
+        if (activeMessages(db, id) != expected) throw IllegalStateException("Active context changed")
+        if (!AgentSessionCodec.fits(retained, summary.toByteArray(Charsets.UTF_8).size)) {
+            throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
+        }
+        val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(id)).use {
+            it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
+        }
+        db.beginTransaction()
+        try {
+            db.insertOrThrow("compactions", null, ContentValues().apply {
+                put("session_id", id); put("through_event_id", through)
+                put("summary", summary); put("before_count", expected.size)
+                put("after_count", retained.size); put("created_at", System.currentTimeMillis())
+            })
+            db.delete("active_events", "session_id=?", arrayOf(id))
+            retained.forEach { message ->
+                db.insertOrThrow("active_events", null, ContentValues().apply {
+                    put("session_id", id)
+                    put("payload", json.encodeToString(AgentMessage.serializer(), message))
+                })
+            }
+            db.execSQL("UPDATE sessions SET summary=? WHERE id=?", arrayOf(summary, id))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
+    }
+
+    suspend fun fullEventCount(id: String): Int = onDatabase { db ->
+        db.rawQuery("SELECT COUNT(*) FROM events WHERE session_id=?", arrayOf(id)).use {
+            it.moveToFirst(); it.getInt(0)
         }
     }
 
@@ -205,9 +262,13 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             if (meta(db, "legacy_migrated") == null) {
                 insertSession(db, id, "Previous conversation", workspaceId, legacy.interrupted)
                 legacy.messages.forEach { message ->
+                    val payload = json.encodeToString(AgentMessage.serializer(), message)
                     db.insertOrThrow("events", null, ContentValues().apply {
                         put("session_id", id)
-                        put("payload", json.encodeToString(AgentMessage.serializer(), message))
+                        put("payload", payload)
+                    })
+                    db.insertOrThrow("active_events", null, ContentValues().apply {
+                        put("session_id", id); put("payload", payload)
                     })
                 }
                 putMeta(db, "active_session", id)
@@ -220,13 +281,42 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     private fun activeId(db: SQLiteDatabase): String = meta(db, "active_session")
         ?: throw IllegalStateException("No active session")
 
-    private fun messages(db: SQLiteDatabase, id: String): List<AgentMessage> =
-        db.rawQuery("SELECT payload FROM events WHERE session_id=? ORDER BY id", arrayOf(id)).use { cursor ->
+    private fun activeMessages(db: SQLiteDatabase, id: String): List<AgentMessage> =
+        db.rawQuery("SELECT payload FROM active_events WHERE session_id=? ORDER BY id", arrayOf(id)).use { cursor ->
             buildList { while (cursor.moveToNext()) add(decode(cursor.getString(0))) }
+        }
+
+    private fun summary(db: SQLiteDatabase, id: String): String =
+        db.rawQuery("SELECT summary FROM sessions WHERE id=?", arrayOf(id)).use {
+            if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
+            it.getString(0)
         }
 
     private fun decode(payload: String): AgentMessage =
         json.decodeFromString(AgentMessage.serializer(), payload)
+
+    private fun validRetained(expected: List<AgentMessage>, retained: List<AgentMessage>): Boolean {
+        var original = 0
+        for (message in retained) {
+            while (original < expected.size && expected[original] != message) original++
+            if (original == expected.size) return false
+            original++
+        }
+        for (index in retained.indices) {
+            val message = retained[index]
+            if (message.role == AgentRole.Assistant && message.toolCalls.isNotEmpty()) {
+                val results = retained.getOrNull(index + 1)?.takeIf { it.role == AgentRole.Tool }?.toolResults
+                    ?: return false
+                if (results.map { it.callId } != message.toolCalls.map { it.id }) return false
+            }
+            if (message.role == AgentRole.Tool) {
+                val calls = retained.getOrNull(index - 1)?.takeIf { it.role == AgentRole.Assistant }?.toolCalls
+                    ?: return false
+                if (calls.map { it.id } != message.toolResults.map { it.callId }) return false
+            }
+        }
+        return true
+    }
 
     private fun header(db: SQLiteDatabase, id: String): CodingSessionHeader =
         db.rawQuery("SELECT id,title,workspace_id,created_at,updated_at,interrupted FROM sessions WHERE id=?", arrayOf(id))
@@ -246,6 +336,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         })
     }
 
+    companion object { const val MAX_SUMMARY_BYTES = 16 * 1024 }
+
     private fun setActive(db: SQLiteDatabase, id: String) = putMeta(db, "active_session", id)
 
     private fun meta(db: SQLiteDatabase, key: String): String? =
@@ -260,13 +352,14 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 }
 
-private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 2) {
+private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 3) {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0)")
+        db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL DEFAULT '')")
         db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL)")
         db.execSQL("CREATE INDEX events_session_id ON events(session_id,id)")
         db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         createUsage(db)
+        createCompaction(db)
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -275,12 +368,23 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion == 1 && newVersion == 2) createUsage(db)
-        else throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
+        if (oldVersion < 1 || newVersion != 3) throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
+        if (oldVersion == 1) createUsage(db)
+        if (oldVersion <= 2) {
+            db.execSQL("ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
+            createCompaction(db)
+            db.execSQL("INSERT INTO active_events(session_id,payload) SELECT session_id,payload FROM events ORDER BY id")
+        }
     }
 
     private fun createUsage(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE usage (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, turn_id TEXT NOT NULL, provider_id TEXT NOT NULL, model TEXT NOT NULL, source TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, reasoning_tokens INTEGER, total_tokens INTEGER, created_at INTEGER NOT NULL)")
         db.execSQL("CREATE INDEX usage_session_id ON usage(session_id,id)")
+    }
+
+    private fun createCompaction(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE active_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL)")
+        db.execSQL("CREATE INDEX active_events_session_id ON active_events(session_id,id)")
+        db.execSQL("CREATE TABLE compactions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, through_event_id INTEGER NOT NULL, summary TEXT NOT NULL, before_count INTEGER NOT NULL, after_count INTEGER NOT NULL, created_at INTEGER NOT NULL)")
     }
 }
