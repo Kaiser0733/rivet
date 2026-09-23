@@ -61,7 +61,15 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
         }
     }
 
-    fun stop() { controller.stopTerminal() }
+    fun stop() {
+        val session = mutable.value.session ?: return
+        if (session.isRunning) controller.stopTerminal()
+        else {
+            controller.terminalFinished(session)
+            watchWorkspace?.cancel()
+            mutable.update { it.copy(active = false, notice = "Shell stopped before startup.") }
+        }
+    }
 
     fun startupFailed(session: TerminalSession, error: Exception) {
         controller.stopTerminal()
