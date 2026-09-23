@@ -10,6 +10,7 @@ import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.storage.AgentSessionCodec
 import com.kaiser.rivet.storage.AgentSessionStore
+import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.workspace.TestDocumentsProvider
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.workspace.WorkspacePath
@@ -198,6 +199,43 @@ class ChatViewModelTest {
         assertTrue(provider.requests[1].messages.any { message ->
             message.toolResults.any { "project_instructions_loaded" in it.content }
         })
+    }
+
+    @Test fun compactionKeepsFullHistoryAndSendsSmallerContext() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(22) { index ->
+                add(AgentMessage.user("Inspect $index"))
+                add(AgentMessage.assistant("", listOf(AgentToolCall("call-$index", "read_file", "{}"))))
+                add(AgentMessage.tools(listOf(com.kaiser.rivet.agent.AgentToolResult(
+                    "call-$index", "read_file", "x".repeat(22_000), summary = "Read $index"))))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(text = "Prior files were inspected; continue the task."),
+            AgentResponse(text = "Complete"),
+        )))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "model-a")
+        val viewModel = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Continue")
+        val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Complete" }
+
+        assertNull(complete.error)
+        assertEquals(68, sessions.fullEventCount(id))
+        assertTrue(sessions.load().messages.size < history.size)
+        assertTrue(sessions.load().summary.contains("Prior files"))
+        assertEquals(2, provider.requests.size)
+        assertTrue(provider.requests[1].system.contains("Prior task state"))
+        assertTrue(provider.requests[1].messages.size < history.size)
+        assertEquals(68, sessions.recent(id, 100).size)
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =

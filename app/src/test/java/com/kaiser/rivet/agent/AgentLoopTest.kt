@@ -15,6 +15,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentLoopTest {
+    @Test fun compactionReplacesOnlyActiveContextBeforeNextModelRequest() = runTest {
+        val old = listOf(AgentMessage.user("older"), AgentMessage.assistant("done"), AgentMessage.user("current"))
+        val seen = mutableListOf<List<AgentMessage>>()
+        val persisted = mutableListOf<AgentMessage>()
+        val result = AgentLoop(
+            requestModel = { messages, _, _ -> seen += messages; AgentResponse(text = "next") },
+            prepareTool = { error("No tools") },
+            requestApproval = { error("No approvals") },
+            compactContext = { messages, _ -> messages.takeLast(1) },
+        ).run(old, emptyList(), onMessage = { persisted += it })
+
+        assertEquals(listOf(AgentMessage.user("current")), seen.single())
+        assertEquals(listOf(AgentMessage.assistant("next")), persisted)
+        assertEquals(listOf(AgentMessage.user("current"), AgentMessage.assistant("next")), result.messages)
+    }
+
+    @Test fun compactionFailureStopsWithoutExecutingTool() = runTest {
+        var requests = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> requests++; AgentResponse() },
+            prepareTool = { error("No tools") },
+            requestApproval = { error("No approvals") },
+            compactContext = { _, _ -> throw IllegalStateException("summary failed") },
+        ).run(listOf(AgentMessage.user("continue")), emptyList())
+        assertEquals(AgentStopReason.ContextUnavailable, result.stopReason)
+        assertEquals(0, requests)
+    }
+
     @Test
     fun checkpointFailureStopsApprovedMutationBeforeExecution() = runTest {
         val call = AgentToolCall("edit", "write_file", "{}")

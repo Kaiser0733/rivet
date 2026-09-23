@@ -16,6 +16,7 @@ enum class AgentStopReason {
     WorkspaceChanged,
     SessionLimit,
     CheckpointUnavailable,
+    ContextUnavailable,
 }
 
 data class AgentRunResult(
@@ -37,6 +38,7 @@ class AgentLoop(
     private val workspaceIsCurrent: suspend () -> Boolean = { true },
     private val canPersistToolOutput: suspend (List<AgentMessage>, Int) -> Boolean = { _, _ -> true },
     private val beforeMutation: suspend (AgentToolCall) -> Boolean = { true },
+    private val compactContext: suspend (List<AgentMessage>, Boolean) -> List<AgentMessage> = { messages, _ -> messages },
 ) {
     suspend fun run(
         initial: List<AgentMessage>,
@@ -58,6 +60,15 @@ class AgentLoop(
         var toolCalls = 0
         while (modelIterations < RUNAWAY_MODEL_ITERATIONS) {
             currentCoroutineContext().ensureActive()
+            val active = try { compactContext(messages.toList(), false) }
+                catch (e: CancellationException) { throw e
+                } catch (_: Exception) {
+                    return AgentRunResult(messages, AgentStopReason.ContextUnavailable, modelIterations, toolCalls)
+                }
+            if (active != messages) {
+                messages.clear()
+                messages.addAll(active)
+            }
             val streamed = StringBuffer()
             val response = try {
                 requestModel(messages.toList(), tools) { delta ->
