@@ -20,9 +20,10 @@ import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.runtime.RuntimeController
-import com.kaiser.rivet.storage.AgentSessionStore
 import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
+import com.kaiser.rivet.storage.CodingSessionHeader
+import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import com.kaiser.rivet.workspace.WorkspaceSelection
@@ -47,6 +48,10 @@ data class ChatUiState(
     val streamText: String = "",
     val pendingApproval: AgentApprovalRequest? = null,
     val error: String? = null,
+    val sessions: List<CodingSessionHeader> = emptyList(),
+    val currentSessionId: String? = null,
+    val currentSessionTitle: String? = null,
+    val currentSessionWorkspaceId: String? = null,
 )
 
 internal sealed interface ProviderRuntimeResult {
@@ -82,7 +87,7 @@ class ChatViewModel private constructor(
 ) : AndroidViewModel(app) {
     constructor(app: Application) : this(
         app,
-        AgentSessionStore(app),
+        CodingSessions(app),
         StoredProviderRuntimeSource(app),
         WorkspaceSelection(app),
         ::providerClient,
@@ -96,6 +101,7 @@ class ChatViewModel private constructor(
     ) : this(app, sessionPersistence, providerSource, WorkspaceSelection(app), clientFactory)
 
     private val approvals = AgentApprovalGate()
+    private val sessions get() = sessionStore as? CodingSessions
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
@@ -111,11 +117,17 @@ class ChatViewModel private constructor(
     init {
         viewModelScope.launch {
             val ticket = generation
-            val restored = try {
-                sessionStore.load()
+            val (restored, history) = try {
+                sessionStore.load() to sessions?.list().orEmpty()
             } catch (_: AgentSessionLimitException) {
                 if (ticket == generation) {
                     _uiState.update { it.copy(ready = true, error = CONTEXT_LIMIT_ERROR) }
+                }
+                return@launch
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                if (ticket == generation) _uiState.update {
+                    it.copy(ready = true, error = "Could not load conversation history. Restart Rivet or check available storage.")
                 }
                 return@launch
             }
@@ -124,6 +136,10 @@ class ChatViewModel private constructor(
                     state.copy(
                         messages = restored.messages,
                         ready = true,
+                        sessions = history,
+                        currentSessionId = restored.id,
+                        currentSessionTitle = restored.title,
+                        currentSessionWorkspaceId = restored.workspaceId,
                         error = if (restored.interrupted) "Previous agent turn was interrupted." else state.error,
                     )
                 }
@@ -152,6 +168,11 @@ class ChatViewModel private constructor(
             }
             val workspace = restoredWorkspace?.first
             val workspaceId = workspace?.tree?.toString()
+            if (sessions != null && _uiState.value.currentSessionId != null &&
+                workspaceId != _uiState.value.currentSessionWorkspaceId) {
+                _uiState.update { it.copy(error = "This session belongs to another workspace. Select its workspace or start a new session.") }
+                return@launch
+            }
             val runtime = runtimeController
             val executor = workspace?.let {
                 AgentToolExecutor(
@@ -341,8 +362,10 @@ class ChatViewModel private constructor(
         }
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
         sessionStore.save(persisted, interrupted = false)
+        val history = sessions?.list()
         _uiState.update {
-            it.copy(messages = persisted, streaming = false, streamText = "", pendingApproval = null, error = error)
+            it.copy(messages = persisted, streaming = false, streamText = "", pendingApproval = null,
+                sessions = history ?: it.sessions, error = error)
         }
     }
 
@@ -390,7 +413,54 @@ class ChatViewModel private constructor(
             sendJob?.cancelAndJoin()
             if (ticket == generation) {
                 sessionStore.clear()
-                _uiState.value = ChatUiState(ready = true)
+                val selected = sessionStore.load()
+                _uiState.value = ChatUiState(ready = true, sessions = sessions?.list().orEmpty(),
+                    currentSessionId = selected.id, currentSessionTitle = selected.title,
+                    currentSessionWorkspaceId = selected.workspaceId)
+            }
+        }
+    }
+
+    fun newSession() = changeSession { store ->
+        store.create(workspaceSelection.currentIdentity())
+    }
+
+    fun resumeSession(id: String) = changeSession { store -> store.select(id) }
+
+    fun deleteSession(id: String) = changeSession { store -> store.delete(id) }
+
+    fun renameSession(id: String, title: String) {
+        val store = sessions ?: return
+        if (_uiState.value.streaming) return
+        viewModelScope.launch {
+            try {
+                store.rename(id, title)
+                val history = store.list()
+                _uiState.update { it.copy(sessions = history,
+                    currentSessionTitle = history.firstOrNull { row -> row.id == it.currentSessionId }?.title) }
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) { _uiState.update { it.copy(error = "Could not rename the session.") } }
+        }
+    }
+
+    private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
+        val store = sessions ?: return
+        if (_uiState.value.streaming) return
+        val ticket = ++generation
+        approvals.cancel()
+        viewModelScope.launch {
+            try {
+                val selected = action(store)
+                val history = store.list()
+                if (ticket == generation) _uiState.value = ChatUiState(
+                    messages = selected.messages, ready = true, sessions = history,
+                    currentSessionId = selected.id, currentSessionTitle = selected.title,
+                    currentSessionWorkspaceId = selected.workspaceId,
+                    error = if (selected.interrupted) "Previous agent turn was interrupted." else null)
+                if (selected.interrupted) store.markInterrupted(false)
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                if (ticket == generation) _uiState.update { it.copy(error = "Could not open the session.") }
             }
         }
     }
