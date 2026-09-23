@@ -95,21 +95,6 @@ class AgentLoopTest {
         assertEquals(1, result.messages.flatMap { it.toolResults }.count { it.error })
     }
 
-    @Test fun unchangedDeniedMutationStopsBeforeRepeatingApproval() = runTest {
-        val call = AgentToolCall("first", "delete_path", """{"path":"Max.txt"}""")
-        var requests = 0
-        var approvals = 0
-        val result = AgentLoop(
-            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call.copy(id = "${++requests}"))) },
-            prepareTool = { candidate -> PreparedAgentTool(candidate,
-                AgentApprovalRequest(candidate, "Delete", "Max.txt")) { error("Denied mutation executed") } },
-            requestApproval = { approvals++; false },
-        ).run(listOf(AgentMessage.user("Delete")), emptyList())
-        assertEquals(AgentStopReason.NoProgress, result.stopReason)
-        assertEquals(2, requests)
-        assertEquals(1, approvals)
-    }
-
     @Test fun contextOverflowCompactsAndRetriesOnlyTheModelRequest() = runTest {
         val call = AgentToolCall("edit", "write_file", "{}")
         var requests = 0
@@ -381,7 +366,8 @@ class AgentLoopTest {
         assertEquals(1, approvals)
         assertEquals(0, executions)
         assertEquals(2, result.messages.flatMap { it.toolResults }.count { it.error })
-        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("no_progress"))
     }
 
     @Test
