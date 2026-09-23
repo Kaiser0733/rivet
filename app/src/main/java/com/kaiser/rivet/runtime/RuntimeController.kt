@@ -29,7 +29,7 @@ class RuntimeController(context: Context) {
     private val operations = Mutex()
     private var mirrorIdentity: String? = null
     private var mirror: WorkspaceMirror? = null
-    private var terminal: TerminalSession? = null
+    @Volatile private var terminal: TerminalSession? = null
 
     suspend fun runCommand(command: String, cwd: String, timeoutMs: Long): RuntimeCommandResult = operations.withLock {
         if (terminal != null) return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "terminal_active")

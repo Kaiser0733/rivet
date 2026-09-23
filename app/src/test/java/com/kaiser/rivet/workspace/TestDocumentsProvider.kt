@@ -7,6 +7,7 @@ import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract.Document
 import android.provider.DocumentsProvider
 import java.io.File
+import java.util.concurrent.CountDownLatch
 
 /** Disposable test documents only; no real user storage is accessed. */
 class TestDocumentsProvider : DocumentsProvider() {
@@ -15,6 +16,8 @@ class TestDocumentsProvider : DocumentsProvider() {
     var writable = true
     var rejectDelete = false
     var rejectRead = false
+    var blockNextRead: CountDownLatch? = null
+    var readStarted: CountDownLatch? = null
     var reportMetadata = true
     var childQueries = 0
     var createCalls = 0
@@ -66,6 +69,15 @@ class TestDocumentsProvider : DocumentsProvider() {
     }
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
         if (rejectRead && mode == "r") throw java.io.FileNotFoundException("read refused")
+        if (mode == "r") {
+            blockNextRead?.let { blocked ->
+                blockNextRead = null
+                signal?.setOnCancelListener { blocked.countDown() }
+                readStarted?.countDown()
+                blocked.await()
+                if (signal?.isCanceled == true) throw android.os.OperationCanceledException()
+            }
+        }
         val node = nodes[documentId] ?: throw java.io.FileNotFoundException()
         return ParcelFileDescriptor.open(node.bytes, ParcelFileDescriptor.parseMode(mode))
     }

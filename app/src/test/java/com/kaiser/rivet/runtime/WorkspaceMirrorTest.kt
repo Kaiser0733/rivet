@@ -11,7 +11,11 @@ import com.kaiser.rivet.workspace.WorkspacePath
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.nio.file.Files
-import kotlinx.coroutines.Job
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withContext
 import org.junit.After
@@ -154,13 +158,17 @@ class WorkspaceMirrorTest {
         assertTrue(workspace.listDirectory(WorkspacePath.ROOT).isEmpty())
     }
 
-    @Test fun cancelledMaterializationDoesNotReplaceAWorktree() = runBlocking {
+    @Test fun cancelledMaterializationLeavesNoCommittedWorktreeAndCanRetry() = runBlocking {
         source("file.txt", "base".toByteArray())
         val mirror = mirror()
-        val local = File(mirror.prepare().worktree, "file.txt")
-        val cancelled = Job().apply { cancel() }
-        try { withContext(cancelled) { mirror.prepare() }; fail("Expected cancellation") }
-        catch (_: kotlinx.coroutines.CancellationException) { }
-        assertEquals("base", local.readText())
+        val gate = CountDownLatch(1)
+        val started = CountDownLatch(1)
+        provider.blockNextRead = gate
+        provider.readStarted = started
+        val running = launch { mirror.prepare() }
+        assertTrue(withContext(Dispatchers.IO) { started.await(5, TimeUnit.SECONDS) })
+        running.cancelAndJoin()
+        assertFalse(mirror.worktree.exists())
+        assertEquals("base", File(mirror.prepare().worktree, "file.txt").readText())
     }
 }
