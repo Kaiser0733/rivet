@@ -115,7 +115,17 @@ JNIEXPORT jint JNICALL Java_com_kaiser_rivet_runtime_CommandNative_waitFor(
 JNIEXPORT void JNICALL Java_com_kaiser_rivet_runtime_CommandNative_signalGroup(
     JNIEnv* env, jobject instance, jint pid, jint signal) {
     (void) env; (void) instance;
-    if (pid > 0) {
-        if (kill(-pid, signal) != 0 && errno == ESRCH) kill(pid, signal);
-    }
+    if (pid > 0) kill(-pid, signal);
+}
+
+JNIEXPORT void JNICALL Java_com_kaiser_rivet_runtime_CommandNative_signalLeader(
+    JNIEnv* env, jobject instance, jint pid, jint signal) {
+    (void) env; (void) instance;
+    if (pid > 0) kill(pid, signal);
+}
+
+JNIEXPORT void JNICALL Java_com_kaiser_rivet_runtime_CommandNative_closeFd(
+    JNIEnv* env, jobject instance, jint fd) {
+    (void) env; (void) instance;
+    if (fd >= 0) close(fd);
 }

@@ -99,7 +99,11 @@ class WorkspaceMirror(
                     .sortedByDescending { it.count { char -> char == '/' } }
                 for (path in removed) {
                     selected()
-                    workspace.delete(WorkspacePath.parse(path))
+                    val old = before.entries[path]!!
+                    workspace.deleteIfUnchanged(WorkspacePath.parse(path),
+                        if (old.directory) null else SafWorkspace.BinaryFingerprint(
+                            old.size ?: throw MirrorFailure("baseline_invalid", path),
+                            old.sha256 ?: throw MirrorFailure("baseline_invalid", path)))
                 }
                 val addedDirs = local.filter { (path, entry) -> path.isNotEmpty() && entry.directory &&
                     before.entries[path] != entry }.keys.sortedBy { it.count { char -> char == '/' } }

@@ -177,7 +177,8 @@ class AgentToolExecutor(
                 }
                 "run_command" -> {
                     val args = json.decodeFromString<CommandArgs>(call.arguments)
-                    require(args.command.isNotBlank() && args.command.toByteArray(Charsets.UTF_8).size <= 8192)
+                    require(args.command.isNotBlank() && '\u0000' !in args.command &&
+                        args.command.toByteArray(Charsets.UTF_8).size <= 8192)
                     val cwd = path(args.cwd, root = true)
                     require(args.timeoutMs in 1000..MAX_COMMAND_TIMEOUT_MS)
                     PreparedAgentTool(
