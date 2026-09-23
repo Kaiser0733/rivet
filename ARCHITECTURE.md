@@ -3,9 +3,10 @@
 Describes what exists today. Phase-by-phase growth is recorded in
 MASTER_ROADMAP.md; anything not listed here is not in the tree.
 
-## Current shape (Phase 4: Agent Loop)
+## Current shape (Phase 5: Embedded Runtime)
 
-One Android module, `:app`, package `com.kaiser.rivet`.
+The `:app` module uses vendored `:terminal-emulator` and `:terminal-view`
+modules. The application ID remains `com.kaiser.rivet`.
 
 ```
 app/src/main/java/com/kaiser/rivet/
@@ -29,6 +30,11 @@ app/src/main/java/com/kaiser/rivet/
         AgentApprovalGate.kt  # one-shot mutation approval authority
         AgentToolExecutor.kt  # strict workspace tool schemas and validation
         SafAgentWorkspace.kt  # adapter to the trusted SAF boundary
+    runtime/
+        WorkspaceMirror.kt    # streamed SAF mirror and baseline
+        RuntimeController.kt  # command/terminal workspace association
+        CommandProcess.kt     # bounded command capture and cleanup
+        TerminalViewModel.kt  # retained PTY session and explicit sync
     storage/
         ProviderStore.kt     # DataStore: provider configs + active id
         SecretStore.kt       # Android Keystore + AES-GCM API-key storage
@@ -47,6 +53,7 @@ app/src/main/java/com/kaiser/rivet/
         Theme.kt             # dark color scheme, shape set
         files/               # workspace browser/editor, dialogs, FilesViewModel
         chat/ChatScreen.kt   # message list, input, model selector
+        terminal/TerminalScreen.kt # PTY view and shell controls
         provider/SettingsScreen.kt    # provider list, add/edit/delete
         provider/ProviderEditor.kt    # provider form, test, fetch models
         provider/ProvidersViewModel.kt
@@ -114,8 +121,9 @@ Before approval, mutations reserve space for their bounded result contract and
 all remaining correlated results. Session exhaustion stops the turn without
 executing the mutation. Workspace file text is untrusted project data; tool
 results establish observed state, not higher-priority instructions.
-Read-only `list_directory`, `read_file`, and `search_files` calls run directly.
-Every write, exact patch, create, rename, move, and delete waits for a one-shot
+Read-only `list_directory`, `read_file`, and `search_files` calls run directly
+when the mirror has no unsynchronized changes. Every write, exact patch,
+create, rename, move, delete, and agent `run_command` waits for a one-shot
 Approve or Deny decision. A repeated identical denial within the turn stays
 denied. Tool validation rejects unknown names, extra or missing JSON fields,
 invalid paths, hashes, and oversized input before SAF is called.
@@ -201,6 +209,36 @@ state. Navigation and search epochs reject late results; saves/mutations block
 editor navigation until completion. Back navigation/discard and deletion require
 confirmation. Process death ends asynchronous work and loses unsaved drafts;
 only the selected tree, directory, and file path restore (file bytes are reread).
-Whole project contents are not persisted. Model access is limited to the ten
-declared workspace tools and never exposes URIs or document IDs. There is no
-indexing database, terminal/shell/runtime integration, Git, or diff tracking.
+Whole project contents are not persisted in preferences. Tool results never
+expose URIs or document IDs. There is no indexing database, Git, or diff
+tracking.
+
+## Runtime boundary
+
+The selected SAF tree remains the external workspace. `WorkspaceMirror`
+streams regular file bytes into `files/runtime/workspaces/<sha256-tree-id>/current/worktree`
+and keeps a compact path/type/size/SHA-256 baseline beside the worktree.
+It rejects symlinks and special local entries. Before applying mirror changes, the SAF
+baseline is checked; any external change returns a conflict and leaves local
+work in the mirror. Local creates, modifications, and deletions then use the
+existing SAF path and provider confirmation rules. A failed or interrupted
+sync retains the mirror; a later stale baseline cannot silently replay writes.
+No recursive file contents are retained in memory.
+
+`run_command` starts `/system/bin/sh -lc` with a workspace-relative cwd and
+an explicit HOME/PATH/TMPDIR/PWD/LANG/TERM environment. HOME is under
+the workspace's `files/runtime` area, not the app's credential/configuration area. Each agent
+command requires the existing one-shot approval; stdout and stderr retain
+bounded head/tail text, exit status remains separate from sync status, and a
+timeout or Stop terminates the process group. The shell shares Rivet's Android
+UID: cwd checks are not a security sandbox. No API keys are exported.
+
+The Terminal tab uses a PTY, the vendored Termux terminal emulator/view, and
+one `/system/bin/sh` session retained by a ViewModel across rotation. Its
+scrollback is bounded by the emulator. Terminal edits stay in the mirror until
+the shell stops and the user chooses Sync. Leaving the tab never discards the
+worktree. A workspace switch stops the old shell and cannot retarget its
+mirror. Android system utilities provide the initial command set. No
+Termux installation, package manager, or app-data ELF execution is present.
+The inspected modern `termux-exec` linker/interception approach is reserved
+for future packaged binaries; direct app-data execution is not assumed.

@@ -274,7 +274,7 @@ class AgentToolExecutorTest {
     fun unknownMalformedMissingAndTraversalAreControlledErrors() = runTest {
         val executor = AgentToolExecutor(FakeWorkspace())
         val calls = listOf(
-            AgentToolCall("u", "run_command", "{}"),
+            AgentToolCall("u", "shell", "{}"),
             AgentToolCall("j", "read_file", "{"),
             AgentToolCall("m", "read_file", "{}"),
             AgentToolCall("p", "read_file", """{"path":"../secret"}"""),
@@ -306,11 +306,11 @@ class AgentToolExecutorTest {
     }
 
     @Test
-    fun catalogContainsOnlyWorkspaceToolsAndClassifiesMutations() {
+    fun catalogContainsWorkspaceToolsAndApprovedCommand() {
         val names = AgentToolExecutor.definitions.map { it.name }
         assertEquals(listOf("list_directory", "read_file", "search_files", "write_file", "apply_patch",
-            "create_file", "create_directory", "rename_path", "move_path", "delete_path"), names)
-        assertTrue(names.none { it in setOf("shell", "terminal", "run_command", "exec", "bash") })
+            "create_file", "create_directory", "rename_path", "move_path", "delete_path", "run_command"), names)
+        assertTrue(names.none { it in setOf("shell", "terminal", "exec", "bash") })
     }
 
     @Test

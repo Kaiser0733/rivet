@@ -1,5 +1,7 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.runtime.MirrorFailure
+import com.kaiser.rivet.runtime.RuntimeCommandResult
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -42,7 +44,11 @@ interface AgentWorkspace {
     suspend fun delete(path: String)
 }
 
-class AgentToolExecutor(private val workspace: AgentWorkspace) {
+class AgentToolExecutor(
+    private val workspace: AgentWorkspace,
+    private val runCommand: (suspend (String, String, Long) -> RuntimeCommandResult)? = null,
+    private val requireSafCurrent: suspend () -> Unit = {},
+) {
     fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
         return try {
@@ -169,6 +175,25 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                         success(call, buildJsonObject { put("path", path); put("deleted", true) }, "Deleted  $path")
                     }
                 }
+                "run_command" -> {
+                    val args = json.decodeFromString<CommandArgs>(call.arguments)
+                    require(args.command.isNotBlank() && '\u0000' !in args.command &&
+                        args.command.toByteArray(Charsets.UTF_8).size <= 8192)
+                    val cwd = path(args.cwd, root = true)
+                    require(args.timeoutMs in 1000..MAX_COMMAND_TIMEOUT_MS)
+                    PreparedAgentTool(
+                        call,
+                        AgentApprovalRequest(call, "Run command",
+                            "Working directory: ${cwd.ifEmpty { "." }}\n${args.command}\nThis command may modify workspace files.",
+                            dangerous = true),
+                    ) {
+                        execute(call) {
+                            val result = runCommand?.invoke(args.command, cwd, args.timeoutMs.toLong())
+                                ?: throw AgentWorkspaceFailure("runtime_unavailable")
+                            commandResult(call, result)
+                        }
+                    }
+                }
                 else -> invalid(call, "unknown_tool")
             }
         } catch (_: SerializationException) {
@@ -181,7 +206,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
     }
 
     private fun readOnly(call: AgentToolCall, action: suspend () -> AgentToolResult) =
-        PreparedAgentTool(call, null) { execute(call, action) }
+        PreparedAgentTool(call, null) { execute(call) { requireSafCurrent(); action() } }
 
     private fun mutation(
         call: AgentToolCall,
@@ -195,7 +220,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         // Paths contain no controls: three UTF-8 bytes per UTF-16 unit covers
         // their JSON representation. Fixed fields, hashes and numbers fit in 512.
         resultContentLimitBytes = minOf(AgentLoop.MAX_TOOL_RESULT_BYTES, 512 + resultPathChars * 3),
-    ) { execute(call, action) }
+    ) { execute(call) { requireSafCurrent(); action() } }
 
     suspend fun describeDestructive(request: AgentApprovalRequest): AgentApprovalRequest {
         val target = request.destructivePath ?: return request
@@ -221,6 +246,8 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         throw e
     } catch (e: AgentWorkspaceFailure) {
         failure(call, e.code)
+    } catch (e: MirrorFailure) {
+        failure(call, e.code)
     } catch (_: Exception) {
         failure(call, "workspace_error")
     }
@@ -239,6 +266,45 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
     private fun snapshot(call: AgentToolCall, file: AgentFileSnapshot, summary: String) = success(call, buildJsonObject {
         put("path", file.path); put("sha256", file.sha256); put("size", file.size)
     }, summary)
+
+    private fun commandResult(call: AgentToolCall, result: RuntimeCommandResult): AgentToolResult {
+        var stdout = result.stdout
+        var stderr = result.stderr
+        var stdoutCut = result.stdoutTruncated
+        var stderrCut = result.stderrTruncated
+        fun value() = buildJsonObject {
+            result.error?.let { put("error", it) }
+            result.exitCode?.let { put("exit_code", it) }
+            put("stdout", stdout)
+            put("stderr", stderr)
+            put("stdout_truncated", stdoutCut)
+            put("stderr_truncated", stderrCut)
+            put("timed_out", result.timedOut)
+            put("cwd", result.cwd)
+            put("sync", result.sync)
+            result.syncPath?.let { put("sync_path", it) }
+        }
+        var encoded = value()
+        while (encoded.toString().toByteArray(Charsets.UTF_8).size > AgentLoop.MAX_TOOL_RESULT_BYTES) {
+            if (stdout.length >= stderr.length && stdout.isNotEmpty()) {
+                stdout = shorten(stdout)
+                stdoutCut = true
+            } else if (stderr.isNotEmpty()) {
+                stderr = shorten(stderr)
+                stderrCut = true
+            } else throw AgentWorkspaceFailure("output_limit")
+            encoded = value()
+        }
+        return AgentToolResult(call.id, call.name, encoded.toString(), result.error != null,
+            if (result.error == null) "Command exited  ${result.exitCode}" else "Failed  run_command")
+    }
+
+    private fun shorten(value: String): String {
+        if (value.length <= 64) return value.take(value.length / 2).dropLastWhile { it.isHighSurrogate() }
+        val half = value.length / 4
+        return value.take(half).dropLastWhile { it.isHighSurrogate() } +
+            "\n… [output truncated] …\n" + value.takeLast(half).dropWhile { it.isLowSurrogate() }
+    }
 
     private fun entryValue(entry: AgentWorkspaceEntry, requestedPath: String? = null) = buildJsonObject {
         put("path", entry.path)
@@ -326,6 +392,11 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         @kotlinx.serialization.SerialName("new_name") val newName: String,
     )
     @Serializable private data class MoveArgs(val path: String, val destination: String)
+    @Serializable private data class CommandArgs(
+        val command: String,
+        val cwd: String = "",
+        @kotlinx.serialization.SerialName("timeout_ms") val timeoutMs: Int = 300_000,
+    )
 
     companion object {
         private val json = Json { ignoreUnknownKeys = false; isLenient = false }
@@ -333,6 +404,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         private const val MAX_ARGUMENT_BYTES = 1_200_000
         private const val MAX_LIST_ENTRIES = 200
         private const val MAX_READ_CHUNK_BYTES = 8 * 1024
+        private const val MAX_COMMAND_TIMEOUT_MS = 30 * 60 * 1000
 
         private fun schema(required: List<String>, vararg fields: Pair<String, JsonObject>) = buildJsonObject {
             put("type", "object")
@@ -366,6 +438,9 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
             AgentToolDefinition("rename_path", "Rename an existing file or directory. Use the returned actual path afterward.", schema(listOf("path", "new_name"), path, "new_name" to string)),
             AgentToolDefinition("move_path", "Move a path into an existing directory; empty destination means root. Use the returned actual path afterward.", schema(listOf("path", "destination"), path, "destination" to string)),
             AgentToolDefinition("delete_path", "Permanently delete a non-root path after approval. Inspect first; never delete an uncertain or pre-existing path just for testing.", schema(listOf("path"), path)),
+            AgentToolDefinition("run_command", "Run one foreground Android shell command in the private POSIX workspace mirror after explicit user approval. The command may modify workspace files. Returned exit_code describes the command; sync separately reports whether mirror changes reached SAF. Use a workspace-relative cwd; empty means root. Output is bounded and marks truncation. Commands may time out or be stopped.",
+                schema(listOf("command"), "command" to string, "cwd" to string,
+                    "timeout_ms" to buildJsonObject { put("type", "integer"); put("minimum", 1000); put("maximum", MAX_COMMAND_TIMEOUT_MS) })),
         )
     }
 }

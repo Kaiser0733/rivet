@@ -5,6 +5,7 @@ import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
 import androidx.lifecycle.ViewModelProvider
 import com.kaiser.rivet.chat.ChatViewModel
+import com.kaiser.rivet.runtime.TerminalViewModel
 import com.kaiser.rivet.ui.RivetApp
 import com.kaiser.rivet.ui.files.FilesViewModel
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
@@ -20,6 +21,8 @@ class MainActivity : ComponentActivity() {
         val chatViewModel = ViewModelProvider(this)[ChatViewModel::class.java]
         val providersViewModel = ViewModelProvider(this)[ProvidersViewModel::class.java]
         val filesViewModel = ViewModelProvider(this)[FilesViewModel::class.java]
-        setContent { RivetApp(versionName, chatViewModel, providersViewModel, filesViewModel) }
+        val terminalViewModel = ViewModelProvider(this)[TerminalViewModel::class.java]
+        chatViewModel.attachRuntime(terminalViewModel.controller)
+        setContent { RivetApp(versionName, chatViewModel, providersViewModel, filesViewModel, terminalViewModel) }
     }
 }
