@@ -282,7 +282,7 @@ class AgentToolExecutor(
 
     private fun failure(call: AgentToolCall, code: String) = AgentToolResult(
         call.id, call.name, if (code == "output_limit") AgentLoop.OUTPUT_LIMIT_CONTENT
-        else buildJsonObject { put("error", code) }.toString(), true, "Failed  ${call.name}",
+        else AgentToolError.content(code), true, "Failed  ${call.name}",
     )
 
     private fun success(call: AgentToolCall, value: JsonObject, summary: String) =
@@ -298,7 +298,13 @@ class AgentToolExecutor(
         var stdoutCut = result.stdoutTruncated
         var stderrCut = result.stderrTruncated
         fun value() = buildJsonObject {
-            result.error?.let { put("error", it) }
+            result.error?.let {
+                put("error", it)
+                AgentToolError.action(it)?.let { action ->
+                    put("retryable", false)
+                    put("required_action", action)
+                }
+            }
             result.exitCode?.let { put("exit_code", it) }
             put("stdout", stdout)
             put("stderr", stderr)
@@ -505,7 +511,7 @@ class AgentToolExecutor(
             AgentToolDefinition("rename_path", "Rename an existing file or directory. Use the returned actual path afterward.", schema(listOf("path", "new_name"), path, "new_name" to string)),
             AgentToolDefinition("move_path", "Move a path into an existing directory; empty destination means root. Use the returned actual path afterward.", schema(listOf("path", "destination"), path, "destination" to string)),
             AgentToolDefinition("delete_path", "Permanently delete a non-root path after approval. Inspect first; never delete an uncertain or pre-existing path just for testing.", schema(listOf("path"), path)),
-            AgentToolDefinition("run_command", "Run one foreground Android shell command in the private POSIX workspace mirror after explicit user approval. The command may modify workspace files. Returned exit_code describes the command; sync separately reports whether mirror changes reached SAF. Use a workspace-relative cwd; empty means root. Output is bounded and marks truncation. Commands may time out or be stopped.",
+            AgentToolDefinition("run_command", "Run one foreground Android shell command in the private POSIX workspace mirror after explicit user approval. The interactive Terminal must be stopped first; terminal_active is not solved by retrying. The command may modify workspace files. Returned exit_code describes the command; sync separately reports whether mirror changes reached SAF. Resolve sync_required or a sync conflict before further agent commands. Use a workspace-relative cwd; empty means root. Output is bounded and marks truncation. Commands may time out or be stopped.",
                 schema(listOf("command"), "command" to string, "cwd" to string,
                     "timeout_ms" to buildJsonObject { put("type", "integer"); put("minimum", 1000); put("maximum", MAX_COMMAND_TIMEOUT_MS) })),
         )
