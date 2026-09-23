@@ -24,10 +24,10 @@ class CommandToolTest {
     @Test fun commandWaitsForOneShotApprovalAndDenialExecutesNothing() = runTest {
         val gate = AgentApprovalGate()
         var executions = 0
-        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace()) { _, _, _ ->
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace(), runCommand = { _, _, _ ->
             executions++
             RuntimeCommandResult(0, "hello\n", cwd = "src", sync = "no_changes")
-        }
+        })
         val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "done")))
         val running = async {
             AgentLoop(
@@ -53,13 +53,13 @@ class CommandToolTest {
     @Test fun approvedCommandReportsExitOutputAndSyncSeparately() = runTest {
         val gate = AgentApprovalGate()
         var executions = 0
-        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace()) { command, cwd, timeout ->
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace(), runCommand = { command, cwd, timeout ->
             assertEquals("echo hello", command)
             assertEquals("src", cwd)
             assertEquals(30_000L, timeout)
             executions++
             RuntimeCommandResult(7, "hello\n", "warning\n", cwd = cwd, sync = "conflict", syncPath = "src/file")
-        }
+        })
         val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "done")))
         val running = async {
             AgentLoop(
@@ -85,9 +85,9 @@ class CommandToolTest {
 
     @Test fun largeOrMalformedOutputKeepsExitStatusInsideResultBound() = runTest {
         val output = "\u0000\u001b".repeat(12_000) + "end"
-        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace()) { _, _, _ ->
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace(), runCommand = { _, _, _ ->
             RuntimeCommandResult(3, output, "error", cwd = "src", sync = "failed")
-        }
+        })
         val result = executor.prepare(call).execute()
         val value = Json.parseToJsonElement(result.content).jsonObject
         assertTrue(result.content.toByteArray(Charsets.UTF_8).size <= AgentLoop.MAX_TOOL_RESULT_BYTES)
@@ -99,10 +99,10 @@ class CommandToolTest {
 
     @Test fun invalidCwdNeverRequestsApprovalOrRunsCommand() = runTest {
         var executions = 0
-        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace()) { _, _, _ ->
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace(), runCommand = { _, _, _ ->
             executions++
             RuntimeCommandResult(0, sync = "ok")
-        }
+        })
         val invalid = executor.prepare(call.copy(arguments = """{"command":"pwd","cwd":"../other"}"""))
         assertNull(invalid.approval)
         assertTrue(invalid.execute().error)

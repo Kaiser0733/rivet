@@ -19,6 +19,8 @@ internal object CommandNative {
     external fun start(command: String, cwd: String, environment: Array<String>): IntArray
     external fun waitFor(pid: Int): Int
     external fun signalGroup(pid: Int, signal: Int)
+    external fun signalLeader(pid: Int, signal: Int)
+    external fun closeFd(fd: Int)
 }
 
 internal data class CommandOutput(
@@ -36,8 +38,24 @@ internal class CommandProcess {
             val started = CommandNative.start(command, cwd, environment)
             check(started.size == 3 && started[0] > 0)
             val pid = started[0]
-            val stdoutFd = ParcelFileDescriptor.adoptFd(started[1])
-            val stderrFd = ParcelFileDescriptor.adoptFd(started[2])
+            val stdoutFd = try { ParcelFileDescriptor.adoptFd(started[1]) }
+                catch (e: Exception) {
+                    CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+                    CommandNative.signalLeader(pid, OsConstants.SIGKILL)
+                    try { CommandNative.waitFor(pid) } catch (_: Exception) { }
+                    CommandNative.closeFd(started[1])
+                    CommandNative.closeFd(started[2])
+                    throw e
+                }
+            val stderrFd = try { ParcelFileDescriptor.adoptFd(started[2]) }
+                catch (e: Exception) {
+                    CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+                    CommandNative.signalLeader(pid, OsConstants.SIGKILL)
+                    try { CommandNative.waitFor(pid) } catch (_: Exception) { }
+                    stdoutFd.close()
+                    CommandNative.closeFd(started[2])
+                    throw e
+                }
             val stdout = BoundedCapture()
             val stderr = BoundedCapture()
             val stdoutReader = async(Dispatchers.IO) { collect(stdoutFd, stdout) }
@@ -74,16 +92,20 @@ internal class CommandProcess {
                 }
                 throw e
             } finally {
-                if (!timedOut && !exited.isCompleted) CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+                CommandNative.signalGroup(pid, OsConstants.SIGKILL)
                 stdoutFd.close()
                 stderrFd.close()
+                stdoutReader.cancel()
+                stderrReader.cancel()
             }
         }
 
     private suspend fun terminate(pid: Int, exited: CompletableDeferred<Int>): Int {
         CommandNative.signalGroup(pid, OsConstants.SIGTERM)
+        if (!exited.isCompleted) CommandNative.signalLeader(pid, OsConstants.SIGTERM)
         val graceful = withTimeoutOrNull(750) { exited.await() }
         CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+        if (!exited.isCompleted) CommandNative.signalLeader(pid, OsConstants.SIGKILL)
         return graceful ?: withTimeoutOrNull(3000) { exited.await() } ?: -OsConstants.SIGKILL
     }
 

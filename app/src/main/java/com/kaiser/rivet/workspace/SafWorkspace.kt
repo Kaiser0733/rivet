@@ -170,11 +170,21 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         }
     }
 
-    suspend fun delete(path: WorkspacePath) = io {
+    suspend fun delete(path: WorkspacePath) = delete(path, null, false)
+
+    suspend fun deleteIfUnchanged(path: WorkspacePath, expected: BinaryFingerprint?) =
+        delete(path, expected, true)
+
+    private suspend fun delete(path: WorkspacePath, expected: BinaryFingerprint?, requireEmpty: Boolean) = io {
         mutations.withLock {
             requireNonRoot(path)
             val entry = resolve(path)
             if (!entry.capabilities.delete) fail(WorkspaceFailure.Reason.UNSUPPORTED)
+            if (entry.directory) {
+                if (requireEmpty && children(entry, 5000).isNotEmpty()) fail(WorkspaceFailure.Reason.CONFLICT)
+            } else if (requireEmpty) {
+                if (expected == null || stream(entry, null) != expected) fail(WorkspaceFailure.Reason.CONFLICT)
+            }
             currentCoroutineContext().ensureActive()
             withContext(NonCancellable) {
                 if (!DocumentsContract.deleteDocument(resolver, uri(entry.documentId))) fail(WorkspaceFailure.Reason.PROVIDER)

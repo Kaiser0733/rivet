@@ -34,7 +34,7 @@ class WorkspaceMirrorTest {
     private val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.mirrortest", "root")
 
     @Before fun setup() {
-        val base = RuntimeEnvironment.getApplication<android.app.Application>()
+        val base = RuntimeEnvironment.getApplication()
         files = Files.createTempDirectory(base.cacheDir.toPath(), "mirror-fixture").toFile()
         app = object : ContextWrapper(base) { override fun getFilesDir(): File = files }
         val info = ProviderInfo().apply {
