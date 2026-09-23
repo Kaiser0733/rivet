@@ -119,6 +119,11 @@ Every write, exact patch, create, rename, move, and delete waits for a one-shot
 Approve or Deny decision. A repeated identical denial within the turn stays
 denied. Tool validation rejects unknown names, extra or missing JSON fields,
 invalid paths, hashes, and oversized input before SAF is called.
+The turn tracks confirmed created paths and carries that state through successful
+renames and moves. Delete, rename, and move of paths not known to be created in
+the turn receive a stronger approval showing the path, type, and known size.
+Delete remains permanent: document providers need not support native moves, and
+a portable recovery record cannot be guaranteed within the current workspace.
 
 The workspace identity is checked before every tool and again after approval.
 Changing the selected tree stops the turn instead of redirecting work. Stop
@@ -154,6 +159,10 @@ suffixes on coding filenames. If a provider normalizes the name and supports
 rename, one correction is attempted and its returned identity is verified.
 Creation is never retried; an uncorrectable name is returned as the actual path
 alongside the requested path, with the empty-file SHA and size preserved.
+Trailing-dot and blank names are rejected before creation or rename. Provider
+MIME guesses only block known binary filename types; other files must pass
+bounded strict UTF-8 validation. A newly created file is inspected without a
+MIME veto so its confirmed contents can supply the hash handoff.
 
 ## Text and mutation limits
 
@@ -177,10 +186,13 @@ fallback is attempted.
 ## Search and lifecycle
 
 Literal case-sensitive search covers paths/names and text lines under the current
-directory. Defaults: 1,000 files, 5,000 entries, 8 MiB total reads, 256 KiB per
+directory, or exactly the requested file. Defaults: 1,000 files, 5,000 entries, 8 MiB total reads, 256 KiB per
 file, 200 hits, and 240-character contexts. Binary/inaccessible entries are
 skipped; limits and bounded scan totals are reported. Directory listings are
 capped at 5,000 entries.
+Physical mutation tests must use a disposable SAF workspace with generated read,
+binary, search, rename, move, delete, and filename fixtures. Never run destructive
+self-tests against an existing user project.
 Provider I/O runs on Dispatchers.IO. Cancellation signals and closing active
 read descriptors support cancellation; providers can delay or ignore requests.
 

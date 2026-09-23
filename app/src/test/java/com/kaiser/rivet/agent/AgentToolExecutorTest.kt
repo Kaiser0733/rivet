@@ -16,7 +16,9 @@ class AgentToolExecutorTest {
         var text: String = "content",
         var readHash: String = "a".repeat(64),
     ) : AgentWorkspace {
+        override suspend fun stat(path: String) = AgentWorkspaceEntry(path, directory = false, size = 80_106)
         var writes = 0
+        var deletes = 0
         var failure: String? = null
         var listedEntries = listOf(
             AgentWorkspaceEntry("Main.kt", directory = false, size = 12),
@@ -51,7 +53,7 @@ class AgentToolExecutorTest {
         }
         override suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>) =
             write(path, edits.single().newText, expectedHash)
-        override suspend fun createFile(path: String) = AgentFileSnapshot(createdPath ?: path, "", "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0)
+        override suspend fun createFile(path: String) = AgentCreatedFile(createdPath ?: path, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0)
         override suspend fun createDirectory(path: String) = AgentWorkspaceEntry(path, directory = true, size = null)
         override suspend fun rename(path: String, newName: String) = AgentWorkspaceEntry(
             path.substringBeforeLast('/', "").let { parent -> if (parent.isEmpty()) newName else "$parent/$newName" },
@@ -63,7 +65,7 @@ class AgentToolExecutorTest {
             directory = false,
             size = 0,
         )
-        override suspend fun delete(path: String) = Unit
+        override suspend fun delete(path: String) { deletes++ }
     }
 
     @Test
@@ -276,13 +278,14 @@ class AgentToolExecutorTest {
             AgentToolCall("j", "read_file", "{"),
             AgentToolCall("m", "read_file", "{}"),
             AgentToolCall("p", "read_file", """{"path":"../secret"}"""),
+            AgentToolCall("dot", "create_file", """{"path":"trailing."}"""),
             AgentToolCall("x", "read_file", """{"path":"A","extra":true}"""),
         )
 
         val results = calls.map { executor.prepare(it).execute() }
 
         assertTrue(results.all { it.error })
-        assertEquals(listOf("unknown_tool", "invalid_arguments", "invalid_arguments", "invalid_path", "invalid_arguments"),
+        assertEquals(listOf("unknown_tool", "invalid_arguments", "invalid_arguments", "invalid_path", "invalid_path", "invalid_arguments"),
             results.map { kotlinx.serialization.json.Json.parseToJsonElement(it.content).jsonObject["error"]!!.jsonPrimitive.content })
     }
 

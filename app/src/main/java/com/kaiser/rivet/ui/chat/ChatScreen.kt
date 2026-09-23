@@ -243,14 +243,17 @@ private fun ApprovalRow(
     onDeny: (String) -> Unit,
 ) {
     Surface(
-        color = MaterialTheme.colorScheme.surfaceContainer,
+        color = if (request.dangerous) MaterialTheme.colorScheme.errorContainer else MaterialTheme.colorScheme.surfaceContainer,
         shape = RoundedCornerShape(6.dp),
     ) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 10.dp)) {
-            Text(request.title, style = MaterialTheme.typography.titleSmall)
-            Text(request.detail, style = MaterialTheme.typography.bodySmall)
+            val textColor = if (request.dangerous) MaterialTheme.colorScheme.onErrorContainer else MaterialTheme.colorScheme.onSurface
+            Text(request.title, style = MaterialTheme.typography.titleSmall, color = textColor)
+            Text(request.detail, style = MaterialTheme.typography.bodySmall, color = textColor)
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                TextButton(onClick = { onApprove(request.call.id) }) { Text("Approve") }
+                TextButton(onClick = { onApprove(request.call.id) }) {
+                    Text(if (request.dangerous && request.call.name == "delete_path") "Delete permanently" else "Approve")
+                }
                 TextButton(onClick = { onDeny(request.call.id) }) { Text("Deny") }
             }
         }

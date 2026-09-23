@@ -21,10 +21,12 @@ class WorkspacePathTest {
     }
 
     @Test fun simpleNamesCannotContainSeparatorsOrDotSegments() {
-        listOf("", ".", "..", "a/b", "a\\b", "\r").forEach {
+        listOf("", ".", "..", "trailing.", "   ", "a/b", "a\\b", "\r").forEach {
             assertThrows(WorkspaceFailure::class.java) { WorkspacePath.ROOT.child(it) }
         }
         assertEquals("hello world.kt", WorkspacePath.ROOT.child("hello world.kt").value)
+        assertEquals("CON", WorkspacePath.ROOT.child("CON").value)
+        assertEquals(".gitignore", WorkspacePath.ROOT.child(".gitignore").value)
     }
 
     @Test fun descendantsAreComponentAware() {

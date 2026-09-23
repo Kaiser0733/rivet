@@ -10,10 +10,72 @@ import kotlinx.coroutines.withContext
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentLoopTest {
+    @Test
+    fun createdPathStaysOrdinaryThroughRenameAndMoveButExistingDeleteIsDangerous() = runTest {
+        val workspace = AgentToolExecutorTest.FakeWorkspace()
+        val executor = AgentToolExecutor(workspace)
+        val calls = listOf(
+            AgentToolCall("create", "create_file", """{"path":"scratch.ts"}"""),
+            AgentToolCall("rename", "rename_path", """{"path":"scratch.ts","new_name":"renamed.ts"}"""),
+            AgentToolCall("move", "move_path", """{"path":"renamed.ts","destination":"tmp"}"""),
+            AgentToolCall("delete-created", "delete_path", """{"path":"tmp/renamed.ts"}"""),
+            AgentToolCall("delete-existing", "delete_path", """{"path":"Max.txt"}"""),
+        )
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = calls), AgentResponse(text = "Done")))
+        val approvals = mutableListOf<AgentApprovalRequest>()
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = executor::prepare,
+            requestApproval = { approvals += it; it.call.id != "delete-existing" },
+            describeDestructive = executor::describeDestructive,
+        ).run(listOf(AgentMessage.user("Test")), AgentToolExecutor.definitions)
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertFalse(approvals.first { it.call.id == "delete-created" }.dangerous)
+        val existing = approvals.first { it.call.id == "delete-existing" }
+        assertTrue(existing.dangerous)
+        assertTrue(existing.title.contains("existing file"))
+        assertTrue(existing.detail.contains("80,106 bytes"))
+        assertTrue(existing.detail.contains("Deletion is permanent"))
+        assertEquals(1, workspace.deletes)
+        assertTrue(result.messages.flatMap { it.toolResults }.last().error)
+    }
+
+    @Test
+    fun movedExistingPathRemainsDangerousAndGateBlocksExecutionUntilResolved() = runTest {
+        val workspace = AgentToolExecutorTest.FakeWorkspace()
+        val executor = AgentToolExecutor(workspace)
+        val gate = AgentApprovalGate()
+        val move = AgentToolCall("move-existing", "move_path", """{"path":"Max.txt","destination":"tmp"}""")
+        val delete = AgentToolCall("delete-existing", "delete_path", """{"path":"tmp/Max.txt"}""")
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(move, delete)), AgentResponse(text = "Done")))
+        val approvals = mutableListOf<AgentApprovalRequest>()
+        val running = async {
+            AgentLoop(
+                requestModel = { _, _, _ -> responses.removeFirst() },
+                prepareTool = executor::prepare,
+                requestApproval = { approvals += it; gate.await(it) },
+                describeDestructive = executor::describeDestructive,
+            ).run(listOf(AgentMessage.user("Move")), AgentToolExecutor.definitions)
+        }
+        yield()
+        assertEquals("move-existing", gate.pending.value?.call?.id)
+        assertEquals(0, workspace.deletes)
+        assertTrue(gate.resolve("move-existing", true))
+        yield()
+        assertEquals("delete-existing", gate.pending.value?.call?.id)
+        assertTrue(approvals.last().dangerous)
+        assertEquals(0, workspace.deletes)
+        assertTrue(gate.resolve("delete-existing", false))
+        assertFalse(gate.resolve("delete-existing", true))
+        assertEquals(0, workspace.deletes)
+        assertEquals(AgentStopReason.Completed, running.await().stopReason)
+    }
     @Test
     fun textResponseCompletesTurn() = runTest {
         val requests = mutableListOf<List<AgentMessage>>()

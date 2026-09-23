@@ -107,6 +107,77 @@ class SafWorkspaceTest {
         assertEquals(0, provider.renameCalls)
         assertTrue(provider.createdMimeTypes.all { it == "application/octet-stream" })
     }
+    @Test fun videoMimeTypeScriptStillCreatesWritesReadsAndSearches() = runBlocking {
+        provider.videoMimeForTs = true
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+        val created = executor.prepare(AgentToolCall("create", "create_file", """{"path":"index.ts"}""")).execute()
+        assertFalse(created.content, created.error)
+        val content = Json.parseToJsonElement(created.content).jsonObject
+        assertEquals("index.ts", content["path"]!!.jsonPrimitive.content)
+        assertEquals("0", content["size"]!!.jsonPrimitive.content)
+        val hash = content["sha256"]!!.jsonPrimitive.content
+        assertEquals(WorkspaceText.sha256(byteArrayOf()), hash)
+        assertEquals(1, provider.createCalls)
+        assertEquals(1, workspace.listDirectory(WorkspacePath.ROOT).size)
+
+        val written = executor.prepare(AgentToolCall("write", "write_file",
+            """{"path":"index.ts","content":"const review = 1;","expected_sha256":"$hash"}""")).execute()
+        assertFalse(written.content, written.error)
+        val read = executor.prepare(AgentToolCall("read", "read_file", """{"path":"index.ts"}""")).execute()
+        assertFalse(read.content, read.error)
+        assertTrue(read.content.contains("const review = 1;"))
+        val report = workspace.search("review", path("index.ts"))
+        assertEquals(1, report.filesScanned)
+        assertEquals(1, report.entriesVisited)
+        assertEquals(1, report.hits.size)
+        assertFalse(report.limited)
+    }
+    @Test fun committedCreateReportsActualPathWhenProviderRefusesInspection() = runBlocking {
+        provider.rejectRead = true
+        val result = AgentToolExecutor(SafAgentWorkspace(workspace)).prepare(
+            AgentToolCall("create", "create_file", """{"path":"index.ts"}"""),
+        ).execute()
+        val content = Json.parseToJsonElement(result.content).jsonObject
+        assertFalse(result.content, result.error)
+        assertEquals("index.ts", content["path"]!!.jsonPrimitive.content)
+        assertEquals("missing", content["inspection_error"]!!.jsonPrimitive.content)
+        assertNull(content["sha256"])
+        assertEquals(1, provider.createCalls)
+        assertEquals(1, workspace.listDirectory(WorkspacePath.ROOT).size)
+    }
+    @Test fun fileTargetSearchSkipsBinaryAndOversizedFilesWithoutDirectoryTraversal() = runBlocking {
+        val binary = workspace.createFile(path("clip.mp4"))
+        provider.nodes[binary.documentId]!!.bytes.writeBytes(byteArrayOf(0, 1, 2))
+        provider.binaryMimeByExtension = true
+        provider.videoMimeForTs = true
+        val ts = workspace.createFile(path("large.ts"))
+        provider.nodes[ts.documentId]!!.bytes.writeBytes(ByteArray(300_000) { 'x'.code.toByte() })
+        provider.childQueries = 0
+        val binaryReport = workspace.search("x", binary.path)
+        val largeReport = workspace.search("x", ts.path)
+        assertEquals(2, provider.childQueries)
+        assertEquals(1, binaryReport.skipped)
+        assertEquals(1, largeReport.skipped)
+        assertEquals(1, binaryReport.filesScanned)
+        assertTrue(largeReport.limited)
+        assertEquals(1, largeReport.entriesVisited)
+    }
+    @Test fun misleadingMimeDoesNotPermitMalformedUtf8ButRealBinaryMimeStillBlocks() = runBlocking {
+        provider.videoMimeForTs = true
+        val source = workspace.createFile(path("bad.ts"))
+        provider.nodes[source.documentId]!!.bytes.writeBytes(byteArrayOf(0xC3.toByte(), 0x28))
+        failure(WorkspaceFailure.Reason.BINARY) { workspace.readTextFile(source.path) }
+        val image = workspace.createFile(path("image.png"))
+        provider.binaryMimeByExtension = true
+        provider.nodes[image.documentId]!!.bytes.writeText("looks textual")
+        failure(WorkspaceFailure.Reason.BINARY) { workspace.readTextFile(image.path) }
+    }
+    @Test fun unstableNameIsRejectedBeforeProviderMutation() = runBlocking {
+        failure(WorkspaceFailure.Reason.INVALID_PATH) { workspace.createFile(path("trailing.")) }
+        failure(WorkspaceFailure.Reason.INVALID_PATH) { workspace.createDirectory(path("   ")) }
+        assertEquals(0, provider.createCalls)
+        assertEquals(1, provider.nodes.size)
+    }
     @Test fun normalizedCodingNamesAreCorrectedOnceWithoutDuplicates() = runBlocking {
         provider.normalizeAllFileNames = true
         val names = listOf("review.md", "Main.kt", "index.ts", "package.json", ".gitignore", "Makefile")
@@ -227,6 +298,7 @@ class SafWorkspaceTest {
         workspace.createFile(path("a"))
         failure(WorkspaceFailure.Reason.DUPLICATE) { workspace.createFile(path("a")) }
         failure(WorkspaceFailure.Reason.MISSING) { workspace.createFile(path("missing/a")) }
+        failure(WorkspaceFailure.Reason.MISSING) { workspace.move(path("missing"), WorkspacePath.ROOT) }
         failure(WorkspaceFailure.Reason.NOT_DIRECTORY) { workspace.createFile(path("a/child")) }
         assertEquals(2, provider.nodes.size)
     }

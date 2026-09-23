@@ -6,6 +6,11 @@ import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
 
 class SafAgentWorkspace(private val workspace: SafWorkspace) : AgentWorkspace {
+    override suspend fun stat(path: String): AgentWorkspaceEntry = call {
+        workspace.stat(WorkspacePath.parse(path)).let {
+            AgentWorkspaceEntry(it.path.value, it.directory, it.size)
+        }
+    }
     override suspend fun list(path: String): List<AgentWorkspaceEntry> = call {
         workspace.listDirectory(WorkspacePath.parse(path)).map {
             AgentWorkspaceEntry(it.path.value, it.directory, it.size)
@@ -43,10 +48,16 @@ class SafAgentWorkspace(private val workspace: SafWorkspace) : AgentWorkspace {
         ).let { AgentFileSnapshot(it.path.value, it.text, it.sha256, it.size) }
     }
 
-    override suspend fun createFile(path: String): AgentFileSnapshot = call {
+    override suspend fun createFile(path: String): AgentCreatedFile = call {
         val created = workspace.createFile(WorkspacePath.parse(path))
-        workspace.readTextFile(created.path).let {
-            AgentFileSnapshot(it.path.value, it.text, it.sha256, it.size)
+        try {
+            workspace.readCreatedFile(created.path).let {
+                AgentCreatedFile(it.path.value, it.sha256, it.size)
+            }
+        } catch (e: WorkspaceFailure) {
+            // Creation is already committed. Report its confirmed identity even
+            // when this provider refuses the follow-up inspection.
+            AgentCreatedFile(created.path.value, inspectionError = e.reason.name.lowercase())
         }
     }
 
