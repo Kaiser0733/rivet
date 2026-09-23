@@ -82,6 +82,22 @@ class RuntimeController(context: Context) {
         if (active.hasLocalChanges()) throw MirrorFailure("sync_required")
     }
 
+    suspend fun gitStatus(): RepositoryStatus = operations.withLock {
+        gitInspection().status()
+    }
+
+    suspend fun gitDiff(path: String): RepositoryDiff = operations.withLock {
+        gitInspection().diff(path)
+    }
+
+    private suspend fun gitInspection(): GitInspection {
+        if (terminal != null) throw MirrorFailure("terminal_active")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val ready = active.prepare()
+        if (ready.dirty) throw MirrorFailure("sync_required")
+        return GitInspection(ready.worktree)
+    }
+
     fun stopTerminal() { terminal?.finishIfRunning() }
 
     fun terminalFinished(session: TerminalSession) {

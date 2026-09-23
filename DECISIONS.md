@@ -216,3 +216,12 @@ display. No writable app-data executable or Termux package is required.
 Why: target SDK 35 blocks direct execution of writable app data. Packaged
 executables need their own linker and shebang compatibility work after the
 runtime and sync boundary is validated on a device.
+
+## D27 — JGit core for read-only repository inspection
+
+What: inspect an explicit root `.git` directory in the private SAF mirror
+with JGit core. Gitfile links, which may point outside the workspace, are not
+followed. Rivet does not stage, commit, reset, or sync repository metadata for
+inspection.
+Why: one Java library supplies real Git status and bounded diffs without
+requiring an external Termux install or packaging native Git executables.

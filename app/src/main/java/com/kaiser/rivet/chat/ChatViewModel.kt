@@ -154,9 +154,13 @@ class ChatViewModel private constructor(
             val workspaceId = workspace?.tree?.toString()
             val runtime = runtimeController
             val executor = workspace?.let {
-                AgentToolExecutor(SafAgentWorkspace(it), runtime?.let { controller -> controller::runCommand }) {
-                    if (runtime != null) runtime.requireSafCurrent()
-                }
+                AgentToolExecutor(
+                    SafAgentWorkspace(it),
+                    runCommand = runtime?.let { controller -> controller::runCommand },
+                    requireSafCurrent = { runtime?.requireSafCurrent() },
+                    gitStatus = runtime?.let { controller -> controller::gitStatus },
+                    gitDiff = runtime?.let { controller -> controller::gitDiff },
+                )
             }
             val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
             val durable = (_uiState.value.messages + AgentMessage.user(trimmed)).toMutableList()
