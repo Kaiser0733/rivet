@@ -13,6 +13,8 @@ import kotlinx.serialization.json.put
 
 data class AgentWorkspaceEntry(val path: String, val directory: Boolean, val size: Long?)
 data class AgentFileSnapshot(val path: String, val text: String, val sha256: String, val size: Long)
+data class AgentCreatedFile(val path: String, val sha256: String? = null, val size: Long? = null,
+    val inspectionError: String? = null)
 data class AgentSearchHit(val path: String, val line: Int?, val context: String)
 data class AgentSearchReport(
     val hits: List<AgentSearchHit>,
@@ -27,12 +29,13 @@ data class AgentTextEdit(val oldText: String, val newText: String)
 class AgentWorkspaceFailure(val code: String) : Exception(code)
 
 interface AgentWorkspace {
+    suspend fun stat(path: String): AgentWorkspaceEntry
     suspend fun list(path: String): List<AgentWorkspaceEntry>
     suspend fun read(path: String): AgentFileSnapshot
     suspend fun search(path: String, query: String): AgentSearchReport
     suspend fun write(path: String, content: String, expectedHash: String): AgentFileSnapshot
     suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>): AgentFileSnapshot
-    suspend fun createFile(path: String): AgentFileSnapshot
+    suspend fun createFile(path: String): AgentCreatedFile
     suspend fun createDirectory(path: String): AgentWorkspaceEntry
     suspend fun rename(path: String, newName: String): AgentWorkspaceEntry
     suspend fun move(path: String, destination: String): AgentWorkspaceEntry
@@ -118,8 +121,9 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                         success(call, buildJsonObject {
                             put("path", created.path)
                             if (created.path != path) put("requested_path", path)
-                            put("sha256", created.sha256)
-                            put("size", created.size)
+                            created.sha256?.let { put("sha256", it) }
+                            created.size?.let { put("size", it) }
+                            created.inspectionError?.let { put("inspection_error", it) }
                         }, "Created  ${created.path}")
                     }
                 }
@@ -133,7 +137,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                 "rename_path" -> {
                     val args = json.decodeFromString<RenameArgs>(call.arguments)
                     val path = path(args.path); name(args.newName)
-                    mutation(call, "Rename", "$path\n→ ${args.newName}", path.length * 2 + 765) {
+                    mutation(call, "Rename", "$path\n→ ${args.newName}", path.length * 2 + 765, path) {
                         val renamed = workspace.rename(path, args.newName)
                         val actualName = renamed.path.substringAfterLast('/')
                         success(call, buildJsonObject {
@@ -148,7 +152,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                 "move_path" -> {
                     val args = json.decodeFromString<MoveArgs>(call.arguments)
                     val path = path(args.path); val destination = path(args.destination, root = true)
-                    mutation(call, "Move", "$path\n→ ${destination.ifEmpty { "." }}", path.length + destination.length * 2 + 256) {
+                    mutation(call, "Move", "$path\n→ ${destination.ifEmpty { "." }}", path.length + destination.length * 2 + 256, path) {
                         val moved = workspace.move(path, destination)
                         success(call, buildJsonObject {
                             put("source_path", path)
@@ -160,7 +164,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
                 }
                 "delete_path" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
-                    mutation(call, "Delete", path, path.length) {
+                    mutation(call, "Delete", path, path.length, path) {
                         workspace.delete(path)
                         success(call, buildJsonObject { put("path", path); put("deleted", true) }, "Deleted  $path")
                     }
@@ -184,13 +188,32 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         title: String,
         detail: String,
         resultPathChars: Int,
+        destructivePath: String? = null,
         action: suspend () -> AgentToolResult,
     ) = PreparedAgentTool(
-        call, AgentApprovalRequest(call, title, detail),
+        call, AgentApprovalRequest(call, title, detail, destructivePath),
         // Paths contain no controls: three UTF-8 bytes per UTF-16 unit covers
         // their JSON representation. Fixed fields, hashes and numbers fit in 512.
         resultContentLimitBytes = minOf(AgentLoop.MAX_TOOL_RESULT_BYTES, 512 + resultPathChars * 3),
     ) { execute(call, action) }
+
+    suspend fun describeDestructive(request: AgentApprovalRequest): AgentApprovalRequest {
+        val target = request.destructivePath ?: return request
+        val entry = try { workspace.stat(target) } catch (e: CancellationException) { throw e
+        } catch (_: AgentWorkspaceFailure) { null }
+        val kind = when (entry?.directory) { true -> "folder"; false -> "file"; null -> "path" }
+        val verb = when (request.call.name) {
+            "delete_path" -> "Delete"
+            "rename_path" -> "Rename"
+            else -> "Move"
+        }
+        val size = entry?.takeIf { !it.directory }?.size?.let { "\n%,d bytes".format(java.util.Locale.US, it) } ?: ""
+        val warning = if (request.call.name == "delete_path")
+            "Rivet cannot confirm this path was created for this task. Deletion is permanent."
+        else "Rivet cannot confirm this path was created for this task."
+        return request.copy(title = "$verb ${if (entry == null) "unverified" else "existing"} $kind?",
+            detail = "${request.detail}$size\n$warning", dangerous = true)
+    }
 
     private suspend fun execute(call: AgentToolCall, action: suspend () -> AgentToolResult): AgentToolResult = try {
         action()
@@ -231,13 +254,13 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         }
         if (value.length > 4096) throw InvalidPath()
         val segments = value.split('/')
-        if (segments.size > 64 || segments.any { it.isEmpty() || it == "." || it == ".." || it.length > 255 ||
+        if (segments.size > 64 || segments.any { it.isBlank() || it.endsWith('.') || it.length > 255 ||
                 it.any { char -> char == '\\' || char.isISOControl() } }) throw InvalidPath()
         return value
     }
 
     private fun name(value: String) {
-        if (value.isEmpty() || value == "." || value == ".." || value.length > 255 ||
+        if (value.isBlank() || value.endsWith('.') || value.length > 255 ||
             value.any { it == '/' || it == '\\' || it.isISOControl() }) throw InvalidPath()
     }
 
@@ -322,15 +345,15 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
         private val path = "path" to string
 
         val definitions = listOf(
-            AgentToolDefinition("list_directory", "List a workspace directory.", schema(emptyList(), path)),
+            AgentToolDefinition("list_directory", "List a workspace directory. Empty path means workspace root.", schema(emptyList(), path)),
             AgentToolDefinition(
                 "read_file",
-                "Read a bounded UTF-8 chunk of a workspace file. Offset and next_offset are UTF-8 byte positions. Start at 0, then continue with next_offset until eof is true. Every chunk includes the full-file SHA-256.",
+                "Read a bounded UTF-8 chunk of a workspace file. Offset and next_offset are UTF-8 byte positions. Start at 0; continue with next_offset only when needed, until eof. Every chunk includes the full-file SHA-256. Prefer targeted search for large files; use the returned SHA for write_file or apply_patch.",
                 schema(listOf("path"), path, "offset" to nonNegativeInteger),
             ),
             AgentToolDefinition(
                 "search_files",
-                "Search workspace paths and text literally and case-sensitively. Broad searches may be limited; inspect limited, files_scanned, entries_visited, bytes_scanned, and skipped for completeness.",
+                "Search one file or a directory recursively; empty path means workspace root. Searches are literal and case-sensitive. Broad searches may be limited; inspect limited, files_scanned, entries_visited, bytes_scanned, and skipped for completeness.",
                 schema(listOf("query"), path, "query" to string),
             ),
             AgentToolDefinition("write_file", "Replace an existing text file when its hash still matches.",
@@ -338,11 +361,11 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
             AgentToolDefinition("apply_patch", "Apply exact unique replacements sequentially in supplied order; each later edit sees earlier edits. All edits validate in memory before the final write, which requires the file hash to still match.",
                 schema(listOf("path", "expected_sha256", "edits"), path, "expected_sha256" to string,
                     "edits" to buildJsonObject { put("type", "array"); put("items", schema(listOf("old_text", "new_text"), "old_text" to string, "new_text" to string)) })),
-            AgentToolDefinition("create_file", "Create a new empty text file.", schema(listOf("path"), path)),
+            AgentToolDefinition("create_file", "Create a file; use the returned actual path and sha256 for write_file. If provider inspection fails after creation, inspection_error is returned without a hash; inspect that path before editing.", schema(listOf("path"), path)),
             AgentToolDefinition("create_directory", "Create a new directory.", schema(listOf("path"), path)),
-            AgentToolDefinition("rename_path", "Rename an existing file or directory.", schema(listOf("path", "new_name"), path, "new_name" to string)),
-            AgentToolDefinition("move_path", "Move a path into an existing directory.", schema(listOf("path", "destination"), path, "destination" to string)),
-            AgentToolDefinition("delete_path", "Delete an existing non-root path.", schema(listOf("path"), path)),
+            AgentToolDefinition("rename_path", "Rename an existing file or directory. Use the returned actual path afterward.", schema(listOf("path", "new_name"), path, "new_name" to string)),
+            AgentToolDefinition("move_path", "Move a path into an existing directory; empty destination means root. Use the returned actual path afterward.", schema(listOf("path", "destination"), path, "destination" to string)),
+            AgentToolDefinition("delete_path", "Permanently delete a non-root path after approval. Inspect first; never delete an uncertain or pre-existing path just for testing.", schema(listOf("path"), path)),
         )
     }
 }

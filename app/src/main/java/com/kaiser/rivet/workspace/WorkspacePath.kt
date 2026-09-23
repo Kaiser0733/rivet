@@ -22,7 +22,7 @@ value class WorkspacePath private constructor(val value: String) {
             return WorkspacePath(value)
         }
         fun validateName(name: String) {
-            if (name.isEmpty() || name == "." || name == ".." || name.length > 255 ||
+            if (name.isBlank() || name.endsWith('.') || name.length > 255 ||
                 name.any { it == '/' || it == '\\' || it.isISOControl() }) invalid()
         }
         private fun invalid(): Nothing = throw WorkspaceFailure(WorkspaceFailure.Reason.INVALID_PATH)

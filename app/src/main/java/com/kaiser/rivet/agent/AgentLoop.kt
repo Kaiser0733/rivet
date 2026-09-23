@@ -5,6 +5,10 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.SerializationException
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 enum class AgentStopReason {
     Completed,
@@ -28,6 +32,7 @@ class AgentLoop(
     ) -> AgentResponse,
     private val prepareTool: suspend (AgentToolCall) -> PreparedAgentTool,
     private val requestApproval: suspend (AgentApprovalRequest) -> Boolean,
+    private val describeDestructive: suspend (AgentApprovalRequest) -> AgentApprovalRequest = { it },
     private val workspaceIsCurrent: suspend () -> Boolean = { true },
     private val canPersistToolOutput: suspend (List<AgentMessage>, Int) -> Boolean = { _, _ -> true },
 ) {
@@ -45,6 +50,8 @@ class AgentLoop(
             messages += message
         }
         val deniedMutations = mutableSetOf<String>()
+        val createdPaths = mutableSetOf<String>()
+        val movedExistingPaths = mutableSetOf<String>()
         var modelIterations = 0
         var toolCalls = 0
         while (modelIterations < RUNAWAY_MODEL_ITERATIONS) {
@@ -134,8 +141,15 @@ class AgentLoop(
                         stopReason = AgentStopReason.SessionLimit
                         break
                     }
-                    val denied = prepared.approval != null &&
-                        (previouslyDenied || !requestApproval(prepared.approval))
+                    val approval = prepared.approval?.let { request ->
+                        val target = request.destructivePath
+                        if (target != null &&
+                            (target !in createdPaths || movedExistingPaths.any { it == target || it.startsWith("$target/") })) {
+                            describeDestructive(request)
+                        } else request
+                    }
+                    val denied = approval != null &&
+                        (previouslyDenied || !requestApproval(approval))
                     currentCoroutineContext().ensureActive()
                     if (!workspaceIsCurrent()) {
                         results += pending("workspace_changed")
@@ -162,6 +176,7 @@ class AgentLoop(
                         break
                     }
                     results += bounded
+                    if (!denied && !bounded.error) recordProvenance(call, bounded, createdPaths, movedExistingPaths)
                 }
             } catch (e: CancellationException) {
                 results += pending("cancelled")
@@ -220,5 +235,38 @@ class AgentLoop(
             )
         }
         return result.copy(summary = result.summary.take(256).dropLastWhile { it.isHighSurrogate() })
+    }
+
+    private fun recordProvenance(
+        call: AgentToolCall,
+        result: AgentToolResult,
+        created: MutableSet<String>,
+        movedExisting: MutableSet<String>,
+    ) {
+        if (call.name !in setOf("create_file", "create_directory", "delete_path", "rename_path", "move_path")) return
+        val value = try { Json.parseToJsonElement(result.content).jsonObject }
+            catch (_: SerializationException) { return }
+            catch (_: IllegalArgumentException) { return }
+        fun field(name: String) = value[name]?.jsonPrimitive?.content
+        val path = field("path") ?: return
+        when (call.name) {
+            "create_file", "create_directory" -> created += path
+            "delete_path" -> {
+                created.removeAll { it == path || it.startsWith("$path/") }
+                movedExisting.removeAll { it == path || it.startsWith("$path/") }
+            }
+            "rename_path", "move_path" -> {
+                val source = field("source_path") ?: return
+                val wasCreated = source in created
+                fun relocate(paths: MutableSet<String>) {
+                    val affected = paths.filter { it == source || it.startsWith("$source/") }
+                    paths.removeAll(affected.toSet())
+                    paths.addAll(affected.map { path + it.removePrefix(source) })
+                }
+                relocate(created)
+                relocate(movedExisting)
+                if (!wasCreated) movedExisting += path
+            }
+        }
     }
 }

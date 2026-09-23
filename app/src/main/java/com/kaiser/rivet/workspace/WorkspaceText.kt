@@ -30,11 +30,18 @@ object WorkspaceText {
         return output.toByteArray()
     }
 
-    fun isBinaryMime(mime: String): Boolean {
+    fun isBinaryMime(mime: String, name: String = ""): Boolean {
         val type = mime.substringBefore(';').trim().lowercase(java.util.Locale.ROOT)
         if (type.endsWith("+xml")) return false
-        return type.startsWith("image/") || type.startsWith("audio/") || type.startsWith("video/") ||
+        val strongMime = type.startsWith("image/") || type.startsWith("audio/") || type.startsWith("video/") ||
             type.startsWith("font/") || type in setOf("application/pdf", "application/zip", "application/gzip")
+        if (!strongMime) return false
+        // Providers can call TypeScript video/mp2t. Only a matching binary
+        // filename supports an early MIME rejection; other bytes are decoded.
+        val extension = name.substringAfterLast('.', "").lowercase(java.util.Locale.ROOT)
+        return name.isEmpty() || extension in setOf("png", "jpg", "jpeg", "gif", "webp", "bmp", "heic",
+            "mp3", "wav", "ogg", "flac", "m4a", "mp4", "mov", "mkv", "webm", "avi",
+            "ttf", "otf", "woff", "woff2", "pdf", "zip", "gz", "jar", "apk")
     }
 
     fun decode(bytes: ByteArray): String {
