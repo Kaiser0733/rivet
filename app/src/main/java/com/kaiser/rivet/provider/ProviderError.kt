@@ -4,6 +4,8 @@ sealed class ProviderError(message: String) : Exception(message) {
     class Unauthorized : ProviderError("unauthorized")
     class Forbidden : ProviderError("forbidden")
     class RateLimited : ProviderError("rate limited")
+    class ResourceExhausted : ProviderError("resource exhausted")
+    class ContextOverflow : ProviderError("context overflow")
     class ModelNotFound(val model: String) : ProviderError("model not found: $model")
     class UnsupportedEndpoint : ProviderError("endpoint not supported")
     class MalformedUrl(val url: String) : ProviderError("malformed url")
@@ -20,6 +22,8 @@ sealed class ProviderError(message: String) : Exception(message) {
         is Unauthorized -> "Authentication failed. Check the API key."
         is Forbidden -> "The provider rejected access for this key."
         is RateLimited -> "Rate limited by the provider. Wait a moment and try again."
+        is ResourceExhausted -> "The provider's request capacity is exhausted. Wait before trying again or choose another model."
+        is ContextOverflow -> "The model's context is full. Rivet could not reduce this request enough to continue."
         is ModelNotFound -> "Model \"$model\" was not found by this provider."
         is UnsupportedEndpoint -> "This endpoint is not supported by the provider."
         is MalformedUrl -> "The base URL is not a valid URL."

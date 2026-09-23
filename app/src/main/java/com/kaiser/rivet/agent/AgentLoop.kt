@@ -1,5 +1,6 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.provider.ProviderError
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -70,10 +71,24 @@ class AgentLoop(
                 messages.addAll(active)
             }
             val streamed = StringBuffer()
+            suspend fun requestOnce(): AgentResponse = requestModel(messages.toList(), tools) { delta ->
+                streamed.append(delta)
+                onText(delta)
+            }
             val response = try {
-                requestModel(messages.toList(), tools) { delta ->
-                    streamed.append(delta)
-                    onText(delta)
+                try { requestOnce() }
+                catch (overflow: ProviderError.ContextOverflow) {
+                    if (streamed.isNotEmpty()) throw overflow
+                    val before = AgentContext.serializedBytes(messages)
+                    val reduced = try { compactContext(messages.toList(), true) }
+                        catch (e: CancellationException) { throw e
+                        } catch (_: Exception) { throw overflow }
+                    if (reduced != messages) {
+                        messages.clear()
+                        messages.addAll(reduced)
+                    }
+                    if (AgentContext.serializedBytes(messages) >= before * 9 / 10) throw overflow
+                    requestOnce()
                 }
             } catch (e: CancellationException) {
                 val partial = streamed.toString()

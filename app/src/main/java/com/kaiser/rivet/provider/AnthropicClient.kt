@@ -191,7 +191,7 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
             "error" -> {
                 val message = root["error"]?.obj()?.get("message")?.str()
                     ?: throw ProviderError.InvalidResponse("stream error")
-                throw ProviderError.ProviderMessage(message)
+                throw providerMessage(message, root["error"]?.obj()?.get("type")?.str())
             }
             "content_block_start" -> {
                 val index = root["index"]?.jsonPrimitive?.intOrNull
