@@ -8,6 +8,7 @@ import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.runtime.TerminalViewModel
 import com.kaiser.rivet.ui.RivetApp
 import com.kaiser.rivet.ui.files.FilesViewModel
+import com.kaiser.rivet.ui.changes.ChangesViewModel
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 
 class MainActivity : ComponentActivity() {
@@ -22,7 +23,10 @@ class MainActivity : ComponentActivity() {
         val providersViewModel = ViewModelProvider(this)[ProvidersViewModel::class.java]
         val filesViewModel = ViewModelProvider(this)[FilesViewModel::class.java]
         val terminalViewModel = ViewModelProvider(this)[TerminalViewModel::class.java]
+        val changesViewModel = ViewModelProvider(this)[ChangesViewModel::class.java]
         chatViewModel.attachRuntime(terminalViewModel.controller)
-        setContent { RivetApp(versionName, chatViewModel, providersViewModel, filesViewModel, terminalViewModel) }
+        changesViewModel.attachRuntime(terminalViewModel.controller)
+        setContent { RivetApp(versionName, chatViewModel, providersViewModel, filesViewModel,
+            terminalViewModel, changesViewModel) }
     }
 }

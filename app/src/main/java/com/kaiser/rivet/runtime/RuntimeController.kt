@@ -90,6 +90,78 @@ class RuntimeController(context: Context) {
         gitInspection().diff(path)
     }
 
+    suspend fun beginCheckpoint(workspaceId: String): String = operations.withLock {
+        if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
+        if (terminal != null) throw MirrorFailure("terminal_active")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val ready = active.prepare()
+        if (ready.dirty) throw MirrorFailure("sync_required")
+        checkpoints(workspaceId).begin(ready.worktree)
+    }
+
+    suspend fun finishCheckpoint(workspaceId: String, id: String): Boolean = operations.withLock {
+        if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
+        if (terminal != null) throw MirrorFailure("terminal_active")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val ready = active.prepare()
+        if (ready.dirty) throw MirrorFailure("sync_required")
+        checkpoints(workspaceId).finish(id, ready.worktree)
+    }
+
+    suspend fun recordCheckpointPost(workspaceId: String, id: String) = operations.withLock {
+        if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
+        if (terminal != null) throw MirrorFailure("terminal_active")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val ready = active.prepare()
+        if (ready.dirty) throw MirrorFailure("sync_required")
+        checkpoints(workspaceId).recordPost(id, ready.worktree)
+    }
+
+    suspend fun checkpointMatchesPost(workspaceId: String, id: String): Boolean = operations.withLock {
+        if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
+        if (terminal != null) throw MirrorFailure("terminal_active")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val ready = active.prepare()
+        if (ready.dirty) throw MirrorFailure("sync_required")
+        checkpoints(workspaceId).matchesPost(id, ready.worktree)
+    }
+
+    suspend fun latestCheckpoint(): CheckpointRecord? = operations.withLock {
+        val identity = selection.currentIdentity() ?: return@withLock null
+        checkpoints(identity).latest()
+    }
+
+    suspend fun checkpointChanges(record: CheckpointRecord): List<CheckpointChange> = operations.withLock {
+        if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
+        if (terminal != null) throw MirrorFailure("terminal_active")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        checkpoints(record.workspace).changesFromCurrent(record, active.prepare().worktree)
+    }
+
+    suspend fun checkpointDiff(record: CheckpointRecord, path: String): CheckpointDiff = operations.withLock {
+        if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
+        if (terminal != null) throw MirrorFailure("terminal_active")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        checkpoints(record.workspace).diff(record, path, active.prepare().worktree)
+    }
+
+    suspend fun undoLastCheckpoint(): MirrorSyncResult = operations.withLock {
+        if (terminal != null) throw MirrorFailure("terminal_active")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val identity = selection.currentIdentity() ?: throw MirrorFailure("workspace_unavailable")
+        val ready = active.prepare()
+        if (ready.dirty) throw MirrorFailure("sync_required")
+        val store = checkpoints(identity)
+        val record = store.latest() ?: throw CheckpointFailure("undo_unavailable")
+        val staged = store.stageUndo(record, ready.worktree)
+        active.installCheckpoint(staged)
+        val sync = active.sync()
+        if (sync.state == MirrorSync.Ok || sync.state == MirrorSync.NoChanges) store.markUndone(record.id)
+        sync
+    }
+
+    private fun checkpoints(identity: String) = TurnCheckpoint(File(app.filesDir, "checkpoints"), identity)
+
     private suspend fun gitInspection(): GitInspection {
         if (terminal != null) throw MirrorFailure("terminal_active")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")

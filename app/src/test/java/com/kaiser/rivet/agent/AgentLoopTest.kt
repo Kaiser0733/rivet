@@ -16,6 +16,49 @@ import org.junit.Test
 
 class AgentLoopTest {
     @Test
+    fun checkpointFailureStopsApprovedMutationBeforeExecution() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "file")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { true },
+            beforeMutation = { false },
+        )
+
+        val result = loop.run(listOf(AgentMessage.user("edit")), emptyList())
+        assertEquals(AgentStopReason.CheckpointUnavailable, result.stopReason)
+        assertEquals(0, executions)
+        val correlated = result.messages.last().toolResults.single()
+        assertEquals("edit", correlated.callId)
+        assertTrue(correlated.error)
+        assertTrue("checkpoint_unavailable" in correlated.content)
+    }
+
+    @Test
+    fun deniedCommandNeverStartsCheckpointOrExecution() = runTest {
+        val call = AgentToolCall("command", "run_command", "{}")
+        var checkpoints = 0
+        var executions = 0
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "Stopped")))
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Run", "command")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { false },
+            beforeMutation = { checkpoints++; true },
+        ).run(listOf(AgentMessage.user("run")), emptyList())
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(0, checkpoints)
+        assertEquals(0, executions)
+    }
+    @Test
     fun createdPathStaysOrdinaryThroughRenameAndMoveButExistingDeleteIsDangerous() = runTest {
         val workspace = AgentToolExecutorTest.FakeWorkspace()
         val executor = AgentToolExecutor(workspace)
