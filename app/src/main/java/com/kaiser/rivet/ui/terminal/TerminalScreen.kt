@@ -66,6 +66,9 @@ fun TerminalScreen(viewModel: TerminalViewModel) {
                         try { view.attachSession(session) }
                         catch (error: Exception) { viewModel.startupFailed(session, error) }
                     }
+                    // Capture the screen revision so AndroidView redraws when
+                    // the session client reports output without replacing the view.
+                    view.tag = state.render
                     view.onScreenUpdated()
                 },
                 modifier = Modifier.fillMaxWidth().weight(1f),
