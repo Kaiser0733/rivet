@@ -42,7 +42,12 @@ class RuntimeController(context: Context) {
         val environment = environment(active, directory)
         val result = CommandProcess().run(command, directory.absolutePath, environment, timeoutMs)
         val sync = try { active.sync() }
-            catch (e: CancellationException) { throw e
+            catch (_: CancellationException) {
+                // The command already ran. Return its exit status with an
+                // interrupted sync so the correlated event can be persisted.
+                return@withLock RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
+                    result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
+                    "interrupted")
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
         RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
             result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
@@ -102,6 +107,7 @@ class RuntimeController(context: Context) {
     private fun environment(mirror: WorkspaceMirror, cwd: File): Array<String> {
         val home = mirror.home.apply { mkdirs() }
         val temporary = mirror.temporary.apply { mkdirs() }
+        if (!home.isDirectory || !temporary.isDirectory) throw MirrorFailure("storage")
         return arrayOf(
             "HOME=${home.absolutePath}",
             "PATH=/system/bin:/system/xbin:/vendor/bin",

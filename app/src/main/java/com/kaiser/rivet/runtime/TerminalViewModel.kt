@@ -67,7 +67,7 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
         else {
             controller.terminalFinished(session)
             watchWorkspace?.cancel()
-            mutable.update { it.copy(active = false, notice = "Shell stopped before startup.") }
+            mutable.update { it.copy(session = null, active = false, notice = "Shell stopped before startup.") }
         }
     }
 

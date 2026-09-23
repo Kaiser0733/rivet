@@ -158,6 +158,19 @@ class WorkspaceMirrorTest {
         assertTrue(workspace.listDirectory(WorkspacePath.ROOT).isEmpty())
     }
 
+    @Test fun deselectedWorkspaceCannotReceiveMirrorChanges() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        var selected = true
+        val mirror = WorkspaceMirror(app, workspace) { selected }
+        File(mirror.prepare().worktree, "file.txt").writeText("old workspace edit")
+        selected = false
+
+        try { mirror.sync(); fail("Expected workspace change") }
+        catch (error: MirrorFailure) { assertEquals("workspace_changed", error.code) }
+        assertArrayEquals("base".toByteArray(), bytes("file.txt"))
+        assertEquals("old workspace edit", File(mirror.worktree, "file.txt").readText())
+    }
+
     @Test fun cancelledMaterializationLeavesNoCommittedWorktreeAndCanRetry() = runBlocking {
         source("file.txt", "base".toByteArray())
         val mirror = mirror()

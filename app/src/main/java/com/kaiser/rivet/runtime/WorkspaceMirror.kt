@@ -56,7 +56,7 @@ class WorkspaceMirror(
     private val previous = File(base, "previous")
     private val mutex = Mutex()
     val worktree: File get() = File(current, "worktree")
-    val home: File get() = File(base.parentFile!!.parentFile!!, "home")
+    val home: File get() = File(base, "home")
     val temporary: File get() = File(base, "tmp")
 
     suspend fun prepare(): MirrorReady = withContext(Dispatchers.IO) {

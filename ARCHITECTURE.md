@@ -218,7 +218,7 @@ tracking.
 The selected SAF tree remains the external workspace. `WorkspaceMirror`
 streams regular file bytes into `files/runtime/workspaces/<sha256-tree-id>/current/worktree`
 and keeps a compact path/type/size/SHA-256 baseline beside the worktree.
-It rejects symlinks and special local entries. Before sync, the entire SAF
+It rejects symlinks and special local entries. Before applying mirror changes, the SAF
 baseline is checked; any external change returns a conflict and leaves local
 work in the mirror. Local creates, modifications, and deletions then use the
 existing SAF path and provider confirmation rules. A failed or interrupted
@@ -227,7 +227,7 @@ No recursive file contents are retained in memory.
 
 `run_command` starts `/system/bin/sh -lc` with a workspace-relative cwd and
 an explicit HOME/PATH/TMPDIR/PWD/LANG/TERM environment. HOME is under
-`files/runtime/home`, not the app's credential/configuration area. Each agent
+the workspace's `files/runtime` area, not the app's credential/configuration area. Each agent
 command requires the existing one-shot approval; stdout and stderr retain
 bounded head/tail text, exit status remains separate from sync status, and a
 timeout or Stop terminates the process group. The shell shares Rivet's Android
