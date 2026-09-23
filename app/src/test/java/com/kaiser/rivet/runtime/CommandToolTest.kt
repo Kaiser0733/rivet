@@ -109,6 +109,22 @@ class CommandToolTest {
         assertEquals(0, executions)
     }
 
+    @Test fun activeTerminalPreventsSafToolResultsAndMutations() = runTest {
+        val workspace = AgentToolExecutorTest.FakeWorkspace()
+        val executor = AgentToolExecutor(workspace, requireSafCurrent = {
+            throw MirrorFailure("terminal_active")
+        })
+        val read = executor.prepare(AgentToolCall("read", "read_file", """{"path":"Main.kt"}""")).execute()
+        val write = executor.prepare(AgentToolCall("write", "write_file",
+            """{"path":"Main.kt","content":"edit","expected_sha256":"${"a".repeat(64)}"}"""))
+        val blockedWrite = write.execute()
+
+        assertEquals("terminal_active", Json.parseToJsonElement(read.content).jsonObject["error"]!!.jsonPrimitive.content)
+        assertNotNull(write.approval)
+        assertEquals("terminal_active", Json.parseToJsonElement(blockedWrite.content).jsonObject["error"]!!.jsonPrimitive.content)
+        assertEquals(0, workspace.writes)
+    }
+
     @Test fun captureRetainsBoundedHeadAndTailOfBinaryOutput() {
         val capture = BoundedCapture(64)
         val bytes = byteArrayOf(0xFF.toByte()) + "start".toByteArray() + ByteArray(20_000) { 'x'.code.toByte() } + "end".toByteArray()

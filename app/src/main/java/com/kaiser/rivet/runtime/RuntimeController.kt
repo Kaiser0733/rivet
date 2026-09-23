@@ -77,6 +77,7 @@ class RuntimeController(context: Context) {
     }
 
     suspend fun requireSafCurrent() = operations.withLock {
+        if (terminal != null) throw MirrorFailure("terminal_active")
         val active = currentMirror() ?: return@withLock
         if (active.hasLocalChanges()) throw MirrorFailure("sync_required")
     }
