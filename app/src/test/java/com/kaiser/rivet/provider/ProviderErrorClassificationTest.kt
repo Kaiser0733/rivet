@@ -8,7 +8,7 @@ class ProviderErrorClassificationTest {
         assertTrue(httpError(400, """{"error":{"code":"context_length_exceeded","message":"too long"}}""")
             is ProviderError.ContextOverflow)
         assertTrue(providerMessage("prompt is too long") is ProviderError.ContextOverflow)
-        assertTrue(httpError(400, """{"error":{"message":"invalid model option"}}""")
+        assertTrue(httpError(400, """{"error":{"message":"invalid option"}}""")
             is ProviderError.ProviderMessage)
     }
 

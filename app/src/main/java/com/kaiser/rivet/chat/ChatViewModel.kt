@@ -19,6 +19,7 @@ import com.kaiser.rivet.agent.ProjectInstructions
 import com.kaiser.rivet.agent.SafAgentWorkspace
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderConfig
+import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.runtime.RuntimeController
@@ -202,6 +203,17 @@ class ChatViewModel private constructor(
                 )
             }
             val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
+            val client = clientFactory(snapshot.config, snapshot.apiKey)
+            val sessionId = _uiState.value.currentSessionId
+            val turnId = UUID.randomUUID().toString()
+            if (!sessionStore.canSaveWithReserve(activeMessages + AgentMessage.user(trimmed), 0)) {
+                try { compactActive(activeMessages, client, snapshot, sessionId, turnId, force = true) }
+                catch (e: CancellationException) { throw e
+                } catch (_: Exception) {
+                    _uiState.update { it.copy(error = "Rivet could not shorten this session's context. The conversation was kept.") }
+                    return@launch
+                }
+            }
             val durable = (activeMessages + AgentMessage.user(trimmed)).toMutableList()
             try {
                 sessionStore.save(durable, interrupted = true)
@@ -218,38 +230,11 @@ class ChatViewModel private constructor(
                     streamText = "", error = null)
             }
             activeMessages = durable.toList()
-            val client = clientFactory(snapshot.config, snapshot.apiKey)
-            val sessionId = _uiState.value.currentSessionId
-            val turnId = UUID.randomUUID().toString()
             var lastSystem = ""
             var checkpointId: String? = null
             var checkpointBroken = false
             var needsPostCheck = false
             var mutationStartedSincePost = false
-
-            suspend fun summarize(input: String, consolidate: Boolean = false): String {
-                var outputBytes = 0
-                val response = client.streamAgent(AgentRequest(
-                    model = snapshot.config.model,
-                    messages = listOf(AgentMessage.user(input)),
-                    system = if (consolidate) CONSOLIDATE_INSTRUCTION else SUMMARIZE_INSTRUCTION,
-                    reasoning = snapshot.config.reasoning,
-                    tools = emptyList(),
-                )) { delta ->
-                    outputBytes += delta.toByteArray(Charsets.UTF_8).size
-                    if (outputBytes > 8 * 1024) throw IllegalStateException("context_summary_limit")
-                }
-                if (sessionId != null) {
-                    try { sessions?.recordUsage(sessionId, "compaction-$turnId", snapshot.config.id,
-                        snapshot.config.model, response.usage) }
-                    catch (e: CancellationException) { throw e
-                    } catch (_: Exception) { /* The session history does not depend on usage metadata. */ }
-                }
-                val summary = AgentContext.redact(response.text.trim())
-                if (summary.isBlank() || summary.toByteArray(Charsets.UTF_8).size > 8 * 1024 ||
-                    response.toolCalls.isNotEmpty()) throw IllegalStateException("context_summary_invalid")
-                return summary
-            }
 
             val loop = AgentLoop(
                 requestModel = { messages, definitions, onText ->
@@ -327,27 +312,12 @@ class ChatViewModel private constructor(
                     }
                 },
                 compactContext = { candidate, force ->
-                    val store = sessions
-                    val plan = if (store != null && sessionId != null) AgentContext.plan(candidate, force) else null
-                    if (plan == null) candidate else {
-                        val delta = summarize(plan.summaryInput)
-                        var merged = if (activeSummary.isBlank()) delta else "$activeSummary\n\n$delta"
-                        if (merged.toByteArray(Charsets.UTF_8).size > com.kaiser.rivet.storage.CodingSessions.MAX_SUMMARY_BYTES) {
-                            merged = summarize(merged, consolidate = true)
-                        }
-                        if (plan.retainedBytes + merged.toByteArray(Charsets.UTF_8).size >= plan.originalBytes * 3 / 4) {
-                            candidate
-                        } else {
-                            withContext(NonCancellable) {
-                                store!!.compact(candidate, plan.retained, merged)
-                                durable.clear()
-                                durable.addAll(plan.retained)
-                                activeMessages = plan.retained
-                                activeSummary = merged
-                            }
-                            plan.retained
-                        }
+                    val compacted = compactActive(candidate, client, snapshot, sessionId, turnId, force)
+                    if (compacted != candidate) {
+                        durable.clear()
+                        durable.addAll(compacted)
                     }
+                    compacted
                 },
             )
             val streamed = StringBuffer()
@@ -459,6 +429,53 @@ class ChatViewModel private constructor(
         }
     }
 
+    private suspend fun compactActive(messages: List<AgentMessage>, client: ProviderClient,
+                                      snapshot: ProviderRuntimeResult.Ready, sessionId: String?,
+                                      turnId: String, force: Boolean): List<AgentMessage> {
+        val store = sessions ?: return messages
+        if (sessionId == null) return messages
+        val plan = AgentContext.plan(messages, force) ?: return messages
+        val delta = summarizeTaskState(client, snapshot, sessionId, turnId, plan.summaryInput, false)
+        var merged = if (activeSummary.isBlank()) delta else "$activeSummary\n\n$delta"
+        if (merged.toByteArray(Charsets.UTF_8).size > CodingSessions.MAX_SUMMARY_BYTES) {
+            merged = summarizeTaskState(client, snapshot, sessionId, turnId, merged, true)
+        }
+        if (plan.retainedBytes + merged.toByteArray(Charsets.UTF_8).size >= plan.originalBytes * 3 / 4) {
+            return messages
+        }
+        withContext(NonCancellable) {
+            store.compact(messages, plan.retained, merged)
+            activeMessages = plan.retained
+            activeSummary = merged
+        }
+        return plan.retained
+    }
+
+    private suspend fun summarizeTaskState(client: ProviderClient, snapshot: ProviderRuntimeResult.Ready,
+                                           sessionId: String, turnId: String, input: String,
+                                           consolidate: Boolean): String {
+        var outputBytes = 0
+        val request = AgentRequest(
+            model = snapshot.config.model,
+            messages = listOf(AgentMessage.user(input)),
+            system = if (consolidate) CONSOLIDATE_INSTRUCTION else SUMMARIZE_INSTRUCTION,
+            reasoning = snapshot.config.reasoning,
+            tools = emptyList(),
+        )
+        val response = client.streamAgent(request) { delta ->
+            outputBytes += delta.toByteArray(Charsets.UTF_8).size
+            if (outputBytes > 8 * 1024) throw IllegalStateException("context_summary_limit")
+        }
+        try { sessions?.recordUsage(sessionId, "compaction-$turnId", snapshot.config.id,
+            snapshot.config.model, response.usage, request.messages, request.system) }
+        catch (e: CancellationException) { throw e
+        } catch (_: Exception) { /* A summary remains valid if usage metadata cannot be saved. */ }
+        val summary = AgentContext.redact(response.text.trim())
+        if (summary.isBlank() || summary.toByteArray(Charsets.UTF_8).size > 8 * 1024 ||
+            response.toolCalls.isNotEmpty()) throw IllegalStateException("context_summary_invalid")
+        return summary
+    }
+
     private suspend fun finish(result: AgentRunResult, durable: List<AgentMessage>) {
         val error = when (result.stopReason) {
             AgentStopReason.Completed -> {
@@ -552,7 +569,7 @@ class ChatViewModel private constructor(
 
     fun renameSession(id: String, title: String) {
         val store = sessions ?: return
-        if (_uiState.value.streaming) return
+        if (_uiState.value.streaming || sendJob?.isActive == true) return
         viewModelScope.launch {
             try {
                 store.rename(id, title)
@@ -566,7 +583,7 @@ class ChatViewModel private constructor(
 
     private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
         val store = sessions ?: return
-        if (_uiState.value.streaming) return
+        if (_uiState.value.streaming || sendJob?.isActive == true) return
         val ticket = ++generation
         approvals.cancel()
         viewModelScope.launch {

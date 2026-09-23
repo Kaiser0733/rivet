@@ -225,7 +225,7 @@ class ChatViewModelTest {
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
-        viewModel.send("Continue")
+        viewModel.send("Continue " + "u".repeat(50_000))
         val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Complete" }
 
         assertNull(complete.error)
@@ -236,6 +236,48 @@ class ChatViewModelTest {
         assertTrue(provider.requests[1].system.contains("Prior task state"))
         assertTrue(provider.requests[1].messages.size < history.size)
         assertEquals(68, sessions.recent(id, 100).size)
+
+        val switchedProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "After switch"))))
+        val switched = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config.copy(id = "provider-b", model = "model-b"), "key") },
+            { _, _ -> switchedProvider })
+        await(switched) { it.ready }
+        switched.send("Follow up")
+        await(switched) { !it.streaming && it.messages.lastOrNull()?.text == "After switch" }
+        assertEquals("model-b", switchedProvider.requests.single().model)
+        assertTrue(switchedProvider.requests.single().system.contains("Prior files were inspected"))
+        assertEquals(70, sessions.fullEventCount(id))
+    }
+
+    @Test fun failedSummaryKeepsFullOriginalHistory() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(22) { index ->
+                add(AgentMessage.user("Inspect $index"))
+                add(AgentMessage.assistant("", listOf(AgentToolCall("call-$index", "read_file", "{}"))))
+                add(AgentMessage.tools(listOf(com.kaiser.rivet.agent.AgentToolResult(
+                    "call-$index", "read_file", "x".repeat(22_000)))))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = ""))))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "model-a")
+        val viewModel = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Continue")
+        val stopped = await(viewModel) { !it.streaming && it.error?.contains("could not shorten") == true }
+
+        assertNull(stopped.pendingApproval)
+        assertEquals(67, sessions.fullEventCount(id))
+        assertEquals(history + AgentMessage.user("Continue"), sessions.load().messages)
+        assertEquals("", sessions.load().summary)
+        assertEquals(1, provider.requests.size)
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
