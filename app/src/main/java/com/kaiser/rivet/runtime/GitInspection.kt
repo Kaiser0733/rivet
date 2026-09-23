@@ -11,6 +11,11 @@ import org.eclipse.jgit.diff.DiffFormatter
 import org.eclipse.jgit.lib.Constants
 import org.eclipse.jgit.lib.Repository
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder
+import org.eclipse.jgit.treewalk.AbstractTreeIterator
+import org.eclipse.jgit.treewalk.CanonicalTreeParser
+import org.eclipse.jgit.treewalk.EmptyTreeIterator
+import org.eclipse.jgit.dircache.DirCacheIterator
+import org.eclipse.jgit.treewalk.FileTreeIterator
 import org.eclipse.jgit.treewalk.filter.PathFilter
 
 data class RepositoryStatus(
@@ -61,37 +66,44 @@ class GitInspection(private val worktree: File) {
     suspend fun diff(path: String = ""): RepositoryDiff = withContext(Dispatchers.IO) {
         val repo = open() ?: return@withContext RepositoryDiff(false, "", false, 0)
         repo.use { repository ->
-            Git(repository).use { git ->
-                val output = LimitedDiffOutput(DIFF_BYTES)
-                var files = 0
-                var limited = false
-                DiffFormatter(output).use { formatter ->
-                    formatter.setRepository(repository)
-                    formatter.setContext(3)
-                    formatter.setBinaryFileThreshold(128 * 1024)
-                    for (cached in listOf(true, false)) {
-                        val command = git.diff().setCached(cached)
-                        if (path.isNotEmpty()) command.setPathFilter(PathFilter.create(path))
-                        val entries = command.call()
-                        for (entry in entries) {
-                            if (files == MAX_DIFF_FILES) {
-                                limited = true
-                                break
-                            }
-                            try {
-                                output.write((if (cached) "Staged\n" else "Unstaged\n").toByteArray())
-                                formatter.format(entry)
-                                files++
-                            } catch (_: DiffLimit) {
-                                limited = true
-                                break
-                            }
+            val output = LimitedDiffOutput(DIFF_BYTES)
+            var files = 0
+            var limited = false
+            DiffFormatter(output).use { formatter ->
+                formatter.setRepository(repository)
+                formatter.setContext(3)
+                formatter.setBinaryFileThreshold(128 * 1024)
+                if (path.isNotEmpty()) formatter.setPathFilter(PathFilter.create(path))
+                for (cached in listOf(true, false)) {
+                    val oldTree: AbstractTreeIterator = if (cached) {
+                        val head = repository.resolve("HEAD^{tree}")
+                        if (head == null) EmptyTreeIterator() else repository.newObjectReader().use { reader ->
+                            CanonicalTreeParser().apply { reset(reader, head) }
                         }
-                        if (limited) break
+                    } else DirCacheIterator(repository.readDirCache())
+                    val newTree: AbstractTreeIterator = if (cached) {
+                        DirCacheIterator(repository.readDirCache())
+                    } else FileTreeIterator(repository)
+                    // scan() keeps working-tree content sources on this formatter.
+                    val entries = formatter.scan(oldTree, newTree)
+                    for (entry in entries) {
+                        if (files == MAX_DIFF_FILES) {
+                            limited = true
+                            break
+                        }
+                        try {
+                            output.write((if (cached) "Staged\n" else "Unstaged\n").toByteArray())
+                            formatter.format(entry)
+                            files++
+                        } catch (_: DiffLimit) {
+                            limited = true
+                            break
+                        }
                     }
+                    if (limited) break
                 }
-                RepositoryDiff(true, output.toString(Charsets.UTF_8.name()), limited, files)
             }
+            RepositoryDiff(true, output.toString(Charsets.UTF_8.name()), limited, files)
         }
     }
 
