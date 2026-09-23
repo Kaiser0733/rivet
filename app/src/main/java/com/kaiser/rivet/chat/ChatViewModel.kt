@@ -178,6 +178,10 @@ class ChatViewModel private constructor(
                 it.copy(messages = durable.toList(), streaming = true, streamText = "", error = null)
             }
             val client = clientFactory(snapshot.config, snapshot.apiKey)
+            var checkpointId: String? = null
+            var checkpointBroken = false
+            var needsPostCheck = false
+            var mutationStartedSincePost = false
 
             val loop = AgentLoop(
                 requestModel = { messages, definitions, onText ->
@@ -211,6 +215,19 @@ class ChatViewModel private constructor(
                 canPersistToolOutput = { candidate, reserve ->
                     sessionStore.canSaveWithReserve(candidate, reserve)
                 },
+                beforeMutation = {
+                    if (runtime == null || workspaceId == null || checkpointBroken) false
+                    else {
+                        val id = checkpointId
+                        if (id == null) checkpointId = runtime.beginCheckpoint(workspaceId)
+                        else if (needsPostCheck) {
+                            needsPostCheck = false
+                            if (!runtime.checkpointMatchesPost(workspaceId, id)) checkpointBroken = true
+                        }
+                        if (!checkpointBroken) mutationStartedSincePost = true
+                        !checkpointBroken
+                    }
+                },
             )
             val streamed = StringBuffer()
             try {
@@ -231,6 +248,15 @@ class ChatViewModel private constructor(
                                 durable += message
                                 if (message.role == AgentRole.Assistant) streamed.setLength(0)
                                 _uiState.update { it.copy(messages = durable.toList(), streamText = streamed.toString()) }
+                                val id = checkpointId
+                                if (message.role == AgentRole.Tool && mutationStartedSincePost && id != null && runtime != null && workspaceId != null && !checkpointBroken) {
+                                    try {
+                                        runtime.recordCheckpointPost(workspaceId, id)
+                                        needsPostCheck = true
+                                        mutationStartedSincePost = false
+                                    } catch (e: CancellationException) { throw e
+                                    } catch (_: Exception) { checkpointBroken = true }
+                                }
                             }
                         },
                     )
@@ -282,6 +308,20 @@ class ChatViewModel private constructor(
                 stableFailure(ticket, durable, "Unexpected error (${e.javaClass.simpleName}).")
             } finally {
                 approvals.cancel()
+                val id = checkpointId
+                if (id != null && runtime != null && workspaceId != null && !checkpointBroken) {
+                    withContext(NonCancellable) {
+                        try { runtime.finishCheckpoint(workspaceId, id) }
+                        catch (e: CancellationException) { throw e }
+                        catch (_: Exception) {
+                            if (ticket == generation) _uiState.update {
+                                it.copy(error = "Checkpoint could not be finalized. Resolve workspace sync before Undo.")
+                            }
+                        }
+                    }
+                } else if (checkpointBroken && ticket == generation) {
+                    _uiState.update { it.copy(error = "Checkpoint could not be finalized. Resolve workspace changes before Undo.") }
+                }
             }
         }
     }
@@ -297,6 +337,7 @@ class ChatViewModel private constructor(
             AgentStopReason.RunawayGuard -> "Agent stopped by the runaway guard. You can continue in a new turn."
             AgentStopReason.WorkspaceChanged -> "Workspace changed. The agent turn was stopped."
             AgentStopReason.SessionLimit -> CONTEXT_LIMIT_ERROR
+            AgentStopReason.CheckpointUnavailable -> "Rivet could not save a checkpoint. No workspace mutation was started."
         }
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
         sessionStore.save(persisted, interrupted = false)

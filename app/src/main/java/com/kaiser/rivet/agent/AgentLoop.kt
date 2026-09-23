@@ -15,6 +15,7 @@ enum class AgentStopReason {
     RunawayGuard,
     WorkspaceChanged,
     SessionLimit,
+    CheckpointUnavailable,
 }
 
 data class AgentRunResult(
@@ -35,6 +36,7 @@ class AgentLoop(
     private val describeDestructive: suspend (AgentApprovalRequest) -> AgentApprovalRequest = { it },
     private val workspaceIsCurrent: suspend () -> Boolean = { true },
     private val canPersistToolOutput: suspend (List<AgentMessage>, Int) -> Boolean = { _, _ -> true },
+    private val beforeMutation: suspend (AgentToolCall) -> Boolean = { true },
 ) {
     suspend fun run(
         initial: List<AgentMessage>,
@@ -155,6 +157,16 @@ class AgentLoop(
                         results += pending("workspace_changed")
                         stopReason = AgentStopReason.WorkspaceChanged
                         break
+                    }
+                    if (!denied && prepared.approval != null) {
+                        val protected = try { beforeMutation(call) }
+                            catch (e: CancellationException) { throw e }
+                            catch (_: Exception) { false }
+                        if (!protected) {
+                            results += pending("checkpoint_unavailable")
+                            stopReason = AgentStopReason.CheckpointUnavailable
+                            break
+                        }
                     }
                     val result = if (denied) {
                         deniedMutations += denialKey
