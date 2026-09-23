@@ -328,7 +328,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
     private fun writeRecord(folder: File, record: CheckpointRecord) {
         val next = File(folder, "checkpoint.next")
         FileOutputStream(next).use { output ->
-            output.write(Json.encodeToString(record).toByteArray(Charsets.UTF_8))
+            output.write(Json.encodeToString(CheckpointRecord.serializer(), record).toByteArray(Charsets.UTF_8))
             output.fd.sync()
         }
         Files.move(next.toPath(), File(folder, "checkpoint.json").toPath(),
