@@ -53,6 +53,7 @@ data class AgentSession(
     val id: String? = null,
     val title: String? = null,
     val workspaceId: String? = null,
+    val summary: String = "",
 )
 
 internal interface AgentSessionPersistence {

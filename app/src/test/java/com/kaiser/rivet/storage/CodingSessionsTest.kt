@@ -101,4 +101,40 @@ class CodingSessionsTest {
         assertEquals(1, reopened.usage(first).unknownRequests)
         assertEquals(60L, reopened.usage(second).reportedInputTokens)
     }
+
+    @Test fun repeatedCompactionKeepsFullHistoryBeyondOldDataStoreLimit() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        var active = emptyList<AgentMessage>()
+        repeat(4) { index ->
+            active += AgentMessage.user("request $index " + "x".repeat(180_000))
+            active += AgentMessage.assistant("done $index")
+            sessions.save(active, interrupted = false)
+            val retained = listOf(AgentMessage.user("continue $index"))
+            // Retained events must come from the original active transcript.
+            active += retained.single()
+            sessions.save(active, interrupted = false)
+            sessions.compact(active, retained, "summary through $index")
+            active = retained
+        }
+        val reopened = CodingSessions(app)
+        val restored = reopened.load()
+        assertEquals(listOf(AgentMessage.user("continue 3")), restored.messages)
+        assertEquals("summary through 3", restored.summary)
+        assertEquals(12, reopened.fullEventCount(id))
+        assertTrue(reopened.recent(id, 100).sumOf { it.text.length } > AgentSessionCodec.MAX_SERIALIZED_BYTES)
+    }
+
+    @Test fun failedCompactionLeavesActiveAndFullEventsUnchanged() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val original = listOf(AgentMessage.user("request"), AgentMessage.assistant("answer"))
+        sessions.save(original, interrupted = false)
+        try {
+            sessions.compact(original, listOf(AgentMessage.user("invented")), "summary")
+            throw AssertionError("Expected rejected active rewrite")
+        } catch (_: IllegalArgumentException) { Unit }
+        assertEquals(original, sessions.load().messages)
+        assertEquals(2, sessions.fullEventCount(id))
+    }
 }
