@@ -18,6 +18,7 @@ enum class AgentStopReason {
     SessionLimit,
     CheckpointUnavailable,
     ContextUnavailable,
+    NoProgress,
 }
 
 data class AgentRunResult(
@@ -38,7 +39,9 @@ class AgentLoop(
     private val describeDestructive: suspend (AgentApprovalRequest) -> AgentApprovalRequest = { it },
     private val workspaceIsCurrent: suspend () -> Boolean = { true },
     private val canPersistToolOutput: suspend (List<AgentMessage>, Int) -> Boolean = { _, _ -> true },
-    private val beforeMutation: suspend (AgentToolCall) -> Boolean = { true },
+    private val mutationBlocker: suspend (AgentToolCall) -> String? = { null },
+    private val beforeMutation: suspend (AgentToolCall) -> String? = { null },
+    private val failureState: suspend () -> String = { "" },
     private val compactContext: suspend (List<AgentMessage>, Boolean) -> List<AgentMessage> = { messages, _ -> messages },
 ) {
     suspend fun run(
@@ -57,6 +60,7 @@ class AgentLoop(
         val deniedMutations = mutableSetOf<String>()
         val createdPaths = mutableSetOf<String>()
         val movedExistingPaths = mutableSetOf<String>()
+        var lastDeterministicFailure: Triple<String, String, String>? = null
         var modelIterations = 0
         var toolCalls = 0
         while (modelIterations < RUNAWAY_MODEL_ITERATIONS) {
@@ -157,6 +161,29 @@ class AgentLoop(
                     }
                     val denialKey = "${call.name}\n${call.arguments}"
                     val previouslyDenied = denialKey in deniedMutations
+                    val previous = lastDeterministicFailure
+                    if (previous != null && previous.first == denialKey && previous.third == failureState()) {
+                        results += AgentToolResult(call.id, call.name,
+                            AgentToolError.noProgress(previous.second), true, "Stopped  ${call.name}")
+                        results += pending("no_progress")
+                        stopReason = AgentStopReason.NoProgress
+                        break
+                    }
+                    val blocked = if (prepared.approval != null && !previouslyDenied) mutationBlocker(call) else null
+                    if (blocked != null) {
+                        val rejected = stopped(call, blocked)
+                        val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "workspace_changed") }
+                        if (!fits(results + rejected + remaining)) {
+                            results += pending("session_limit")
+                            stopReason = AgentStopReason.SessionLimit
+                            break
+                        }
+                        results += rejected
+                        val deterministic = AgentToolError.deterministicCode(rejected)
+                        lastDeterministicFailure = if (deterministic != null)
+                            Triple(denialKey, deterministic, failureState()) else null
+                        continue
+                    }
                     // Only mutations need prospective headroom. Include completed results
                     // and a correlated error for every unstarted call in this batch.
                     if (prepared.approval != null && !previouslyDenied && !fits(
@@ -184,19 +211,21 @@ class AgentLoop(
                         stopReason = AgentStopReason.WorkspaceChanged
                         break
                     }
-                    if (!denied && prepared.approval != null) {
-                        val protected = try { beforeMutation(call) }
-                            catch (e: CancellationException) { throw e }
-                            catch (_: Exception) { false }
-                        if (!protected) {
-                            results += pending("checkpoint_unavailable")
-                            stopReason = AgentStopReason.CheckpointUnavailable
-                            break
-                        }
+                    val mutationBlocker = if (!denied && prepared.approval != null) {
+                        try { beforeMutation(call) }
+                        catch (e: CancellationException) { throw e }
+                        catch (_: Exception) { "checkpoint_unavailable" }
+                    } else null
+                    if (mutationBlocker == "checkpoint_unavailable") {
+                        results += pending("checkpoint_unavailable")
+                        stopReason = AgentStopReason.CheckpointUnavailable
+                        break
                     }
                     val result = if (denied) {
                         deniedMutations += denialKey
                         stopped(call, "denied")
+                    } else if (mutationBlocker != null) {
+                        stopped(call, mutationBlocker)
                     } else {
                         try {
                             prepared.execute()
@@ -214,6 +243,9 @@ class AgentLoop(
                         break
                     }
                     results += bounded
+                    val deterministic = AgentToolError.deterministicCode(bounded)
+                    lastDeterministicFailure = if (deterministic != null)
+                        Triple(denialKey, deterministic, failureState()) else null
                     if (!denied && !bounded.error) recordProvenance(call, bounded, createdPaths, movedExistingPaths)
                 }
             } catch (e: CancellationException) {
@@ -253,7 +285,7 @@ class AgentLoop(
     }
 
     private fun stopped(call: AgentToolCall, code: String) = AgentToolResult(
-        call.id, call.name, "{\"error\":\"$code\"}", error = true,
+        call.id, call.name, AgentToolError.content(code), error = true,
         summary = when (code) {
             "denied" -> "Denied  ${call.name}"
             "tool_failed" -> "Failed  ${call.name}"

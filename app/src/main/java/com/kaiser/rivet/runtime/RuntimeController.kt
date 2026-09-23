@@ -180,6 +180,21 @@ class RuntimeController(context: Context) {
 
     suspend fun currentIdentity(): String? = selection.currentIdentity()
 
+    suspend fun agentFailureState(): String = operations.withLock {
+        val identity = selection.currentIdentity().orEmpty()
+        if (terminal != null) return@withLock "$identity:terminal_active"
+        val dirty = try { currentMirror()?.hasLocalChanges() == true }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { false }
+        "$identity:${if (dirty) "sync_required" else "ready"}"
+    }
+
+    suspend fun commandBlocker(): String? = operations.withLock {
+        if (terminal != null) return@withLock "terminal_active"
+        val active = currentMirror() ?: return@withLock "workspace_unavailable"
+        if (active.hasLocalChanges()) "sync_required" else null
+    }
+
     suspend fun awaitIdentityChange(identity: String) = selection.awaitIdentityChange(identity)
 
     private suspend fun currentMirror(): WorkspaceMirror? {
