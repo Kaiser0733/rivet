@@ -6,7 +6,10 @@ import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
+import java.io.InputStream
+import java.io.OutputStream
 import java.io.FileNotFoundException
+import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineStart
@@ -46,6 +49,56 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         val entry = resolve(path)
         val bytes = read(entry, WorkspaceText.MAX_BYTES, checkMime = false)
         TextSnapshot(path, "", WorkspaceText.sha256(bytes), bytes.size.toLong(), entry.modifiedTime)
+    }
+
+    data class BinaryFingerprint(val size: Long, val sha256: String)
+
+    // Runtime copies use the same SAF resolution and cancellation boundary as
+    // editor reads, but never decode or retain the file in memory.
+    suspend fun copyFileTo(path: WorkspacePath, output: OutputStream): BinaryFingerprint = io {
+        stream(resolve(path), output)
+    }
+
+    suspend fun fingerprint(path: WorkspacePath): BinaryFingerprint = io {
+        stream(resolve(path), null)
+    }
+
+    suspend fun writeFileFrom(path: WorkspacePath, input: InputStream, expectedSha256: String): BinaryFingerprint = io {
+        mutations.withLock {
+            val entry = resolve(path)
+            if (entry.directory) fail(WorkspaceFailure.Reason.NOT_FILE)
+            if (!entry.capabilities.write) fail(WorkspaceFailure.Reason.UNSUPPORTED)
+            if (stream(entry, null).sha256 != expectedSha256) fail(WorkspaceFailure.Reason.CONFLICT)
+            currentCoroutineContext().ensureActive()
+            // A truncating SAF write cannot be rolled back. Keep the verified
+            // commit and its result together even if the caller is cancelled.
+            withContext(NonCancellable) {
+                val descriptor = resolver.openFileDescriptor(uri(entry.documentId), "rwt")
+                    ?: fail(WorkspaceFailure.Reason.WRITE)
+                val written = MessageDigest.getInstance("SHA-256")
+                var count = 0L
+                try {
+                    ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
+                        val buffer = ByteArray(64 * 1024)
+                        while (true) {
+                            val size = input.read(buffer)
+                            if (size < 0) break
+                            output.write(buffer, 0, size)
+                            written.update(buffer, 0, size)
+                            count += size
+                        }
+                        output.flush()
+                    }
+                    val verified = stream(resolve(path), null)
+                    if (verified.size != count || verified.sha256 != written.digest().toHex()) {
+                        fail(WorkspaceFailure.Reason.WRITE)
+                    }
+                    verified
+                } catch (e: CancellationException) { throw e
+                } catch (e: WorkspaceFailure) { throw e
+                } catch (_: Exception) { fail(WorkspaceFailure.Reason.WRITE) }
+            }
+        }
     }
 
     suspend fun writeTextFile(path: WorkspacePath, content: String, expectedHash: String): TextSnapshot = io {
@@ -276,6 +329,34 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
             }
         }
     }
+
+    private suspend fun stream(entry: WorkspaceEntry, output: OutputStream?): BinaryFingerprint {
+        requireGrant()
+        if (entry.directory) fail(WorkspaceFailure.Reason.NOT_FILE)
+        val context = currentCoroutineContext()
+        val activeInput = AtomicReference<ParcelFileDescriptor.AutoCloseInputStream?>()
+        return signalled(onCancel = { activeInput.getAndSet(null)?.close() }) { signal ->
+            val descriptor = resolver.openFileDescriptor(uri(entry.documentId), "r", signal)
+                ?: fail(WorkspaceFailure.Reason.PROVIDER)
+            ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
+                activeInput.set(input)
+                val digest = MessageDigest.getInstance("SHA-256")
+                val buffer = ByteArray(64 * 1024)
+                var count = 0L
+                while (true) {
+                    context.ensureActive()
+                    val size = input.read(buffer)
+                    if (size < 0) break
+                    digest.update(buffer, 0, size)
+                    output?.write(buffer, 0, size)
+                    count += size
+                }
+                BinaryFingerprint(count, digest.digest().toHex())
+            }
+        }
+    }
+
+    private fun ByteArray.toHex(): String = joinToString("") { "%02x".format(it) }
 
     private suspend fun <T> signalled(onCancel: () -> Unit = {}, block: (CancellationSignal) -> T): T = coroutineScope {
         val signal = CancellationSignal()

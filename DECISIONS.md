@@ -184,9 +184,10 @@ structured protocol. Assistant prose is never parsed or executed as a tool.
 
 ## D23 — SAF remains authoritative for agent tools
 
-What: three read-only tools run automatically. Seven mutations require a fresh,
-one-shot approval and retain hash, patch, path, capability, root, and move rules
-from `SafWorkspace`. Turns bind to the tree selected at Send.
+What: three read-only tools run automatically. Seven native file mutations and
+each agent command require a fresh, one-shot approval. File tools retain hash,
+patch, path, capability, root, and move rules from `SafWorkspace`. Turns bind
+to the tree selected at Send.
 Why: model arguments are untrusted. Approval and identity checks prevent an old
 turn from changing a replacement workspace or replaying after process death.
 
@@ -198,3 +199,20 @@ approvals and partial tool calls do not. Restart reports interruption and never
 resumes work.
 Why: process death cannot safely reconstruct network or mutation authority, while
 completed context and existing user data must survive an in-place update.
+
+## D25 — Private POSIX mirror with SAF as external authority
+
+What: shell processes use an app-private worktree. Binary streaming copies
+and a content-hash baseline connect it to the selected SAF tree. A stale SAF
+baseline stops sync before mutation; partial failures preserve the mirror.
+Why: SAF documents are not POSIX paths, and shell changes must not silently
+overwrite external edits or disappear on process death.
+
+## D26 — System shell and pinned terminal libraries first
+
+What: Phase 5 uses `/system/bin/sh` and selected Android system utilities.
+The Apache-exception Termux terminal libraries are pinned and adapted for PTY
+display. No writable app-data executable or Termux package is required.
+Why: target SDK 35 blocks direct execution of writable app data. Packaged
+executables need their own linker and shebang compatibility work after the
+runtime and sync boundary is validated on a device.
