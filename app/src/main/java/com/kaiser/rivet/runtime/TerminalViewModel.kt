@@ -142,6 +142,7 @@ class TerminalViewModel(application: Application) : AndroidViewModel(application
         val clipboard = getApplication<Application>().getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
         val text = clipboard.primaryClip?.getItemAt(0)?.coerceToText(getApplication())?.toString() ?: return
         session?.write(text)
+        if (session != null) markInput()
     }
     override fun onBell(session: TerminalSession) = Unit
     override fun onColorsChanged(session: TerminalSession) { onTextChanged(session) }
