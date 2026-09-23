@@ -12,6 +12,7 @@ import com.kaiser.rivet.storage.AgentSessionCodec
 import com.kaiser.rivet.storage.AgentSessionStore
 import com.kaiser.rivet.workspace.TestDocumentsProvider
 import com.kaiser.rivet.workspace.WorkspaceSelection
+import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ChatRequest
 import com.kaiser.rivet.provider.ModelInfo
@@ -159,6 +160,44 @@ class ChatViewModelTest {
         assertNull(recovered.pendingApproval)
         assertNull(recovered.error)
         assertEquals(0, documents.createCalls)
+    }
+
+    @Test fun nestedInstructionsAreLoadedBeforeFirstMutationApproval() = runBlocking {
+        val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.instructions-chat", "root")
+        val info = ProviderInfo().apply {
+            authority = tree.authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val workspace = WorkspaceSelection(app).select(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        workspace.createDirectory(WorkspacePath.parse("src"))
+        val instructions = workspace.createFile(WorkspacePath.parse("src/AGENTS.md"))
+        documents.nodes[instructions.documentId]!!.bytes.writeText("Use the project naming rule.")
+        val createdBefore = documents.createCalls
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create", "create_file", """{"path":"src/Test.kt"}"""))),
+            AgentResponse(text = "I will follow the project rule."),
+        )))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Create a file in src")
+        val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "I will follow the project rule." }
+
+        assertNull(complete.pendingApproval)
+        assertEquals(createdBefore, documents.createCalls)
+        assertEquals(2, provider.requests.size)
+        assertTrue(provider.requests[1].system.contains("Use the project naming rule."))
+        assertTrue(provider.requests[1].messages.any { message ->
+            message.toolResults.any { "project_instructions_loaded" in it.content }
+        })
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
