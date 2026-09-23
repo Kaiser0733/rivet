@@ -156,10 +156,12 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
     private val calls = mutableListOf<AgentToolCall>()
     private val signatures = linkedMapOf<String, String>()
     private var textSignature: String? = null
+    private var usage: com.kaiser.rivet.agent.AgentUsage? = null
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
         root["error"]?.obj()?.get("message")?.str()?.let { throw ProviderError.ProviderMessage(it) }
+        geminiUsage(root)?.let { usage = it }
         val parts = root["candidates"]?.arr()?.firstOrNull()?.obj()
             ?.get("content")?.obj()?.get("parts")?.arr() ?: return
         parts.forEach { element ->
@@ -196,6 +198,7 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
                 textSignature?.let { put("text_signature", it) }
             }.toString()
         },
+        usage,
     )
 }
 

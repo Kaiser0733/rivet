@@ -24,6 +24,7 @@ import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
 import com.kaiser.rivet.storage.CodingSessionHeader
 import com.kaiser.rivet.storage.CodingSessions
+import com.kaiser.rivet.storage.SessionUsage
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import com.kaiser.rivet.workspace.WorkspaceSelection
@@ -40,6 +41,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
+import java.util.UUID
 
 data class ChatUiState(
     val messages: List<AgentMessage> = emptyList(),
@@ -52,6 +54,7 @@ data class ChatUiState(
     val currentSessionId: String? = null,
     val currentSessionTitle: String? = null,
     val currentSessionWorkspaceId: String? = null,
+    val usage: SessionUsage? = null,
 )
 
 internal sealed interface ProviderRuntimeResult {
@@ -132,6 +135,7 @@ class ChatViewModel private constructor(
                 return@launch
             }
             if (ticket == generation) {
+                val usage = restored.id?.let { sessions?.usage(it) }
                 _uiState.update { state ->
                     state.copy(
                         messages = restored.messages,
@@ -140,6 +144,7 @@ class ChatViewModel private constructor(
                         currentSessionId = restored.id,
                         currentSessionTitle = restored.title,
                         currentSessionWorkspaceId = restored.workspaceId,
+                        usage = usage,
                         error = if (restored.interrupted) "Previous agent turn was interrupted." else state.error,
                     )
                 }
@@ -199,6 +204,8 @@ class ChatViewModel private constructor(
                 it.copy(messages = durable.toList(), streaming = true, streamText = "", error = null)
             }
             val client = clientFactory(snapshot.config, snapshot.apiKey)
+            val sessionId = _uiState.value.currentSessionId
+            val turnId = UUID.randomUUID().toString()
             var checkpointId: String? = null
             var checkpointBroken = false
             var needsPostCheck = false
@@ -206,7 +213,7 @@ class ChatViewModel private constructor(
 
             val loop = AgentLoop(
                 requestModel = { messages, definitions, onText ->
-                    client.streamAgent(
+                    val response = client.streamAgent(
                         AgentRequest(
                             model = snapshot.config.model,
                             messages = messages,
@@ -216,6 +223,12 @@ class ChatViewModel private constructor(
                         ),
                         onText,
                     )
+                    if (sessionId != null) {
+                        try { sessions?.recordUsage(sessionId, turnId, snapshot.config.id, snapshot.config.model, response.usage) }
+                        catch (e: CancellationException) { throw e
+                        } catch (_: Exception) { /* A completed provider response remains usable if usage storage fails. */ }
+                    }
+                    response
                 },
                 prepareTool = { call ->
                     executor?.prepare(call) ?: PreparedAgentTool(call, null) {
@@ -363,9 +376,10 @@ class ChatViewModel private constructor(
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
         sessionStore.save(persisted, interrupted = false)
         val history = sessions?.list()
+        val usage = _uiState.value.currentSessionId?.let { sessions?.usage(it) }
         _uiState.update {
             it.copy(messages = persisted, streaming = false, streamText = "", pendingApproval = null,
-                sessions = history ?: it.sessions, error = error)
+                sessions = history ?: it.sessions, usage = usage, error = error)
         }
     }
 
@@ -414,9 +428,10 @@ class ChatViewModel private constructor(
             if (ticket == generation) {
                 sessionStore.clear()
                 val selected = sessionStore.load()
+                val usage = selected.id?.let { sessions?.usage(it) }
                 _uiState.value = ChatUiState(ready = true, sessions = sessions?.list().orEmpty(),
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
-                    currentSessionWorkspaceId = selected.workspaceId)
+                    currentSessionWorkspaceId = selected.workspaceId, usage = usage)
             }
         }
     }
@@ -452,10 +467,12 @@ class ChatViewModel private constructor(
             try {
                 val selected = action(store)
                 val history = store.list()
+                val usage = selected.id?.let { store.usage(it) }
                 if (ticket == generation) _uiState.value = ChatUiState(
                     messages = selected.messages, ready = true, sessions = history,
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
                     currentSessionWorkspaceId = selected.workspaceId,
+                    usage = usage,
                     error = if (selected.interrupted) "Previous agent turn was interrupted." else null)
                 if (selected.interrupted) store.markInterrupted(false)
             } catch (e: CancellationException) { throw e

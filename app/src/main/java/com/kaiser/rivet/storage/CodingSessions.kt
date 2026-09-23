@@ -7,6 +7,7 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -22,6 +23,15 @@ data class CodingSessionHeader(
     val createdAt: Long,
     val updatedAt: Long,
     val interrupted: Boolean,
+)
+
+data class SessionUsage(
+    val reportedInputTokens: Long,
+    val reportedOutputTokens: Long,
+    val reportedRequests: Int,
+    val unknownRequests: Int,
+    val latestInputTokens: Long?,
+    val latestSource: String?,
 )
 
 /** Provider-neutral event rows. The old DataStore value is retained after migration. */
@@ -144,6 +154,36 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         }
     }
 
+    suspend fun recordUsage(sessionId: String, turnId: String, providerId: String, model: String,
+                            usage: AgentUsage?) = onDatabase { db ->
+        db.insertOrThrow("usage", null, ContentValues().apply {
+            put("session_id", sessionId); put("turn_id", turnId)
+            put("provider_id", providerId); put("model", model)
+            put("source", if (usage == null) "unknown" else "reported")
+            put("input_tokens", usage?.inputTokens); put("output_tokens", usage?.outputTokens)
+            put("cache_read_tokens", usage?.cacheReadTokens)
+            put("reasoning_tokens", usage?.reasoningTokens)
+            put("total_tokens", usage?.totalTokens)
+            put("created_at", System.currentTimeMillis())
+        })
+    }
+
+    suspend fun usage(sessionId: String): SessionUsage = onDatabase { db ->
+        val totals = db.rawQuery("SELECT COALESCE(SUM(input_tokens),0),COALESCE(SUM(output_tokens),0)," +
+            "SUM(CASE WHEN source='reported' THEN 1 ELSE 0 END)," +
+            "SUM(CASE WHEN source='unknown' THEN 1 ELSE 0 END) FROM usage WHERE session_id=?",
+            arrayOf(sessionId)).use { cursor ->
+            cursor.moveToFirst()
+            listOf(cursor.getLong(0), cursor.getLong(1), cursor.getLong(2), cursor.getLong(3))
+        }
+        val latest = db.rawQuery("SELECT input_tokens,source FROM usage WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            arrayOf(sessionId)).use { cursor ->
+            if (cursor.moveToFirst()) (if (cursor.isNull(0)) null else cursor.getLong(0)) to cursor.getString(1)
+            else null to null
+        }
+        SessionUsage(totals[0], totals[1], totals[2].toInt(), totals[3].toInt(), latest.first, latest.second)
+    }
+
     private suspend fun <T> onDatabase(block: suspend (SQLiteDatabase) -> T): T = withContext(Dispatchers.IO) {
         lock.withLock {
             val db = database.writableDatabase
@@ -220,12 +260,13 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 }
 
-private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 1) {
+private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 2) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL)")
         db.execSQL("CREATE INDEX events_session_id ON events(session_id,id)")
         db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        createUsage(db)
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -234,6 +275,12 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
+        if (oldVersion == 1 && newVersion == 2) createUsage(db)
+        else throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
+    }
+
+    private fun createUsage(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE usage (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, turn_id TEXT NOT NULL, provider_id TEXT NOT NULL, model TEXT NOT NULL, source TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, reasoning_tokens INTEGER, total_tokens INTEGER, created_at INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX usage_session_id ON usage(session_id,id)")
     }
 }

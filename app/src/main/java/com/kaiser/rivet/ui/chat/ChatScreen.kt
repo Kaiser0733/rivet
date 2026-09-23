@@ -69,6 +69,17 @@ fun ChatScreen(
                 Icon(painterResource(R.drawable.ic_delete), stringResource(R.string.chat_clear))
             }
         }
+        chatState.usage?.let { usage ->
+            if (usage.reportedRequests > 0 || usage.unknownRequests > 0) {
+                val reported = if (usage.reportedRequests > 0)
+                    "${usage.reportedInputTokens} input · ${usage.reportedOutputTokens} output tokens reported"
+                else "Token usage unavailable"
+                val unknown = if (usage.unknownRequests > 0) " · ${usage.unknownRequests} request(s) unreported" else ""
+                Text(reported + unknown, modifier = Modifier.padding(horizontal = 16.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         MessageList(
             messages = chatState.messages,
             streamText = chatState.streamText,

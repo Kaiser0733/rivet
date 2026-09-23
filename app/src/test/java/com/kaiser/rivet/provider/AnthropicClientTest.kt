@@ -174,6 +174,19 @@ class AnthropicClientTest {
             response.toolCalls.map { it.arguments })
     }
 
+    @Test fun streamUsageUsesFinalCumulativeOutputAndInitialInput() = runTest {
+        val sse = listOf(
+            """{"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1,"cache_read_input_tokens":5}}}""",
+            """{"type":"message_delta","usage":{"output_tokens":15}}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+        val response = AnthropicClient(config(), "key").streamAgent(
+            AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList())) {}
+        assertEquals(25L, response.usage?.inputTokens)
+        assertEquals(15L, response.usage?.outputTokens)
+        assertEquals(5L, response.usage?.cacheReadTokens)
+    }
+
     @Test
     fun streamErrorSurfacesProviderMessage() = runTest {
         server.enqueue(MockResponse().setBody(

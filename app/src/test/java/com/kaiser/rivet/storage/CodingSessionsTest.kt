@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
+import com.kaiser.rivet.agent.AgentUsage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -84,5 +85,20 @@ class CodingSessionsTest {
         AgentSessionStore(app).save(listOf(AgentMessage.user("safe")), interrupted = false)
         assertEquals("safe", sessions.load().messages.single().text)
         assertEquals(1, sessions.list().size)
+    }
+
+    @Test fun usageStaysWithSessionAndModelAfterRestart() = runBlocking {
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        sessions.recordUsage(first, "turn-1", "anthropic", "claude", AgentUsage(100, 25, 40))
+        sessions.recordUsage(first, "turn-1", "custom", "local", null)
+        val second = sessions.create(null).id!!
+        sessions.recordUsage(second, "turn-2", "gemini", "gemini", AgentUsage(60, 15))
+
+        val reopened = CodingSessions(app)
+        assertEquals(100L, reopened.usage(first).reportedInputTokens)
+        assertEquals(25L, reopened.usage(first).reportedOutputTokens)
+        assertEquals(1, reopened.usage(first).unknownRequests)
+        assertEquals(60L, reopened.usage(second).reportedInputTokens)
     }
 }
