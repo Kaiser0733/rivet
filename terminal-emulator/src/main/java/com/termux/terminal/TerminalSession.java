@@ -137,6 +137,9 @@ public final class TerminalSession extends TerminalOutput {
             try { if (writer != null) writer.close(); } catch (IOException ignored) { }
             try { if (mTerminalParcelFileDescriptor != null) mTerminalParcelFileDescriptor.close(); }
             catch (IOException ignored) { }
+            if (mTerminalParcelFileDescriptor == null && mTerminalFileDescriptor >= 0)
+                JNI.close(mTerminalFileDescriptor);
+            mTerminalFileDescriptor = -1;
             mShellPid = -1;
             mShellExitStatus = 1;
             byte[] notice = "\r\n[Terminal could not start]".getBytes(StandardCharsets.UTF_8);
@@ -266,6 +269,10 @@ public final class TerminalSession extends TerminalOutput {
 
     /** Cleanup resources when the process exits. */
     void cleanupResources(int exitStatus) {
+        if (mShellPid > 0) {
+            try { Os.kill(-mShellPid, OsConstants.SIGKILL); }
+            catch (ErrnoException ignored) { }
+        }
         synchronized (this) {
             mShellPid = -1;
             mShellExitStatus = exitStatus;

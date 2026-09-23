@@ -8,6 +8,7 @@ import android.provider.DocumentsContract.Document
 import android.provider.DocumentsProvider
 import java.io.File
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /** Disposable test documents only; no real user storage is accessed. */
 class TestDocumentsProvider : DocumentsProvider() {
@@ -74,7 +75,7 @@ class TestDocumentsProvider : DocumentsProvider() {
                 blockNextRead = null
                 signal?.setOnCancelListener { blocked.countDown() }
                 readStarted?.countDown()
-                blocked.await()
+                blocked.await(5, TimeUnit.SECONDS)
                 if (signal?.isCanceled == true) throw android.os.OperationCanceledException()
             }
         }

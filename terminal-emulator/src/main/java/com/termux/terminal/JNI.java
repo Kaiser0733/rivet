@@ -35,4 +35,6 @@ final class JNI {
      */
     public static native int waitFor(int processId);
 
+    public static native void close(int fd);
+
 }
