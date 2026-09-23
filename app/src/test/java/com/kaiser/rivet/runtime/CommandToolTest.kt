@@ -1,0 +1,123 @@
+package com.kaiser.rivet.runtime
+
+import com.kaiser.rivet.agent.AgentApprovalGate
+import com.kaiser.rivet.agent.AgentLoop
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentResponse
+import com.kaiser.rivet.agent.AgentStopReason
+import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolExecutor
+import com.kaiser.rivet.agent.AgentToolExecutorTest
+import kotlinx.coroutines.async
+import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.*
+import org.junit.Test
+
+class CommandToolTest {
+    private val call = AgentToolCall("command-1", "run_command",
+        """{"command":"echo hello","cwd":"src","timeout_ms":30000}""")
+
+    @Test fun commandWaitsForOneShotApprovalAndDenialExecutesNothing() = runTest {
+        val gate = AgentApprovalGate()
+        var executions = 0
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace()) { _, _, _ ->
+            executions++
+            RuntimeCommandResult(0, "hello\n", cwd = "src", sync = "no_changes")
+        }
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "done")))
+        val running = async {
+            AgentLoop(
+                requestModel = { _, _, _ -> responses.removeFirst() },
+                prepareTool = executor::prepare,
+                requestApproval = gate::await,
+            ).run(listOf(AgentMessage.user("Run it")), AgentToolExecutor.definitions)
+        }
+        yield()
+        assertEquals("command-1", gate.pending.value?.call?.id)
+        assertEquals(0, executions)
+        assertTrue(gate.resolve("command-1", false))
+        assertFalse(gate.resolve("command-1", true))
+        val result = running.await()
+        assertEquals(0, executions)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        val denied = result.messages.flatMap { it.toolResults }.single()
+        assertEquals(call.id, denied.callId)
+        assertEquals(call.name, denied.name)
+        assertTrue(denied.content.contains("denied"))
+    }
+
+    @Test fun approvedCommandReportsExitOutputAndSyncSeparately() = runTest {
+        val gate = AgentApprovalGate()
+        var executions = 0
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace()) { command, cwd, timeout ->
+            assertEquals("echo hello", command)
+            assertEquals("src", cwd)
+            assertEquals(30_000L, timeout)
+            executions++
+            RuntimeCommandResult(7, "hello\n", "warning\n", cwd = cwd, sync = "conflict", syncPath = "src/file")
+        }
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "done")))
+        val running = async {
+            AgentLoop(
+                requestModel = { _, _, _ -> responses.removeFirst() },
+                prepareTool = executor::prepare,
+                requestApproval = gate::await,
+            ).run(listOf(AgentMessage.user("Run it")), AgentToolExecutor.definitions)
+        }
+        yield()
+        assertEquals(0, executions)
+        assertTrue(gate.resolve("command-1", true))
+        assertFalse(gate.resolve("command-1", true))
+        val result = running.await().messages.flatMap { it.toolResults }.single()
+        val value = Json.parseToJsonElement(result.content).jsonObject
+        assertEquals(1, executions)
+        assertEquals(call.id, result.callId)
+        assertEquals("7", value["exit_code"]!!.jsonPrimitive.content)
+        assertEquals("hello\n", value["stdout"]!!.jsonPrimitive.content)
+        assertEquals("warning\n", value["stderr"]!!.jsonPrimitive.content)
+        assertEquals("conflict", value["sync"]!!.jsonPrimitive.content)
+        assertEquals("src/file", value["sync_path"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun largeOrMalformedOutputKeepsExitStatusInsideResultBound() = runTest {
+        val output = "\u0000\u001b".repeat(12_000) + "end"
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace()) { _, _, _ ->
+            RuntimeCommandResult(3, output, "error", cwd = "src", sync = "failed")
+        }
+        val result = executor.prepare(call).execute()
+        val value = Json.parseToJsonElement(result.content).jsonObject
+        assertTrue(result.content.toByteArray(Charsets.UTF_8).size <= AgentLoop.MAX_TOOL_RESULT_BYTES)
+        assertEquals("3", value["exit_code"]!!.jsonPrimitive.content)
+        assertEquals("failed", value["sync"]!!.jsonPrimitive.content)
+        assertEquals("true", value["stdout_truncated"]!!.jsonPrimitive.content)
+        assertFalse(result.error)
+    }
+
+    @Test fun invalidCwdNeverRequestsApprovalOrRunsCommand() = runTest {
+        var executions = 0
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace()) { _, _, _ ->
+            executions++
+            RuntimeCommandResult(0, sync = "ok")
+        }
+        val invalid = executor.prepare(call.copy(arguments = """{"command":"pwd","cwd":"../other"}"""))
+        assertNull(invalid.approval)
+        assertTrue(invalid.execute().error)
+        assertEquals(0, executions)
+    }
+
+    @Test fun captureRetainsBoundedHeadAndTailOfBinaryOutput() {
+        val capture = BoundedCapture(64)
+        val bytes = byteArrayOf(0xFF.toByte()) + "start".toByteArray() + ByteArray(20_000) { 'x'.code.toByte() } + "end".toByteArray()
+        capture.append(bytes, bytes.size)
+        val text = capture.text()
+        assertTrue(capture.truncated)
+        assertTrue(text.length < 200)
+        assertTrue(text.contains("start"))
+        assertTrue(text.endsWith("end"))
+        assertTrue(text.contains('\uFFFD'))
+    }
+}

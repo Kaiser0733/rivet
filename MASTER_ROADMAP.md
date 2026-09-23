@@ -32,9 +32,10 @@ streaming activity UI, and migrated persistent transcripts.
 
 ## Phase 5 — Embedded Runtime
 
-On-device command execution for the agent, terminal UI, runtime
-installation and management. License review of any Termux-derived or
-GPL-adjacent components happens before a single line is incorporated.
+On-device command execution, an interactive terminal, and a conflict-safe
+private POSIX mirror of the SAF workspace. Runtime packages build on this
+execution substrate after physical validation. Termux-derived components
+receive a file-level license review before incorporation.
 
 ## Phase 6 — Coding-Agent Features
 
