@@ -30,7 +30,7 @@ suspend fun searchWorkspace(
     require(query.isNotEmpty() && query.length <= 256)
     val hits = mutableListOf<SearchHit>()
     val pending = ArrayDeque<WorkspaceEntry>().apply { add(start) }
-    val visited = mutableSetOf(start.documentId)
+    val visited = mutableSetOf<String>().apply { if (start.directory) add(start.documentId) }
     var files = 0
     var bytes = 0L
     var entries = 0
@@ -39,9 +39,10 @@ suspend fun searchWorkspace(
     outer@ while (pending.isNotEmpty()) {
         currentCoroutineContext().ensureActive()
         if (entries >= limits.maxEntries) { limited = true; break }
-        val directory = pending.removeFirst()
+        val next = pending.removeFirst()
         val children = try {
-            list(directory, limits.maxEntries - entries).sortedWith(WorkspaceEntry.ORDER)
+            if (next.directory) list(next, limits.maxEntries - entries).sortedWith(WorkspaceEntry.ORDER)
+            else listOf(next)
         } catch (e: WorkspaceFailure) {
             // A failed provider listing can already have enumerated every allowed row.
             entries = limits.maxEntries

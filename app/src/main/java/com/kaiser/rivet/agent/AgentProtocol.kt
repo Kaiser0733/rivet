@@ -70,6 +70,8 @@ data class AgentApprovalRequest(
     val call: AgentToolCall,
     val title: String,
     val detail: String,
+    val destructivePath: String? = null,
+    val dangerous: Boolean = false,
 )
 
 class PreparedAgentTool(
