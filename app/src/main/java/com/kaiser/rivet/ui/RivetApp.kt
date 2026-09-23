@@ -36,7 +36,9 @@ import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.ChatViewModel
+import com.kaiser.rivet.runtime.TerminalViewModel
 import com.kaiser.rivet.ui.chat.ChatScreen
+import com.kaiser.rivet.ui.terminal.TerminalScreen
 import com.kaiser.rivet.ui.provider.ProviderEditor
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.provider.SettingsScreen
@@ -44,7 +46,8 @@ import com.kaiser.rivet.ui.provider.SettingsScreen
 private const val RAIL_MIN_WIDTH_DP = 600
 
 @Composable
-fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel, filesViewModel: FilesViewModel) {
+fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
+    filesViewModel: FilesViewModel, terminalViewModel: TerminalViewModel) {
     RivetTheme {
         var current by rememberSaveable { mutableStateOf(RivetDestination.Chat.name) }
         var screen by rememberSaveable { mutableStateOf("tabs") } // tabs | settings | editor
@@ -56,6 +59,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewMod
         // render (an empty id could be saved as a bogus provider).
         val editing = screen == "editor" && editor.config.id.isNotEmpty()
         val files by filesViewModel.state.collectAsState()
+        val terminal by terminalViewModel.state.collectAsState()
         var confirmExit by rememberSaveable { mutableStateOf(false) }
         val activity = LocalActivity.current
         BackHandler(files.dirty || files.mutating) {
@@ -101,6 +105,10 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewMod
                     verticalAlignment = Alignment.CenterVertically,
                 ) {
                     Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge)
+                    if (terminal.dirty) {
+                        Text("  Unsynced", color = MaterialTheme.colorScheme.tertiary,
+                            style = MaterialTheme.typography.labelSmall)
+                    }
                     Spacer(Modifier.weight(1f))
                     IconButton(onClick = { screen = "settings" }) {
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings))
@@ -143,16 +151,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewMod
                             onOpenSettings = { screen = "settings" },
                         )
                         RivetDestination.Files -> FilesScreen(filesViewModel)
-                        RivetDestination.Changes, RivetDestination.Terminal -> Box(
-                            Modifier.fillMaxSize(),
-                            contentAlignment = Alignment.Center,
-                        ) {
-                            Text(
-                                stringResource(destination.emptyTextRes),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodyMedium,
-                            )
-                        }
+                        RivetDestination.Terminal -> TerminalScreen(terminalViewModel)
                     }
                 }
             }
