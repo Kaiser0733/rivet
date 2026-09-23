@@ -207,7 +207,7 @@ class AgentToolExecutor(private val workspace: AgentWorkspace) {
             "rename_path" -> "Rename"
             else -> "Move"
         }
-        val size = entry?.takeIf { !it.directory }?.size?.let { "\n%,d bytes".format(it) } ?: ""
+        val size = entry?.takeIf { !it.directory }?.size?.let { "\n%,d bytes".format(java.util.Locale.US, it) } ?: ""
         val warning = if (request.call.name == "delete_path")
             "Rivet cannot confirm this path was created for this task. Deletion is permanent."
         else "Rivet cannot confirm this path was created for this task."

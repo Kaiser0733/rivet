@@ -29,6 +29,15 @@ class WorkspaceSearchTest {
         assertTrue(result.hits.isEmpty())
         assertFalse(result.limited)
     }
+    @Test fun fileStartScansOnlyThatFileWithoutListing() = runTest {
+        val result = searchWorkspace("review", entry("review.md"), SearchLimits(),
+            { _, _ -> error("File search must not list a directory") },
+            { _, _ -> "review here".toByteArray() })
+        assertEquals(1, result.filesScanned)
+        assertEquals(1, result.entriesVisited)
+        assertEquals(2, result.hits.size)
+        assertFalse(result.limited)
+    }
     @Test fun fileResultAndByteBudgetsAreEnforced() = runTest {
         var read = 0
         val result = searchWorkspace("hit", entry("", true, "root"),
