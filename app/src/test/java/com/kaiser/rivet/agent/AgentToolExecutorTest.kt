@@ -1,5 +1,7 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.runtime.RepositoryDiff
+import com.kaiser.rivet.runtime.RepositoryStatus
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -66,6 +68,27 @@ class AgentToolExecutorTest {
             size = 0,
         )
         override suspend fun delete(path: String) { deletes++ }
+    }
+
+    @Test
+    fun gitInspectionResultsStayCorrelatedAndBounded() = runTest {
+        val executor = AgentToolExecutor(FakeWorkspace(),
+            gitStatus = { RepositoryStatus(true, "main", "a".repeat(40),
+                untracked = (1..1000).map { "file-$it.txt" }) },
+            gitDiff = { RepositoryDiff(true, "diff\n".repeat(10_000), true, 1) })
+
+        val status = executor.prepare(AgentToolCall("s", "git_status", "{}" )).execute()
+        val diff = executor.prepare(AgentToolCall("d", "git_diff", "{\"path\":\"file-1.txt\"}" )).execute()
+        val traversal = executor.prepare(AgentToolCall("bad", "git_diff", "{\"path\":\"../secret\"}" )).execute()
+
+        assertEquals("s", status.callId)
+        assertEquals("d", diff.callId)
+        assertTrue(status.content.toByteArray().size <= AgentLoop.MAX_TOOL_RESULT_BYTES)
+        assertTrue(diff.content.toByteArray().size <= AgentLoop.MAX_TOOL_RESULT_BYTES)
+        assertTrue("\"limited\":true" in status.content)
+        assertTrue("\"limited\":true" in diff.content)
+        assertTrue(traversal.error)
+        assertTrue("invalid_path" in traversal.content)
     }
 
     @Test
@@ -308,7 +331,7 @@ class AgentToolExecutorTest {
     @Test
     fun catalogContainsWorkspaceToolsAndApprovedCommand() {
         val names = AgentToolExecutor.definitions.map { it.name }
-        assertEquals(listOf("list_directory", "read_file", "search_files", "write_file", "apply_patch",
+        assertEquals(listOf("git_status", "git_diff", "list_directory", "read_file", "search_files", "write_file", "apply_patch",
             "create_file", "create_directory", "rename_path", "move_path", "delete_path", "run_command"), names)
         assertTrue(names.none { it in setOf("shell", "terminal", "exec", "bash") })
     }

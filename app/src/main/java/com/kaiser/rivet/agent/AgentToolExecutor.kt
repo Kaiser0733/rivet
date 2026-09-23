@@ -2,6 +2,8 @@ package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.RuntimeCommandResult
+import com.kaiser.rivet.runtime.RepositoryDiff
+import com.kaiser.rivet.runtime.RepositoryStatus
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -48,11 +50,34 @@ class AgentToolExecutor(
     private val workspace: AgentWorkspace,
     private val runCommand: (suspend (String, String, Long) -> RuntimeCommandResult)? = null,
     private val requireSafCurrent: suspend () -> Unit = {},
+    private val gitStatus: (suspend () -> RepositoryStatus)? = null,
+    private val gitDiff: (suspend (String) -> RepositoryDiff)? = null,
 ) {
     fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
         return try {
             when (call.name) {
+                "git_status" -> {
+                    json.decodeFromString<GitStatusArgs>(call.arguments)
+                    readOnly(call) {
+                        val status = gitStatus?.invoke() ?: throw AgentWorkspaceFailure("runtime_unavailable")
+                        success(call, boundedGitStatus(status), "Git status")
+                    }
+                }
+                "git_diff" -> {
+                    val args = json.decodeFromString<GitDiffArgs>(call.arguments)
+                    val path = path(args.path, root = true)
+                    readOnly(call) {
+                        val diff = gitDiff?.invoke(path) ?: throw AgentWorkspaceFailure("runtime_unavailable")
+                        var text = diff.text
+                        var value = gitDiffValue(diff, text)
+                        while (value.toString().toByteArray(Charsets.UTF_8).size > AgentLoop.MAX_TOOL_RESULT_BYTES) {
+                            text = text.take(text.length / 2).dropLastWhile { it.isHighSurrogate() }
+                            value = gitDiffValue(diff, text, extraLimit = true)
+                        }
+                        success(call, value, "Git diff")
+                    }
+                }
                 "list_directory" -> {
                     val args = json.decodeFromString<ListArgs>(call.arguments)
                     val path = path(args.path, root = true)
@@ -299,6 +324,44 @@ class AgentToolExecutor(
             if (result.error == null) "Command exited  ${result.exitCode}" else "Failed  run_command")
     }
 
+    private fun boundedGitStatus(status: RepositoryStatus): JsonObject {
+        val fields = listOf(
+            "staged" to status.staged,
+            "modified" to status.modified,
+            "deleted" to status.deleted,
+            "untracked" to status.untracked,
+            "conflicts" to status.conflicts,
+        )
+        var maxPaths = 100
+        while (true) {
+            var remaining = maxPaths
+            var shown = 0
+            val value = buildJsonObject {
+                put("repository", status.present)
+                status.branch?.let { put("branch", it) }
+                status.head?.let { put("head", it) }
+                fields.forEach { (name, paths) ->
+                    val selected = paths.take(remaining)
+                    remaining -= selected.size
+                    shown += selected.size
+                    put(name, JsonArray(selected.map(::JsonPrimitive)))
+                }
+                put("limited", fields.sumOf { it.second.size } > shown)
+            }
+            if (value.toString().toByteArray(Charsets.UTF_8).size <= AgentLoop.MAX_TOOL_RESULT_BYTES || maxPaths == 0) {
+                return value
+            }
+            maxPaths /= 2
+        }
+    }
+
+    private fun gitDiffValue(diff: RepositoryDiff, text: String, extraLimit: Boolean = false) = buildJsonObject {
+        put("repository", diff.present)
+        put("diff", text)
+        put("files", diff.files)
+        put("limited", diff.limited || extraLimit)
+    }
+
     private fun shorten(value: String): String {
         if (value.length <= 64) return value.take(value.length / 2).dropLastWhile { it.isHighSurrogate() }
         val half = value.length / 4
@@ -320,7 +383,7 @@ class AgentToolExecutor(
         }
         if (value.length > 4096) throw InvalidPath()
         val segments = value.split('/')
-        if (segments.size > 64 || segments.any { it.isBlank() || it.endsWith('.') || it.length > 255 ||
+        if (segments.size > 64 || segments.any { it.isBlank() || it == "." || it == ".." || it.endsWith('.') || it.length > 255 ||
                 it.any { char -> char == '\\' || char.isISOControl() } }) throw InvalidPath()
         return value
     }
@@ -392,6 +455,8 @@ class AgentToolExecutor(
         @kotlinx.serialization.SerialName("new_name") val newName: String,
     )
     @Serializable private data class MoveArgs(val path: String, val destination: String)
+    @Serializable private class GitStatusArgs
+    @Serializable private data class GitDiffArgs(val path: String = "")
     @Serializable private data class CommandArgs(
         val command: String,
         val cwd: String = "",
@@ -417,6 +482,8 @@ class AgentToolExecutor(
         private val path = "path" to string
 
         val definitions = listOf(
+            AgentToolDefinition("git_status", "Inspect the selected workspace's Git branch, staged, modified, deleted, untracked, and conflicting paths without changing its repository. A non-Git workspace returns repository=false.", schema(emptyList())),
+            AgentToolDefinition("git_diff", "Inspect a bounded Git diff of tracked changes. Supply a workspace-relative path to focus on one file; empty path covers the repository. Staged and unstaged changes are labeled. Untracked files are listed by git_status, not diffed.", schema(emptyList(), path)),
             AgentToolDefinition("list_directory", "List a workspace directory. Empty path means workspace root.", schema(emptyList(), path)),
             AgentToolDefinition(
                 "read_file",
