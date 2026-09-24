@@ -25,9 +25,8 @@ data class RuntimeCommandResult(
     val error: String? = null,
 )
 
-class RuntimeController(context: Context) {
+class RuntimeController(context: Context, private val selection: WorkspaceSelection = WorkspaceSelection(context.applicationContext)) {
     private val app = context.applicationContext
-    private val selection = WorkspaceSelection(app)
     private val operations = Mutex()
     private var mirrorIdentity: String? = null
     private var mirror: WorkspaceMirror? = null

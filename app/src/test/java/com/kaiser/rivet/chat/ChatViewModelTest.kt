@@ -24,6 +24,7 @@ import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.TestResult
 import com.kaiser.rivet.runtime.CheckpointFailure
 import com.kaiser.rivet.runtime.MirrorFailure
+import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.storage.AgentSession
 import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
@@ -91,17 +92,22 @@ class ChatViewModelTest {
         await(viewModel) { it.ready && !it.projectLoading }
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        val runtime = RuntimeController(app)
 
         viewModel.selectProject(tree, flags)
         val first = await(viewModel) { it.projectName == "project" && !it.projectLoading &&
             it.currentSessionWorkspaceId == tree.toString() }
         val firstId = first.currentSessionId
         assertEquals(tree.toString(), first.projectIdentity)
+        assertEquals(tree.toString(), runtime.currentIdentity())
+        assertNull(runtime.commandBlocker())
 
         viewModel.selectProject(other, flags)
         val second = await(viewModel) { it.projectName == "Another project" && !it.projectLoading &&
             it.currentSessionWorkspaceId == other.toString() }
         assertFalse(firstId == second.currentSessionId)
+        assertEquals(other.toString(), runtime.currentIdentity())
+        assertNull(runtime.commandBlocker())
 
         viewModel.resumeSession(firstId!!)
         val resumed = await(viewModel) { it.currentSessionId == firstId }
@@ -124,9 +130,10 @@ class ChatViewModelTest {
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
         WorkspaceSelection(app).select(tree, flags)
+        assertNull(RuntimeController(app).commandBlocker())
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(toolCalls = listOf(
             AgentToolCall("run-1", "run_command", """{"command":"printf 'RIVET_COMMAND_OK\\n'"}"""),
-        )))))
+        )), AgentResponse(text = "I didn't run the command"))))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
         val viewModel = ChatViewModel(app, RejectingPersistence(),
@@ -139,6 +146,38 @@ class ChatViewModelTest {
         assertEquals(tree.toString(), awaiting.projectIdentity)
         assertEquals(1, provider.requests.size)
         viewModel.deny("run-1")
+    }
+
+    @Test fun runtimeFailureMessagesGiveChatRecoveryWithoutRemovedControls() {
+        assertTrue(runtimeFailureMessage("workspace_unavailable").contains("Choose the project again"))
+        assertTrue(runtimeFailureMessage("workspace_changed").contains("stopped before running"))
+        assertTrue(runtimeFailureMessage("terminal_active").contains("command runner is busy"))
+        assertTrue(runtimeFailureMessage("sync_required").contains("stopped instead of overwriting"))
+        listOf("workspace_unavailable", "terminal_active", "sync_required").forEach { code ->
+            val message = runtimeFailureMessage(code)
+            assertFalse(message.contains("Terminal"))
+            assertFalse(message.contains("Sync"))
+            assertFalse(message.contains("SAF"))
+        }
+    }
+
+    @Test fun unavailableCommandShowsTruthfulRecoveryWithoutAnotherModelRequest() = runBlocking {
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("run-1", "run_command", """{"command":"printf ok"}"""))),
+            AgentResponse(text = "The command succeeded"),
+        )))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.send("Run printf ok")
+        val failed = await(viewModel) { !it.streaming && it.error != null }
+        assertTrue(failed.error!!.contains("Choose the project again"))
+        assertNull(failed.pendingApproval)
+        assertEquals(1, provider.requests.size)
+        assertFalse(failed.messages.any { it.text.contains("command succeeded") })
     }
 
     @Test fun activityLabelsDescribeObservedToolKinds() {
