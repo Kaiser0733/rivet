@@ -16,8 +16,8 @@ sealed class ProviderError(message: String) : Exception(message) {
     object EmptyResponse : ProviderError("empty response")
     class ProviderMessage(val text: String) : ProviderError(text)
 
-    // Plain-text copy for UI surfaces; provider-reported messages pass
-    // through verbatim, everything else is Rivet's own short wording.
+    // Keep provider wire messages out of normal Chat; they may contain
+    // implementation details or request fragments.
     fun text(): String = when (this) {
         is Unauthorized -> "Authentication failed. Check the API key."
         is Forbidden -> "The provider rejected access for this key."
@@ -38,6 +38,6 @@ sealed class ProviderError(message: String) : Exception(message) {
         is InvalidResponse -> "The provider returned a response Rivet could not parse."
         is Server -> "Provider server error (HTTP $status)."
         EmptyResponse -> "The provider returned an empty response."
-        is ProviderMessage -> text
+        is ProviderMessage -> "The model provider couldn't complete this request. Try again or check its settings."
     }
 }

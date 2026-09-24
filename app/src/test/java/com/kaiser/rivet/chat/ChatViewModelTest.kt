@@ -19,12 +19,16 @@ import com.kaiser.rivet.provider.ChatRequest
 import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
+import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.TestResult
+import com.kaiser.rivet.runtime.CheckpointFailure
+import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.storage.AgentSession
 import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -60,6 +64,114 @@ class ChatViewModelTest {
     @After
     fun cleanup() {
         Dispatchers.resetMain()
+    }
+
+    @Test fun projectSelectionStartsBoundConversationAndHistoryKeepsItsProject() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val authority = "com.kaiser.rivet.project-chat"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val other = DocumentsContract.buildTreeDocumentUri(authority, "other")
+        documents.nodes["other"] = TestDocumentsProvider.Node("Another project", null, true,
+            java.io.File.createTempFile("other-project", ".test", app.cacheDir))
+        val store = CodingSessions(app)
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, store,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready && !it.projectLoading }
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+
+        viewModel.selectProject(tree, flags)
+        val first = await(viewModel) { it.projectName == "project" && !it.projectLoading &&
+            it.currentSessionWorkspaceId == tree.toString() }
+        val firstId = first.currentSessionId
+        assertEquals(tree.toString(), first.projectIdentity)
+
+        viewModel.selectProject(other, flags)
+        val second = await(viewModel) { it.projectName == "Another project" && !it.projectLoading &&
+            it.currentSessionWorkspaceId == other.toString() }
+        assertFalse(firstId == second.currentSessionId)
+
+        viewModel.resumeSession(firstId!!)
+        val resumed = await(viewModel) { it.currentSessionId == firstId }
+        assertEquals("Another project", resumed.projectName)
+        assertEquals(tree.toString(), resumed.currentSessionWorkspaceId)
+        assertEquals(other.toString(), resumed.projectIdentity)
+    }
+
+    @Test fun activityLabelsDescribeObservedToolKinds() {
+        assertEquals("Looking through the project…", ChatViewModel.activityFor("read_file"))
+        assertEquals("Running a project command…", ChatViewModel.activityFor("run_command"))
+        assertEquals("Updating the project…", ChatViewModel.activityFor("apply_patch"))
+    }
+
+    @Test fun undoErrorsOnlyClaimExternalChangesForRealConflicts() {
+        assertTrue(undoFailureMessage(CheckpointFailure("undo_conflict")).contains("changed after"))
+        assertTrue(undoFailureMessage(MirrorFailure("conflict")).contains("changed after"))
+        assertTrue(undoFailureMessage(MirrorFailure("sync_required")).contains("unfinished"))
+        assertTrue(undoFailureMessage(MirrorFailure("workspace_changed")).contains("no longer selected"))
+        assertFalse(undoFailureMessage(CheckpointFailure("storage")).contains("changed after"))
+        assertFalse(undoFailureMessage(null).contains("changed after"))
+    }
+
+    @Test fun authenticationFailureOffersSettingsWithoutShowingToolData() = runBlocking {
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit) = ""
+            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+                throw ProviderError.Unauthorized()
+            }
+        }
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+        viewModel.send("hello")
+        val failed = await(viewModel) { !it.streaming && it.error != null }
+        assertEquals(ChatErrorAction.OpenSettings, failed.errorAction)
+        assertTrue(failed.error!!.contains("API key"))
+        assertNull(failed.pendingApproval)
+        assertEquals(1L, failed.acceptedMessageCount)
+    }
+
+    @Test fun missingProviderDoesNotAcceptMessageAndOffersSettings() = runBlocking {
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Failure("No API key stored.") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready }
+        viewModel.send("Please fix this")
+        val failed = await(viewModel) { it.error != null }
+        assertEquals(0L, failed.acceptedMessageCount)
+        assertTrue(failed.messages.isEmpty())
+        assertEquals(ChatErrorAction.OpenSettings, failed.errorAction)
+    }
+
+    @Test fun stopWhilePreparingDoesNotAcceptAMessageOrStartASecondTurn() = runBlocking {
+        val provider = CompletableDeferred<ProviderRuntimeResult>()
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { provider.await() },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready }
+        viewModel.send("first")
+        assertTrue(viewModel.uiState.value.streaming)
+        viewModel.send("second")
+        viewModel.cancel()
+        val stopped = await(viewModel) { !it.streaming && it.notice?.startsWith("Stopped") == true }
+        assertEquals(0L, stopped.acceptedMessageCount)
+        assertTrue(stopped.messages.isEmpty())
     }
 
     @Test
@@ -292,7 +404,7 @@ class ChatViewModelTest {
         await(viewModel) { it.ready }
 
         viewModel.send("Continue")
-        val stopped = await(viewModel) { !it.streaming && it.error?.contains("could not shorten") == true }
+        val stopped = await(viewModel) { !it.streaming && it.error?.contains("make room") == true }
 
         assertNull(stopped.pendingApproval)
         assertEquals(67, sessions.fullEventCount(id))

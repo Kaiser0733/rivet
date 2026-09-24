@@ -7,8 +7,6 @@ import androidx.lifecycle.ViewModelProvider
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.runtime.TerminalViewModel
 import com.kaiser.rivet.ui.RivetApp
-import com.kaiser.rivet.ui.files.FilesViewModel
-import com.kaiser.rivet.ui.changes.ChangesViewModel
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 
 class MainActivity : ComponentActivity() {
@@ -21,12 +19,8 @@ class MainActivity : ComponentActivity() {
         // AndroidViewModels; no custom factory needed.
         val chatViewModel = ViewModelProvider(this)[ChatViewModel::class.java]
         val providersViewModel = ViewModelProvider(this)[ProvidersViewModel::class.java]
-        val filesViewModel = ViewModelProvider(this)[FilesViewModel::class.java]
         val terminalViewModel = ViewModelProvider(this)[TerminalViewModel::class.java]
-        val changesViewModel = ViewModelProvider(this)[ChangesViewModel::class.java]
         chatViewModel.attachRuntime(terminalViewModel.controller)
-        changesViewModel.attachRuntime(terminalViewModel.controller)
-        setContent { RivetApp(versionName, chatViewModel, providersViewModel, filesViewModel,
-            terminalViewModel, changesViewModel) }
+        setContent { RivetApp(versionName, chatViewModel, providersViewModel) }
     }
 }

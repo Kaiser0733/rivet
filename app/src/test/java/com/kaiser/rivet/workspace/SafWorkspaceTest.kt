@@ -45,6 +45,10 @@ class SafWorkspaceTest {
         try { operation(); fail("Expected $reason") } catch (e: WorkspaceFailure) { assertEquals(reason, e.reason) }
     }
 
+    @Test fun selectedProjectUsesProviderDisplayName() = runBlocking {
+        assertEquals("project", workspace.displayName())
+    }
+
     @Test fun providerContractSupportsFrameworkQueryAndCreation() {
         val resolver = RuntimeEnvironment.getApplication().contentResolver
         val root = DocumentsContract.buildDocumentUriUsingTree(tree, "root")
