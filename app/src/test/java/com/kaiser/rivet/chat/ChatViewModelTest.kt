@@ -161,6 +161,18 @@ class ChatViewModelTest {
         }
     }
 
+    @Test fun fileToolRuntimeGateDoesNotTreatMissingProjectAsReady() = runBlocking {
+        val runtime = RuntimeController(app)
+        assertEquals("workspace_unavailable", runtime.commandBlocker())
+        assertTrue(runtime.agentFailureState().endsWith(":workspace_unavailable"))
+        try {
+            runtime.requireSafCurrent()
+            error("Expected unavailable project")
+        } catch (failure: MirrorFailure) {
+            assertEquals("workspace_unavailable", failure.code)
+        }
+    }
+
     @Test fun unavailableCommandShowsTruthfulRecoveryWithoutAnotherModelRequest() = runBlocking {
         val provider = QueueProvider(ArrayDeque(listOf(
             AgentResponse(toolCalls = listOf(AgentToolCall("run-1", "run_command", """{"command":"printf ok"}"""))),
