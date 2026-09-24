@@ -12,6 +12,7 @@ internal object AgentToolError {
         "sync_required" to "Sync or resolve pending Terminal workspace changes before continuing.",
         "denied" to "The user denied this mutation. Do not retry it without a new request.",
         "checkpoint_unavailable" to "Resolve workspace or storage changes before retrying the mutation.",
+        "interrupted" to "Inspect workspace state before retrying; the operation outcome is unknown.",
     )
     private val deterministic = setOf("terminal_active", "sync_required", "denied",
         "checkpoint_unavailable", "invalid_arguments", "invalid_path", "unknown_tool")

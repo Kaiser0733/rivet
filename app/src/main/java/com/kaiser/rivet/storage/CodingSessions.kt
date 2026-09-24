@@ -7,6 +7,8 @@ import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.AgentToolError
+import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.workspace.WorkspaceSelection
@@ -51,7 +53,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val header = header(db, id)
         val summary = summary(db, id)
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
-        AgentSession(activeMessages(db, id), header.interrupted, header.id, header.title, header.workspaceId, summary)
+        val messages = recoverInterrupted(db, id, header.interrupted, activeMessages(db, id), summaryBytes)
+        AgentSession(messages, header.interrupted, header.id, header.title, header.workspaceId, summary)
     }
 
     override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) = onDatabase { db ->
@@ -110,11 +113,13 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         try {
             db.delete("events", "session_id=?", arrayOf(id))
             db.delete("active_events", "session_id=?", arrayOf(id))
+            db.delete("compactions", "session_id=?", arrayOf(id))
+            db.delete("usage", "session_id=?", arrayOf(id))
             db.execSQL("UPDATE sessions SET interrupted=0, summary='', active_generation=active_generation+1, updated_at=? WHERE id=?",
                 arrayOf(System.currentTimeMillis(), id))
-            summaryBytes = 0
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+        summaryBytes = 0
     }
 
     suspend fun list(): List<CodingSessionHeader> = onDatabase { db ->
@@ -136,10 +141,12 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     suspend fun select(id: String): AgentSession = onDatabase { db ->
         val selected = header(db, id)
-        setActive(db, id)
         val summary = summary(db, id)
+        val messages = recoverInterrupted(db, id, selected.interrupted, activeMessages(db, id),
+            summary.toByteArray(Charsets.UTF_8).size)
+        setActive(db, id)
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
-        AgentSession(activeMessages(db, id), selected.interrupted, id, selected.title, selected.workspaceId, summary)
+        AgentSession(messages, selected.interrupted, id, selected.title, selected.workspaceId, summary)
     }
 
     suspend fun rename(id: String, title: String) = onDatabase { db ->
@@ -329,6 +336,33 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.rawQuery("SELECT payload FROM active_events WHERE session_id=? ORDER BY id", arrayOf(id)).use { cursor ->
             buildList { while (cursor.moveToNext()) add(decode(cursor.getString(0))) }
         }
+
+    private fun recoverInterrupted(db: SQLiteDatabase, id: String, interrupted: Boolean,
+                                   active: List<AgentMessage>, summaryBytes: Int): List<AgentMessage> {
+        val pending = active.lastOrNull()?.takeIf {
+            interrupted && it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty()
+        } ?: return active
+        val result = AgentMessage.tools(pending.toolCalls.map { call ->
+            AgentToolResult(call.id, call.name, AgentToolError.content("interrupted"), true,
+                "Interrupted  ${call.name}".take(256))
+        })
+        val fits = AgentSessionCodec.fits(active + result, summaryBytes)
+        val payload = json.encodeToString(AgentMessage.serializer(), result)
+        db.beginTransaction()
+        try {
+            db.insertOrThrow("events", null, ContentValues().apply {
+                put("session_id", id); put("payload", payload)
+            })
+            if (fits) db.insertOrThrow("active_events", null, ContentValues().apply {
+                put("session_id", id); put("payload", payload)
+            }) else db.execSQL("DELETE FROM active_events WHERE id=(SELECT MAX(id) FROM active_events WHERE session_id=?)",
+                arrayOf(id))
+            db.execSQL("UPDATE sessions SET active_generation=active_generation+1, updated_at=? WHERE id=?",
+                arrayOf(System.currentTimeMillis(), id))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        return if (fits) active + result else active.dropLast(1)
+    }
 
     private fun summary(db: SQLiteDatabase, id: String): String =
         db.rawQuery("SELECT summary FROM sessions WHERE id=?", arrayOf(id)).use {
