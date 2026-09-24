@@ -111,10 +111,6 @@ internal object AgentContext {
             (fields[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
         }
         if (path != null) return clipped(path, 200)
-        if (call.name == "run_command") {
-            val command = (fields["command"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-            return command?.let { clipped(it, 180) }
-        }
         return null
     }
 

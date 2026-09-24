@@ -60,4 +60,21 @@ class AgentContextTest {
         assertTrue(encoded.size <= 96 * 1024)
         assertEquals(plan.summaryInput, encoded.toString(Charsets.UTF_8))
     }
+
+    @Test fun commandArgumentsAreNotCopiedIntoCompactionPrompt() {
+        val command = AgentToolCall("shell", "run_command", """{"command":"echo private-token-12345"}""")
+        val messages = mutableListOf(
+            AgentMessage.user("Run a test"),
+            AgentMessage.assistant("", listOf(command)),
+            AgentMessage.tools(listOf(AgentToolResult("shell", "run_command", "{}", summary = "Command exited 0"))),
+        )
+        repeat(22) { index ->
+            messages += AgentMessage.user("Inspect $index")
+            messages += AgentMessage.assistant("", listOf(AgentToolCall("read-$index", "read_file", "{}")))
+            messages += AgentMessage.tools(listOf(AgentToolResult("read-$index", "read_file", "x".repeat(22_000))))
+        }
+        val plan = AgentContext.plan(messages)!!
+        assertTrue(plan.summaryInput.contains("run_command"))
+        assertFalse(plan.summaryInput.contains("private-token-12345"))
+    }
 }
