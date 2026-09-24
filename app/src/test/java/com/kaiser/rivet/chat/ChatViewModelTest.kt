@@ -110,6 +110,37 @@ class ChatViewModelTest {
         assertEquals(other.toString(), resumed.projectIdentity)
     }
 
+    @Test fun restoredProjectCanRequestCommandApprovalAfterChatReconstruction() = runBlocking {
+        val authority = "com.kaiser.rivet.restored-command"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        WorkspaceSelection(app).select(tree, flags)
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(toolCalls = listOf(
+            AgentToolCall("run-1", "run_command", """{"command":"printf 'RIVET_COMMAND_OK\\n'"}"""),
+        )))))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && it.projectIdentity == tree.toString() }
+
+        viewModel.send("Run this project command")
+        val awaiting = await(viewModel) { it.pendingApproval != null }
+        assertEquals("run-1", awaiting.pendingApproval?.call?.id)
+        assertEquals(tree.toString(), awaiting.projectIdentity)
+        assertEquals(1, provider.requests.size)
+        viewModel.deny("run-1")
+    }
+
     @Test fun activityLabelsDescribeObservedToolKinds() {
         assertEquals("Looking through the project…", ChatViewModel.activityFor("read_file"))
         assertEquals("Running a project command…", ChatViewModel.activityFor("run_command"))

@@ -16,6 +16,31 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentLoopTest {
+    @Test fun unavailableCommandStopsBeforeApprovalExecutionOrFalseSuccess() = runTest {
+        val call = AgentToolCall("run-1", "run_command", """{"command":"printf ok"}""")
+        var modelRequests = 0
+        var approvals = 0
+        var executions = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                modelRequests++
+                if (modelRequests == 1) AgentResponse(toolCalls = listOf(call))
+                else AgentResponse(text = "The command completed successfully")
+            },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Run", "printf ok")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; true },
+            mutationBlocker = { "workspace_unavailable" },
+        ).run(listOf(AgentMessage.user("Run command")), emptyList())
+
+        assertEquals(1, modelRequests)
+        assertEquals(0, approvals)
+        assertEquals(0, executions)
+        assertFalse(result.messages.any { it.text.contains("completed successfully") })
+        assertTrue(result.messages.flatMap { it.toolResults }.single().content.contains("workspace_unavailable"))
+    }
     @Test fun providerResourceExhaustionIsSurfacedWithoutRetry() = runTest {
         var requests = 0
         val loop = AgentLoop(
