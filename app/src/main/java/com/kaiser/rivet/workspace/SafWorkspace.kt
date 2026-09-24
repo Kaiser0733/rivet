@@ -40,6 +40,13 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
     private fun rootId(): String = DocumentsContract.getTreeDocumentId(tree)
 
     suspend fun stat(path: WorkspacePath): WorkspaceEntry = io { resolve(path) }
+    suspend fun displayName(): String = io {
+        resolver.query(uri(rootId()), arrayOf(Document.COLUMN_DISPLAY_NAME), null, null)?.use { cursor ->
+            if (cursor.moveToFirst()) cursor.getString(0)?.trim()?.takeIf {
+                it.isNotEmpty() && '/' !in it && '\\' !in it && it.length <= 100
+            } else null
+        } ?: "Selected project"
+    }
     suspend fun listDirectory(path: WorkspacePath): List<WorkspaceEntry> = io { children(resolve(path), 5000) }
     suspend fun readTextFile(path: WorkspacePath): TextSnapshot = io {
         val entry = resolve(path)
