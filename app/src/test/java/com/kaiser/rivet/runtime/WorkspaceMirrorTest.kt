@@ -102,6 +102,42 @@ class WorkspaceMirrorTest {
         assertFalse(mirror.hasLocalChanges())
     }
 
+    @Test fun checkpointUndoRestoresBinaryAndDeletedFilesThroughSafSync() = runBlocking {
+        val original = byteArrayOf(0, 1, 2, 0xFF.toByte())
+        source("asset.bin", original)
+        source("delete.txt", "keep".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        val store = TurnCheckpoint(File(files, "checkpoints"), tree.toString())
+        val id = store.begin(root)
+        File(root, "asset.bin").writeBytes(byteArrayOf(8, 9))
+        File(root, "delete.txt").delete()
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        assertTrue(store.finish(id, mirror.prepare().worktree))
+
+        val stage = store.stageUndo(store.latest()!!, mirror.prepare().worktree)
+        mirror.installCheckpoint(stage)
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        assertArrayEquals(original, bytes("asset.bin"))
+        assertArrayEquals("keep".toByteArray(), bytes("delete.txt"))
+    }
+
+    @Test fun checkpointUndoRefusesExternalEditAfterAgentTurn() = runBlocking {
+        source("file.txt", "before".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        val store = TurnCheckpoint(File(files, "checkpoints"), tree.toString())
+        val id = store.begin(root)
+        File(root, "file.txt").writeText("agent")
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        store.finish(id, mirror.prepare().worktree)
+        provider.nodes.values.first { it.name == "file.txt" }.bytes.writeText("external")
+
+        try { store.stageUndo(store.latest()!!, mirror.prepare().worktree); fail("Expected conflict") }
+        catch (error: CheckpointFailure) { assertEquals("undo_conflict", error.code) }
+        assertArrayEquals("external".toByteArray(), bytes("file.txt"))
+    }
+
     @Test fun externalChangeConflictsAndPreservesBothCopies() = runBlocking {
         source("file.txt", "base".toByteArray())
         val mirror = mirror()

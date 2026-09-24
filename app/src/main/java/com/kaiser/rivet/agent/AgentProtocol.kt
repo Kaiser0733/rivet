@@ -64,6 +64,15 @@ data class AgentResponse(
     val text: String = "",
     val toolCalls: List<AgentToolCall> = emptyList(),
     val transportState: String? = null,
+    val usage: AgentUsage? = null,
+)
+
+data class AgentUsage(
+    val inputTokens: Long? = null,
+    val outputTokens: Long? = null,
+    val cacheReadTokens: Long? = null,
+    val reasoningTokens: Long? = null,
+    val totalTokens: Long? = null,
 )
 
 data class AgentApprovalRequest(

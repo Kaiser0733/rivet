@@ -8,7 +8,7 @@ class RivetDestinationTest {
     @Test
     fun tabOrderMatchesShellLayout() {
         assertEquals(
-            listOf("Chat", "Files", "Terminal"),
+            listOf("Chat", "Files", "Changes", "Terminal"),
             RivetDestination.entries.map { it.name },
         )
     }

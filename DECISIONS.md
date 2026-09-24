@@ -138,6 +138,7 @@ live in three Preference DataStores with stable string keys.
 Why: small data, reactive, schema-evolution via JSON list decode with
 `ignoreUnknownKeys`; a database is unjustified for this size.
 Change trigger: multi-session chat (Phase 4+) demanding relational storage.
+Agent history moved to SQLite under D29; provider configuration stays in DataStore.
 
 ## D18 — SAF tree as the workspace boundary
 
@@ -199,6 +200,7 @@ approvals and partial tool calls do not. Restart reports interruption and never
 resumes work.
 Why: process death cannot safely reconstruct network or mutation authority, while
 completed context and existing user data must survive an in-place update.
+The Phase 6 SQLite migration under D29 supersedes the transcript storage medium.
 
 ## D25 — Private POSIX mirror with SAF as external authority
 
@@ -216,3 +218,28 @@ display. No writable app-data executable or Termux package is required.
 Why: target SDK 35 blocks direct execution of writable app data. Packaged
 executables need their own linker and shebang compatibility work after the
 runtime and sync boundary is validated on a device.
+
+## D27 — JGit core for read-only repository inspection
+
+What: inspect an explicit root `.git` directory in the private SAF mirror
+with JGit core. Gitfile links, which may point outside the workspace, are not
+followed. Rivet does not stage, commit, reset, or sync repository metadata for
+inspection.
+Why: one Java library supplies real Git status and bounded diffs without
+requiring an external Termux install or packaging native Git executables.
+
+## D28 — Private pre-turn checkpoints
+
+What: stream one pre-change archive per mutating agent turn into app-private
+storage, excluding `.git`; require a matching post-change manifest for Undo.
+Why: recovery must work without a user Git repository and must not overwrite
+later user or external changes. Checkpoint failure blocks the mutation.
+
+## D29 — SQLite sessions and separate active context
+
+What: import the bounded DataStore agent transcript once into SQLite event
+rows, leaving the source intact. Full rows are durable; only active model
+context is compacted. Provider/model selection remains independent of a
+workspace-bound session.
+Why: a single Preferences value cannot hold a long coding conversation.
+Security policy, approvals, and project guidance are rebuilt outside summaries.

@@ -1,6 +1,7 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.storage.AgentSessionCodec
+import com.kaiser.rivet.provider.ProviderError
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
@@ -15,6 +16,185 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentLoopTest {
+    @Test fun providerResourceExhaustionIsSurfacedWithoutRetry() = runTest {
+        var requests = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> requests++; throw ProviderError.ResourceExhausted() },
+            prepareTool = { error("No tools") },
+            requestApproval = { error("No approvals") },
+        )
+        try {
+            loop.run(listOf(AgentMessage.user("Continue")), emptyList())
+            error("Expected provider failure")
+        } catch (_: ProviderError.ResourceExhausted) {
+            assertEquals(1, requests)
+        }
+    }
+
+    @Test fun repeatedTerminalBlockStopsWithoutSecondApprovalOrCommand() = runTest {
+        val first = AgentToolCall("one", "run_command", """{"command":"pwd"}""")
+        val second = first.copy(id = "two")
+        var modelRequests = 0
+        var approvals = 0
+        var checkpoints = 0
+        var executions = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                modelRequests++
+                AgentResponse(toolCalls = listOf(if (modelRequests == 1) first else second))
+            },
+            prepareTool = { call -> PreparedAgentTool(call, AgentApprovalRequest(call, "Run", "pwd")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; true },
+            mutationBlocker = { "terminal_active" },
+            beforeMutation = { checkpoints++; null },
+            failureState = { "terminal_active" },
+        ).run(listOf(AgentMessage.user("Run pwd")), emptyList())
+        val results = result.messages.flatMap { it.toolResults }
+        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertEquals(2, modelRequests)
+        assertEquals(0, approvals)
+        assertEquals(0, checkpoints)
+        assertEquals(0, executions)
+        assertEquals(listOf("one", "two"), results.map { it.callId })
+        assertTrue(results[0].content.contains("Stop the interactive Terminal"))
+        assertTrue(results[1].content.contains("no_progress"))
+        assertTrue(results[1].content.contains("terminal_active"))
+    }
+
+    @Test fun changedBlockerStateAllowsLaterCommandAndRepeatedSuccessfulReads() = runTest {
+        val calls = listOf(
+            AgentToolCall("blocked", "run_command", """{"command":"pwd"}"""),
+            AgentToolCall("resumed", "run_command", """{"command":"pwd"}"""),
+            AgentToolCall("read1", "read_file", """{"path":"Main.kt"}"""),
+            AgentToolCall("read2", "read_file", """{"path":"Main.kt"}"""),
+        )
+        var request = 0
+        var state = "terminal_active"
+        var executions = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                val next = request++
+                if (next == 1) state = "ready"
+                if (next < calls.size) AgentResponse(toolCalls = listOf(calls[next]))
+                else AgentResponse(text = "done")
+            },
+            prepareTool = { call -> PreparedAgentTool(call,
+                if (call.name == "run_command") AgentApprovalRequest(call, "Run", "pwd") else null) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { true },
+            mutationBlocker = { if (state == "terminal_active") "terminal_active" else null },
+            failureState = { state },
+        ).run(listOf(AgentMessage.user("Continue")), emptyList())
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(3, executions)
+        assertEquals(1, result.messages.flatMap { it.toolResults }.count { it.error })
+    }
+
+    @Test fun contextOverflowCompactsAndRetriesOnlyTheModelRequest() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        var requests = 0
+        var mutations = 0
+        val seen = mutableListOf<List<AgentMessage>>()
+        val result = AgentLoop(
+            requestModel = { messages, _, _ ->
+                requests++
+                seen += messages
+                when (requests) {
+                    1 -> AgentResponse(toolCalls = listOf(call))
+                    2 -> throw ProviderError.ContextOverflow()
+                    else -> AgentResponse(text = "done")
+                }
+            },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "file")) {
+                mutations++
+                AgentToolResult(call.id, call.name, "x".repeat(3_000))
+            } },
+            requestApproval = { true },
+            compactContext = { messages, force -> if (force) messages.take(1) else messages },
+        ).run(listOf(AgentMessage.user("edit")), emptyList())
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(3, requests)
+        assertEquals(1, mutations)
+        assertEquals(listOf(AgentMessage.user("edit")), seen.last())
+    }
+
+    @Test fun compactionReplacesOnlyActiveContextBeforeNextModelRequest() = runTest {
+        val old = listOf(AgentMessage.user("older"), AgentMessage.assistant("done"), AgentMessage.user("current"))
+        val seen = mutableListOf<List<AgentMessage>>()
+        val persisted = mutableListOf<AgentMessage>()
+        val result = AgentLoop(
+            requestModel = { messages, _, _ -> seen += messages; AgentResponse(text = "next") },
+            prepareTool = { error("No tools") },
+            requestApproval = { error("No approvals") },
+            compactContext = { messages, _ -> messages.takeLast(1) },
+        ).run(old, emptyList(), onMessage = { persisted += it })
+
+        assertEquals(listOf(AgentMessage.user("current")), seen.single())
+        assertEquals(listOf(AgentMessage.assistant("next")), persisted)
+        assertEquals(listOf(AgentMessage.user("current"), AgentMessage.assistant("next")), result.messages)
+    }
+
+    @Test fun compactionFailureStopsWithoutExecutingTool() = runTest {
+        var requests = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> requests++; AgentResponse() },
+            prepareTool = { error("No tools") },
+            requestApproval = { error("No approvals") },
+            compactContext = { _, _ -> throw IllegalStateException("summary failed") },
+        ).run(listOf(AgentMessage.user("continue")), emptyList())
+        assertEquals(AgentStopReason.ContextUnavailable, result.stopReason)
+        assertEquals(0, requests)
+    }
+
+    @Test
+    fun checkpointFailureStopsApprovedMutationBeforeExecution() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "file")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { true },
+            beforeMutation = { "checkpoint_unavailable" },
+        )
+
+        val result = loop.run(listOf(AgentMessage.user("edit")), emptyList())
+        assertEquals(AgentStopReason.CheckpointUnavailable, result.stopReason)
+        assertEquals(0, executions)
+        val correlated = result.messages.last().toolResults.single()
+        assertEquals("edit", correlated.callId)
+        assertTrue(correlated.error)
+        assertTrue("checkpoint_unavailable" in correlated.content)
+    }
+
+    @Test
+    fun deniedCommandNeverStartsCheckpointOrExecution() = runTest {
+        val call = AgentToolCall("command", "run_command", "{}")
+        var checkpoints = 0
+        var executions = 0
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "Stopped")))
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Run", "command")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { false },
+            beforeMutation = { checkpoints++; null },
+        ).run(listOf(AgentMessage.user("run")), emptyList())
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(0, checkpoints)
+        assertEquals(0, executions)
+    }
     @Test
     fun createdPathStaysOrdinaryThroughRenameAndMoveButExistingDeleteIsDangerous() = runTest {
         val workspace = AgentToolExecutorTest.FakeWorkspace()
@@ -186,7 +366,8 @@ class AgentLoopTest {
         assertEquals(1, approvals)
         assertEquals(0, executions)
         assertEquals(2, result.messages.flatMap { it.toolResults }.count { it.error })
-        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("no_progress"))
     }
 
     @Test

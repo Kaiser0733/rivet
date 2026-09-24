@@ -205,6 +205,27 @@ class OpenAiCompatibleClientTest {
         assertEquals("search_files", response.toolCalls[1].name)
     }
 
+    @Test fun knownProvidersRequestAndParseFinalUsageButCustomShapeStaysBaseline() = runTest {
+        val sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
+            "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":12," +
+            "\"total_tokens\":52,\"prompt_tokens_details\":{\"cached_tokens\":10}," +
+            "\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n" +
+            "data: [DONE]\n\n"
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+        val reported = OpenAiCompatibleClient(config(ProviderType.OpenAi), "key").streamAgent(
+            AgentRequest("model", emptyList(), "", ReasoningLevel.Default, emptyList())) {}
+        assertEquals(40L, reported.usage?.inputTokens)
+        assertEquals(12L, reported.usage?.outputTokens)
+        assertEquals(10L, reported.usage?.cacheReadTokens)
+        assertEquals(3L, reported.usage?.reasoningTokens)
+        assertTrue(server.takeRequest().body.readUtf8().contains("\"include_usage\":true"))
+
+        server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
+        OpenAiCompatibleClient(config(), "key").streamAgent(
+            AgentRequest("model", emptyList(), "", ReasoningLevel.Default, emptyList())) {}
+        assertTrue(!server.takeRequest().body.readUtf8().contains("stream_options"))
+    }
+
     @Test
     fun streamErrorSurfacesProviderMessage() = runTest {
         server.enqueue(MockResponse().setBody(

@@ -53,6 +53,7 @@ class WorkspaceMirror(
     private val base = File(context.filesDir, "runtime/workspaces/$id")
     private val current = File(base, "current")
     private val staging = File(base, "staging")
+    private val checkpointStaging = File(base, "checkpoint-stage")
     private val previous = File(base, "previous")
     private val mutex = Mutex()
     val worktree: File get() = File(current, "worktree")
@@ -135,6 +136,33 @@ class WorkspaceMirror(
             } catch (e: CancellationException) { throw e
             } catch (e: MirrorFailure) { throw e
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
+        }
+    }
+
+    suspend fun installCheckpoint(replacement: File) = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            selected()
+            recover()
+            if (!replacement.isDirectory || Files.isSymbolicLink(replacement.toPath())) throw MirrorFailure("unsafe_entry")
+            val before = baseline()
+            if (localSnapshot() != before.entries) throw MirrorFailure("mirror_dirty")
+            if (safSnapshot() != before.entries) throw MirrorFailure("conflict")
+            if (!checkpointStaging.mkdirs()) throw MirrorFailure("storage")
+            try {
+                Files.move(replacement.toPath(), File(checkpointStaging, "worktree").toPath(),
+                    StandardCopyOption.ATOMIC_MOVE)
+                writeBaseline(checkpointStaging, before)
+                Files.move(current.toPath(), previous.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                try {
+                    Files.move(checkpointStaging.toPath(), current.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                } catch (error: Exception) {
+                    Files.move(previous.toPath(), current.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                    throw error
+                }
+                if (previous.exists()) removeTree(previous)
+            } catch (error: CancellationException) { throw error
+            } catch (error: MirrorFailure) { throw error
+            } catch (_: Exception) { throw MirrorFailure("restore_failed") }
         }
     }
 
@@ -276,6 +304,7 @@ class WorkspaceMirror(
 
     private fun removeStaging() {
         if (staging.exists()) removeTree(staging)
+        if (checkpointStaging.exists()) removeTree(checkpointStaging)
     }
 
     private fun removeTree(root: File) {
