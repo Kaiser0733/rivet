@@ -79,7 +79,7 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
 
     suspend fun requireSafCurrent() = operations.withLock {
         if (terminal != null) throw MirrorFailure("terminal_active")
-        val active = currentMirror() ?: return@withLock
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         if (active.hasLocalChanges()) throw MirrorFailure("sync_required")
     }
 
@@ -193,7 +193,7 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
     suspend fun currentIdentity(): String? = selection.currentIdentity()
 
     suspend fun agentFailureState(): String = operations.withLock {
-        val identity = selection.currentIdentity().orEmpty()
+        val identity = selection.currentIdentity() ?: return@withLock ":workspace_unavailable"
         if (terminal != null) return@withLock "$identity:terminal_active"
         val dirty = try { currentMirror()?.hasLocalChanges() == true }
             catch (e: CancellationException) { throw e }

@@ -41,6 +41,33 @@ class AgentLoopTest {
         assertFalse(result.messages.any { it.text.contains("completed successfully") })
         assertTrue(result.messages.flatMap { it.toolResults }.single().content.contains("workspace_unavailable"))
     }
+
+    @Test fun workspaceLostAfterApprovalStopsBeforeCommandExecution() = runTest {
+        val call = AgentToolCall("run-1", "run_command", """{"command":"printf ok"}""")
+        var requests = 0
+        var approvals = 0
+        var executions = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                requests++
+                if (requests == 1) AgentResponse(toolCalls = listOf(call))
+                else AgentResponse(text = "The command succeeded")
+            },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Run", "printf ok")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; true },
+            beforeMutation = { "workspace_unavailable" },
+        ).run(listOf(AgentMessage.user("Run command")), emptyList())
+
+        assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
+        assertEquals("workspace_unavailable", result.failureCode)
+        assertEquals(1, approvals)
+        assertEquals(0, executions)
+        assertEquals(1, requests)
+        assertTrue(result.messages.flatMap { it.toolResults }.single().content.contains("workspace_unavailable"))
+    }
     @Test fun providerResourceExhaustionIsSurfacedWithoutRetry() = runTest {
         var requests = 0
         val loop = AgentLoop(

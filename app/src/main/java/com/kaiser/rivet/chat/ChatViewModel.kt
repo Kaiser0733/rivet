@@ -440,7 +440,8 @@ class ChatViewModel private constructor(
                             if (checkpointBroken) "checkpoint_unavailable" else null
                         } catch (e: CancellationException) { throw e
                         } catch (e: MirrorFailure) {
-                            e.code.takeIf { it == "terminal_active" || it == "sync_required" }
+                            e.code.takeIf { it == "terminal_active" || it == "sync_required" ||
+                                it == "workspace_unavailable" || it == "workspace_changed" }
                                 ?: "checkpoint_unavailable"
                         }
                     }
