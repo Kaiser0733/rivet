@@ -44,6 +44,43 @@ JGit's license notice:
     ARISING IN ANY WAY OUT OF THE USE OF THIS SOFTWARE, EVEN IF
     ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
 
+JGit core's runtime dependencies are
+[`JavaEWAH` 1.2.3](https://github.com/lemire/javaewah/tree/JavaEWAH-1.2.3) (Apache-2.0),
+[`Apache Commons Codec` 1.17.0](https://github.com/apache/commons-codec/tree/rel/commons-codec-1.17.0)
+(Apache-2.0), and
+[`SLF4J API` 1.7.36](https://github.com/qos-ch/slf4j/tree/v_1.7.36) (MIT).
+The Apache-2.0 terms are in Rivet's `LICENSE`. Commons Codec's notice is:
+
+    Apache Commons Codec
+    Copyright 2002-2024 The Apache Software Foundation
+
+    This product includes software developed at
+    The Apache Software Foundation (https://www.apache.org/).
+
+SLF4J's MIT notice:
+
+    Copyright (c) 2004-2022 QOS.ch Sarl (Switzerland)
+    All rights reserved.
+
+    Permission is hereby granted, free  of charge, to any person obtaining
+    a  copy  of this  software  and  associated  documentation files  (the
+    "Software"), to  deal in  the Software without  restriction, including
+    without limitation  the rights to  use, copy, modify,  merge, publish,
+    distribute,  sublicense, and/or sell  copies of  the Software,  and to
+    permit persons to whom the Software  is furnished to do so, subject to
+    the following conditions:
+
+    The  above  copyright  notice  and  this permission  notice  shall  be
+    included in all copies or substantial portions of the Software.
+
+    THE  SOFTWARE IS  PROVIDED  "AS  IS", WITHOUT  WARRANTY  OF ANY  KIND,
+    EXPRESS OR  IMPLIED, INCLUDING  BUT NOT LIMITED  TO  THE  WARRANTIES OF
+    MERCHANTABILITY,    FITNESS    FOR    A   PARTICULAR    PURPOSE    AND
+    NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE
+    LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION
+    OF CONTRACT, TORT OR OTHERWISE,  ARISING FROM, OUT OF OR IN CONNECTION
+    WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
 Rivet includes `terminal-emulator` and `terminal-view` source from
 [`termux/termux-app`](https://github.com/termux/termux-app), pinned to
 `084d709fbf23ea83b5cb85fd3d795c775be06676`. The upstream repository's

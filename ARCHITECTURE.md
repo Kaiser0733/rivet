@@ -3,7 +3,7 @@
 Describes what exists today. Phase-by-phase growth is recorded in
 MASTER_ROADMAP.md; anything not listed here is not in the tree.
 
-## Current shape (Phase 5: Embedded Runtime)
+## Current shape (Phase 6: Coding Workflow)
 
 The `:app` module uses vendored `:terminal-emulator` and `:terminal-view`
 modules. The application ID remains `com.kaiser.rivet`.
@@ -30,15 +30,20 @@ app/src/main/java/com/kaiser/rivet/
         AgentApprovalGate.kt  # one-shot mutation approval authority
         AgentToolExecutor.kt  # strict workspace tool schemas and validation
         SafAgentWorkspace.kt  # adapter to the trusted SAF boundary
+        AgentContext.kt       # bounded active-context planning
+        ProjectInstructions.kt # bounded root-to-target AGENTS.md loading
     runtime/
         WorkspaceMirror.kt    # streamed SAF mirror and baseline
         RuntimeController.kt  # command/terminal workspace association
         CommandProcess.kt     # bounded command capture and cleanup
         TerminalViewModel.kt  # retained PTY session and explicit sync
+        GitInspection.kt      # read-only JGit status and bounded diff
+        TurnCheckpoint.kt     # private pre-turn archive and undo fingerprints
     storage/
         ProviderStore.kt     # DataStore: provider configs + active id
         SecretStore.kt       # Android Keystore + AES-GCM API-key storage
         ChatStore.kt         # legacy chat plus migrated agent session
+        CodingSessions.kt    # SQLite full events, active context, usage
     workspace/
         SafWorkspace.kt       # native SAF traversal and document operations
         WorkspaceSelection.kt # persisted tree grant and directory navigation
@@ -54,6 +59,7 @@ app/src/main/java/com/kaiser/rivet/
         files/               # workspace browser/editor, dialogs, FilesViewModel
         chat/ChatScreen.kt   # message list, input, model selector
         terminal/TerminalScreen.kt # PTY view and shell controls
+        changes/             # Git/checkpoint changes, diff, confirmed Undo
         provider/SettingsScreen.kt    # provider list, add/edit/delete
         provider/ProviderEditor.kt    # provider form, test, fetch models
         provider/ProvidersViewModel.kt
@@ -88,9 +94,11 @@ message only; the active request completes (or is stopped) on its own.
 
 - Provider configs + active selection: DataStore Preferences, keys
   `configs` / `active_id`, JSON-encoded list.
-- Agent history: DataStore Preferences, provider-neutral JSON under
-  `agent_messages`. The former `messages` list is imported once and is not
-  deleted by migration. One conversation.
+- Coding sessions: SQLite stores provider-neutral full event rows, a bounded
+  active model transcript, compaction summaries, and per-request usage. The
+  previous DataStore `agent_messages` transcript imports once; its source is
+  retained. Sessions bind to the selected workspace and can be resumed or
+  switched independently of provider/model selection.
 - API keys: app-private preferences contain versioned IV+ciphertext records.
   A non-exportable AES-256 key in AndroidKeyStore encrypts each value with
   AES/GCM/NoPadding; the provider id is authenticated as associated data.
@@ -107,16 +115,17 @@ wide layouts instead of stretching phone-width fields across a tablet.
 Rotation: ViewModels and their active work survive activity recreation, while
 `rememberSaveable` may restore the selected tab and screen. System-initiated
 process death destroys the ViewModels and terminates any active stream. A new
-process reloads completed provider configuration and agent history from
-DataStore. An interrupted marker is shown once; streams and approvals are never
+process reloads completed provider configuration and coding sessions from
+storage. An interrupted marker is shown once; streams and approvals are never
 resumed or reconstructed.
 
 ## Agent execution boundary
 
 `AgentLoop` has emergency runaway ceilings of 200 model responses and 1,000
 requested tools per turn. There is no cumulative tool-output quota. Individual
-results remain capped at 24 KiB of encoded UTF-8 JSON; the persisted session
-remains capped at 512 KiB. Read-only results are checked at their actual size.
+results remain capped at 24 KiB of encoded UTF-8 JSON; the active model
+transcript remains capped at 512 KiB. Full event history has no aggregate
+512 KiB limit. Read-only results are checked at their actual size.
 Before approval, mutations reserve space for their bounded result contract and
 all remaining correlated results. Session exhaustion stops the turn without
 executing the mutation. Workspace file text is untrusted project data; tool
@@ -137,8 +146,9 @@ The workspace identity is checked before every tool and again after approval.
 Changing the selected tree stops the turn instead of redirecting work. Stop
 cancels the provider request, pending approval, future calls, and cancellable
 reads. A SAF commit that already began retains Phase 3 non-cancellable commit
-semantics, and its completed result is persisted. Tool errors remain correlated
-results so the same model can inspect and recover.
+semantics, and its completed result is persisted. Tool errors remain correlated.
+Repeating an unchanged deterministic blocker stops the turn; a changed
+Terminal/sync state permits a later retry.
 
 ## Workspace boundary
 
@@ -210,8 +220,7 @@ editor navigation until completion. Back navigation/discard and deletion require
 confirmation. Process death ends asynchronous work and loses unsaved drafts;
 only the selected tree, directory, and file path restore (file bytes are reread).
 Whole project contents are not persisted in preferences. Tool results never
-expose URIs or document IDs. There is no indexing database, Git, or diff
-tracking.
+expose URIs or document IDs. There is no repository index.
 
 ## Runtime boundary
 
@@ -242,3 +251,27 @@ mirror. Android system utilities provide the initial command set. No
 Termux installation, package manager, or app-data ELF execution is present.
 The inspected modern `termux-exec` linker/interception approach is reserved
 for future packaged binaries; direct app-data execution is not assumed.
+
+## Repository, checkpoints, and context
+
+JGit inspects only a real `.git` directory at the selected worktree root.
+`git_status` and `git_diff` never stage or alter the user's repository. Diff
+output is capped at 16 KiB and 20 files. Android's system shell does not supply
+Git; Rivet's inspection works without a separate Git executable.
+
+After approval and before the first workspace mutation in an agent turn,
+`TurnCheckpoint` streams a pre-change ZIP into app-private storage. It excludes
+`.git`, tracks a post-change manifest, and retains at most three completed
+checkpoints within 2 GiB. Undo requires an explicit UI confirmation and an
+unchanged post-turn worktree. Restoration passes through the mirror's SAF
+conflict checks. A checkpoint that cannot be created prevents the mutation.
+
+SQLite keeps full events independently of the active transcript. Context
+pressure first removes older complete call/result groups from active context,
+then stores a bounded task-state summary; full rows remain. Recent complete
+groups stay verbatim. A clear provider context-overflow response may trigger
+one smaller model request, never a replay of completed tools. Rivet policy,
+approvals, workspace identity, and bounded applicable `AGENTS.md` instructions
+are rebuilt outside the summary on each request. Usage is recorded as reported,
+estimated from a compatible reported anchor, or unknown; model context-window
+size is not inferred from an unverified model-name table.
