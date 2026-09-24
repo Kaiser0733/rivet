@@ -24,6 +24,7 @@ import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.runtime.RuntimeController
+import com.kaiser.rivet.runtime.CheckpointFailure
 import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.MirrorSync
 import com.kaiser.rivet.storage.AgentSessionLimitException
@@ -75,9 +76,21 @@ data class ChatUiState(
     val undoCheckpointId: String? = null,
     val undoing: Boolean = false,
     val notice: String? = null,
+    val acceptedMessageCount: Long = 0,
 )
 
 enum class ChatErrorAction { OpenSettings }
+
+internal fun undoFailureMessage(error: Throwable?): String = when {
+    error is CheckpointFailure && error.code == "undo_conflict" ||
+        error is MirrorFailure && error.code == "conflict" ->
+        "The project changed after Rivet's edits, so Undo stopped before overwriting newer work."
+    error is MirrorFailure && error.code in setOf("sync_required", "mirror_dirty", "previous_dirty") ->
+        "Rivet found unfinished project changes and stopped Undo to avoid overwriting them."
+    error is MirrorFailure && error.code in setOf("workspace_changed", "workspace_unavailable") ->
+        "This project is no longer selected. Choose it again before undoing."
+    else -> "Rivet couldn't finish Undo. Check the project before trying again."
+}
 
 internal sealed interface ProviderRuntimeResult {
     data class Ready(val config: ProviderConfig, val apiKey: String) : ProviderRuntimeResult
@@ -211,7 +224,7 @@ class ChatViewModel private constructor(
     }
 
     fun selectProject(uri: Uri, flags: Int) {
-        if (_uiState.value.streaming || _uiState.value.projectLoading) return
+        if (!_uiState.value.ready || _uiState.value.streaming || _uiState.value.projectLoading) return
         _uiState.update { it.copy(projectLoading = true, projectError = null) }
         viewModelScope.launch {
             try {
@@ -254,7 +267,8 @@ class ChatViewModel private constructor(
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready) return
+        if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready ||
+            sendJob?.isActive == true) return
         val ticket = ++generation
         sendJob = viewModelScope.launch {
             val snapshot = providerSnapshot() ?: return@launch
@@ -316,7 +330,8 @@ class ChatViewModel private constructor(
             _uiState.update {
                 it.copy(messages = (it.messages + durable.last()).takeLast(100), streaming = true,
                     error = null, errorAction = null, notice = null, activity = "Working on it…",
-                    lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null)
+                    lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
+                    acceptedMessageCount = it.acceptedMessageCount + 1)
             }
             activeMessages = durable.toList()
             var lastSystem = ""
@@ -631,14 +646,19 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun providerSnapshot(): ProviderRuntimeResult.Ready? {
-        return when (val result = providerSource.load()) {
+        val loaded = try { providerSource.load() }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                return failBeforeStart("Rivet couldn't load the model settings. Open Settings and try again.")
+            }
+        return when (val result = loaded) {
             is ProviderRuntimeResult.Ready -> result
             is ProviderRuntimeResult.Failure -> failBeforeStart(result.message)
         }
     }
 
     private fun failBeforeStart(message: String): Nothing? {
-        _uiState.update { it.copy(error = message) }
+        _uiState.update { it.copy(error = message, errorAction = ChatErrorAction.OpenSettings) }
         return null
     }
 
@@ -677,12 +697,14 @@ class ChatViewModel private constructor(
                         lastTurnFiles = emptyList(), lastTurnFileCount = 0, notice = "Changes undone.") }
                 } else {
                     _uiState.update { it.copy(undoing = false,
-                        error = "The project changed outside Rivet, so I stopped before overwriting it. The newer version is safe.") }
+                        error = if (outcome.state == MirrorSync.Conflict)
+                            undoFailureMessage(MirrorFailure("conflict"))
+                        else undoFailureMessage(null)) }
                 }
             } catch (e: CancellationException) { throw e
-            } catch (_: Exception) {
+            } catch (e: Exception) {
                 _uiState.update { it.copy(undoing = false,
-                    error = "I couldn't safely undo this because the project changed afterward. The newer files were left untouched.") }
+                    error = undoFailureMessage(e)) }
             }
         }
     }

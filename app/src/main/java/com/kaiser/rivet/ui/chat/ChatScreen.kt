@@ -74,6 +74,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         }
     }
     fun chooseProject() {
+        if (!state.ready) return
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
@@ -109,7 +110,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         Row(Modifier.widthIn(max = MAX_COLUMN_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically) {
             TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
-                enabled = !state.streaming && !state.projectLoading && !state.undoing) {
+                enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing) {
                 Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
                 Text(state.projectName ?: "Choose project", maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
@@ -142,7 +143,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         } else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading) {
             EmptyState("What do you want to work on?", "Choose the folder containing your project, then tell Rivet what you want changed.",
                 "Choose project", ::chooseProject, Modifier.weight(1f))
-        } else if (state.messages.isEmpty() && !state.streaming) {
+        } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null) {
             EmptyState("Tell Rivet what you want to change.", "Rivet can inspect this project and will ask before changing files.",
                 "", {}, Modifier.weight(1f))
         } else {
@@ -155,6 +156,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         }
         InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null && !wrongProject &&
             providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing,
+            acceptedMessageCount = state.acceptedMessageCount,
             onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
             modifier = Modifier.widthIn(max = MAX_COLUMN_WIDTH).align(Alignment.CenterHorizontally))
     }
@@ -347,15 +349,27 @@ private fun ErrorRow(error: String, onDismiss: () -> Unit, onOpenSettings: (() -
 }
 
 @Composable
-private fun InputBar(streaming: Boolean, ready: Boolean, onSend: (String) -> Unit,
+private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long, onSend: (String) -> Unit,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
     var draft by rememberSaveable { mutableStateOf("") }
+    var pendingText by rememberSaveable { mutableStateOf<String?>(null) }
+    var submittedAt by rememberSaveable { mutableStateOf(0L) }
+    LaunchedEffect(acceptedMessageCount) {
+        if (pendingText != null && acceptedMessageCount > submittedAt) {
+            if (draft == pendingText) draft = ""
+            pendingText = null
+        }
+    }
     Row(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
         verticalAlignment = Alignment.Bottom) {
         OutlinedTextField(value = draft, onValueChange = { draft = it }, modifier = Modifier.weight(1f),
             placeholder = { Text("Ask Rivet…") }, minLines = 1, maxLines = 6)
         IconButton(onClick = {
-            if (streaming) onCancel() else { onSend(draft); draft = "" }
+            if (streaming) onCancel() else {
+                pendingText = draft
+                submittedAt = acceptedMessageCount
+                onSend(draft)
+            }
         }, enabled = streaming || (ready && draft.isNotBlank())) {
             Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
                 stringResource(if (streaming) R.string.chat_stop else R.string.chat_send))
