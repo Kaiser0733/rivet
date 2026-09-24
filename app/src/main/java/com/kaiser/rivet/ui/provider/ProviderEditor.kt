@@ -24,6 +24,9 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
@@ -32,6 +35,7 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.offeredReasoning
+import com.kaiser.rivet.provider.ProviderType
 
 private val MAX_WIDTH = 640.dp
 
@@ -42,6 +46,7 @@ fun ProviderEditor(
 ) {
     val state by viewModel.editorState.collectAsState()
     val config = state.config
+    var advanced by remember(config.id) { mutableStateOf(state.headersText.isNotEmpty()) }
 
     Column(
         Modifier
@@ -72,13 +77,15 @@ fun ProviderEditor(
             modifier = Modifier.fillMaxWidth(),
             singleLine = true,
         )
-        OutlinedTextField(
-            value = config.baseUrl,
-            onValueChange = { v -> viewModel.updateConfig { it.copy(baseUrl = v) } },
-            label = { Text(stringResource(R.string.provider_base_url_label)) },
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            singleLine = true,
-        )
+        if (config.type == ProviderType.OpenAiCompatible || advanced) {
+            OutlinedTextField(
+                value = config.baseUrl,
+                onValueChange = { v -> viewModel.updateConfig { it.copy(baseUrl = v) } },
+                label = { Text(stringResource(R.string.provider_base_url_label)) },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                singleLine = true,
+            )
+        }
         OutlinedTextField(
             value = state.keyInput,
             onValueChange = viewModel::setKeyInput,
@@ -167,8 +174,11 @@ fun ProviderEditor(
             }
         }
 
+        TextButton(onClick = { advanced = !advanced }) {
+            Text(if (advanced) "Hide advanced options" else "Advanced options")
+        }
         val reasoningOptions = offeredReasoning(config.type, config.model)
-        if (reasoningOptions.size > 1) {
+        if (advanced && reasoningOptions.size > 1) {
             Text(
                 stringResource(R.string.provider_reasoning_label),
                 style = MaterialTheme.typography.titleSmall,
@@ -186,13 +196,15 @@ fun ProviderEditor(
             }
         }
 
-        OutlinedTextField(
-            value = state.headersText,
-            onValueChange = viewModel::updateHeadersText,
-            label = { Text(stringResource(R.string.provider_headers_label)) },
-            placeholder = { Text(stringResource(R.string.provider_headers_hint)) },
-            modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
-        )
+        if (advanced) {
+            OutlinedTextField(
+                value = state.headersText,
+                onValueChange = viewModel::updateHeadersText,
+                label = { Text(stringResource(R.string.provider_headers_label)) },
+                placeholder = { Text(stringResource(R.string.provider_headers_hint)) },
+                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+            )
+        }
 
         Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
             TextButton(

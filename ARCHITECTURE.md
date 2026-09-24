@@ -3,7 +3,7 @@
 Describes what exists today. Phase-by-phase growth is recorded in
 MASTER_ROADMAP.md; anything not listed here is not in the tree.
 
-## Current shape (Phase 6: Coding Workflow)
+## Current shape (Phase 7: Chat-first product)
 
 The `:app` module uses vendored `:terminal-emulator` and `:terminal-view`
 modules. The application ID remains `com.kaiser.rivet`.
@@ -53,13 +53,13 @@ app/src/main/java/com/kaiser/rivet/
         WorkspaceEntry.kt     # metadata, capabilities, operation epochs
         WorkspaceFailure.kt   # safe user-facing failures
     ui/
-        RivetApp.kt           # shell: nav, screen routing, settings entry
-        RivetDestination.kt  # tab model
+        RivetApp.kt           # Chat and Settings routing
+        RivetDestination.kt  # two normal surfaces
         Theme.kt             # dark color scheme, shape set
-        files/               # workspace browser/editor, dialogs, FilesViewModel
-        chat/ChatScreen.kt   # message list, input, model selector
-        terminal/TerminalScreen.kt # PTY view and shell controls
-        changes/             # Git/checkpoint changes, diff, confirmed Undo
+        files/               # retained workspace browser/editor code; not routed
+        chat/ChatScreen.kt   # conversation, project choice, approval, Undo
+        terminal/TerminalScreen.kt # retained PTY UI; not routed
+        changes/             # retained Git/checkpoint review code; not routed
         provider/SettingsScreen.kt    # provider list, add/edit/delete
         provider/ProviderEditor.kt    # provider form, test, fetch models
         provider/ProvidersViewModel.kt
@@ -109,11 +109,13 @@ message only; the active request completes (or is stopped) on its own.
 
 ## UI shell
 
-Single-activity Compose. Width >= 600dp uses NavigationRail, else
-NavigationBar. Chat and Settings screens cap content width at 640dp on
-wide layouts instead of stretching phone-width fields across a tablet.
-Rotation: ViewModels and their active work survive activity recreation, while
-`rememberSaveable` may restore the selected tab and screen. System-initiated
+Single-activity Compose. Chat is the normal working surface; Settings is
+secondary. Android's folder picker is launched from Chat. Runtime, file, Git,
+and synchronization controls are not normal destinations. Chat shows completed
+conversation text, contextual project changes and Undo, and approval dialogs;
+provider-neutral tool events remain durable but are not rendered as a log.
+Content width is capped for tablet layouts. Rotation preserves the composer
+draft and ViewModels. System-initiated
 process death destroys the ViewModels and terminates any active stream. A new
 process reloads completed provider configuration and coding sessions from
 storage. An interrupted marker is shown once; streams and approvals are never
@@ -242,12 +244,12 @@ bounded head/tail text, exit status remains separate from sync status, and a
 timeout or Stop terminates the process group. The shell shares Rivet's Android
 UID: cwd checks are not a security sandbox. No API keys are exported.
 
-The Terminal tab uses a PTY, the vendored Termux terminal emulator/view, and
-one `/system/bin/sh` session retained by a ViewModel across rotation. Its
-scrollback is bounded by the emulator. Terminal edits stay in the mirror until
-the shell stops and the user chooses Sync. Leaving the tab never discards the
-worktree. A workspace switch stops the old shell and cannot retarget its
-mirror. Android system utilities provide the initial command set. No
+The retained Terminal implementation uses a PTY, the vendored Termux terminal
+emulator/view, and one `/system/bin/sh` session retained across rotation. The
+Terminal screen is not routed in the Phase 7 product. Agent commands still use
+the runtime, process-group cancellation, and automatic mirror-to-SAF sync. A
+workspace switch cannot retarget an active command. Android system utilities
+provide the initial command set. No
 Termux installation, package manager, or app-data ELF execution is present.
 The inspected modern `termux-exec` linker/interception approach is reserved
 for future packaged binaries; direct app-data execution is not assumed.

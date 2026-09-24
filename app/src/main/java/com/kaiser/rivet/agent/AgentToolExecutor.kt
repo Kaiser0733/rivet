@@ -141,7 +141,7 @@ class AgentToolExecutor(
                     val path = path(args.path); hash(args.expectedSha256)
                     require(args.edits.isNotEmpty() && args.edits.size <= 100)
                     val edits = args.edits.map { require(it.oldText.isNotEmpty()); AgentTextEdit(it.oldText, it.newText) }
-                    mutation(call, "Edit", "$path\n${edits.size} exact replacement${if (edits.size == 1) "" else "s"}", path.length) {
+                    mutation(call, "Edit", "$path\n${edits.size} change${if (edits.size == 1) "" else "s"}", path.length) {
                         snapshot(call, workspace.patch(path, args.expectedSha256, edits), "Edited  $path")
                     }
                 }
@@ -209,7 +209,7 @@ class AgentToolExecutor(
                     PreparedAgentTool(
                         call,
                         AgentApprovalRequest(call, "Run command",
-                            "Working directory: ${cwd.ifEmpty { "." }}\n${args.command}\nThis command may modify workspace files.",
+                            "${args.command}${if (cwd.isEmpty()) "" else "\nIn folder: $cwd"}",
                             dangerous = true),
                     ) {
                         execute(call) {
@@ -259,8 +259,8 @@ class AgentToolExecutor(
         }
         val size = entry?.takeIf { !it.directory }?.size?.let { "\n%,d bytes".format(java.util.Locale.US, it) } ?: ""
         val warning = if (request.call.name == "delete_path")
-            "Rivet cannot confirm this path was created for this task. Deletion is permanent."
-        else "Rivet cannot confirm this path was created for this task."
+            "This may be one of your existing files. Deletion is permanent."
+        else "This may be one of your existing files."
         return request.copy(title = "$verb ${if (entry == null) "unverified" else "existing"} $kind?",
             detail = "${request.detail}$size\n$warning", dangerous = true)
     }

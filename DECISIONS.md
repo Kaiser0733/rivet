@@ -243,3 +243,12 @@ context is compacted. Provider/model selection remains independent of a
 workspace-bound session.
 Why: a single Preferences value cannot hold a long coding conversation.
 Security policy, approvals, and project guidance are rebuilt outside summaries.
+
+## D30 — Chat-first normal surface
+
+What: Chat and Settings are the only normal destinations. Project selection,
+approvals, activity, changed files, and Undo appear in Chat when relevant.
+File, Terminal, Git, checkpoint, and synchronization systems remain available
+to the agent without permanent user navigation.
+Why: local coding work should start with a project and a request; users should
+not need to operate the engine's development and recovery screens.

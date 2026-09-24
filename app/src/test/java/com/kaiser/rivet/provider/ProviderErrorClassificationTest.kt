@@ -1,6 +1,7 @@
 package com.kaiser.rivet.provider
 
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class ProviderErrorClassificationTest {
@@ -16,5 +17,10 @@ class ProviderErrorClassificationTest {
         assertTrue(httpError(429, """{"error":{"message":"ResourceExhausted: Worker local total request limit reached (16/16)"}}""")
             is ProviderError.ResourceExhausted)
         assertTrue(httpError(429, """{"error":{"message":"slow down"}}""") is ProviderError.RateLimited)
+    }
+
+    @Test fun providerWireMessageIsNotShownAsChatError() {
+        val error = ProviderError.ProviderMessage("internal_request_id=abc123")
+        assertFalse(error.text().contains("internal_request_id"))
     }
 }

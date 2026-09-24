@@ -101,7 +101,7 @@ fun SettingsScreen(
                     Column(Modifier.weight(1f)) {
                         Text(config.name, style = MaterialTheme.typography.bodyLarge)
                         Text(
-                            config.type.name + " · " + config.model,
+                            typeDisplayName(config.type) + " · " + config.model,
                             style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant,
                         )
