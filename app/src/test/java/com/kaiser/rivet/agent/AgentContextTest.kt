@@ -66,7 +66,8 @@ class AgentContextTest {
         val messages = mutableListOf(
             AgentMessage.user("Run a test"),
             AgentMessage.assistant("", listOf(command)),
-            AgentMessage.tools(listOf(AgentToolResult("shell", "run_command", "{}", summary = "Command exited 0"))),
+            AgentMessage.tools(listOf(AgentToolResult("shell", "run_command", "x".repeat(22_000),
+                summary = "Command exited 0"))),
         )
         repeat(22) { index ->
             messages += AgentMessage.user("Inspect $index")
