@@ -101,6 +101,27 @@ class ChatViewModelTest {
         assertNull(recovered.pendingApproval)
     }
 
+    @Test fun unexpectedPersistenceFailureDoesNotRetrySameTranscript() = runBlocking {
+        val persistence = RejectingPersistence().apply { failOnAssistant = "unstorable" }
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(text = "unstorable"), AgentResponse(text = "recovered"))))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, persistence,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("first")
+        val failed = await(viewModel) { !it.streaming && it.error != null }
+        assertEquals(2, persistence.saveAttempts)
+        assertEquals(1, persistence.markInterruptedCalls)
+        assertNull(failed.pendingApproval)
+
+        viewModel.send("second")
+        val recovered = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "recovered" }
+        assertNull(recovered.error)
+    }
+
     @Test
     fun mutationAtSessionLimitNeverRequestsApprovalAndClearAllowsNextTurn() = runBlocking {
         val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.testdocs", "root")
@@ -288,6 +309,7 @@ class ChatViewModelTest {
         private var interrupted = false
         var saveAttempts = 0
         var markInterruptedCalls = 0
+        var failOnAssistant: String? = null
 
         override suspend fun load() = AgentSession(messages, interrupted)
 
@@ -295,6 +317,10 @@ class ChatViewModelTest {
             saveAttempts++
             if (messages.any { it.text == "oversized" }) {
                 throw AgentSessionLimitException(Int.MAX_VALUE)
+            }
+            if (failOnAssistant != null && messages.lastOrNull()?.text == failOnAssistant) {
+                failOnAssistant = null
+                throw IllegalStateException("storage failed")
             }
             this.messages = messages
             this.interrupted = interrupted

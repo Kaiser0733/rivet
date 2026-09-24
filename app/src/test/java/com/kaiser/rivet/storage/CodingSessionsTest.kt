@@ -10,6 +10,7 @@ import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -53,6 +54,37 @@ class CodingSessionsTest {
         assertEquals(1, reopened.list().size)
     }
 
+    @Test fun interruptedToolCallGetsOneCorrelatedUnknownResultOnRestart() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val call = AgentToolCall("pending-1", "write_file", "{}")
+        val pending = listOf(AgentMessage.user("edit"), AgentMessage.assistant("", listOf(call)))
+        sessions.save(pending, interrupted = true)
+
+        val restored = CodingSessions(app).load()
+        assertTrue(restored.interrupted)
+        assertEquals(3, restored.messages.size)
+        val result = restored.messages.last().toolResults.single()
+        assertEquals(call.id, result.callId)
+        assertEquals(call.name, result.name)
+        assertTrue(result.error)
+        assertTrue(result.content.contains("outcome is unknown"))
+        assertEquals(3, CodingSessions(app).fullEventCount(id))
+        assertEquals(3, CodingSessions(app).load().messages.size)
+        sessions.markInterrupted(false)
+        assertEquals(3, CodingSessions(app).load().messages.size)
+    }
+
+    @Test fun migratedInterruptedToolCallIsRecoveredWithoutRerunningIt() = runBlocking {
+        val call = AgentToolCall("legacy-pending", "run_command", "{}")
+        AgentSessionStore(app).save(listOf(AgentMessage.user("run"),
+            AgentMessage.assistant("", listOf(call))), interrupted = true)
+        val migrated = CodingSessions(app).load()
+        assertEquals(call.id, migrated.messages.last().toolResults.single().callId)
+        assertTrue(migrated.messages.last().toolResults.single().error)
+        assertEquals(3, CodingSessions(app).fullEventCount(migrated.id!!))
+    }
+
     @Test fun sessionsResumeIndependentlyAndDeletionIsIsolated() = runBlocking {
         val sessions = CodingSessions(app)
         val first = sessions.load()
@@ -74,6 +106,21 @@ class CodingSessionsTest {
         assertEquals(1, sessions.list().size)
     }
 
+    @Test fun unreadableSessionCannotReplaceCurrentSelection() = runBlocking {
+        val sessions = CodingSessions(app)
+        val good = sessions.load().id!!
+        val broken = sessions.create(null).id!!
+        sessions.save(listOf(AgentMessage.user("will be corrupt")), interrupted = false)
+        sessions.select(good)
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("UPDATE active_events SET payload=? WHERE session_id=?", arrayOf("{broken", broken))
+        }
+
+        try { sessions.select(broken); throw AssertionError("Expected decode failure") }
+        catch (_: Exception) { Unit }
+        assertEquals(good, sessions.load().id)
+    }
+
     @Test fun failedMigrationLeavesOriginalAndCanRetry() = runBlocking {
         val oversized = "[\"" + "x".repeat(AgentSessionCodec.MAX_SERIALIZED_BYTES) + "\"]"
         app.chatData.edit { it[stringPreferencesKey("agent_messages")] = oversized }
@@ -85,6 +132,30 @@ class CodingSessionsTest {
         AgentSessionStore(app).save(listOf(AgentMessage.user("safe")), interrupted = false)
         assertEquals("safe", sessions.load().messages.single().text)
         assertEquals(1, sessions.list().size)
+    }
+
+    @Test fun earlierSqliteSchemaUpgradesWithoutLosingEvents() = runBlocking {
+        val id = "legacy-session"
+        val original = AgentMessage.user("before schema upgrade")
+        val db = app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null)
+        db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0)")
+        db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL)")
+        db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+        db.execSQL("INSERT INTO sessions(id,title,created_at,updated_at,interrupted) VALUES(?,?,?,?,?)",
+            arrayOf(id, "Legacy", 1L, 1L, 1))
+        db.execSQL("INSERT INTO events(session_id,payload) VALUES(?,?)",
+            arrayOf(id, Json.encodeToString(AgentMessage.serializer(), original)))
+        db.execSQL("INSERT INTO metadata(key,value) VALUES('active_session',?)", arrayOf(id))
+        db.execSQL("INSERT INTO metadata(key,value) VALUES('legacy_migrated','1')")
+        db.version = 1
+        db.close()
+
+        val upgraded = CodingSessions(app)
+        assertEquals(listOf(original), upgraded.load().messages)
+        assertEquals(1, upgraded.fullEventCount(id))
+        upgraded.recordUsage(id, "after-upgrade", "provider", "model", AgentUsage(3, 2))
+        assertEquals(1, CodingSessions(app).usage(id).reportedRequests)
+        assertEquals(listOf(original), CodingSessions(app).load().messages)
     }
 
     @Test fun usageStaysWithSessionAndModelAfterRestart() = runBlocking {
@@ -100,6 +171,23 @@ class CodingSessionsTest {
         assertEquals(25L, reopened.usage(first).reportedOutputTokens)
         assertEquals(1, reopened.usage(first).unknownRequests)
         assertEquals(60L, reopened.usage(second).reportedInputTokens)
+    }
+
+    @Test fun clearingCurrentSessionAlsoClearsUsageAndCompactionState() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = listOf(AgentMessage.user("first"), AgentMessage.assistant("done"),
+            AgentMessage.user("second"))
+        sessions.save(history, interrupted = false)
+        sessions.compact(history, history.takeLast(1), "older task")
+        sessions.recordUsage(id, "turn", "provider", "model", AgentUsage(10, 5))
+        sessions.clear()
+
+        val reopened = CodingSessions(app)
+        assertTrue(reopened.load().messages.isEmpty())
+        assertEquals("", reopened.load().summary)
+        assertEquals(0, reopened.fullEventCount(id))
+        assertEquals(0, reopened.usage(id).reportedRequests)
     }
 
     @Test fun repeatedCompactionKeepsFullHistoryBeyondOldDataStoreLimit() = runBlocking {

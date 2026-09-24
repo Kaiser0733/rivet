@@ -55,17 +55,29 @@ fun ChatScreen(
     val chatState by chatViewModel.uiState.collectAsState()
     val providersState by providersViewModel.listState.collectAsState()
     val hasProvider = providersState.configs.isNotEmpty()
+    var confirmClear by remember { mutableStateOf(false) }
 
     if (!hasProvider) {
         NoProviderState(onOpenSettings)
         return
     }
 
+    if (confirmClear) {
+        AlertDialog(onDismissRequest = { confirmClear = false },
+            title = { Text("Clear this session?") },
+            text = { Text("This removes its conversation history and usage. Start a new session to keep this one.") },
+            confirmButton = { TextButton(onClick = {
+                chatViewModel.clearChat()
+                confirmClear = false
+            }) { Text("Clear") } },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } })
+    }
+
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             ModelSelector(Modifier.weight(1f), providersViewModel)
             SessionPicker(chatViewModel, chatState)
-            IconButton(onClick = chatViewModel::clearChat) {
+            IconButton(onClick = { confirmClear = true }, enabled = !chatState.streaming) {
                 Icon(painterResource(R.drawable.ic_delete), stringResource(R.string.chat_clear))
             }
         }
