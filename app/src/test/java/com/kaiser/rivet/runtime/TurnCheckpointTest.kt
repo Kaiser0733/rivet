@@ -63,9 +63,12 @@ class TurnCheckpointTest {
         val id = store.begin(root)
         target.writeText("agent")
         store.finish(id, root)
+        val record = store.latest()!!
         target.writeText("external")
 
-        try { store.stageUndo(store.latest()!!, root); throw AssertionError("Expected conflict") }
+        assertEquals(listOf("file.txt"), store.changes(record).map { it.path })
+
+        try { store.stageUndo(record, root); throw AssertionError("Expected conflict") }
         catch (error: CheckpointFailure) { assertEquals("undo_conflict", error.code) }
         assertEquals("external", target.readText())
     }

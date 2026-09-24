@@ -140,6 +140,11 @@ class RuntimeController(context: Context) {
         checkpoints(record.workspace).changesFromCurrent(record, active.prepare().worktree)
     }
 
+    suspend fun checkpointTurnChanges(record: CheckpointRecord): List<CheckpointChange> = operations.withLock {
+        if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
+        checkpoints(record.workspace).changes(record)
+    }
+
     suspend fun checkpointDiff(record: CheckpointRecord, path: String): CheckpointDiff = operations.withLock {
         if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
         if (terminal != null) throw MirrorFailure("terminal_active")
