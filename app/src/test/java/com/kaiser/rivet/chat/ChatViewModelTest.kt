@@ -28,6 +28,7 @@ import com.kaiser.rivet.storage.AgentSession
 import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -156,6 +157,21 @@ class ChatViewModelTest {
         assertEquals(0L, failed.acceptedMessageCount)
         assertTrue(failed.messages.isEmpty())
         assertEquals(ChatErrorAction.OpenSettings, failed.errorAction)
+    }
+
+    @Test fun stopWhilePreparingDoesNotAcceptAMessageOrStartASecondTurn() = runBlocking {
+        val provider = CompletableDeferred<ProviderRuntimeResult>()
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { provider.await() },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready }
+        viewModel.send("first")
+        assertTrue(viewModel.uiState.value.streaming)
+        viewModel.send("second")
+        viewModel.cancel()
+        val stopped = await(viewModel) { !it.streaming && it.notice?.startsWith("Stopped") == true }
+        assertEquals(0L, stopped.acceptedMessageCount)
+        assertTrue(stopped.messages.isEmpty())
     }
 
     @Test
