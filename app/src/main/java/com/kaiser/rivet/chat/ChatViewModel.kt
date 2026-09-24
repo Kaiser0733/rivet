@@ -267,10 +267,14 @@ class ChatViewModel private constructor(
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready ||
-            sendJob?.isActive == true) return
+        if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready) return
         val ticket = ++generation
+        _uiState.update { it.copy(streaming = true, activity = "Getting ready…",
+            error = null, errorAction = null, notice = null) }
+        val previous = sendJob
         sendJob = viewModelScope.launch {
+            try {
+            previous?.join()
             val snapshot = providerSnapshot() ?: return@launch
             val restoredWorkspace = try {
                 workspaceSelection.restore()
@@ -283,7 +287,8 @@ class ChatViewModel private constructor(
             val workspaceId = workspace?.tree?.toString()
             if (sessions != null && _uiState.value.currentSessionId != null &&
                 workspaceId != _uiState.value.currentSessionWorkspaceId) {
-                _uiState.update { it.copy(error = "This conversation belongs to another project. Choose that project or start a new conversation.") }
+                _uiState.update { it.copy(streaming = false, activity = null,
+                    error = "This conversation belongs to another project. Choose that project or start a new conversation.") }
                 return@launch
             }
             val runtime = runtimeController
@@ -307,7 +312,8 @@ class ChatViewModel private constructor(
                 try { compactActive(activeMessages, client, snapshot, sessionId, turnId, force = true) }
                 catch (e: CancellationException) { throw e
                 } catch (_: Exception) {
-                    _uiState.update { it.copy(error = "Rivet could not shorten this session's context. The conversation was kept.") }
+                    _uiState.update { it.copy(streaming = false, activity = null,
+                        error = "Rivet could not shorten this session's context. The conversation was kept.") }
                     return@launch
                 }
             }
@@ -317,13 +323,14 @@ class ChatViewModel private constructor(
             } catch (_: AgentSessionLimitException) {
                 if (ticket == generation) {
                     _uiState.update {
-                        it.copy(streaming = false, pendingApproval = null, error = CONTEXT_LIMIT_ERROR)
+                        it.copy(streaming = false, pendingApproval = null, activity = null,
+                            error = CONTEXT_LIMIT_ERROR)
                     }
                 }
                 return@launch
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
-                _uiState.update { it.copy(streaming = false, pendingApproval = null,
+                _uiState.update { it.copy(streaming = false, pendingApproval = null, activity = null,
                     error = "Could not save the conversation. Check available storage and try again.") }
                 return@launch
             }
@@ -550,6 +557,18 @@ class ChatViewModel private constructor(
                     _uiState.update { it.copy(error = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") }
                 }
             }
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                Log.w("RivetChat", "agent setup failed: ${e.javaClass.simpleName}")
+                if (ticket == generation) _uiState.update { it.copy(streaming = false,
+                    activity = null, pendingApproval = null,
+                    error = "Rivet couldn't start this request. Check the project and try again.") }
+            } finally {
+                if (ticket == generation && _uiState.value.streaming) {
+                    _uiState.update { it.copy(streaming = false, activity = null, pendingApproval = null,
+                        notice = "Stopped. Any completed changes remain in the project.") }
+                }
+            }
         }
     }
 
@@ -658,7 +677,8 @@ class ChatViewModel private constructor(
     }
 
     private fun failBeforeStart(message: String): Nothing? {
-        _uiState.update { it.copy(error = message, errorAction = ChatErrorAction.OpenSettings) }
+        _uiState.update { it.copy(streaming = false, activity = null, error = message,
+            errorAction = ChatErrorAction.OpenSettings) }
         return null
     }
 

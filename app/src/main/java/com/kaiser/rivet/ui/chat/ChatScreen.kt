@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -109,12 +110,14 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
         Row(Modifier.widthIn(max = MAX_COLUMN_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally),
             verticalAlignment = Alignment.CenterVertically) {
-            TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
-                enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing) {
-                Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
-                Text(state.projectName ?: "Choose project", maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-            }
+            if (state.projectName != null || state.messages.isNotEmpty()) {
+                TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
+                    enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing) {
+                    Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
+                    Text(state.projectName ?: "Choose project", maxLines = 1,
+                        overflow = TextOverflow.Ellipsis)
+                }
+            } else Spacer(Modifier.weight(1f))
             SessionPicker(chatViewModel, state)
         }
         if (providers.configs.isNotEmpty()) {
@@ -124,7 +127,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Text(state.projectError.orEmpty(), Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
-                TextButton(onClick = ::chooseProject) { Text("Choose again") }
+                if (state.projectName != null || state.messages.isNotEmpty() || providers.configs.isEmpty())
+                    TextButton(onClick = ::chooseProject) { Text("Choose again") }
             }
         }
         if (wrongProject && state.projectName != null) {
@@ -157,6 +161,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null && !wrongProject &&
             providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing,
             acceptedMessageCount = state.acceptedMessageCount,
+            error = state.error, notice = state.notice,
             onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
             modifier = Modifier.widthIn(max = MAX_COLUMN_WIDTH).align(Alignment.CenterHorizontally))
     }
@@ -349,14 +354,17 @@ private fun ErrorRow(error: String, onDismiss: () -> Unit, onOpenSettings: (() -
 }
 
 @Composable
-private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long, onSend: (String) -> Unit,
+private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
+                     error: String?, notice: String?, onSend: (String) -> Unit,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
     var draft by rememberSaveable { mutableStateOf("") }
     var pendingText by rememberSaveable { mutableStateOf<String?>(null) }
     var submittedAt by rememberSaveable { mutableStateOf(0L) }
-    LaunchedEffect(acceptedMessageCount) {
+    LaunchedEffect(acceptedMessageCount, streaming, error, notice) {
         if (pendingText != null && acceptedMessageCount > submittedAt) {
             if (draft == pendingText) draft = ""
+            pendingText = null
+        } else if (!streaming && (error != null || notice != null)) {
             pendingText = null
         }
     }
@@ -370,7 +378,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                 submittedAt = acceptedMessageCount
                 onSend(draft)
             }
-        }, enabled = streaming || (ready && draft.isNotBlank())) {
+        }, enabled = streaming || (ready && draft.isNotBlank() && pendingText == null)) {
             Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
                 stringResource(if (streaming) R.string.chat_stop else R.string.chat_send))
         }

@@ -248,6 +248,6 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         is ProviderError -> error.text()
         is IllegalArgumentException -> "Provider configuration contains an invalid header or value."
         is SecurityException -> ProviderError.Network("permission").text()
-        else -> "Unexpected error (${error.javaClass.simpleName})."
+        else -> "Rivet couldn't connect to this provider. Check its settings and try again."
     }
 }
