@@ -120,9 +120,24 @@ class CommandToolTest {
         val blockedWrite = write.execute()
 
         assertEquals("terminal_active", Json.parseToJsonElement(read.content).jsonObject["error"]!!.jsonPrimitive.content)
+        assertEquals("false", Json.parseToJsonElement(read.content).jsonObject["retryable"]!!.jsonPrimitive.content)
+        assertTrue(Json.parseToJsonElement(read.content).jsonObject["required_action"]!!.jsonPrimitive.content.contains("Stop"))
         assertNotNull(write.approval)
         assertEquals("terminal_active", Json.parseToJsonElement(blockedWrite.content).jsonObject["error"]!!.jsonPrimitive.content)
         assertEquals(0, workspace.writes)
+    }
+
+    @Test fun blockedCommandExplainsRequiredActionWithoutInventingExitStatus() = runTest {
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace(), runCommand = { _, cwd, _ ->
+            RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "terminal_active")
+        })
+        val result = executor.prepare(call).execute()
+        val value = Json.parseToJsonElement(result.content).jsonObject
+        assertTrue(result.error)
+        assertEquals("terminal_active", value["error"]!!.jsonPrimitive.content)
+        assertEquals("false", value["retryable"]!!.jsonPrimitive.content)
+        assertTrue(value["required_action"]!!.jsonPrimitive.content.contains("Stop"))
+        assertNull(value["exit_code"])
     }
 
     @Test fun captureRetainsBoundedHeadAndTailOfBinaryOutput() {

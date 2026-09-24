@@ -45,6 +45,11 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         val entry = resolve(path)
         WorkspaceText.snapshot(path, read(entry, WorkspaceText.MAX_BYTES), entry.modifiedTime)
     }
+    suspend fun readProjectInstruction(path: WorkspacePath, maxBytes: Int): String = io {
+        require(maxBytes in 1..WorkspaceText.MAX_BYTES)
+        val entry = resolve(path)
+        WorkspaceText.decode(read(entry, maxBytes))
+    }
     suspend fun readCreatedFile(path: WorkspacePath): TextSnapshot = io {
         val entry = resolve(path)
         val bytes = read(entry, WorkspaceText.MAX_BYTES, checkMime = false)

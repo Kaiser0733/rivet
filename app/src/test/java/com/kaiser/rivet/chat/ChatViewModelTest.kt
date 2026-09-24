@@ -10,8 +10,10 @@ import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.storage.AgentSessionCodec
 import com.kaiser.rivet.storage.AgentSessionStore
+import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.workspace.TestDocumentsProvider
 import com.kaiser.rivet.workspace.WorkspaceSelection
+import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ChatRequest
 import com.kaiser.rivet.provider.ModelInfo
@@ -99,6 +101,27 @@ class ChatViewModelTest {
         assertNull(recovered.pendingApproval)
     }
 
+    @Test fun unexpectedPersistenceFailureDoesNotRetrySameTranscript() = runBlocking {
+        val persistence = RejectingPersistence().apply { failOnAssistant = "unstorable" }
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(text = "unstorable"), AgentResponse(text = "recovered"))))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, persistence,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("first")
+        val failed = await(viewModel) { !it.streaming && it.error != null }
+        assertEquals(2, persistence.saveAttempts)
+        assertEquals(1, persistence.markInterruptedCalls)
+        assertNull(failed.pendingApproval)
+
+        viewModel.send("second")
+        val recovered = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "recovered" }
+        assertNull(recovered.error)
+    }
+
     @Test
     fun mutationAtSessionLimitNeverRequestsApprovalAndClearAllowsNextTurn() = runBlocking {
         val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.testdocs", "root")
@@ -161,6 +184,123 @@ class ChatViewModelTest {
         assertEquals(0, documents.createCalls)
     }
 
+    @Test fun nestedInstructionsAreLoadedBeforeFirstMutationApproval() = runBlocking {
+        val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.instructions-chat", "root")
+        val info = ProviderInfo().apply {
+            authority = tree.authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val workspace = WorkspaceSelection(app).select(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        workspace.createDirectory(WorkspacePath.parse("src"))
+        val instructions = workspace.createFile(WorkspacePath.parse("src/AGENTS.md"))
+        documents.nodes[instructions.documentId]!!.bytes.writeText("Use the project naming rule.")
+        val createdBefore = documents.createCalls
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create", "create_file", """{"path":"src/Test.kt"}"""))),
+            AgentResponse(text = "I will follow the project rule."),
+        )))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Create a file in src")
+        val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "I will follow the project rule." }
+
+        assertNull(complete.pendingApproval)
+        assertEquals(createdBefore, documents.createCalls)
+        assertEquals(2, provider.requests.size)
+        assertTrue(provider.requests[1].system.contains("Use the project naming rule."))
+        assertTrue(provider.requests[1].messages.any { message ->
+            message.toolResults.any { "project_instructions_loaded" in it.content }
+        })
+    }
+
+    @Test fun compactionKeepsFullHistoryAndSendsSmallerContext() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(22) { index ->
+                add(AgentMessage.user("Inspect $index"))
+                add(AgentMessage.assistant("", listOf(AgentToolCall("call-$index", "read_file", "{}"))))
+                add(AgentMessage.tools(listOf(com.kaiser.rivet.agent.AgentToolResult(
+                    "call-$index", "read_file", "x".repeat(22_000), summary = "Read $index"))))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(text = "Prior files were inspected; continue the task."),
+            AgentResponse(text = "Complete"),
+        )))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "model-a")
+        val viewModel = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Continue " + "u".repeat(50_000))
+        val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Complete" }
+
+        assertNull(complete.error)
+        assertEquals(68, sessions.fullEventCount(id))
+        assertTrue(sessions.load().messages.size < history.size)
+        assertTrue(sessions.load().summary.contains("Prior files"))
+        assertEquals(2, provider.requests.size)
+        assertTrue(provider.requests[1].system.contains("Prior task state"))
+        assertTrue(provider.requests[1].messages.size < history.size)
+        assertEquals(68, sessions.recent(id, 100).size)
+
+        val switchedProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "After switch"))))
+        val switched = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config.copy(id = "provider-b", model = "model-b"), "key") },
+            { _, _ -> switchedProvider })
+        await(switched) { it.ready }
+        switched.send("Follow up")
+        await(switched) { !it.streaming && it.messages.lastOrNull()?.text == "After switch" }
+        assertEquals("model-b", switchedProvider.requests.single().model)
+        assertTrue(switchedProvider.requests.single().system.contains("Prior files were inspected"))
+        assertEquals(70, sessions.fullEventCount(id))
+    }
+
+    @Test fun failedSummaryKeepsFullOriginalHistory() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(22) { index ->
+                add(AgentMessage.user("Inspect $index"))
+                add(AgentMessage.assistant("", listOf(AgentToolCall("call-$index", "read_file", "{}"))))
+                add(AgentMessage.tools(listOf(com.kaiser.rivet.agent.AgentToolResult(
+                    "call-$index", "read_file", "x".repeat(22_000)))))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = ""))))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "model-a")
+        val viewModel = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Continue")
+        val stopped = await(viewModel) { !it.streaming && it.error?.contains("could not shorten") == true }
+
+        assertNull(stopped.pendingApproval)
+        assertEquals(67, sessions.fullEventCount(id))
+        assertEquals(history + AgentMessage.user("Continue"), sessions.load().messages)
+        assertEquals("", sessions.load().summary)
+        assertEquals(1, provider.requests.size)
+    }
+
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withTimeout(5_000) { viewModel.uiState.first(predicate) }
 
@@ -169,6 +309,7 @@ class ChatViewModelTest {
         private var interrupted = false
         var saveAttempts = 0
         var markInterruptedCalls = 0
+        var failOnAssistant: String? = null
 
         override suspend fun load() = AgentSession(messages, interrupted)
 
@@ -176,6 +317,10 @@ class ChatViewModelTest {
             saveAttempts++
             if (messages.any { it.text == "oversized" }) {
                 throw AgentSessionLimitException(Int.MAX_VALUE)
+            }
+            if (failOnAssistant != null && messages.lastOrNull()?.text == failOnAssistant) {
+                failOnAssistant = null
+                throw IllegalStateException("storage failed")
             }
             this.messages = messages
             this.interrupted = interrupted

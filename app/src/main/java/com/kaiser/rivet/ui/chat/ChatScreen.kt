@@ -23,6 +23,7 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.AlertDialog
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
@@ -54,17 +55,49 @@ fun ChatScreen(
     val chatState by chatViewModel.uiState.collectAsState()
     val providersState by providersViewModel.listState.collectAsState()
     val hasProvider = providersState.configs.isNotEmpty()
+    var confirmClear by remember { mutableStateOf(false) }
 
     if (!hasProvider) {
         NoProviderState(onOpenSettings)
         return
     }
 
+    if (confirmClear) {
+        AlertDialog(onDismissRequest = { confirmClear = false },
+            title = { Text("Clear this session?") },
+            text = { Text("This removes its conversation history and usage. Start a new session to keep this one.") },
+            confirmButton = { TextButton(onClick = {
+                chatViewModel.clearChat()
+                confirmClear = false
+            }) { Text("Clear") } },
+            dismissButton = { TextButton(onClick = { confirmClear = false }) { Text("Cancel") } })
+    }
+
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             ModelSelector(Modifier.weight(1f), providersViewModel)
-            IconButton(onClick = chatViewModel::clearChat) {
+            SessionPicker(chatViewModel, chatState)
+            IconButton(onClick = { confirmClear = true }, enabled = !chatState.streaming) {
                 Icon(painterResource(R.drawable.ic_delete), stringResource(R.string.chat_clear))
+            }
+        }
+        chatState.usage?.let { usage ->
+            if (usage.reportedRequests > 0 || usage.unknownRequests > 0) {
+                val reported = if (usage.reportedRequests > 0)
+                    "${usage.reportedInputTokens} input · ${usage.reportedOutputTokens} output tokens reported"
+                else "Token usage unavailable"
+                val unknown = if (usage.unknownRequests > 0) " · ${usage.unknownRequests} request(s) unreported" else ""
+                Text(reported + unknown, modifier = Modifier.padding(horizontal = 16.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+        chatState.contextEstimate?.let { estimate ->
+            estimate.tokens?.let { tokens ->
+                Text("Active context: ${if (estimate.source == "reported") "" else "≈"}$tokens tokens · ${estimate.source}",
+                    modifier = Modifier.padding(horizontal = 16.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
         MessageList(
@@ -84,6 +117,55 @@ fun ChatScreen(
             onSend = chatViewModel::send,
             onCancel = chatViewModel::cancel,
         )
+    }
+}
+
+@Composable
+private fun SessionPicker(viewModel: ChatViewModel, state: com.kaiser.rivet.chat.ChatUiState) {
+    var menu by remember { mutableStateOf(false) }
+    var rename by remember { mutableStateOf(false) }
+    var name by remember { mutableStateOf("") }
+    var delete by remember { mutableStateOf(false) }
+    if (rename) {
+        AlertDialog(onDismissRequest = { rename = false }, title = { Text("Rename session") },
+            text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true) },
+            confirmButton = { TextButton(onClick = {
+                state.currentSessionId?.let { viewModel.renameSession(it, name) }
+                rename = false
+            }) { Text("Save") } },
+            dismissButton = { TextButton(onClick = { rename = false }) { Text("Cancel") } })
+    }
+    if (delete) {
+        AlertDialog(onDismissRequest = { delete = false }, title = { Text("Delete session?") },
+            text = { Text("This deletes the conversation history for this session.") },
+            confirmButton = { TextButton(onClick = {
+                state.currentSessionId?.let(viewModel::deleteSession)
+                delete = false
+            }) { Text("Delete") } },
+            dismissButton = { TextButton(onClick = { delete = false }) { Text("Cancel") } })
+    }
+    Box {
+        TextButton(onClick = { menu = true }, enabled = !state.streaming) {
+            Text(state.currentSessionTitle ?: "Sessions")
+        }
+        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
+            DropdownMenuItem(text = { Text("New session") }, onClick = {
+                menu = false; viewModel.newSession()
+            })
+            state.sessions.forEach { session ->
+                DropdownMenuItem(text = { Text(session.title) }, onClick = {
+                    menu = false; viewModel.resumeSession(session.id)
+                })
+            }
+            if (state.currentSessionId != null) {
+                DropdownMenuItem(text = { Text("Rename current session") }, onClick = {
+                    menu = false; name = state.currentSessionTitle.orEmpty(); rename = true
+                })
+                DropdownMenuItem(text = { Text("Delete current session") }, onClick = {
+                    menu = false; delete = true
+                })
+            }
+        }
     }
 }
 

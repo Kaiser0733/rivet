@@ -59,6 +59,8 @@ fun httpError(code: Int, body: String?): ProviderError {
     return when {
         code == 401 -> ProviderError.Unauthorized()
         code == 403 -> ProviderError.Forbidden()
+        code in setOf(400, 413, 422) && isContextOverflow(body.orEmpty()) -> ProviderError.ContextOverflow()
+        code == 429 && isResourceExhausted(detail.orEmpty()) -> ProviderError.ResourceExhausted()
         code == 429 -> ProviderError.RateLimited()
         code in 500..599 -> ProviderError.Server(code)
         // Wrong-model bodies arrive as 400 or 404 depending on the service
@@ -70,6 +72,25 @@ fun httpError(code: Int, body: String?): ProviderError {
         detail != null -> ProviderError.ProviderMessage(detail)
         else -> ProviderError.ProviderMessage("HTTP $code")
     }
+}
+
+internal fun providerMessage(message: String, code: String? = null): ProviderError = when {
+    isContextOverflow(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ContextOverflow()
+    isResourceExhausted(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ResourceExhausted()
+    else -> ProviderError.ProviderMessage(message)
+}
+
+private fun isContextOverflow(text: String): Boolean {
+    val value = text.lowercase(java.util.Locale.ROOT)
+    return listOf("context_length_exceeded", "model_context_window_exceeded", "context window exceeded",
+        "maximum context length", "prompt is too long", "input token count exceeds", "request too large for context")
+        .any { it in value }
+}
+
+private fun isResourceExhausted(text: String): Boolean {
+    val value = text.lowercase(java.util.Locale.ROOT)
+    return "resourceexhausted" in value || "resource_exhausted" in value ||
+        "worker local total request limit reached" in value
 }
 
 private fun extractModelName(detail: String): String {

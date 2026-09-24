@@ -50,6 +50,10 @@ class ChatStore(private val context: Context) {
 data class AgentSession(
     val messages: List<AgentMessage> = emptyList(),
     val interrupted: Boolean = false,
+    val id: String? = null,
+    val title: String? = null,
+    val workspaceId: String? = null,
+    val summary: String = "",
 )
 
 internal interface AgentSessionPersistence {

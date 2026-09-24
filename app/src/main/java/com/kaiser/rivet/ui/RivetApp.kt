@@ -6,6 +6,8 @@ import androidx.compose.material3.TextButton
 import androidx.activity.compose.LocalActivity
 import com.kaiser.rivet.ui.files.FilesScreen
 import com.kaiser.rivet.ui.files.FilesViewModel
+import com.kaiser.rivet.ui.changes.ChangesScreen
+import com.kaiser.rivet.ui.changes.ChangesViewModel
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
@@ -47,7 +49,8 @@ private const val RAIL_MIN_WIDTH_DP = 600
 
 @Composable
 fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
-    filesViewModel: FilesViewModel, terminalViewModel: TerminalViewModel) {
+    filesViewModel: FilesViewModel, terminalViewModel: TerminalViewModel,
+    changesViewModel: ChangesViewModel) {
     RivetTheme {
         var current by rememberSaveable { mutableStateOf(RivetDestination.Chat.name) }
         var screen by rememberSaveable { mutableStateOf("tabs") } // tabs | settings | editor
@@ -151,6 +154,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel, providersViewMod
                             onOpenSettings = { screen = "settings" },
                         )
                         RivetDestination.Files -> FilesScreen(filesViewModel)
+                        RivetDestination.Changes -> ChangesScreen(changesViewModel)
                         RivetDestination.Terminal -> TerminalScreen(terminalViewModel)
                     }
                 }

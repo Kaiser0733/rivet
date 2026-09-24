@@ -162,4 +162,18 @@ class GeminiClientTest {
             kotlinx.serialization.json.Json.parseToJsonElement(it.arguments).jsonObject["path"]!!.jsonPrimitive.content
         })
     }
+
+    @Test fun usageMetadataIsKeptWhenFinalChunkHasNoCandidate() = runTest {
+        val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]}}]}\n\n" +
+            "data: {\"usageMetadata\":{\"promptTokenCount\":35,\"candidatesTokenCount\":8," +
+            "\"cachedContentTokenCount\":4,\"thoughtsTokenCount\":2,\"totalTokenCount\":45}}\n\n"
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+        val response = GeminiClient(config(), "key").streamAgent(
+            AgentRequest("gemini-x", emptyList(), "", ReasoningLevel.Default, emptyList())) {}
+        assertEquals(35L, response.usage?.inputTokens)
+        assertEquals(8L, response.usage?.outputTokens)
+        assertEquals(4L, response.usage?.cacheReadTokens)
+        assertEquals(2L, response.usage?.reasoningTokens)
+        assertEquals(45L, response.usage?.totalTokens)
+    }
 }

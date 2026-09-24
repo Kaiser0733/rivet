@@ -177,14 +177,21 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
     private val text = StringBuilder()
     private val tools = sortedMapOf<Int, Tool>()
     private val thinking = sortedMapOf<Int, Thinking>()
+    private var usage: com.kaiser.rivet.agent.AgentUsage? = null
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
         when (root["type"]?.str()) {
+            "message_start" -> anthropicUsage(root["message"]?.obj() ?: root)?.let { usage = it }
+            "message_delta" -> anthropicUsage(root)?.let { delta ->
+                val prior = usage
+                usage = delta.copy(inputTokens = delta.inputTokens ?: prior?.inputTokens,
+                    cacheReadTokens = delta.cacheReadTokens ?: prior?.cacheReadTokens)
+            }
             "error" -> {
                 val message = root["error"]?.obj()?.get("message")?.str()
                     ?: throw ProviderError.InvalidResponse("stream error")
-                throw ProviderError.ProviderMessage(message)
+                throw providerMessage(message, root["error"]?.obj()?.get("type")?.str())
             }
             "content_block_start" -> {
                 val index = root["index"]?.jsonPrimitive?.intOrNull
@@ -240,7 +247,7 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
             put("provider", "anthropic")
             put("blocks", JsonArray(values))
         }.toString() }
-        return AgentResponse(text.toString(), calls, state)
+        return AgentResponse(text.toString(), calls, state, usage)
     }
 }
 

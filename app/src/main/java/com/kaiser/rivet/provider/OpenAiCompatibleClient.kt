@@ -70,6 +70,9 @@ internal class OpenAiCompatibleClient(
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)
+            if (config.type == ProviderType.OpenAi || config.type == ProviderType.OpenRouter) {
+                put("stream_options", buildJsonObject { put("include_usage", true) })
+            }
             put("messages", buildJsonArray {
                 if (request.system.isNotEmpty()) add(buildJsonObject {
                     put("role", "system")
@@ -132,14 +135,16 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
     )
     private val text = StringBuilder()
     private val tools = sortedMapOf<Int, Pending>()
+    private var usage: com.kaiser.rivet.agent.AgentUsage? = null
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
         root["error"]?.let { error ->
             val message = error.obj()?.get("message")?.str()
                 ?: throw ProviderError.InvalidResponse("invalid stream error")
-            throw ProviderError.ProviderMessage(message)
+            throw providerMessage(message, error.obj()?.get("code")?.str())
         }
+        openAiUsage(root)?.let { usage = it }
         val delta = root["choices"]?.arr()?.firstOrNull()?.obj()?.get("delta")?.obj() ?: return
         delta["content"]?.str()?.takeIf { it.isNotEmpty() }?.let { value ->
             text.append(value); onDelta(value)
@@ -168,6 +173,7 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
                 pending.arguments.toString(),
             )
         },
+        usage = usage,
     )
 }
 
