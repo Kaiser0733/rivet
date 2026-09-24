@@ -22,6 +22,8 @@ import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.TestResult
+import com.kaiser.rivet.runtime.CheckpointFailure
+import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.storage.AgentSession
 import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
@@ -113,6 +115,15 @@ class ChatViewModelTest {
         assertEquals("Updating the project…", ChatViewModel.activityFor("apply_patch"))
     }
 
+    @Test fun undoErrorsOnlyClaimExternalChangesForRealConflicts() {
+        assertTrue(undoFailureMessage(CheckpointFailure("undo_conflict")).contains("changed after"))
+        assertTrue(undoFailureMessage(MirrorFailure("conflict")).contains("changed after"))
+        assertTrue(undoFailureMessage(MirrorFailure("sync_required")).contains("unfinished"))
+        assertTrue(undoFailureMessage(MirrorFailure("workspace_changed")).contains("no longer selected"))
+        assertFalse(undoFailureMessage(CheckpointFailure("storage")).contains("changed after"))
+        assertFalse(undoFailureMessage(null).contains("changed after"))
+    }
+
     @Test fun authenticationFailureOffersSettingsWithoutShowingToolData() = runBlocking {
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
@@ -132,6 +143,19 @@ class ChatViewModelTest {
         assertEquals(ChatErrorAction.OpenSettings, failed.errorAction)
         assertTrue(failed.error!!.contains("API key"))
         assertNull(failed.pendingApproval)
+        assertEquals(1L, failed.acceptedMessageCount)
+    }
+
+    @Test fun missingProviderDoesNotAcceptMessageAndOffersSettings() = runBlocking {
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Failure("No API key stored.") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready }
+        viewModel.send("Please fix this")
+        val failed = await(viewModel) { it.error != null }
+        assertEquals(0L, failed.acceptedMessageCount)
+        assertTrue(failed.messages.isEmpty())
+        assertEquals(ChatErrorAction.OpenSettings, failed.errorAction)
     }
 
     @Test
