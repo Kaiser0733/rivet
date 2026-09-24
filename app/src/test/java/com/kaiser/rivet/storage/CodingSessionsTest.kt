@@ -10,6 +10,7 @@ import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -117,7 +118,7 @@ class CodingSessionsTest {
         }
 
         try { sessions.select(broken); throw AssertionError("Expected decode failure") }
-        catch (_: Exception) { Unit }
+        catch (_: SerializationException) { Unit }
         assertEquals(good, sessions.load().id)
     }
 
