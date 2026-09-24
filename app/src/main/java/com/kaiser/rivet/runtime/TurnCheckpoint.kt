@@ -216,6 +216,10 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         writeRecord(folder, record.copy(undone = true))
     }
 
+    suspend fun discardStagedUndo(id: String) = withContext(Dispatchers.IO) {
+        removeTree(File(folder(id), "restore-worktree"))
+    }
+
     suspend fun fileBefore(record: CheckpointRecord, path: String): ByteArray? = withContext(Dispatchers.IO) {
         val entry = record.before[path] ?: return@withContext null
         if (entry.directory || entry.size > DIFF_FILE_BYTES) return@withContext null

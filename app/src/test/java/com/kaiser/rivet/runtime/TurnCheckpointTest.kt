@@ -70,6 +70,25 @@ class TurnCheckpointTest {
         assertEquals("external", target.readText())
     }
 
+    @Test fun refusedInstallCanDiscardOnlyTheDisposableRestoreStage() = runTest {
+        val root = temp.newFolder("worktree")
+        val original = File(root, "file.txt")
+        original.writeText("before")
+        val store = TurnCheckpoint(temp.newFolder("private-checkpoints"), "workspace-A")
+        val id = store.begin(root)
+        original.writeText("after")
+        store.finish(id, root)
+        val record = store.latest()!!
+        val staged = store.stageUndo(record, root)
+
+        store.discardStagedUndo(id)
+
+        assertFalse(staged.exists())
+        assertEquals("after", original.readText())
+        assertNotNull(store.latest())
+        assertEquals("before", File(store.stageUndo(record, root), "file.txt").readText())
+    }
+
     @Test fun newerEditBeforeTurnEndsDoesNotBecomeUndoableAgentWork() = runTest {
         val root = temp.newFolder("worktree")
         val target = File(root, "file.txt")

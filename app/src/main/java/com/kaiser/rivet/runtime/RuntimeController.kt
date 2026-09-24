@@ -7,8 +7,10 @@ import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 
 data class RuntimeCommandResult(
     val exitCode: Int? = null,
@@ -154,7 +156,13 @@ class RuntimeController(context: Context) {
         val store = checkpoints(identity)
         val record = store.latest() ?: throw CheckpointFailure("undo_unavailable")
         val staged = store.stageUndo(record, ready.worktree)
-        active.installCheckpoint(staged)
+        try { active.installCheckpoint(staged) }
+        catch (failure: Exception) {
+            try { withContext(NonCancellable) { store.discardStagedUndo(record.id) } }
+            catch (cleanup: CancellationException) { throw cleanup }
+            catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+            throw failure
+        }
         val sync = active.sync()
         if (sync.state == MirrorSync.Ok || sync.state == MirrorSync.NoChanges) store.markUndone(record.id)
         sync
