@@ -19,6 +19,7 @@ enum class AgentStopReason {
     CheckpointUnavailable,
     ContextUnavailable,
     NoProgress,
+    RuntimeBlocked,
 }
 
 data class AgentRunResult(
@@ -26,6 +27,7 @@ data class AgentRunResult(
     val stopReason: AgentStopReason,
     val modelIterations: Int,
     val toolCalls: Int,
+    val failureCode: String? = null,
 )
 
 class AgentLoop(
@@ -140,6 +142,7 @@ class AgentLoop(
             }
             val results = mutableListOf<AgentToolResult>()
             var stopReason: AgentStopReason? = null
+            var failureCode: String? = null
             fun pending(code: String) = response.toolCalls.drop(results.size).map { stopped(it, code) }
             suspend fun fits(candidate: List<AgentToolResult>, reserve: Int = 0): Boolean =
                 canPersistToolOutput(messages + AgentMessage.tools(candidate), reserve)
@@ -179,6 +182,12 @@ class AgentLoop(
                             break
                         }
                         results += rejected
+                        if (AgentToolError.runtimeStopCode(rejected) != null) {
+                            results += response.toolCalls.drop(results.size).map { stopped(it, "not_executed") }
+                            stopReason = AgentStopReason.RuntimeBlocked
+                            failureCode = blocked
+                            break
+                        }
                         val deterministic = AgentToolError.deterministicCode(rejected)
                         lastDeterministicFailure = if (deterministic != null)
                             Triple(denialKey, deterministic, failureState()) else null
@@ -243,6 +252,13 @@ class AgentLoop(
                         break
                     }
                     results += bounded
+                    val runtimeStop = AgentToolError.runtimeStopCode(bounded)
+                    if (runtimeStop != null) {
+                        results += response.toolCalls.drop(results.size).map { stopped(it, "not_executed") }
+                        stopReason = AgentStopReason.RuntimeBlocked
+                        failureCode = runtimeStop
+                        break
+                    }
                     val deterministic = AgentToolError.deterministicCode(bounded)
                     lastDeterministicFailure = if (deterministic != null)
                         Triple(denialKey, deterministic, failureState()) else null
@@ -263,6 +279,7 @@ class AgentLoop(
                     stopReason = stopReason,
                     modelIterations = modelIterations,
                     toolCalls = toolCalls,
+                    failureCode = failureCode,
                 )
             }
         }
