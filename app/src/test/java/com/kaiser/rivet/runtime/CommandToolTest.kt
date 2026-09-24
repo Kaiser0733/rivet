@@ -121,7 +121,7 @@ class CommandToolTest {
 
         assertEquals("terminal_active", Json.parseToJsonElement(read.content).jsonObject["error"]!!.jsonPrimitive.content)
         assertEquals("false", Json.parseToJsonElement(read.content).jsonObject["retryable"]!!.jsonPrimitive.content)
-        assertTrue(Json.parseToJsonElement(read.content).jsonObject["required_action"]!!.jsonPrimitive.content.contains("Stop"))
+        assertTrue(Json.parseToJsonElement(read.content).jsonObject["required_action"]!!.jsonPrimitive.content.contains("command runner"))
         assertNotNull(write.approval)
         assertEquals("terminal_active", Json.parseToJsonElement(blockedWrite.content).jsonObject["error"]!!.jsonPrimitive.content)
         assertEquals(0, workspace.writes)
@@ -136,8 +136,38 @@ class CommandToolTest {
         assertTrue(result.error)
         assertEquals("terminal_active", value["error"]!!.jsonPrimitive.content)
         assertEquals("false", value["retryable"]!!.jsonPrimitive.content)
-        assertTrue(value["required_action"]!!.jsonPrimitive.content.contains("Stop"))
+        assertTrue(value["required_action"]!!.jsonPrimitive.content.contains("command runner"))
         assertNull(value["exit_code"])
+    }
+
+    @Test fun unavailableAfterApprovalStopsWithoutAnotherModelAnswer() = runTest {
+        val gate = AgentApprovalGate()
+        var requests = 0
+        var attempts = 0
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace(), runCommand = { _, cwd, _ ->
+            attempts++
+            RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "workspace_unavailable")
+        })
+        val running = async {
+            AgentLoop(
+                requestModel = { _, _, _ ->
+                    requests++
+                    if (requests == 1) AgentResponse(toolCalls = listOf(call))
+                    else AgentResponse(text = "The command succeeded")
+                },
+                prepareTool = executor::prepare,
+                requestApproval = gate::await,
+            ).run(listOf(AgentMessage.user("Run it")), AgentToolExecutor.definitions)
+        }
+        yield()
+        assertEquals(call.id, gate.pending.value?.call?.id)
+        assertTrue(gate.resolve(call.id, true))
+        val result = running.await()
+        assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
+        assertEquals("workspace_unavailable", result.failureCode)
+        assertEquals(1, attempts)
+        assertEquals(1, requests)
+        assertFalse(result.messages.any { it.text.contains("command succeeded") })
     }
 
     @Test fun captureRetainsBoundedHeadAndTailOfBinaryOutput() {

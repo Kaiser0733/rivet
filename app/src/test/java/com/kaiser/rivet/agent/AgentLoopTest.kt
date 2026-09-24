@@ -78,34 +78,27 @@ class AgentLoopTest {
             failureState = { "terminal_active" },
         ).run(listOf(AgentMessage.user("Run pwd")), emptyList())
         val results = result.messages.flatMap { it.toolResults }
-        assertEquals(AgentStopReason.NoProgress, result.stopReason)
-        assertEquals(2, modelRequests)
+        assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
+        assertEquals("terminal_active", result.failureCode)
+        assertEquals(1, modelRequests)
         assertEquals(0, approvals)
         assertEquals(0, checkpoints)
         assertEquals(0, executions)
-        assertEquals(listOf("one", "two"), results.map { it.callId })
-        assertTrue(results[0].content.contains("Stop the interactive Terminal"))
-        assertTrue(results[1].content.contains("no_progress"))
-        assertTrue(results[1].content.contains("terminal_active"))
+        assertEquals(listOf("one"), results.map { it.callId })
+        assertTrue(results[0].content.contains("command runner is busy"))
     }
 
-    @Test fun changedBlockerStateAllowsLaterCommandAndRepeatedSuccessfulReads() = runTest {
+    @Test fun changedBlockerStateAllowsCommandInLaterTurnAndRepeatedSuccessfulReads() = runTest {
         val calls = listOf(
             AgentToolCall("blocked", "run_command", """{"command":"pwd"}"""),
             AgentToolCall("resumed", "run_command", """{"command":"pwd"}"""),
             AgentToolCall("read1", "read_file", """{"path":"Main.kt"}"""),
             AgentToolCall("read2", "read_file", """{"path":"Main.kt"}"""),
         )
-        var request = 0
         var state = "terminal_active"
         var executions = 0
-        val result = AgentLoop(
-            requestModel = { _, _, _ ->
-                val next = request++
-                if (next == 1) state = "ready"
-                if (next < calls.size) AgentResponse(toolCalls = listOf(calls[next]))
-                else AgentResponse(text = "done")
-            },
+        fun loop(responses: ArrayDeque<AgentResponse>) = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
             prepareTool = { call -> PreparedAgentTool(call,
                 if (call.name == "run_command") AgentApprovalRequest(call, "Run", "pwd") else null) {
                 executions++
@@ -114,10 +107,16 @@ class AgentLoopTest {
             requestApproval = { true },
             mutationBlocker = { if (state == "terminal_active") "terminal_active" else null },
             failureState = { state },
-        ).run(listOf(AgentMessage.user("Continue")), emptyList())
+        )
+        val blocked = loop(ArrayDeque(listOf(AgentResponse(toolCalls = listOf(calls[0])))))
+            .run(listOf(AgentMessage.user("Continue")), emptyList())
+        assertEquals(AgentStopReason.RuntimeBlocked, blocked.stopReason)
+        state = "ready"
+        val result = loop(ArrayDeque(calls.drop(1).map { AgentResponse(toolCalls = listOf(it)) } +
+            AgentResponse(text = "done"))).run(listOf(AgentMessage.user("Continue")), emptyList())
         assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals(3, executions)
-        assertEquals(1, result.messages.flatMap { it.toolResults }.count { it.error })
+        assertEquals(0, result.messages.flatMap { it.toolResults }.count { it.error })
     }
 
     @Test fun contextOverflowCompactsAndRetriesOnlyTheModelRequest() = runTest {
