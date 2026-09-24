@@ -22,7 +22,7 @@ internal object AgentToolError {
         "invalid_arguments", "invalid_path", "unknown_tool")
     private val runtimeStops = setOf("terminal_active", "sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
-        "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "conflict")
+        "materialize_failed", "baseline_invalid", "storage", "mirror_dirty")
 
     fun content(code: String): String = buildJsonObject {
         put("error", code)
