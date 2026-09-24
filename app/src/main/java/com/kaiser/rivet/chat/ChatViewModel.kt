@@ -538,7 +538,7 @@ class ChatViewModel private constructor(
                             if (runtime.finishCheckpoint(workspaceId, id) && ticket == generation) {
                                 val record = runtime.latestCheckpoint()
                                 if (record?.id == id) {
-                                    val paths = runtime.checkpointChanges(record)
+                                    val paths = runtime.checkpointTurnChanges(record)
                                         .filter { it.beforeSize != null || it.afterSize != null }
                                         .map { it.path }
                                     _uiState.update { it.copy(lastTurnFiles = paths.take(5),
