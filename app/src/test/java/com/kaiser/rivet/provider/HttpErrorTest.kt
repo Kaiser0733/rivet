@@ -22,15 +22,17 @@ class HttpErrorTest {
     }
 
     @Test
-    fun plainMessageBodySurfaces() {
+    fun plainMessageBodyIsRetainedWithoutShowingItInChat() {
         val e = httpError(400, """{"message":"max_tokens is required"}""")
         assertTrue(e is ProviderError.ProviderMessage)
-        assertTrue(e.text().contains("max_tokens"))
+        assertTrue((e as ProviderError.ProviderMessage).text.contains("max_tokens"))
+        assertTrue(!e.text().contains("max_tokens"))
     }
 
     @Test
     fun noBodyFallsBackToStatusText() {
         val e = httpError(418, null)
-        assertTrue(e.text().contains("418"))
+        assertTrue(e is ProviderError.ProviderMessage)
+        assertTrue((e as ProviderError.ProviderMessage).text.contains("418"))
     }
 }

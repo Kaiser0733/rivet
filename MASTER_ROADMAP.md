@@ -41,10 +41,11 @@ receive a file-level license review before incorporation.
 
 Diff viewing and application, Git integration, and higher-level coding workflows.
 
-## Phase 7 — Android Product Hardening
+## Phase 7 — Chat-First Product Simplification
 
-Performance, accessibility, keyboard/mouse/pointer input polish,
-large-screen refinements, error surfaces.
+Chat and Settings are the only normal surfaces. Project choice, approvals,
+activity, results, and Undo are contextual in Chat. Runtime, files, Git, and
+checkpoint systems remain agent infrastructure rather than user destinations.
 
 ## Phase 8 — Release Candidate
 
