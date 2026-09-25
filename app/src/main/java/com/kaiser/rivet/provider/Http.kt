@@ -72,6 +72,7 @@ fun httpError(code: Int, body: String?): ProviderError {
         detail != null -> ProviderError.ProviderMessage(detail)
         else -> ProviderError.ProviderMessage("HTTP $code")
     }
+}
 
 internal fun providerMessage(message: String, code: String? = null): ProviderError = when {
     isContextOverflow(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ContextOverflow()
@@ -195,4 +196,3 @@ internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Uni
             }
         })
     }
-}
