@@ -29,8 +29,8 @@ internal class AnthropicClient(
     override suspend fun listModels(): List<ModelInfo> {
         val request = base(Endpoints.anthropicModels(config.baseUrl)).get().build()
         http.quick().await(request).use { r ->
-            if (!r.isSuccessful) throw httpError(r.code, r.body?.string())
-            val text = r.body?.string() ?: throw ProviderError.InvalidResponse("no body")
+            if (!r.isSuccessful) throw httpError(r.code, r.errorText())
+            val text = r.readBoundedBody() ?: throw ProviderError.InvalidResponse("no body")
             val data = parseJsonObject(text)?.get("data")?.arr() ?: throw ProviderError.InvalidResponse("not a JSON object")
             return data.mapNotNull { el ->
                 val o = el.obj() ?: return@mapNotNull null

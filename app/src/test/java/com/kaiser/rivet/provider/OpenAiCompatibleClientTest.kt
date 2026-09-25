@@ -69,6 +69,17 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun listModelsRejectsOversizedResponse() = runTest {
+        server.enqueue(MockResponse().setChunkedBody("x".repeat(MAX_PROVIDER_JSON_BODY_BYTES + 1), 8192))
+        try {
+            OpenAiCompatibleClient(config(), "key").listModels()
+            fail("expected an oversized response to be rejected")
+        } catch (_: ProviderError.ResponseTooLarge) {
+            // expected
+        }
+    }
+
+    @Test
     fun streamChatAccumulatesDeltas() = runTest {
         val sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n" +
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" +
