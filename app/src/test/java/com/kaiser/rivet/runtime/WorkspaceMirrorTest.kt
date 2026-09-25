@@ -191,6 +191,9 @@ class WorkspaceMirrorTest {
         assertEquals(1, provider.createCalls)
         assertEquals("target content", String(bytes("new.txt")))
         assertFalse(restored.hasLocalChanges())
+        provider.nodes.values.first { it.name == "new.txt" }.bytes.writeText("outside later")
+        assertFalse(mirror().prepare().dirty)
+        assertEquals("outside later", File(restored.worktree, "new.txt").readText())
     }
 
     @Test fun partialCreateReceiptCannotOverwriteChangedOrReplacedSafFile() = runBlocking {
