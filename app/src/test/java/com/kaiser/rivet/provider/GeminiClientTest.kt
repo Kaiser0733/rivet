@@ -58,7 +58,7 @@ class GeminiClientTest {
     fun streamChatConcatenatesParts() = runTest {
         val sse = listOf(
             """{"candidates":[{"content":{"parts":[{"text":"Hi "}]}}]}""",
-            """{"candidates":[{"content":{"parts":[{"text":"there"},{"text":"!"}]}}]}""",
+            """{"candidates":[{"content":{"parts":[{"text":"there"},{"text":"!"}]},"finishReason":"STOP"}]}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val full = GeminiClient(config(), "key").streamChat(
@@ -96,7 +96,7 @@ class GeminiClientTest {
     fun nativeFunctionCallsAndResponsesPreserveIds() = runTest {
         val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
             "{\"text\":\"Inspecting\"},{\"functionCall\":{\"id\":\"g-1\",\"name\":\"read_file\",\"args\":{\"path\":\"A.kt\"}},\"thoughtSignature\":\"sig\"}" +
-            "]}}]}\n\n"
+            "]},\"finishReason\":\"STOP\"}]}\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val client = GeminiClient(config(), "key")
         val response = client.streamAgent(AgentRequest(
@@ -107,7 +107,7 @@ class GeminiClientTest {
         assertEquals(AgentToolCall("g-1", "read_file", "{\"path\":\"A.kt\"}"), response.toolCalls.single())
         server.takeRequest()
 
-        server.enqueue(MockResponse().setBody("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]}}]}\n\n"))
+        server.enqueue(MockResponse().setBody("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}]}\n\n"))
         client.streamAgent(AgentRequest(
             "gemini-x",
             listOf(AgentMessage.assistant("", response.toolCalls, response.transportState), AgentMessage.tools(listOf(
@@ -141,7 +141,7 @@ class GeminiClientTest {
         val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
             "{\"text\":\"\",\"thoughtSignature\":\"text-sig\"}," +
             "{\"functionCall\":{\"id\":\"g-1\",\"name\":\"list_directory\",\"args\":{}}}" +
-            "]}}]}\n\n"
+            "]},\"finishReason\":\"STOP\"}]}\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val client = GeminiClient(config(), "key")
         val definition = AgentToolDefinition(
@@ -154,7 +154,7 @@ class GeminiClientTest {
         assertTrue(firstBody.contains("\"parametersJsonSchema\""))
         assertTrue(!firstBody.contains("\"parameters\":"))
 
-        server.enqueue(MockResponse().setBody("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]}}]}\n\n"))
+        server.enqueue(MockResponse().setBody("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}]}\n\n"))
         client.streamAgent(AgentRequest(
             "gemini-x", listOf(AgentMessage.assistant("", response.toolCalls, response.transportState)),
             "", ReasoningLevel.Default, emptyList(),
@@ -167,7 +167,7 @@ class GeminiClientTest {
         val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
             "{\"functionCall\":{\"id\":\"a\",\"name\":\"read_file\",\"args\":{\"path\":\"A.kt\"}}}," +
             "{\"functionCall\":{\"id\":\"b\",\"name\":\"read_file\",\"args\":{\"path\":\"B.kt\"}}}" +
-            "]}}]}\n\n"
+            "]},\"finishReason\":\"STOP\"}]}\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
 
         val response = GeminiClient(config(), "key").streamAgent(
@@ -181,7 +181,7 @@ class GeminiClientTest {
     }
 
     @Test fun usageMetadataIsKeptWhenFinalChunkHasNoCandidate() = runTest {
-        val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]}}]}\n\n" +
+        val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}]}\n\n" +
             "data: {\"usageMetadata\":{\"promptTokenCount\":35,\"candidatesTokenCount\":8," +
             "\"cachedContentTokenCount\":4,\"thoughtsTokenCount\":2,\"totalTokenCount\":45}}\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
