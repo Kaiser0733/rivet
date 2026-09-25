@@ -4,8 +4,12 @@ import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.TextEdit
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
+import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
 
 class SafAgentWorkspace(private val workspace: SafWorkspace) : AgentWorkspace {
+    override suspend fun observeStructural(path: String, recursive: Boolean): WorkspaceStructuralStamp = call {
+        workspace.observeStructural(WorkspacePath.parse(path), recursive)
+    }
     override suspend fun stat(path: String): AgentWorkspaceEntry = call {
         workspace.stat(WorkspacePath.parse(path)).let {
             AgentWorkspaceEntry(it.path.value, it.directory, it.size)
@@ -67,20 +71,22 @@ class SafAgentWorkspace(private val workspace: SafWorkspace) : AgentWorkspace {
         }
     }
 
-    override suspend fun rename(path: String, newName: String): AgentWorkspaceEntry = call {
-        workspace.rename(WorkspacePath.parse(path), newName).let {
+    override suspend fun rename(path: String, newName: String, approved: WorkspaceStructuralStamp): AgentWorkspaceEntry = call {
+        workspace.rename(WorkspacePath.parse(path), newName, approved).let {
             AgentWorkspaceEntry(it.path.value, it.directory, it.size)
         }
     }
 
-    override suspend fun move(path: String, destination: String): AgentWorkspaceEntry = call {
-        workspace.move(WorkspacePath.parse(path), WorkspacePath.parse(destination)).let {
+    override suspend fun move(path: String, destination: String, approvedSource: WorkspaceStructuralStamp,
+                              approvedDestination: WorkspaceStructuralStamp): AgentWorkspaceEntry = call {
+        workspace.move(WorkspacePath.parse(path), WorkspacePath.parse(destination), approvedSource,
+            approvedDestination).let {
             AgentWorkspaceEntry(it.path.value, it.directory, it.size)
         }
     }
 
-    override suspend fun delete(path: String) = call<Unit> {
-        workspace.delete(WorkspacePath.parse(path)); Unit
+    override suspend fun delete(path: String, approved: WorkspaceStructuralStamp) = call<Unit> {
+        workspace.delete(WorkspacePath.parse(path), approved); Unit
     }
 
     private suspend fun <T> call(block: suspend () -> T): T = try {

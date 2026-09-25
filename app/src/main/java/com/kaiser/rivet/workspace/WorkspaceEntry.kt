@@ -26,6 +26,14 @@ data class WorkspaceEntry(
     }
 }
 
+data class WorkspaceStructuralStamp(
+    val documentId: String,
+    val parentDocumentId: String,
+    val directory: Boolean,
+    val state: String?,
+    val recursive: Boolean,
+)
+
 // Confined to the ViewModel's main-thread state transitions.
 class WorkspaceEpoch {
     private var revision = 0L

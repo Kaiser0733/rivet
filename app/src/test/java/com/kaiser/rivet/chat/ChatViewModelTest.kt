@@ -25,6 +25,7 @@ import com.kaiser.rivet.provider.TestResult
 import com.kaiser.rivet.runtime.CheckpointFailure
 import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.RuntimeController
+import com.kaiser.rivet.runtime.WorkspaceMirror
 import com.kaiser.rivet.storage.AgentSession
 import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
@@ -152,13 +153,98 @@ class ChatViewModelTest {
         assertTrue(runtimeFailureMessage("workspace_unavailable").contains("Choose the project again"))
         assertTrue(runtimeFailureMessage("workspace_changed").contains("stopped before running"))
         assertTrue(runtimeFailureMessage("terminal_active").contains("command runner is busy"))
-        assertTrue(runtimeFailureMessage("sync_required").contains("stopped instead of overwriting"))
+        assertTrue(runtimeFailureMessage("sync_required").contains("kept the pending copy"))
         listOf("workspace_unavailable", "terminal_active", "sync_required").forEach { code ->
             val message = runtimeFailureMessage(code)
             assertFalse(message.contains("Terminal"))
             assertFalse(message.contains("Sync"))
             assertFalse(message.contains("SAF"))
         }
+    }
+
+    @Test fun partialSyncFailureDoesNotClaimNothingChanged() {
+        val message = runtimeFailureMessage("sync_failed")
+        assertTrue(message.contains("may already"))
+        assertFalse(message.contains("overwriting anything"))
+    }
+
+    @Test fun partialMultiFileSyncShowsSavedAndPendingChangesInChat() = runBlocking {
+        val authority = "com.kaiser.rivet.partial-sync-chat"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        val workspace = WorkspaceSelection(app).select(tree, flags)
+        val a = workspace.createFile(WorkspacePath.parse("a.txt"))
+        val b = workspace.createFile(WorkspacePath.parse("b.txt"))
+        documents.nodes[a.documentId]!!.bytes.writeText("before a")
+        documents.nodes[b.documentId]!!.bytes.writeText("before b")
+        val root = WorkspaceMirror(app, workspace) { true }.prepare().worktree
+        java.io.File(root, "a.txt").writeText("after a")
+        java.io.File(root, "b.txt").writeText("after b")
+        documents.rejectWriteOnceFor = "b.txt"
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready && !it.projectLoading && it.projectIdentity == tree.toString() }
+
+        viewModel.retryProjectChanges()
+        val failed = await(viewModel) { !it.recoveringProjectChanges && it.error?.contains("may already be saved") == true }
+        assertEquals("after a", documents.nodes[a.documentId]!!.bytes.readText())
+        assertEquals("before b", documents.nodes[b.documentId]!!.bytes.readText())
+        assertEquals(ChatErrorAction.RetryProjectChanges, failed.errorAction)
+
+        viewModel.retryProjectChanges()
+        val saved = await(viewModel) { !it.recoveringProjectChanges && it.notice == "Project changes saved. You can continue." }
+        assertNull(saved.error)
+        assertEquals("after b", documents.nodes[b.documentId]!!.bytes.readText())
+    }
+
+    @Test fun earlierSavedMutationRemainsVisibleWhenLaterCheckpointPostFails() = runBlocking {
+        val authority = "com.kaiser.rivet.checkpoint-post-chat"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        documents.rejectReadAfterFirstFor = "A.kt"
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        val workspace = WorkspaceSelection(app).select(tree, flags)
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-b", "create_file", """{"path":"B.kt"}"""))),
+        )))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.send("Create A and B")
+        val first = await(viewModel) { it.pendingApproval?.call?.id == "create-a" }
+        viewModel.approve(first.pendingApproval!!.approvalToken)
+        val second = await(viewModel) { it.pendingApproval?.call?.id == "create-b" }
+        viewModel.approve(second.pendingApproval!!.approvalToken)
+        val stopped = await(viewModel) { !it.streaming && it.error != null }
+
+        assertTrue(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "A.kt" })
+        assertFalse(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "B.kt" })
+        assertTrue(stopped.error!!.contains("Earlier project changes"))
+        assertNull(stopped.undoCheckpointId)
     }
 
     @Test fun fileToolRuntimeGateDoesNotTreatMissingProjectAsReady() = runBlocking {

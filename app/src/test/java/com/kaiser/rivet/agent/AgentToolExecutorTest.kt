@@ -2,6 +2,7 @@ package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.runtime.RepositoryDiff
 import com.kaiser.rivet.runtime.RepositoryStatus
+import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -37,6 +38,11 @@ class AgentToolExecutorTest {
             path, directory = path in directories, size = if (path in directories) null else 80_106,
         )
 
+        override suspend fun observeStructural(path: String, recursive: Boolean) = WorkspaceStructuralStamp(
+            path, path.substringBeforeLast('/', ""), path.isEmpty() || path in directories,
+            if (recursive) readHash else null, recursive,
+        )
+
         override suspend fun list(path: String) = listedEntries
         override suspend fun read(path: String) = AgentFileSnapshot(
             path,
@@ -64,17 +70,20 @@ class AgentToolExecutorTest {
             directories += path
             return AgentWorkspaceEntry(path, directory = true, size = null)
         }
-        override suspend fun rename(path: String, newName: String) = AgentWorkspaceEntry(
+        override suspend fun rename(path: String, newName: String, approved: WorkspaceStructuralStamp) = AgentWorkspaceEntry(
             path.substringBeforeLast('/', "").let { parent -> if (parent.isEmpty()) newName else "$parent/$newName" },
             directory = false,
             size = 0,
         )
-        override suspend fun move(path: String, destination: String) = AgentWorkspaceEntry(
+        override suspend fun move(path: String, destination: String, approvedSource: WorkspaceStructuralStamp,
+                                  approvedDestination: WorkspaceStructuralStamp) = AgentWorkspaceEntry(
             if (destination.isEmpty()) path.substringAfterLast('/') else "$destination/${path.substringAfterLast('/')}",
             directory = false,
             size = 0,
         )
-        override suspend fun delete(path: String) { deletes++; directories.remove(path) }
+        override suspend fun delete(path: String, approved: WorkspaceStructuralStamp) {
+            deletes++; directories.remove(path)
+        }
     }
 
     @Test
