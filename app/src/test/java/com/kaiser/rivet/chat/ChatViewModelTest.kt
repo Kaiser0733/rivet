@@ -161,6 +161,50 @@ class ChatViewModelTest {
         }
     }
 
+    @Test fun partialSyncFailureDoesNotClaimNothingChanged() {
+        val message = runtimeFailureMessage("sync_failed")
+        assertTrue(message.contains("may already"))
+        assertFalse(message.contains("overwriting anything"))
+    }
+
+    @Test fun earlierSavedMutationRemainsVisibleWhenLaterCheckpointPostFails() = runBlocking {
+        val authority = "com.kaiser.rivet.checkpoint-post-chat"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        documents.rejectReadAfterFirstFor = "A.kt"
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        val workspace = WorkspaceSelection(app).select(tree, flags)
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-b", "create_file", """{"path":"B.kt"}"""))),
+        )))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = ChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.send("Create A and B")
+        val first = await(viewModel) { it.pendingApproval?.call?.id == "create-a" }
+        viewModel.approve(first.pendingApproval!!.approvalToken)
+        val second = await(viewModel) { it.pendingApproval?.call?.id == "create-b" }
+        viewModel.approve(second.pendingApproval!!.approvalToken)
+        val stopped = await(viewModel) { !it.streaming && it.error != null }
+
+        assertTrue(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "A.kt" })
+        assertFalse(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "B.kt" })
+        assertTrue(stopped.error!!.contains("Earlier project changes"))
+        assertNull(stopped.undoCheckpointId)
+    }
+
     @Test fun fileToolRuntimeGateDoesNotTreatMissingProjectAsReady() = runBlocking {
         val runtime = RuntimeController(app)
         assertEquals("workspace_unavailable", runtime.commandBlocker())

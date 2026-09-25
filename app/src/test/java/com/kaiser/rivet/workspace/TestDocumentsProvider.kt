@@ -17,6 +17,8 @@ class TestDocumentsProvider : DocumentsProvider() {
     var writable = true
     var rejectDelete = false
     var rejectRead = false
+    var rejectReadAfterFirstFor: String? = null
+    private val readsByName = mutableMapOf<String, Int>()
     var rejectWriteOnceFor: String? = null
     var blockNextRead: CountDownLatch? = null
     var readStarted: CountDownLatch? = null
@@ -72,6 +74,11 @@ class TestDocumentsProvider : DocumentsProvider() {
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
         if (rejectRead && mode == "r") throw java.io.FileNotFoundException("read refused")
         val node = nodes[documentId] ?: throw java.io.FileNotFoundException()
+        if (mode == "r" && node.name == rejectReadAfterFirstFor) {
+            val count = (readsByName[node.name] ?: 0) + 1
+            readsByName[node.name] = count
+            if (count > 1) throw java.io.FileNotFoundException("later read refused")
+        }
         if (mode != "r" && node.name == rejectWriteOnceFor) {
             rejectWriteOnceFor = null
             throw java.io.FileNotFoundException("write refused")
