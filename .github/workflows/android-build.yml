@@ -31,6 +31,9 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Release identity checks
+        run: python3 -m unittest discover -s scripts -p 'test_*.py'
+
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
