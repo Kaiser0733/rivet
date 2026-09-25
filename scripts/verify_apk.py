@@ -60,7 +60,13 @@ requested = {
     for line in badging_lines
     if (match := re.search(r"uses-permission(?:-sdk-\d+)?: name='([^']+)'", line))
 }
-assert requested == {"android.permission.INTERNET"}, f"Unexpected APK permissions: {sorted(requested)}"
+allowed_permissions = {
+    "android.permission.INTERNET",
+    # AndroidX adds its signature-protected helper for non-exported receivers.
+    "com.kaiser.rivet.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+}
+assert "android.permission.INTERNET" in requested, "APK is missing INTERNET"
+assert requested <= allowed_permissions, f"Unexpected APK permissions: {sorted(requested - allowed_permissions)}"
 manifest = run(str(tools / "aapt"), "dump", "xmltree", apk, "AndroidManifest.xml")
 for forbidden in (
     "android.permission.BIND_ACCESSIBILITY_SERVICE",
