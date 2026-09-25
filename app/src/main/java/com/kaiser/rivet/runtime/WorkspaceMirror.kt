@@ -99,6 +99,7 @@ class WorkspaceMirror(
             val local = localSnapshot()
             val pendingCreate = readPartialCreate()
             if (local == before.entries) {
+                if (pendingCreate != null) clearPartialCreate()
                 return@withLock MirrorSyncResult(
                     if (pendingCreate == null) MirrorSync.NoChanges else MirrorSync.Conflict,
                     pendingCreate?.path,
@@ -114,6 +115,7 @@ class WorkspaceMirror(
                 } catch (_: Exception) { false }
                 if (!sameDocument || before.entries[path] != null || local[path] != partial.target ||
                     (external[path] != emptyFile && external[path] != partial.target)) {
+                    clearPartialCreate()
                     return@withLock MirrorSyncResult(MirrorSync.Conflict, path)
                 }
                 if (external[path] == partial.target) {
