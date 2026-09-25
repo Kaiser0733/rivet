@@ -19,7 +19,7 @@ android {
 
     // Use a narrow generated asset directory; using the project root here
     // overlaps Gradle lint outputs and breaks task dependency validation.
-    sourceSets.getByName("main").assets.srcDir(packagedNotices)
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/rivet-notices"))
 
     defaultConfig {
         applicationId = "com.kaiser.rivet"
@@ -77,6 +77,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(packagedNotices)
 }
 
 kotlin {
