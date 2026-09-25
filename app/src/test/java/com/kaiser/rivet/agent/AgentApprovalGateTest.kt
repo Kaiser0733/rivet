@@ -54,10 +54,10 @@ class AgentApprovalGateTest {
         val gate = AgentApprovalGate()
         val waiting = async { gate.await(AgentApprovalRequest(call, "Delete", "A.kt")) }
         yield()
+        val token = gate.pending.value!!.approvalToken
 
         waiting.cancelAndJoin()
 
-        val token = gate.pending.value!!.approvalToken
         assertFalse(gate.resolve(token, approved = true))
         assertTrue(gate.pending.value == null)
     }
