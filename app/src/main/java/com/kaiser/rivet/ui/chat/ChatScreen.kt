@@ -305,9 +305,9 @@ private fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> U
     val command = request.call.name == "run_command"
     val delete = request.call.name == "delete_path"
     AlertDialog(onDismissRequest = { onDeny(request.approvalToken) },
-        title = { Text(approvalTitle(request)) },
+        title = { Text(displaySafeText(approvalTitle(request))) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(request.detail)
+            Text(displaySafeText(request.detail))
             if (command) Text("Project commands can execute code on this device.")
         } },
         confirmButton = { TextButton(onClick = { onApprove(request.approvalToken) }) {
@@ -331,7 +331,7 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
                 state.undoCheckpointId != null) { Text(if (state.undoing) "Undoing…" else "Undo") }
         }
         if (details) state.lastTurnFiles.forEach { path ->
-            Text(path, style = MaterialTheme.typography.bodySmall,
+            Text(displaySafeText(path), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (details && state.lastTurnFileCount > state.lastTurnFiles.size)

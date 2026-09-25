@@ -118,6 +118,48 @@ class HttpBridgeTest {
         }
     }
 
+    @Test
+    fun oversizedSseEventIsRejectedBeforeParsing() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse()
+            .setBody("data: ${"x".repeat(MAX_SSE_LINE_BYTES + 1)}\n\n")
+            .setHeader("Content-Type", "text/event-stream"))
+        server.start()
+        try {
+            val request = Request.Builder().url(server.url("/stream")).build()
+            try {
+                OkHttpClient().sse(request) { }
+                throw AssertionError("expected bounded stream failure")
+            } catch (_: ProviderError.ResponseTooLarge) {
+                Unit
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun aggregateSseResponseIsBounded() = runBlocking {
+        val server = MockWebServer()
+        val event = "data: ${"x".repeat(32 * 1024)}\n\n"
+        val body = buildString {
+            repeat(MAX_SSE_RESPONSE_BYTES / (32 * 1024 + 8) + 2) { append(event) }
+        }
+        server.enqueue(MockResponse().setBody(body).setHeader("Content-Type", "text/event-stream"))
+        server.start()
+        try {
+            val request = Request.Builder().url(server.url("/stream")).build()
+            try {
+                OkHttpClient().sse(request) { }
+                throw AssertionError("expected bounded stream failure")
+            } catch (_: ProviderError.ResponseTooLarge) {
+                Unit
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
     private fun response(): Response {
         val request = Request.Builder().url("https://localhost/").build()
         return Response.Builder()

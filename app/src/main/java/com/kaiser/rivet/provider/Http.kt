@@ -9,6 +9,8 @@ import okhttp3.Callback
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.Response
+import okio.Buffer
+import java.io.EOFException
 import java.io.IOException
 import java.net.ConnectException
 import java.net.SocketTimeoutException
@@ -40,6 +42,24 @@ internal val http: OkHttpClient = OkHttpClient.Builder()
 internal fun OkHttpClient.quick(): OkHttpClient =
     newBuilder().readTimeout(20, TimeUnit.SECONDS).build()
 
+// Providers should return compact streamed deltas. These ceilings prevent a
+// malformed endpoint from retaining an unbounded event or response on-device.
+internal const val MAX_SSE_LINE_BYTES = 128 * 1024
+internal const val MAX_SSE_RESPONSE_BYTES = 1024 * 1024
+private const val MAX_ERROR_BODY_BYTES = 64 * 1024
+
+private fun Response.errorText(): String? {
+    val source = body?.source() ?: return null
+    val bytes = Buffer()
+    var remaining = MAX_ERROR_BODY_BYTES + 1L
+    while (remaining > 0) {
+        val read = source.read(bytes, remaining)
+        if (read < 0) break
+        remaining -= read
+    }
+    val value = bytes.readUtf8()
+    return value.take(MAX_ERROR_BODY_BYTES / 4).dropLastWhile { it.isHighSurrogate() }
+}
 
 // Best-effort extraction of a human-readable message from any of the error
 // body shapes in use ({"error":{"message"}}, {"message"}).
@@ -54,12 +74,21 @@ private fun errorBodyText(body: String?): String? = try {
     null
 }
 
+private fun errorBodyCode(body: String?): String? = try {
+    val error = Json.parseToJsonElement(body ?: return null).jsonObject["error"]?.jsonObject
+    error?.get("code")?.jsonPrimitive?.content ?: error?.get("type")?.jsonPrimitive?.content
+} catch (e: Exception) {
+    null
+}
+
 fun httpError(code: Int, body: String?): ProviderError {
     val detail = errorBodyText(body)
+    val providerCode = errorBodyCode(body)
     return when {
         code == 401 -> ProviderError.Unauthorized()
         code == 403 -> ProviderError.Forbidden()
         code in setOf(400, 413, 422) && isContextOverflow(body.orEmpty()) -> ProviderError.ContextOverflow()
+        code == 429 && isUsageLimit(providerCode.orEmpty() + " " + detail.orEmpty()) -> ProviderError.UsageLimit()
         code == 429 && isResourceExhausted(detail.orEmpty()) -> ProviderError.ResourceExhausted()
         code == 429 -> ProviderError.RateLimited()
         code in 500..599 -> ProviderError.Server(code)
@@ -76,8 +105,15 @@ fun httpError(code: Int, body: String?): ProviderError {
 
 internal fun providerMessage(message: String, code: String? = null): ProviderError = when {
     isContextOverflow(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ContextOverflow()
+    isUsageLimit(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.UsageLimit()
     isResourceExhausted(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ResourceExhausted()
     else -> ProviderError.ProviderMessage(message)
+}
+
+private fun isUsageLimit(text: String): Boolean {
+    val value = text.lowercase(java.util.Locale.ROOT)
+    return "insufficient_quota" in value || "exceeded your current quota" in value ||
+        "quota exceeded" in value || "billing hard limit" in value
 }
 
 private fun isContextOverflow(text: String): Boolean {
@@ -164,11 +200,23 @@ internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Uni
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     try {
-                        if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
+                        if (!it.isSuccessful) throw httpError(it.code, it.errorText())
                         val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
                         var completed = false
+                        var responseBytes = 0
                         while (!terminal.get()) {
-                            val line = source.readUtf8Line() ?: break
+                            val line = try {
+                                source.readUtf8LineStrict(MAX_SSE_LINE_BYTES.toLong())
+                            } catch (_: EOFException) {
+                                if (source.buffer.size > MAX_SSE_LINE_BYTES) {
+                                    throw ProviderError.ResponseTooLarge()
+                                }
+                                break
+                            }
+                            responseBytes += line.toByteArray(Charsets.UTF_8).size + 2
+                            if (responseBytes > MAX_SSE_RESPONSE_BYTES) {
+                                throw ProviderError.ResponseTooLarge()
+                            }
                             if (line.startsWith("data:")) {
                                 val payload = line.removePrefix("data:").trim()
                                 if (payload == "[DONE]") {
