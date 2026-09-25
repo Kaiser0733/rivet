@@ -75,6 +75,65 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         stream(resolve(path), null)
     }
 
+    suspend fun observeStructural(path: WorkspacePath, recursive: Boolean): WorkspaceStructuralStamp = io {
+        val entry = resolve(path)
+        structuralStamp(entry, resolve(path.parent()), recursive)
+    }
+
+    private suspend fun requireStructural(path: WorkspacePath, expected: WorkspaceStructuralStamp): WorkspaceEntry {
+        return try {
+            val entry = resolve(path)
+            val actual = structuralStamp(entry, resolve(path.parent()), expected.recursive)
+            if (actual != expected || resolve(path).documentId != entry.documentId) {
+                fail(WorkspaceFailure.Reason.STALE_TARGET)
+            }
+            entry
+        } catch (failure: WorkspaceFailure) {
+            if (failure.reason in setOf(WorkspaceFailure.Reason.MISSING, WorkspaceFailure.Reason.NOT_DIRECTORY,
+                    WorkspaceFailure.Reason.DUPLICATE)) fail(WorkspaceFailure.Reason.STALE_TARGET)
+            throw failure
+        }
+    }
+
+    private suspend fun structuralStamp(entry: WorkspaceEntry, parent: WorkspaceEntry,
+                                        recursive: Boolean): WorkspaceStructuralStamp {
+        val state = if (entry.directory) {
+            if (!recursive) null else {
+                val digest = MessageDigest.getInstance("SHA-256")
+                val seen = mutableSetOf<String>()
+                var count = 0
+                var bytes = 0L
+                fun field(value: String) {
+                    val encoded = value.toByteArray(Charsets.UTF_8)
+                    digest.update(byteArrayOf((encoded.size ushr 24).toByte(), (encoded.size ushr 16).toByte(),
+                        (encoded.size ushr 8).toByte(), encoded.size.toByte()))
+                    digest.update(encoded)
+                }
+                suspend fun visit(node: WorkspaceEntry) {
+                    if (++count > MAX_STRUCTURAL_ENTRIES || !seen.add(node.documentId)) {
+                        fail(WorkspaceFailure.Reason.LIMIT)
+                    }
+                    field(node.path.value)
+                    field(node.documentId)
+                    field(if (node.directory) "directory" else "file")
+                    if (node.directory) children(node, 5000).forEach { visit(it) }
+                    else {
+                        val fingerprint = stream(node, null, MAX_STRUCTURAL_BYTES - bytes)
+                        bytes += fingerprint.size
+                        field(fingerprint.size.toString())
+                        field(fingerprint.sha256)
+                    }
+                }
+                visit(entry)
+                digest.digest().toHex()
+            }
+        } else {
+            val fingerprint = stream(entry, null, MAX_STRUCTURAL_BYTES)
+            "${fingerprint.size}:${fingerprint.sha256}"
+        }
+        return WorkspaceStructuralStamp(entry.documentId, parent.documentId, entry.directory, state, recursive)
+    }
+
     suspend fun writeFileFrom(path: WorkspacePath, input: InputStream, expectedSha256: String): BinaryFingerprint = io {
         mutations.withLock {
             val entry = resolve(path)
@@ -182,15 +241,17 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         }
     }
 
-    suspend fun delete(path: WorkspacePath) = delete(path, null, false)
+    suspend fun delete(path: WorkspacePath, approved: WorkspaceStructuralStamp? = null) =
+        delete(path, null, false, approved)
 
     suspend fun deleteIfUnchanged(path: WorkspacePath, expected: BinaryFingerprint?) =
-        delete(path, expected, true)
+        delete(path, expected, true, null)
 
-    private suspend fun delete(path: WorkspacePath, expected: BinaryFingerprint?, requireEmpty: Boolean) = io {
+    private suspend fun delete(path: WorkspacePath, expected: BinaryFingerprint?, requireEmpty: Boolean,
+                               approved: WorkspaceStructuralStamp?) = io {
         mutations.withLock {
             requireNonRoot(path)
-            val entry = resolve(path)
+            val entry = if (approved == null) resolve(path) else requireStructural(path, approved)
             if (!entry.capabilities.delete) fail(WorkspaceFailure.Reason.UNSUPPORTED)
             if (entry.directory) {
                 if (requireEmpty && children(entry, 5000).isNotEmpty()) fail(WorkspaceFailure.Reason.CONFLICT)
@@ -207,11 +268,12 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         }
     }
 
-    suspend fun rename(path: WorkspacePath, newName: String): WorkspaceEntry = io {
+    suspend fun rename(path: WorkspacePath, newName: String,
+                       approved: WorkspaceStructuralStamp? = null): WorkspaceEntry = io {
         mutations.withLock {
             requireNonRoot(path)
             WorkspacePath.validateName(newName)
-            val entry = resolve(path)
+            val entry = if (approved == null) resolve(path) else requireStructural(path, approved)
             if (!entry.capabilities.rename) fail(WorkspaceFailure.Reason.UNSUPPORTED)
             val parent = resolve(path.parent())
             absent(parent, newName)
@@ -225,12 +287,15 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
     }
 
     // Destination is an existing directory; the provider preserves the source name.
-    suspend fun move(source: WorkspacePath, destination: WorkspacePath): WorkspaceEntry = io {
+    suspend fun move(source: WorkspacePath, destination: WorkspacePath,
+                     approvedSource: WorkspaceStructuralStamp? = null,
+                     approvedDestination: WorkspaceStructuralStamp? = null): WorkspaceEntry = io {
         mutations.withLock {
             requireNonRoot(source)
-            val entry = resolve(source)
+            val entry = if (approvedSource == null) resolve(source) else requireStructural(source, approvedSource)
             if (destination.isWithin(source) || destination == source.parent()) fail(WorkspaceFailure.Reason.INVALID_PATH)
-            val target = resolve(destination)
+            val target = if (approvedDestination == null) resolve(destination)
+                else requireStructural(destination, approvedDestination)
             if (!target.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
             if (!entry.capabilities.move || !target.capabilities.create) fail(WorkspaceFailure.Reason.UNSUPPORTED)
             val parent = resolve(source.parent())
@@ -352,7 +417,7 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         }
     }
 
-    private suspend fun stream(entry: WorkspaceEntry, output: OutputStream?): BinaryFingerprint {
+    private suspend fun stream(entry: WorkspaceEntry, output: OutputStream?, limitBytes: Long? = null): BinaryFingerprint {
         requireGrant()
         if (entry.directory) fail(WorkspaceFailure.Reason.NOT_FILE)
         val context = currentCoroutineContext()
@@ -369,6 +434,7 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
                     context.ensureActive()
                     val size = input.read(buffer)
                     if (size < 0) break
+                    if (limitBytes != null && count + size > limitBytes) fail(WorkspaceFailure.Reason.LIMIT)
                     digest.update(buffer, 0, size)
                     output?.write(buffer, 0, size)
                     count += size
@@ -411,4 +477,9 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
     }
 
     private fun fail(reason: WorkspaceFailure.Reason): Nothing = throw WorkspaceFailure(reason)
+
+    private companion object {
+        const val MAX_STRUCTURAL_ENTRIES = 50_000
+        const val MAX_STRUCTURAL_BYTES = 1024L * 1024 * 1024
+    }
 }

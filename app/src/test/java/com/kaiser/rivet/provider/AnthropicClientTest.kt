@@ -66,6 +66,7 @@ class AnthropicClientTest {
             """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi "}}""",
             """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"internal"}}""",
             """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"there"}}""",
+            """{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""",
             """{"type":"message_stop"}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
@@ -84,7 +85,7 @@ class AnthropicClientTest {
 
     @Test
     fun olderModelUsesManualThinkingBudget() = runTest {
-        server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
+        server.enqueue(MockResponse().setBody(finished("end_turn")))
         AnthropicClient(config("claude-haiku-4-5-20251001"), "key").streamChat(
             ChatRequest("claude-haiku-4-5-20251001", emptyList(), "", ReasoningLevel.High),
         ) {}
@@ -96,7 +97,7 @@ class AnthropicClientTest {
 
     @Test
     fun currentModelUsesAdaptiveThinkingAndEffort() = runTest {
-        server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
+        server.enqueue(MockResponse().setBody(finished("end_turn")))
         AnthropicClient(config("claude-opus-4-8"), "key").streamChat(
             ChatRequest("claude-opus-4-8", emptyList(), "", ReasoningLevel.High),
         ) {}
@@ -108,7 +109,7 @@ class AnthropicClientTest {
 
     @Test
     fun unknownModelOmitsReasoningConfiguration() = runTest {
-        server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
+        server.enqueue(MockResponse().setBody(finished("end_turn")))
         AnthropicClient(config("claude-opus-4-9"), "key").streamChat(
             ChatRequest("claude-opus-4-9", emptyList(), "", ReasoningLevel.High),
         ) {}
@@ -120,7 +121,7 @@ class AnthropicClientTest {
 
     @Test
     fun defaultReasoningSendsNoThinkingBlock() = runTest {
-        server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
+        server.enqueue(MockResponse().setBody(finished("end_turn")))
         AnthropicClient(config(), "key").streamChat(
             ChatRequest("claude-x", emptyList(), "", ReasoningLevel.Default),
         ) {}
@@ -146,6 +147,7 @@ class AnthropicClientTest {
             """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"read_file","input":{}}}""",
             """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}""",
             """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"A.kt\"}"}}""",
+            """{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""",
             """{"type":"message_stop"}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
@@ -158,7 +160,7 @@ class AnthropicClientTest {
         assertEquals(AgentToolCall("tool-1", "read_file", "{\"path\":\"A.kt\"}"), response.toolCalls.single())
         server.takeRequest()
 
-        server.enqueue(MockResponse().setBody("data: {\"type\":\"message_stop\"}\n\n"))
+        server.enqueue(MockResponse().setBody(finished("end_turn")))
         client.streamAgent(AgentRequest(
             "claude-x",
             listOf(AgentMessage.assistant("", response.toolCalls), AgentMessage.tools(listOf(
@@ -188,10 +190,52 @@ class AnthropicClientTest {
     }
 
     @Test
+    fun completeLookingToolUseIsRejectedWhenGenerationHitsMaxTokens() = runTest {
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"delete_path","input":{"path":"Max.txt"}}}""",
+            """{"type":"content_block_stop","index":0}""",
+            """{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}""",
+            """{"type":"message_stop"}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse))
+
+        try {
+            AnthropicClient(config(), "key").streamAgent(
+                AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            throw AssertionError("A max_tokens tool decision must not be executed")
+        } catch (_: ProviderError) {
+            // expected
+        }
+    }
+
+    @Test
+    fun maxTokensTextIsNotPresentedAsCompleted() = runTest {
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I changed the file"}}""",
+            """{"type":"content_block_stop","index":0}""",
+            """{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}""",
+            """{"type":"message_stop"}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse))
+
+        try {
+            AnthropicClient(config(), "key").streamChat(
+                ChatRequest("claude-x", emptyList(), "", ReasoningLevel.Default),
+            ) {}
+            throw AssertionError("A max_tokens answer must not be presented as complete")
+        } catch (_: ProviderError) {
+            // expected
+        }
+    }
+
+    @Test
     fun multipleToolUsesRemainDistinct() = runTest {
         val sse = listOf(
             """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"read_file","input":{"path":"A.kt"}}}""",
             """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"b","name":"read_file","input":{"path":"B.kt"}}}""",
+            """{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""",
             """{"type":"message_stop"}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
@@ -208,7 +252,7 @@ class AnthropicClientTest {
     @Test fun streamUsageUsesFinalCumulativeOutputAndInitialInput() = runTest {
         val sse = listOf(
             """{"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1,"cache_read_input_tokens":5}}}""",
-            """{"type":"message_delta","usage":{"output_tokens":15}}""",
+            """{"type":"message_delta","delta":{"stop_reason":"end_turn"},"usage":{"output_tokens":15}}""",
             """{"type":"message_stop"}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
@@ -234,4 +278,8 @@ class AnthropicClientTest {
             assertTrue(e.text.contains("Overloaded"))
         }
     }
+
+    private fun finished(reason: String) =
+        "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"$reason\"}}\n\n" +
+            "data: {\"type\":\"message_stop\"}\n\n"
 }

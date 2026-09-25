@@ -42,6 +42,16 @@ private data class MirrorEntry(val directory: Boolean, val size: Long? = null, v
 @Serializable
 private data class MirrorBaseline(val tree: String, val entries: Map<String, MirrorEntry>)
 
+@Serializable
+private data class PartialCreate(
+    val tree: String,
+    val path: String,
+    val documentId: String,
+    val target: MirrorEntry,
+)
+
+private val emptyFile = MirrorEntry(false, 0, MessageDigest.getInstance("SHA-256").digest().toHex())
+
 /** One SAF tree has one private worktree. The baseline names bytes confirmed at the last sync. */
 class WorkspaceMirror(
     context: Context,
@@ -55,6 +65,7 @@ class WorkspaceMirror(
     private val staging = File(base, "staging")
     private val checkpointStaging = File(base, "checkpoint-stage")
     private val previous = File(base, "previous")
+    private val partialCreateFile = File(current, "partial-create.json")
     private val mutex = Mutex()
     val worktree: File get() = File(current, "worktree")
     val home: File get() = File(base, "home")
@@ -67,7 +78,7 @@ class WorkspaceMirror(
             if (!current.exists()) materialize()
             val baseline = baseline()
             val local = localSnapshot()
-            val dirty = local != baseline.entries
+            val dirty = local != baseline.entries || readPartialCreate() != null
             if (!dirty && safSnapshot() != baseline.entries) materialize()
             MirrorReady(worktree, dirty)
         }
@@ -75,7 +86,7 @@ class WorkspaceMirror(
 
     suspend fun hasLocalChanges(): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
-            if (!current.exists()) false else localSnapshot() != baseline().entries
+            if (!current.exists()) false else localSnapshot() != baseline().entries || readPartialCreate() != null
         }
     }
 
@@ -86,12 +97,37 @@ class WorkspaceMirror(
             if (!current.exists()) materialize()
             val before = baseline()
             val local = localSnapshot()
-            if (local == before.entries) return@withLock MirrorSyncResult(MirrorSync.NoChanges)
+            val pendingCreate = readPartialCreate()
+            if (local == before.entries) {
+                if (pendingCreate != null) clearPartialCreate()
+                return@withLock MirrorSyncResult(
+                    if (pendingCreate == null) MirrorSync.NoChanges else MirrorSync.Conflict,
+                    pendingCreate?.path,
+                )
+            }
             val external = safSnapshot()
+            var partial = pendingCreate
+            if (partial != null) {
+                val path = partial.path
+                val sameDocument = try {
+                    workspace.stat(WorkspacePath.parse(path)).documentId == partial.documentId
+                } catch (e: CancellationException) { throw e
+                } catch (_: Exception) { false }
+                if (!sameDocument || before.entries[path] != null || local[path] != partial.target ||
+                    (external[path] != emptyFile && external[path] != partial.target)) {
+                    clearPartialCreate()
+                    return@withLock MirrorSyncResult(MirrorSync.Conflict, path)
+                }
+                if (external[path] == partial.target) {
+                    clearPartialCreate()
+                    partial = null
+                }
+            }
             // Resume only when every SAF entry is still at the baseline or already
             // matches this mirror's exact target; third-party content blocks writes.
             val difference = (external.keys + before.entries.keys + local.keys).firstOrNull {
-                external[it] != before.entries[it] && external[it] != local[it]
+                external[it] != before.entries[it] && external[it] != local[it] &&
+                    !(it == partial?.path && external[it] == emptyFile)
             }
             if (difference != null) return@withLock MirrorSyncResult(MirrorSync.Conflict, difference)
             try {
@@ -125,16 +161,31 @@ class WorkspaceMirror(
                     if (Files.isSymbolicLink(file.toPath())) throw MirrorFailure("unsafe_entry", path)
                     val old = before.entries[path]
                     val actual = if (old == null || old.directory) {
-                        val created = workspace.createFile(relative)
-                        if (created.path.value != path) return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value)
-                        workspace.fingerprint(created.path).sha256
+                        if (partial?.path == path) {
+                            emptyFile.sha256!!
+                        } else {
+                            val created = workspace.createFile(relative)
+                            if (created.path.value != path) return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value)
+                            val fingerprint = workspace.fingerprint(created.path)
+                            if (fingerprint.size != emptyFile.size || fingerprint.sha256 != emptyFile.sha256) {
+                                return@withLock MirrorSyncResult(MirrorSync.Conflict, path)
+                            }
+                            partial = PartialCreate(workspace.tree.toString(), path, created.documentId, local[path]!!)
+                            writePartialCreate(partial)
+                            emptyFile.sha256!!
+                        }
                     } else old.sha256 ?: throw MirrorFailure("baseline_invalid", path)
                     FileInputStream(file).use { workspace.writeFileFrom(relative, it, actual) }
+                    if (partial?.path == path) {
+                        clearPartialCreate()
+                        partial = null
+                    }
                 }
                 val verified = safSnapshot()
                 val mismatch = (verified.keys + local.keys).firstOrNull { verified[it] != local[it] }
                 if (mismatch != null) return@withLock MirrorSyncResult(MirrorSync.Failed, mismatch)
                 writeBaseline(current, MirrorBaseline(workspace.tree.toString(), verified))
+                clearPartialCreate()
                 MirrorSyncResult(MirrorSync.Ok)
             } catch (e: CancellationException) { throw e
             } catch (e: MirrorFailure) { throw e
@@ -193,6 +244,32 @@ class WorkspaceMirror(
         }
         Files.move(temporary.toPath(), target.toPath(), StandardCopyOption.ATOMIC_MOVE,
             StandardCopyOption.REPLACE_EXISTING)
+    }
+
+    private fun readPartialCreate(): PartialCreate? {
+        if (!partialCreateFile.exists()) return null
+        val receipt = try { Json.decodeFromString(PartialCreate.serializer(), partialCreateFile.readText()) }
+            catch (_: Exception) { throw MirrorFailure("receipt_invalid") }
+        if (receipt.tree != workspace.tree.toString() || receipt.path.isEmpty() || receipt.target.directory) {
+            throw MirrorFailure("receipt_invalid")
+        }
+        try { WorkspacePath.parse(receipt.path) }
+            catch (_: Exception) { throw MirrorFailure("receipt_invalid") }
+        return receipt
+    }
+
+    private fun writePartialCreate(receipt: PartialCreate) {
+        val next = File(current, "partial-create.next")
+        FileOutputStream(next).use { output ->
+            output.write(Json.encodeToString(PartialCreate.serializer(), receipt).toByteArray())
+            output.fd.sync()
+        }
+        Files.move(next.toPath(), partialCreateFile.toPath(), StandardCopyOption.ATOMIC_MOVE,
+            StandardCopyOption.REPLACE_EXISTING)
+    }
+
+    private fun clearPartialCreate() {
+        Files.deleteIfExists(partialCreateFile.toPath())
     }
 
     private suspend fun materialize() {

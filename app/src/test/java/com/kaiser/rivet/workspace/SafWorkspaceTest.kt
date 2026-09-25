@@ -5,6 +5,10 @@ import android.content.pm.ProviderInfo
 import android.provider.DocumentsContract
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolExecutor
+import com.kaiser.rivet.agent.AgentLoop
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentResponse
+import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.SafAgentWorkspace
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -43,6 +47,17 @@ class SafWorkspaceTest {
     private fun path(value: String) = WorkspacePath.parse(value)
     private suspend fun failure(reason: WorkspaceFailure.Reason, operation: suspend () -> Unit) {
         try { operation(); fail("Expected $reason") } catch (e: WorkspaceFailure) { assertEquals(reason, e.reason) }
+    }
+    private suspend fun afterApproval(call: AgentToolCall, change: suspend () -> Unit): AgentToolResult {
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "Stopped")))
+        val run = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = executor::prepare,
+            requestApproval = { change(); true },
+            describeDestructive = executor::describeDestructive,
+        ).run(listOf(AgentMessage.user("Change the file")), AgentToolExecutor.definitions)
+        return run.messages.flatMap { it.toolResults }.single()
     }
 
     @Test fun selectedProjectUsesProviderDisplayName() = runBlocking {
@@ -320,6 +335,101 @@ class SafWorkspaceTest {
         provider.rejectDelete = true
         try { workspace.delete(entry.path); fail("Rejected deletion reported success") } catch (_: WorkspaceFailure) { }
         assertTrue(provider.nodes.containsKey(entry.documentId))
+    }
+    @Test fun approvedDeleteCannotRemoveAReplacementDocument() = runBlocking {
+        val original = workspace.createFile(path("Max.txt"))
+        provider.nodes[original.documentId]!!.bytes.writeText("old")
+        var replacementId = ""
+        val result = afterApproval(AgentToolCall("delete", "delete_path", """{"path":"Max.txt"}""")) {
+            provider.nodes.remove(original.documentId)
+            val replacement = workspace.createFile(path("Max.txt"))
+            replacementId = replacement.documentId
+            provider.nodes[replacementId]!!.bytes.writeText("new user data")
+        }
+
+        assertTrue(result.error)
+        assertTrue(result.content.contains("stale_target"))
+        assertEquals(replacementId, workspace.stat(path("Max.txt")).documentId)
+        assertEquals("new user data", workspace.readTextFile(path("Max.txt")).text)
+    }
+    @Test fun approvedRenameCannotRenameAReplacementDocument() = runBlocking {
+        val original = workspace.createFile(path("Max.txt"))
+        var replacementId = ""
+        val result = afterApproval(AgentToolCall("rename", "rename_path",
+            """{"path":"Max.txt","new_name":"renamed.txt"}""")) {
+            provider.nodes.remove(original.documentId)
+            replacementId = workspace.createFile(path("Max.txt")).documentId
+        }
+
+        assertTrue(result.error)
+        assertTrue(result.content.contains("stale_target"))
+        assertEquals(replacementId, workspace.stat(path("Max.txt")).documentId)
+        assertFalse(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "renamed.txt" })
+    }
+    @Test fun approvedMoveCannotMoveAReplacementDocument() = runBlocking {
+        workspace.createDirectory(path("target"))
+        val original = workspace.createFile(path("Max.txt"))
+        var replacementId = ""
+        val result = afterApproval(AgentToolCall("move", "move_path",
+            """{"path":"Max.txt","destination":"target"}""")) {
+            provider.nodes.remove(original.documentId)
+            replacementId = workspace.createFile(path("Max.txt")).documentId
+        }
+
+        assertTrue(result.error)
+        assertTrue(result.content.contains("stale_target"))
+        assertEquals(replacementId, workspace.stat(path("Max.txt")).documentId)
+        assertTrue(workspace.listDirectory(path("target")).isEmpty())
+    }
+    @Test fun approvedMoveCannotUseAReplacementDestinationFolder() = runBlocking {
+        val originalTarget = workspace.createDirectory(path("target"))
+        val source = workspace.createFile(path("Max.txt"))
+        var replacementId = ""
+        val result = afterApproval(AgentToolCall("move", "move_path",
+            """{"path":"Max.txt","destination":"target"}""")) {
+            provider.nodes.remove(originalTarget.documentId)
+            replacementId = workspace.createDirectory(path("target")).documentId
+        }
+
+        assertTrue(result.error)
+        assertTrue(result.content.contains("stale_target"))
+        assertEquals(source.documentId, workspace.stat(path("Max.txt")).documentId)
+        assertEquals(replacementId, workspace.stat(path("target")).documentId)
+        assertTrue(workspace.listDirectory(path("target")).isEmpty())
+    }
+    @Test fun approvedDeleteCannotRemoveFileChangedDuringApproval() = runBlocking {
+        val original = workspace.createFile(path("Max.txt"))
+        provider.nodes[original.documentId]!!.bytes.writeText("old")
+        val result = afterApproval(AgentToolCall("delete", "delete_path", """{"path":"Max.txt"}""")) {
+            provider.nodes[original.documentId]!!.bytes.writeText("new user data")
+        }
+
+        assertTrue(result.error)
+        assertTrue(result.content.contains("stale_target"))
+        assertEquals("new user data", workspace.readTextFile(path("Max.txt")).text)
+    }
+    @Test fun missingSourceParentAfterApprovalIsReportedAsStale() = runBlocking {
+        workspace.createDirectory(path("folder"))
+        workspace.createFile(path("folder/Max.txt"))
+        val result = afterApproval(AgentToolCall("delete", "delete_path",
+            """{"path":"folder/Max.txt"}""")) {
+            workspace.delete(path("folder"))
+        }
+
+        assertTrue(result.error)
+        assertTrue(result.content.contains("stale_target"))
+        assertFalse(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "folder" })
+    }
+    @Test fun approvedDeleteCannotRemoveDirectoryWithNewExternalContents() = runBlocking {
+        workspace.createDirectory(path("folder"))
+        val result = afterApproval(AgentToolCall("delete", "delete_path", """{"path":"folder"}""")) {
+            val added = workspace.createFile(path("folder/user.txt"))
+            provider.nodes[added.documentId]!!.bytes.writeText("new user data")
+        }
+
+        assertTrue(result.error)
+        assertTrue(result.content.contains("stale_target"))
+        assertEquals("new user data", workspace.readTextFile(path("folder/user.txt")).text)
     }
     @Test fun nullMetadataAndBinaryAndLargeFilesAreSafe() = runBlocking {
         val entry = workspace.createFile(path("a"))

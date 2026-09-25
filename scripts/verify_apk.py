@@ -1,6 +1,6 @@
 """Validate the built APK artifact, not just Gradle declarations (runs in CI).
 
-Usage: verify_apk.py <apk> <keystore> <storepass> <alias>
+Usage: verify_apk.py <apk> <keystore> <storepass> <alias> [<production-pin-file> <release-tag>]
 Fails when APK identity, SDK levels, permissions, bundled notices, or signer
 do not match the release configuration.
 """
@@ -11,8 +11,9 @@ import subprocess
 import sys
 from pathlib import Path
 from zipfile import ZipFile
+from release_identity import verify_release_identity
 
-if len(sys.argv) != 5:
+if len(sys.argv) not in (5, 7):
     sys.exit(__doc__)
 apk, keystore, storepass, alias = sys.argv[1:5]
 
@@ -93,6 +94,8 @@ digests = [line.split("certificate SHA-256 digest: ", 1)[1]
            for line in signing.splitlines()
            if "certificate SHA-256 digest: " in line]
 assert digests and set(digests) == {expected_signer}, signing
+if len(sys.argv) == 7:
+    verify_release_identity(version_name, expected_signer, Path(sys.argv[5]), sys.argv[6])
 
 print(badging)
 print("permissions:", ", ".join(sorted(requested)))
