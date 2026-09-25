@@ -99,8 +99,12 @@ internal fun runtimeFailureMessage(code: String?): String = when (code) {
     "workspace_changed" ->
         "The project changed while Rivet was working, so it stopped before running the command."
     "terminal_active" -> "Rivet's command runner is busy. Try again."
-    "sync_required", "sync_conflict", "sync_failed", "mirror_dirty", "conflict" ->
-        "Rivet found project changes it couldn't safely reconcile, so it stopped instead of overwriting anything."
+    "sync_required", "mirror_dirty" ->
+        "Rivet found pending project changes it couldn't safely reconcile. It kept the pending copy and stopped before another command."
+    "sync_conflict", "conflict" ->
+        "The project changed outside Rivet. Rivet kept its pending changes and stopped before overwriting newer work."
+    "sync_failed" ->
+        "Rivet couldn't finish saving the command's project changes. Some files may already be saved; Rivet kept the pending changes."
     "sync_interrupted", "interrupted" ->
         "The command ran, but Rivet couldn't confirm its project changes. Check the project before retrying."
     "checkpoint_unavailable" ->
@@ -656,7 +660,13 @@ class ChatViewModel private constructor(
             AgentStopReason.RunawayGuard -> "Rivet stopped after reaching its safety limit. Try a smaller request."
             AgentStopReason.WorkspaceChanged -> "The project changed while Rivet was working, so it stopped. Completed changes remain."
             AgentStopReason.SessionLimit -> CONTEXT_LIMIT_ERROR
-            AgentStopReason.CheckpointUnavailable -> "Rivet couldn't prepare a safe Undo, so it didn't start changing files. Try again."
+            AgentStopReason.CheckpointUnavailable -> when {
+                result.mutationsCompleted > 0 ->
+                    "Rivet stopped before another change because safe Undo is unavailable. Earlier project changes may remain."
+                result.mutationsAttempted > 0 ->
+                    "Rivet stopped after an attempted change could not be confirmed. Project changes may remain; safe Undo is unavailable."
+                else -> "Rivet couldn't prepare a safe Undo, so it stopped before changing files. Try again."
+            }
             AgentStopReason.ContextUnavailable -> "Rivet couldn't make room to continue this conversation. Your messages were kept. Try again or start a new conversation."
             AgentStopReason.NoProgress -> "Rivet couldn't get past the same problem. Check the last message, then tell it what to try next."
             AgentStopReason.RuntimeBlocked -> runtimeFailureMessage(result.failureCode)

@@ -28,6 +28,8 @@ data class AgentRunResult(
     val modelIterations: Int,
     val toolCalls: Int,
     val failureCode: String? = null,
+    val mutationsAttempted: Int = 0,
+    val mutationsCompleted: Int = 0,
 )
 
 class AgentLoop(
@@ -66,12 +68,15 @@ class AgentLoop(
         var lastDeterministicFailure: Triple<String, String, String>? = null
         var modelIterations = 0
         var toolCalls = 0
+        var mutationsAttempted = 0
+        var mutationsCompleted = 0
         while (modelIterations < RUNAWAY_MODEL_ITERATIONS) {
             currentCoroutineContext().ensureActive()
             val active = try { compactContext(messages.toList(), false) }
                 catch (e: CancellationException) { throw e
                 } catch (_: Exception) {
-                    return AgentRunResult(messages, AgentStopReason.ContextUnavailable, modelIterations, toolCalls)
+                    return AgentRunResult(messages, AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
+                        mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
                 }
             if (active != messages) {
                 messages.clear()
@@ -119,6 +124,8 @@ class AgentLoop(
                         stopReason = AgentStopReason.SessionLimit,
                         modelIterations = modelIterations,
                         toolCalls = toolCalls,
+                        mutationsAttempted = mutationsAttempted,
+                        mutationsCompleted = mutationsCompleted,
                     )
                 }
             }
@@ -129,6 +136,8 @@ class AgentLoop(
                     stopReason = AgentStopReason.Completed,
                     modelIterations = modelIterations,
                     toolCalls = toolCalls,
+                    mutationsAttempted = mutationsAttempted,
+                    mutationsCompleted = mutationsCompleted,
                 )
             }
             if (toolCalls + response.toolCalls.size > RUNAWAY_TOOL_CALLS) {
@@ -139,6 +148,8 @@ class AgentLoop(
                     stopReason = AgentStopReason.RunawayGuard,
                     modelIterations = modelIterations,
                     toolCalls = toolCalls,
+                    mutationsAttempted = mutationsAttempted,
+                    mutationsCompleted = mutationsCompleted,
                 )
             }
             val results = mutableListOf<AgentToolResult>()
@@ -244,6 +255,7 @@ class AgentLoop(
                     } else if (mutationBlocker != null) {
                         stopped(call, mutationBlocker)
                     } else {
+                        if (prepared.approval != null) mutationsAttempted++
                         try {
                             prepared.execute()
                         } catch (e: CancellationException) {
@@ -251,6 +263,9 @@ class AgentLoop(
                         } catch (_: Exception) {
                             failed(call)
                         }
+                    }
+                    if (prepared.approval != null && !denied && mutationBlocker == null && !result.error) {
+                        mutationsCompleted++
                     }
                     val bounded = boundResult(result, prepared.resultContentLimitBytes)
                     val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "workspace_changed") }
@@ -290,6 +305,8 @@ class AgentLoop(
                     modelIterations = modelIterations,
                     toolCalls = toolCalls,
                     failureCode = failureCode,
+                    mutationsAttempted = mutationsAttempted,
+                    mutationsCompleted = mutationsCompleted,
                 )
             }
         }
@@ -298,6 +315,8 @@ class AgentLoop(
             stopReason = AgentStopReason.RunawayGuard,
             modelIterations = modelIterations,
             toolCalls = toolCalls,
+            mutationsAttempted = mutationsAttempted,
+            mutationsCompleted = mutationsCompleted,
         )
     }
 
