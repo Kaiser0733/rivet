@@ -7,6 +7,7 @@ import com.kaiser.rivet.provider.ProviderType
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertThrows
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
@@ -40,5 +41,37 @@ class ProviderHeaderStorageTest {
         val data = File(context.filesDir, "datastore/providers.preferences_pb").readBytes()
         val stored = String(data, Charsets.ISO_8859_1)
         assertFalse(stored.contains(secret))
+        store.configSnapshot()
+        assertEquals(data.toList(), File(context.filesDir, "datastore/providers.preferences_pb").readBytes().toList())
+    }
+
+    @Test
+    fun wrongKeyCannotRewriteTaggedHeadersAsPlaintext() = runBlocking {
+        val context = RuntimeEnvironment.getApplication() as Context
+        val id = UUID.randomUUID().toString()
+        val originalKey = SecretKeySpec(ByteArray(32) { it.toByte() }, "AES")
+        val wrongKey = SecretKeySpec(ByteArray(32) { (it + 1).toByte() }, "AES")
+        val original = ProviderStore(context, SecretStore(context, originalKey))
+        val config = ProviderConfig(
+            id = id,
+            type = ProviderType.OpenAiCompatible,
+            name = "Test provider",
+            baseUrl = "https://example.invalid/v1",
+            model = "test-model",
+            headers = listOf(
+                ProviderHeader("X-First", "first-secret"),
+                ProviderHeader("X-Second", "second-secret"),
+            ),
+        )
+        original.save(config)
+        val file = File(context.filesDir, "datastore/providers.preferences_pb")
+        val before = file.readBytes()
+
+        assertThrows(IllegalStateException::class.java) {
+            runBlocking { ProviderStore(context, SecretStore(context, wrongKey)).configSnapshot() }
+        }
+
+        assertEquals(before.toList(), file.readBytes().toList())
+        assertEquals(config, original.configSnapshot().single { it.id == id })
     }
 }

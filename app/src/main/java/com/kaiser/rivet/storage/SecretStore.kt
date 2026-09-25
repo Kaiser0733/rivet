@@ -85,8 +85,7 @@ class SecretStore private constructor(context: Context, private val keyProvider:
         }
     }
 
-    internal fun isEncryptedProviderHeader(providerId: String, index: Int, value: String): Boolean =
-        decryptProviderHeader(providerId, index, value) != null
+    internal fun isTaggedProviderHeader(value: String): Boolean = value.startsWith(HEADER_PREFIX)
 
     fun clearApiKey(providerId: String) {
         prefs.edit().remove(providerId).apply()
