@@ -160,8 +160,8 @@ class GeminiClientTest {
                     "gemini-x", emptyList(), "sys", ReasoningLevel.Default, emptyList(),
                 )) {}
                 throw AssertionError("$reason must not authorize a function call")
-            } catch (error: ProviderError.InvalidResponse) {
-                assertTrue(error.detail.contains("finish reason"))
+            } catch (error: ProviderError.IncompleteGeneration) {
+                assertEquals(reason, error.reason)
             }
         }
     }

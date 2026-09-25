@@ -1,9 +1,12 @@
 package com.kaiser.rivet.provider
 
 import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentLoop
+import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolDefinition
 import com.kaiser.rivet.agent.AgentToolResult
+import com.kaiser.rivet.agent.PreparedAgentTool
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -203,7 +206,9 @@ class OpenAiCompatibleClientTest {
         val sse = listOf(
             """{"choices":[{"delta":{"content":"Checking ","tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read_","arguments":"{\"pa"}}]}}]}""",
             """{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"search_files","arguments":"{\"query\":\"x\"}"}},{"index":0,"function":{"name":"file","arguments":"th\":\"A.kt\"}"}}]}}]}""",
-        ).joinToString("") { "data: $it\n\n" } + "data: [DONE]\n\n"
+        ).joinToString("") { "data: $it\n\n" } +
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"tool_calls\"}]}\n\n" +
+            "data: [DONE]\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
 
         val response = OpenAiCompatibleClient(config(), "key").streamAgent(
@@ -245,8 +250,9 @@ class OpenAiCompatibleClientTest {
                 AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
             ) {}
             fail("A length-limited generation must not return a tool call")
-        } catch (_: ProviderError) {
-            // expected
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("length", error.reason)
+            assertTrue(error.text().contains("stopped before finishing"))
         }
     }
 
@@ -264,6 +270,39 @@ class OpenAiCompatibleClientTest {
         } catch (_: ProviderError) {
             // expected
         }
+    }
+
+    @Test
+    fun customToolCallWithoutFinishReasonNeverReachesApprovalOrExecution() = runTest {
+        val tool = """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"delete_path","arguments":"{\"path\":\"Max.txt\"}"}}]}}]}"""
+        server.enqueue(MockResponse().setBody("data: $tool\n\ndata: [DONE]\n\n"))
+        val client = OpenAiCompatibleClient(config(), "key")
+        var prepared = 0
+        var approvals = 0
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { messages, tools, onText ->
+                client.streamAgent(AgentRequest("test-model", messages, "", ReasoningLevel.Default, tools), onText)
+            },
+            prepareTool = { call ->
+                prepared++
+                PreparedAgentTool(call, AgentApprovalRequest(call, "Delete", "Max.txt")) {
+                    executions++
+                    AgentToolResult(call.id, call.name, "{}")
+                }
+            },
+            requestApproval = { approvals++; true },
+        )
+
+        try {
+            loop.run(listOf(AgentMessage.user("Delete Max.txt")), emptyList())
+            fail("An unconfirmed tool decision must not reach the agent loop")
+        } catch (_: ProviderError.IncompleteGeneration) {
+            // expected
+        }
+        assertEquals(0, prepared)
+        assertEquals(0, approvals)
+        assertEquals(0, executions)
     }
 
     @Test fun knownProvidersRequestAndParseFinalUsageButCustomShapeStaysBaseline() = runTest {

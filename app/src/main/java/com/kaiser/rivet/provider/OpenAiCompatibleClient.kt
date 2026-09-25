@@ -137,6 +137,7 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
     private val text = StringBuilder()
     private val tools = sortedMapOf<Int, Pending>()
     private var usage: com.kaiser.rivet.agent.AgentUsage? = null
+    private var finishReason: String? = null
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
@@ -146,7 +147,9 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
             throw providerMessage(message, error.obj()?.get("code")?.str())
         }
         openAiUsage(root)?.let { usage = it }
-        val delta = root["choices"]?.arr()?.firstOrNull()?.obj()?.get("delta")?.obj() ?: return
+        val choice = root["choices"]?.arr()?.firstOrNull()?.obj() ?: return
+        choice["finish_reason"]?.str()?.let { finishReason = it }
+        val delta = choice["delta"]?.obj() ?: return
         delta["content"]?.str()?.takeIf { it.isNotEmpty() }?.let { value ->
             text.append(value); onDelta(value)
         }
@@ -163,7 +166,13 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
         }
     }
 
-    fun response(): AgentResponse = AgentResponse(
+    fun response(): AgentResponse {
+        val reason = finishReason
+        if (tools.isNotEmpty() && reason != "tool_calls" ||
+            tools.isEmpty() && reason != null && reason != "stop") {
+            throw ProviderError.IncompleteGeneration(reason ?: "missing finish reason")
+        }
+        return AgentResponse(
         text = text.toString(),
         toolCalls = tools.values.map { pending ->
             AgentToolCall(
@@ -175,7 +184,8 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
             )
         },
         usage = usage,
-    )
+        )
+    }
 }
 
 private fun reasoningEffort(
