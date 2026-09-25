@@ -135,6 +135,7 @@ class AnthropicClientTest {
             """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"tool-1","name":"read_file","input":{}}}""",
             """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"{\"path\":"}}""",
             """{"type":"content_block_delta","index":1,"delta":{"type":"input_json_delta","partial_json":"\"A.kt\"}"}}""",
+            """{"type":"message_stop"}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val client = AnthropicClient(config(), "key")
@@ -180,6 +181,7 @@ class AnthropicClientTest {
         val sse = listOf(
             """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"read_file","input":{"path":"A.kt"}}}""",
             """{"type":"content_block_start","index":1,"content_block":{"type":"tool_use","id":"b","name":"read_file","input":{"path":"B.kt"}}}""",
+            """{"type":"message_stop"}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
 
@@ -196,6 +198,7 @@ class AnthropicClientTest {
         val sse = listOf(
             """{"type":"message_start","message":{"usage":{"input_tokens":25,"output_tokens":1,"cache_read_input_tokens":5}}}""",
             """{"type":"message_delta","usage":{"output_tokens":15}}""",
+            """{"type":"message_stop"}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val response = AnthropicClient(config(), "key").streamAgent(
