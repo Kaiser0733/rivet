@@ -26,8 +26,8 @@ internal class GeminiClient(
     override suspend fun listModels(): List<ModelInfo> {
         val request = base(Endpoints.geminiModels(config.baseUrl) + "?pageSize=1000").get().build()
         http.quick().await(request).use { r ->
-            if (!r.isSuccessful) throw httpError(r.code, r.body?.string())
-            val text = r.body?.string() ?: throw ProviderError.InvalidResponse("no body")
+            if (!r.isSuccessful) throw httpError(r.code, r.errorText())
+            val text = r.readBoundedBody() ?: throw ProviderError.InvalidResponse("no body")
             val models = parseJsonObject(text)?.get("models")?.arr() ?: throw ProviderError.InvalidResponse("not a JSON object")
             return models.mapNotNull { el ->
                 val o = el.obj() ?: return@mapNotNull null
@@ -158,6 +158,7 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
     private var textSignature: String? = null
     private var usage: com.kaiser.rivet.agent.AgentUsage? = null
     private var finished = false
+    private var finishReason: String? = null
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
@@ -166,7 +167,10 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
         }
         geminiUsage(root)?.let { usage = it }
         val candidate = root["candidates"]?.arr()?.firstOrNull()?.obj()
-        if (candidate?.get("finishReason")?.str() != null) finished = true
+        candidate?.get("finishReason")?.str()?.let {
+            finishReason = it
+            finished = true
+        }
         val parts = candidate?.get("content")?.obj()?.get("parts")?.arr() ?: return
         parts.forEach { element ->
             val part = element.obj() ?: throw ProviderError.InvalidResponse("invalid response part")
@@ -192,6 +196,9 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
 
     fun response(): AgentResponse {
         if (!finished) throw ProviderError.InvalidResponse("incomplete stream")
+        if (calls.isNotEmpty() && finishReason != "STOP") {
+            throw ProviderError.InvalidResponse("function call with unsuccessful finish reason")
+        }
         return AgentResponse(
             text.toString(),
             calls.toList(),

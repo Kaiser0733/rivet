@@ -49,6 +49,17 @@ class AnthropicClientTest {
     }
 
     @Test
+    fun listModelsRejectsOversizedResponse() = runTest {
+        server.enqueue(MockResponse().setBody("x".repeat(MAX_PROVIDER_JSON_BODY_BYTES + 1)))
+        try {
+            AnthropicClient(config(), "key").listModels()
+            throw AssertionError("expected an oversized response to be rejected")
+        } catch (_: ProviderError.ResponseTooLarge) {
+            // expected
+        }
+    }
+
+    @Test
     fun streamChatExtractsTextDeltas() = runTest {
         val sse = listOf(
             """{"type":"message_start","message":{}}""",

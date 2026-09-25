@@ -55,6 +55,17 @@ class GeminiClientTest {
     }
 
     @Test
+    fun listModelsRejectsOversizedResponse() = runTest {
+        server.enqueue(MockResponse().setBody("x".repeat(MAX_PROVIDER_JSON_BODY_BYTES + 1)))
+        try {
+            GeminiClient(config(), "key").listModels()
+            throw AssertionError("expected an oversized response to be rejected")
+        } catch (_: ProviderError.ResponseTooLarge) {
+            // expected
+        }
+    }
+
+    @Test
     fun streamChatConcatenatesParts() = runTest {
         val sse = listOf(
             """{"candidates":[{"content":{"parts":[{"text":"Hi "}]}}]}""",
@@ -133,6 +144,25 @@ class GeminiClientTest {
             throw AssertionError("Expected an incomplete stream to be rejected")
         } catch (error: ProviderError.InvalidResponse) {
             assertTrue(error.detail.contains("incomplete"))
+        }
+    }
+
+    @Test
+    fun functionCallsAreRejectedForNonSuccessFinishReasons() = runTest {
+        for (reason in listOf("MALFORMED_FUNCTION_CALL", "SAFETY", "MAX_TOKENS")) {
+            val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
+                "{\"functionCall\":{\"id\":\"g-1\",\"name\":\"delete_path\",\"args\":{\"path\":\"important.txt\"}}}" +
+                "]},\"finishReason\":\"$reason\"}]}\n\n"
+            server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+
+            try {
+                GeminiClient(config(), "key").streamAgent(AgentRequest(
+                    "gemini-x", emptyList(), "sys", ReasoningLevel.Default, emptyList(),
+                )) {}
+                throw AssertionError("$reason must not authorize a function call")
+            } catch (error: ProviderError.InvalidResponse) {
+                assertTrue(error.detail.contains("finish reason"))
+            }
         }
     }
 
