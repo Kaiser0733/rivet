@@ -2,6 +2,7 @@ package com.kaiser.rivet.runtime
 
 import android.content.Context
 import com.kaiser.rivet.workspace.SafWorkspace
+import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
 import java.io.File
 import java.io.FileInputStream
@@ -175,7 +176,16 @@ class WorkspaceMirror(
                             emptyFile.sha256!!
                         }
                     } else old.sha256 ?: throw MirrorFailure("baseline_invalid", path)
-                    FileInputStream(file).use { workspace.writeFileFrom(relative, it, actual) }
+                    val createdId = partial?.takeIf { it.path == path }?.documentId
+                    try {
+                        FileInputStream(file).use { workspace.writeFileFrom(relative, it, actual, createdId) }
+                    } catch (failure: WorkspaceFailure) {
+                        if (failure.reason == WorkspaceFailure.Reason.CONFLICT) {
+                            if (createdId != null) clearPartialCreate()
+                            return@withLock MirrorSyncResult(MirrorSync.Conflict, path)
+                        }
+                        throw failure
+                    }
                     if (partial?.path == path) {
                         clearPartialCreate()
                         partial = null
