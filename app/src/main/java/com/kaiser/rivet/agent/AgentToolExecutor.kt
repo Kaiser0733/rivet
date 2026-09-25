@@ -4,6 +4,7 @@ import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.RuntimeCommandResult
 import com.kaiser.rivet.runtime.RepositoryDiff
 import com.kaiser.rivet.runtime.RepositoryStatus
+import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -34,6 +35,7 @@ class AgentWorkspaceFailure(val code: String) : Exception(code)
 
 interface AgentWorkspace {
     suspend fun stat(path: String): AgentWorkspaceEntry
+    suspend fun observeStructural(path: String, recursive: Boolean): WorkspaceStructuralStamp
     suspend fun list(path: String): List<AgentWorkspaceEntry>
     suspend fun read(path: String): AgentFileSnapshot
     suspend fun search(path: String, query: String): AgentSearchReport
@@ -41,9 +43,10 @@ interface AgentWorkspace {
     suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>): AgentFileSnapshot
     suspend fun createFile(path: String): AgentCreatedFile
     suspend fun createDirectory(path: String): AgentWorkspaceEntry
-    suspend fun rename(path: String, newName: String): AgentWorkspaceEntry
-    suspend fun move(path: String, destination: String): AgentWorkspaceEntry
-    suspend fun delete(path: String)
+    suspend fun rename(path: String, newName: String, approved: WorkspaceStructuralStamp): AgentWorkspaceEntry
+    suspend fun move(path: String, destination: String, approvedSource: WorkspaceStructuralStamp,
+                     approvedDestination: WorkspaceStructuralStamp): AgentWorkspaceEntry
+    suspend fun delete(path: String, approved: WorkspaceStructuralStamp)
 }
 
 class AgentToolExecutor(
@@ -53,7 +56,7 @@ class AgentToolExecutor(
     private val gitStatus: (suspend () -> RepositoryStatus)? = null,
     private val gitDiff: (suspend (String) -> RepositoryDiff)? = null,
 ) {
-    fun prepare(call: AgentToolCall): PreparedAgentTool {
+    suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
         return try {
             when (call.name) {
@@ -168,8 +171,9 @@ class AgentToolExecutor(
                 "rename_path" -> {
                     val args = json.decodeFromString<RenameArgs>(call.arguments)
                     val path = path(args.path); name(args.newName)
+                    val approved = workspace.observeStructural(path, recursive = true)
                     mutation(call, "Rename", "$path\n→ ${args.newName}", path.length * 2 + 765, path) {
-                        val renamed = workspace.rename(path, args.newName)
+                        val renamed = workspace.rename(path, args.newName, approved)
                         val actualName = renamed.path.substringAfterLast('/')
                         success(call, buildJsonObject {
                             put("source_path", path)
@@ -183,8 +187,10 @@ class AgentToolExecutor(
                 "move_path" -> {
                     val args = json.decodeFromString<MoveArgs>(call.arguments)
                     val path = path(args.path); val destination = path(args.destination, root = true)
+                    val approvedSource = workspace.observeStructural(path, recursive = true)
+                    val approvedDestination = workspace.observeStructural(destination, recursive = false)
                     mutation(call, "Move", "$path\n→ ${destination.ifEmpty { "." }}", path.length + destination.length * 2 + 256, path) {
-                        val moved = workspace.move(path, destination)
+                        val moved = workspace.move(path, destination, approvedSource, approvedDestination)
                         success(call, buildJsonObject {
                             put("source_path", path)
                             put("destination", destination)
@@ -195,8 +201,9 @@ class AgentToolExecutor(
                 }
                 "delete_path" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
+                    val approved = workspace.observeStructural(path, recursive = true)
                     mutation(call, "Delete", path, path.length, path) {
-                        workspace.delete(path)
+                        workspace.delete(path, approved)
                         success(call, buildJsonObject { put("path", path); put("deleted", true) }, "Deleted  $path")
                     }
                 }
@@ -227,6 +234,8 @@ class AgentToolExecutor(
             invalid(call, "invalid_arguments")
         } catch (_: InvalidPath) {
             invalid(call, "invalid_path")
+        } catch (e: AgentWorkspaceFailure) {
+            invalid(call, e.code)
         }
     }
 

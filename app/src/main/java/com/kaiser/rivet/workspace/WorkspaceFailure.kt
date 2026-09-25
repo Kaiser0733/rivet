@@ -13,6 +13,7 @@ class WorkspaceFailure(val reason: Reason) : Exception(reason.message) {
         BINARY("Binary or non-UTF-8 content cannot be edited."),
         TOO_LARGE("This file exceeds the 1 MiB editable-file limit."),
         CONFLICT("The file changed outside this editor. Your changes were not saved. Reopen it to review the current version."),
+        STALE_TARGET("This file or folder changed while approval was pending. Inspect it before requesting a new approval."),
         PATCH("Each patch must match exactly once. No changes were written."),
         LIMIT("The directory or operation exceeds the workspace safety limit."),
         PROVIDER("The document provider is unavailable or rejected the operation."),
