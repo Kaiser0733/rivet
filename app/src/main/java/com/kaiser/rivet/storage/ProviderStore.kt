@@ -8,11 +8,14 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.datastore.preferences.preferencesDataStore
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderHeader
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.flow.flowOn
 import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 
@@ -33,7 +36,8 @@ class ProviderStore(
 
     val configs: Flow<List<ProviderConfig>> = flow {
         migrateLegacyHeaderValues()
-        emitAll(context.providerData.data.map { prefs -> decodeForUse(prefs[configsKey]) })
+        emitAll(context.providerData.data.map { prefs -> decodeForUse(prefs[configsKey]) }
+            .flowOn(Dispatchers.IO))
     }
 
     val activeId: Flow<String?> = context.providerData.data.map { it[activeKey] }
@@ -47,7 +51,7 @@ class ProviderStore(
 
     suspend fun save(config: ProviderConfig) {
         migrateLegacyHeaderValues()
-        val protected = protectHeaders(config)
+        val protected = withContext(Dispatchers.IO) { protectHeaders(config) }
         context.providerData.edit { prefs ->
             val current = decode(prefs[configsKey]).toMutableList()
             val idx = current.indexOfFirst { it.id == protected.id }
