@@ -152,7 +152,7 @@ class ChatViewModelTest {
         assertTrue(runtimeFailureMessage("workspace_unavailable").contains("Choose the project again"))
         assertTrue(runtimeFailureMessage("workspace_changed").contains("stopped before running"))
         assertTrue(runtimeFailureMessage("terminal_active").contains("command runner is busy"))
-        assertTrue(runtimeFailureMessage("sync_required").contains("stopped instead of overwriting"))
+        assertTrue(runtimeFailureMessage("sync_required").contains("kept the pending copy"))
         listOf("workspace_unavailable", "terminal_active", "sync_required").forEach { code ->
             val message = runtimeFailureMessage(code)
             assertFalse(message.contains("Terminal"))
