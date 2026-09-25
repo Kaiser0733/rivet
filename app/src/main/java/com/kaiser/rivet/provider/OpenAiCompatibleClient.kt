@@ -97,9 +97,10 @@ internal class OpenAiCompatibleClient(
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         val stream = OpenAiAgentStream(onDelta)
-        http.sse(httpRequest) { payload ->
+        val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
+        if (!completed) throw ProviderError.InvalidResponse("incomplete stream")
         return stream.response()
     }
 

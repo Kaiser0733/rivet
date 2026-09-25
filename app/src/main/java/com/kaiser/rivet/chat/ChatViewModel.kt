@@ -697,12 +697,12 @@ class ChatViewModel private constructor(
         return null
     }
 
-    fun approve(callId: String) {
-        approvals.resolve(callId, approved = true)
+    fun approve(approvalToken: Long) {
+        approvals.resolve(approvalToken, approved = true)
     }
 
-    fun deny(callId: String) {
-        approvals.resolve(callId, approved = false)
+    fun deny(approvalToken: Long) {
+        approvals.resolve(approvalToken, approved = false)
     }
 
     fun cancel() {

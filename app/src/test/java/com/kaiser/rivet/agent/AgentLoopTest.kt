@@ -297,13 +297,14 @@ class AgentLoopTest {
         yield()
         assertEquals("move-existing", gate.pending.value?.call?.id)
         assertEquals(0, workspace.deletes)
-        assertTrue(gate.resolve("move-existing", true))
+        assertTrue(gate.resolve(gate.pending.value!!.approvalToken, true))
         yield()
         assertEquals("delete-existing", gate.pending.value?.call?.id)
         assertTrue(approvals.last().dangerous)
         assertEquals(0, workspace.deletes)
-        assertTrue(gate.resolve("delete-existing", false))
-        assertFalse(gate.resolve("delete-existing", true))
+        val deleteToken = gate.pending.value!!.approvalToken
+        assertTrue(gate.resolve(deleteToken, false))
+        assertFalse(gate.resolve(deleteToken, true))
         assertEquals(0, workspace.deletes)
         assertEquals(AgentStopReason.Completed, running.await().stopReason)
     }

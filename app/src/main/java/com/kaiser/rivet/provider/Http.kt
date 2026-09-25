@@ -146,7 +146,7 @@ internal suspend fun Call.await(): Response =
 // Reads an SSE body, invoking onEvent for each non-empty data payload.
 // Coroutine cancellation cancels the OkHttp call and remains a
 // CancellationException; callback completion can never resume twice.
-internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Unit) {
+internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Unit): Boolean =
     suspendCancellableCoroutine { cont ->
         val call = newCall(request)
         val terminal = AtomicBoolean(false)
@@ -166,16 +166,21 @@ internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Uni
                     try {
                         if (!it.isSuccessful) throw httpError(it.code, it.body?.string())
                         val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
+                        var completed = false
                         while (!terminal.get()) {
                             val line = source.readUtf8Line() ?: break
                             if (line.startsWith("data:")) {
                                 val payload = line.removePrefix("data:").trim()
-                                if (!terminal.get() && payload.isNotEmpty() && payload != "[DONE]") {
+                                if (payload == "[DONE]") {
+                                    completed = true
+                                    break
+                                }
+                                if (!terminal.get() && payload.isNotEmpty()) {
                                     onEvent(payload)
                                 }
                             }
                         }
-                        if (terminal.compareAndSet(false, true)) cont.resume(Unit)
+                        if (terminal.compareAndSet(false, true)) cont.resume(completed)
                     } catch (e: IOException) {
                         if (terminal.compareAndSet(false, true)) {
                             cont.resumeWithException(networkError(e))

@@ -300,20 +300,20 @@ internal fun approvalTitle(request: AgentApprovalRequest): String = when {
 }
 
 @Composable
-private fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (String) -> Unit,
-                           onDeny: (String) -> Unit) {
+private fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> Unit,
+                           onDeny: (Long) -> Unit) {
     val command = request.call.name == "run_command"
     val delete = request.call.name == "delete_path"
-    AlertDialog(onDismissRequest = { onDeny(request.call.id) },
+    AlertDialog(onDismissRequest = { onDeny(request.approvalToken) },
         title = { Text(approvalTitle(request)) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(request.detail)
             if (command) Text("Project commands can execute code on this device.")
         } },
-        confirmButton = { TextButton(onClick = { onApprove(request.call.id) }) {
+        confirmButton = { TextButton(onClick = { onApprove(request.approvalToken) }) {
             Text(if (delete) "Delete" else "Allow")
         } },
-        dismissButton = { TextButton(onClick = { onDeny(request.call.id) }) {
+        dismissButton = { TextButton(onClick = { onDeny(request.approvalToken) }) {
             Text(if (delete) "Cancel" else "Don't allow")
         } })
 }
