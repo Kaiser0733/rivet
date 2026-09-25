@@ -1,4 +1,5 @@
 import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+import org.gradle.api.tasks.Sync
 
 plugins {
     id("com.android.application")
@@ -7,16 +8,25 @@ plugins {
     id("org.jetbrains.kotlin.plugin.serialization")
 }
 
+val packagedNotices by tasks.registering(Sync::class) {
+    from(rootProject.files("LICENSE", "THIRD_PARTY_NOTICES.md"))
+    into(layout.buildDirectory.dir("generated/rivet-notices"))
+}
+
 android {
     namespace = "com.kaiser.rivet"
     compileSdk = 35
+
+    // Use a narrow generated asset directory; using the project root here
+    // overlaps Gradle lint outputs and breaks task dependency validation.
+    sourceSets.getByName("main").assets.srcDir(layout.buildDirectory.dir("generated/rivet-notices"))
 
     defaultConfig {
         applicationId = "com.kaiser.rivet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.7.1"
+        versionCode = 14
+        versionName = "0.8.0"
     }
 
     buildFeatures {
@@ -67,6 +77,10 @@ android {
         sourceCompatibility = JavaVersion.VERSION_17
         targetCompatibility = JavaVersion.VERSION_17
     }
+}
+
+tasks.named("preBuild").configure {
+    dependsOn(packagedNotices)
 }
 
 kotlin {

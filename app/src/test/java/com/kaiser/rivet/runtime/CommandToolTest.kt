@@ -39,8 +39,9 @@ class CommandToolTest {
         yield()
         assertEquals("command-1", gate.pending.value?.call?.id)
         assertEquals(0, executions)
-        assertTrue(gate.resolve("command-1", false))
-        assertFalse(gate.resolve("command-1", true))
+        val approvalToken = gate.pending.value!!.approvalToken
+        assertTrue(gate.resolve(approvalToken, false))
+        assertFalse(gate.resolve(approvalToken, true))
         val result = running.await()
         assertEquals(0, executions)
         assertEquals(AgentStopReason.Completed, result.stopReason)
@@ -70,8 +71,9 @@ class CommandToolTest {
         }
         yield()
         assertEquals(0, executions)
-        assertTrue(gate.resolve("command-1", true))
-        assertFalse(gate.resolve("command-1", true))
+        val approvalToken = gate.pending.value!!.approvalToken
+        assertTrue(gate.resolve(approvalToken, true))
+        assertFalse(gate.resolve(approvalToken, true))
         val result = running.await().messages.flatMap { it.toolResults }.single()
         val value = Json.parseToJsonElement(result.content).jsonObject
         assertEquals(1, executions)
@@ -161,7 +163,7 @@ class CommandToolTest {
         }
         yield()
         assertEquals(call.id, gate.pending.value?.call?.id)
-        assertTrue(gate.resolve(call.id, true))
+        assertTrue(gate.resolve(gate.pending.value!!.approvalToken, true))
         val result = running.await()
         assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
         assertEquals("workspace_unavailable", result.failureCode)

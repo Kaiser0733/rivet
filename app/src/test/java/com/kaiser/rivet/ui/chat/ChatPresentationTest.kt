@@ -32,4 +32,8 @@ class ChatPresentationTest {
         assertEquals("Run a project command?", approvalTitle(command))
         assertEquals("Delete existing file?", approvalTitle(deletion))
     }
+
+    @Test fun bidiFormattingControlsAreVisibleInApprovalAndPathText() {
+        assertEquals("safe\\u202Etxt", displaySafeText("safe\u202Etxt"))
+    }
 }

@@ -69,6 +69,16 @@ fun SettingsScreen(
             Modifier.fillMaxSize().widthIn(max = MAX_WIDTH),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp),
         ) {
+            state.loadError?.let { message ->
+                item {
+                    Text(
+                        message,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(vertical = 8.dp),
+                    )
+                }
+            }
             item {
                 Text(
                     stringResource(R.string.provider_section),

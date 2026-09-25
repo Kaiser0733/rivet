@@ -81,6 +81,7 @@ data class AgentApprovalRequest(
     val detail: String,
     val destructivePath: String? = null,
     val dangerous: Boolean = false,
+    val approvalToken: Long = 0L,
 )
 
 class PreparedAgentTool(

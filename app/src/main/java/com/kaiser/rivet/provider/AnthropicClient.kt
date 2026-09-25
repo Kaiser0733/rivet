@@ -178,10 +178,12 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
     private val tools = sortedMapOf<Int, Tool>()
     private val thinking = sortedMapOf<Int, Thinking>()
     private var usage: com.kaiser.rivet.agent.AgentUsage? = null
+    private var messageStopped = false
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
         when (root["type"]?.str()) {
+            "message_stop" -> messageStopped = true
             "message_start" -> anthropicUsage(root["message"]?.obj() ?: root)?.let { usage = it }
             "message_delta" -> anthropicUsage(root)?.let { delta ->
                 val prior = usage
@@ -227,6 +229,7 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
     }
 
     fun response(): AgentResponse {
+        if (!messageStopped) throw ProviderError.InvalidResponse("incomplete stream")
         val calls = tools.values.map { tool ->
             val arguments = tool.fragments.toString().ifEmpty { tool.initial.toString() }
             try {
