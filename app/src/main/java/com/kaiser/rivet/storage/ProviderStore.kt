@@ -20,9 +20,11 @@ private val Context.providerData: DataStore<Preferences> by preferencesDataStore
 
 // Provider configuration uses one JSON list under a stable key. Header
 // values are encrypted before they enter DataStore; API keys stay separate.
-class ProviderStore(private val context: Context) {
+class ProviderStore(
+    private val context: Context,
+    private val secrets: SecretStore = SecretStore(context),
+) {
     private val json = Json { ignoreUnknownKeys = true }
-    private val secrets = SecretStore(context)
 
     // Stable keys: renaming either of these silently orphans stored
     // configuration on every installed copy.
