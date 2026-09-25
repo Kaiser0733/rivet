@@ -408,6 +408,18 @@ class SafWorkspaceTest {
         assertTrue(result.content.contains("stale_target"))
         assertEquals("new user data", workspace.readTextFile(path("Max.txt")).text)
     }
+    @Test fun missingSourceParentAfterApprovalIsReportedAsStale() = runBlocking {
+        workspace.createDirectory(path("folder"))
+        workspace.createFile(path("folder/Max.txt"))
+        val result = afterApproval(AgentToolCall("delete", "delete_path",
+            """{"path":"folder/Max.txt"}""")) {
+            workspace.delete(path("folder"))
+        }
+
+        assertTrue(result.error)
+        assertTrue(result.content.contains("stale_target"))
+        assertFalse(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "folder" })
+    }
     @Test fun approvedDeleteCannotRemoveDirectoryWithNewExternalContents() = runBlocking {
         workspace.createDirectory(path("folder"))
         val result = afterApproval(AgentToolCall("delete", "delete_path", """{"path":"folder"}""")) {

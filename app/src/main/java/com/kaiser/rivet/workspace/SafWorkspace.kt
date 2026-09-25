@@ -81,16 +81,18 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
     }
 
     private suspend fun requireStructural(path: WorkspacePath, expected: WorkspaceStructuralStamp): WorkspaceEntry {
-        val entry = try { resolve(path) } catch (failure: WorkspaceFailure) {
+        return try {
+            val entry = resolve(path)
+            val actual = structuralStamp(entry, resolve(path.parent()), expected.recursive)
+            if (actual != expected || resolve(path).documentId != entry.documentId) {
+                fail(WorkspaceFailure.Reason.STALE_TARGET)
+            }
+            entry
+        } catch (failure: WorkspaceFailure) {
             if (failure.reason in setOf(WorkspaceFailure.Reason.MISSING, WorkspaceFailure.Reason.NOT_DIRECTORY,
                     WorkspaceFailure.Reason.DUPLICATE)) fail(WorkspaceFailure.Reason.STALE_TARGET)
             throw failure
         }
-        val actual = structuralStamp(entry, resolve(path.parent()), expected.recursive)
-        if (actual != expected || resolve(path).documentId != entry.documentId) {
-            fail(WorkspaceFailure.Reason.STALE_TARGET)
-        }
-        return entry
     }
 
     private suspend fun structuralStamp(entry: WorkspaceEntry, parent: WorkspaceEntry,
