@@ -158,6 +158,24 @@ class AnthropicClientTest {
     }
 
     @Test
+    fun toolUseIsRejectedWhenStreamEndsBeforeMessageStop() = runTest {
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"read_file","input":{}}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+
+        try {
+            AnthropicClient(config(), "key").streamAgent(AgentRequest(
+                "claude-x", emptyList(), "sys", ReasoningLevel.Default, emptyList(),
+            )) {}
+            throw AssertionError("Expected an incomplete stream to be rejected")
+        } catch (error: ProviderError.InvalidResponse) {
+            assertTrue(error.detail.contains("incomplete"))
+        }
+    }
+
+    @Test
     fun multipleToolUsesRemainDistinct() = runTest {
         val sse = listOf(
             """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"read_file","input":{"path":"A.kt"}}}""",
