@@ -88,10 +88,10 @@ class WorkspaceMirror(
             val local = localSnapshot()
             if (local == before.entries) return@withLock MirrorSyncResult(MirrorSync.NoChanges)
             val external = safSnapshot()
-            // Global preflight is deliberately conservative: no partial writes
-            // begin when any external change makes this mirror's baseline stale.
-            val difference = (external.keys + before.entries.keys).firstOrNull {
-                external[it] != before.entries[it]
+            // Resume only when every SAF entry is still at the baseline or already
+            // matches this mirror's exact target; third-party content blocks writes.
+            val difference = (external.keys + before.entries.keys + local.keys).firstOrNull {
+                external[it] != before.entries[it] && external[it] != local[it]
             }
             if (difference != null) return@withLock MirrorSyncResult(MirrorSync.Conflict, difference)
             try {
@@ -100,6 +100,7 @@ class WorkspaceMirror(
                     .sortedByDescending { it.count { char -> char == '/' } }
                 for (path in removed) {
                     selected()
+                    if (external[path] == null) continue
                     val old = before.entries[path]!!
                     workspace.deleteIfUnchanged(WorkspacePath.parse(path),
                         if (old.directory) null else SafWorkspace.BinaryFingerprint(
@@ -110,6 +111,7 @@ class WorkspaceMirror(
                     before.entries[path] != entry }.keys.sortedBy { it.count { char -> char == '/' } }
                 for (path in addedDirs) {
                     selected()
+                    if (external[path]?.directory == true) continue
                     val created = workspace.createDirectory(WorkspacePath.parse(path))
                     if (created.path.value != path) return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value)
                 }
@@ -117,6 +119,7 @@ class WorkspaceMirror(
                     entry != before.entries[path] }.keys.sorted()
                 for (path in changedFiles) {
                     selected()
+                    if (external[path] == local[path]) continue
                     val relative = WorkspacePath.parse(path)
                     val file = File(worktree, path)
                     if (Files.isSymbolicLink(file.toPath())) throw MirrorFailure("unsafe_entry", path)
