@@ -700,7 +700,7 @@ class ChatViewModel private constructor(
                     result.state == MirrorSync.Ok || result.state == MirrorSync.NoChanges -> null
                     result.state == MirrorSync.Conflict ->
                         "The project changed outside Rivet. Rivet kept its pending changes and the newer project data. Check the project, then try again."
-                    else -> "Rivet couldn't save these changes yet. Its pending copy is still available. Try again."
+                    else -> "Rivet couldn't finish saving the project changes. Some files may already be saved; Rivet kept the pending changes. Try again."
                 }
                 val action = if (error == null || result == null) null else ChatErrorAction.RetryProjectChanges
                 _uiState.update { it.copy(error = error, errorAction = action,
