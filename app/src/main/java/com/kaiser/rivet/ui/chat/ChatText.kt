@@ -2,6 +2,9 @@ package com.kaiser.rivet.ui.chat
 
 import java.util.Locale
 
+internal const val COMMAND_APPROVAL_WARNING =
+    "Project commands run code with Rivet's app permissions. They can read Rivet's saved data and change your project."
+
 internal fun displaySafeText(value: String): String = buildString(value.length) {
     value.forEach { char ->
         if (char.code in BIDI_FORMATTING_CONTROLS) append("\\u%04X".format(Locale.ROOT, char.code))

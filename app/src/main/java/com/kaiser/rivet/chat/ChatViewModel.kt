@@ -79,7 +79,7 @@ data class ChatUiState(
     val acceptedMessageCount: Long = 0,
 )
 
-enum class ChatErrorAction { OpenSettings }
+enum class ChatErrorAction { OpenSettings, RetryProjectChanges }
 
 internal fun undoFailureMessage(error: Throwable?): String = when {
     error is CheckpointFailure && error.code == "undo_conflict" ||
@@ -200,7 +200,7 @@ class ChatViewModel private constructor(
                             currentSessionTitle = restored.title,
                             currentSessionWorkspaceId = restored.workspaceId,
                             usage = usage,
-                            error = if (restored.interrupted) "The previous task was interrupted. Completed changes remain." else state.error,
+                            error = if (restored.interrupted) "The previous task was interrupted. Any saved project changes remain." else state.error,
                         )
                     }
                     if (restored.interrupted) sessionStore.markInterrupted(false)
@@ -237,8 +237,9 @@ class ChatViewModel private constructor(
     }
 
     fun selectProject(uri: Uri, flags: Int) {
-        if (!_uiState.value.ready || _uiState.value.streaming || _uiState.value.projectLoading) return
-        _uiState.update { it.copy(projectLoading = true, projectError = null) }
+        if (!_uiState.value.ready || _uiState.value.streaming || _uiState.value.projectLoading ||
+            _uiState.value.activity != null) return
+        _uiState.update { it.copy(projectLoading = true, projectError = null, error = null, errorAction = null) }
         viewModelScope.launch {
             try {
                 val workspace = workspaceSelection.select(uri, flags)
@@ -275,12 +276,13 @@ class ChatViewModel private constructor(
     }
 
     fun projectPickerUnavailable() {
-        _uiState.update { it.copy(projectError = "Android couldn't open the folder picker. Try again after enabling a file provider.") }
+        _uiState.update { it.copy(projectError = "Rivet couldn't open the folder picker. Try again.") }
     }
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready) return
+        if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready ||
+            _uiState.value.activity != null) return
         val ticket = ++generation
         _uiState.update { it.copy(streaming = true, activity = "Getting ready…",
             error = null, errorAction = null, notice = null) }
@@ -528,8 +530,15 @@ class ChatViewModel private constructor(
                 withContext(NonCancellable) {
                     if (ticket == generation) {
                         sessionStore.save(durable, interrupted = false)
-                        _uiState.update { it.copy(streaming = false, pendingApproval = null,
-                            activity = null, notice = "Stopped. Any completed changes remain in the project.") }
+                        val blocker = try { runtimeController.commandBlocker() }
+                            catch (error: CancellationException) { throw error }
+                            catch (error: MirrorFailure) { error.code }
+                            catch (_: Exception) { null }
+                        val pendingProjectChanges = blocker != null && blocker in SYNC_RECOVERY_CODES
+                        _uiState.update { it.copy(streaming = false, pendingApproval = null, activity = null,
+                            error = if (pendingProjectChanges) "Rivet stopped before it could save the command's project changes." else it.error,
+                            errorAction = if (pendingProjectChanges) ChatErrorAction.RetryProjectChanges else it.errorAction,
+                            notice = if (pendingProjectChanges) null else "Stopped. Any saved project changes remain.") }
                     }
                 }
                 throw e
@@ -641,7 +650,7 @@ class ChatViewModel private constructor(
                     ProviderError.EmptyResponse.text()
                 } else null
             }
-            AgentStopReason.RunawayGuard -> "Rivet stopped after too many repeated steps. Tell it what to try next."
+            AgentStopReason.RunawayGuard -> "Rivet stopped after reaching its safety limit. Try a smaller request."
             AgentStopReason.WorkspaceChanged -> "The project changed while Rivet was working, so it stopped. Completed changes remain."
             AgentStopReason.SessionLimit -> CONTEXT_LIMIT_ERROR
             AgentStopReason.CheckpointUnavailable -> "Rivet couldn't prepare a safe Undo, so it didn't start changing files. Try again."
@@ -655,10 +664,45 @@ class ChatViewModel private constructor(
         val history = sessions?.list()
         val usage = _uiState.value.currentSessionId?.let { sessions?.usage(it) }
         val visible = _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: persisted
+        val errorAction = if (result.failureCode != null && result.failureCode in SYNC_RECOVERY_CODES)
+            ChatErrorAction.RetryProjectChanges else null
         _uiState.update {
             it.copy(messages = visible, streaming = false, pendingApproval = null,
                 sessions = history ?: it.sessions, usage = usage, error = error,
-                errorAction = null, activity = null)
+                errorAction = errorAction, activity = null)
+        }
+    }
+
+    fun retryProjectChanges() {
+        val state = _uiState.value
+        val identity = state.projectIdentity ?: return
+        if (state.streaming || state.projectLoading || state.undoing || state.activity != null) return
+        _uiState.update { it.copy(error = null, errorAction = null, activity = "Saving project changes…") }
+        viewModelScope.launch {
+            try {
+                val result = runtimeController.retryPendingChanges(identity)
+                val error = when {
+                    result == null -> "Rivet couldn't access this project's pending changes. Choose the project again, then try to save them."
+                    result.state == MirrorSync.Ok || result.state == MirrorSync.NoChanges -> null
+                    result.state == MirrorSync.Conflict ->
+                        "The project changed outside Rivet. Rivet kept its pending changes and the newer project data. Check the project, then try again."
+                    else -> "Rivet couldn't save these changes yet. Its pending copy is still available. Try again."
+                }
+                val action = if (error == null || result == null) null else ChatErrorAction.RetryProjectChanges
+                _uiState.update { it.copy(error = error, errorAction = action,
+                    notice = if (error == null) "Project changes saved. You can continue." else null,
+                    activity = null) }
+            } catch (e: CancellationException) { throw e
+            } catch (error: MirrorFailure) {
+                val message = if (error.code == "unsafe_entry")
+                    "Rivet found a project item it couldn't safely save. Remove or rename it, then try again."
+                else "Rivet couldn't check these project changes yet. Try again."
+                _uiState.update { it.copy(error = message,
+                    errorAction = ChatErrorAction.RetryProjectChanges, activity = null) }
+            } catch (_: Exception) {
+                _uiState.update { it.copy(error = "Rivet couldn't check these project changes yet. Try again.",
+                    errorAction = ChatErrorAction.RetryProjectChanges, activity = null) }
+            }
         }
     }
 
@@ -717,7 +761,7 @@ class ChatViewModel private constructor(
     fun undoLastTurn() {
         val id = _uiState.value.undoCheckpointId ?: return
         val controller = runtimeController
-        if (_uiState.value.streaming || _uiState.value.undoing) return
+        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.activity != null) return
         _uiState.update { it.copy(undoing = true, error = null, notice = null) }
         viewModelScope.launch {
             try {
@@ -775,7 +819,7 @@ class ChatViewModel private constructor(
 
     fun renameSession(id: String, title: String) {
         val store = sessions ?: return
-        if (_uiState.value.streaming || _uiState.value.undoing || sendJob?.isActive == true) return
+        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.activity != null || sendJob?.isActive == true) return
         viewModelScope.launch {
             try {
                 store.rename(id, title)
@@ -789,7 +833,7 @@ class ChatViewModel private constructor(
 
     private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
         val store = sessions ?: return
-        if (_uiState.value.streaming || _uiState.value.undoing || sendJob?.isActive == true) return
+        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.activity != null || sendJob?.isActive == true) return
         val ticket = ++generation
         approvals.cancel()
         viewModelScope.launch {
@@ -808,7 +852,7 @@ class ChatViewModel private constructor(
                     usage = usage,
                     projectName = project.projectName, projectIdentity = project.projectIdentity,
                     projectLoading = project.projectLoading, projectError = project.projectError,
-                    error = if (selected.interrupted) "The previous task was interrupted. Completed changes remain." else null)
+                    error = if (selected.interrupted) "The previous task was interrupted. Any saved project changes remain." else null)
                 if (selected.interrupted) store.markInterrupted(false)
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
@@ -820,6 +864,10 @@ class ChatViewModel private constructor(
     companion object {
         internal const val CONTEXT_LIMIT_ERROR =
             "This conversation is too long to continue here. Start a new conversation."
+        private val SYNC_RECOVERY_CODES = setOf(
+            "sync_required", "sync_conflict", "sync_failed", "sync_interrupted", "interrupted", "mirror_dirty",
+            "unsafe_entry",
+        )
 
         internal fun activityFor(tool: String): String = when (tool) {
             "read_file", "list_directory", "search_files", "git_status", "git_diff" -> "Looking through the project…"
