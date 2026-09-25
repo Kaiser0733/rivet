@@ -120,6 +120,23 @@ class GeminiClientTest {
     }
 
     @Test
+    fun functionCallIsRejectedWhenCandidateHasNoFinishReason() = runTest {
+        val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
+            "{\"functionCall\":{\"id\":\"g-1\",\"name\":\"read_file\",\"args\":{\"path\":\"A.kt\"}}}" +
+            "]}}]}\n\n"
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+
+        try {
+            GeminiClient(config(), "key").streamAgent(AgentRequest(
+                "gemini-x", emptyList(), "sys", ReasoningLevel.Default, emptyList(),
+            )) {}
+            throw AssertionError("Expected an incomplete stream to be rejected")
+        } catch (error: ProviderError.InvalidResponse) {
+            assertTrue(error.detail.contains("incomplete"))
+        }
+    }
+
+    @Test
     fun toolSchemaUsesJsonSchemaFieldAndTextSignatureIsReturned() = runTest {
         val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
             "{\"text\":\"\",\"thoughtSignature\":\"text-sig\"}," +
