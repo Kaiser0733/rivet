@@ -71,6 +71,7 @@ data class ChatUiState(
     val projectLoading: Boolean = true,
     val projectError: String? = null,
     val activity: String? = null,
+    val recoveringProjectChanges: Boolean = false,
     val lastTurnFiles: List<String> = emptyList(),
     val lastTurnFileCount: Int = 0,
     val undoCheckpointId: String? = null,
@@ -238,8 +239,9 @@ class ChatViewModel private constructor(
 
     fun selectProject(uri: Uri, flags: Int) {
         if (!_uiState.value.ready || _uiState.value.streaming || _uiState.value.projectLoading ||
-            _uiState.value.activity != null) return
-        _uiState.update { it.copy(projectLoading = true, projectError = null, error = null, errorAction = null) }
+            _uiState.value.recoveringProjectChanges) return
+        _uiState.update { it.copy(projectLoading = true, projectError = null, error = null,
+            errorAction = null, activity = null) }
         viewModelScope.launch {
             try {
                 val workspace = workspaceSelection.select(uri, flags)
@@ -282,7 +284,7 @@ class ChatViewModel private constructor(
     fun send(text: String) {
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready ||
-            _uiState.value.activity != null) return
+            _uiState.value.recoveringProjectChanges) return
         val ticket = ++generation
         _uiState.update { it.copy(streaming = true, activity = "Getting ready…",
             error = null, errorAction = null, notice = null) }
@@ -521,6 +523,7 @@ class ChatViewModel private constructor(
                                 messages = durable.toList(),
                                 streaming = false,
                                 pendingApproval = null,
+                                activity = null,
                                 error = CONTEXT_LIMIT_ERROR,
                             )
                         }
@@ -676,8 +679,9 @@ class ChatViewModel private constructor(
     fun retryProjectChanges() {
         val state = _uiState.value
         val identity = state.projectIdentity ?: return
-        if (state.streaming || state.projectLoading || state.undoing || state.activity != null) return
-        _uiState.update { it.copy(error = null, errorAction = null, activity = "Saving project changes…") }
+        if (state.streaming || state.projectLoading || state.undoing || state.recoveringProjectChanges) return
+        _uiState.update { it.copy(error = null, errorAction = null,
+            activity = "Saving project changes…", recoveringProjectChanges = true) }
         viewModelScope.launch {
             try {
                 val result = runtimeController.retryPendingChanges(identity)
@@ -691,17 +695,19 @@ class ChatViewModel private constructor(
                 val action = if (error == null || result == null) null else ChatErrorAction.RetryProjectChanges
                 _uiState.update { it.copy(error = error, errorAction = action,
                     notice = if (error == null) "Project changes saved. You can continue." else null,
-                    activity = null) }
+                    activity = null, recoveringProjectChanges = false) }
             } catch (e: CancellationException) { throw e
             } catch (error: MirrorFailure) {
                 val message = if (error.code == "unsafe_entry")
                     "Rivet found a project item it couldn't safely save. Remove or rename it, then try again."
                 else "Rivet couldn't check these project changes yet. Try again."
                 _uiState.update { it.copy(error = message,
-                    errorAction = ChatErrorAction.RetryProjectChanges, activity = null) }
+                    errorAction = ChatErrorAction.RetryProjectChanges, activity = null,
+                    recoveringProjectChanges = false) }
             } catch (_: Exception) {
                 _uiState.update { it.copy(error = "Rivet couldn't check these project changes yet. Try again.",
-                    errorAction = ChatErrorAction.RetryProjectChanges, activity = null) }
+                    errorAction = ChatErrorAction.RetryProjectChanges, activity = null,
+                    recoveringProjectChanges = false) }
             }
         }
     }
@@ -761,7 +767,7 @@ class ChatViewModel private constructor(
     fun undoLastTurn() {
         val id = _uiState.value.undoCheckpointId ?: return
         val controller = runtimeController
-        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.activity != null) return
+        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
         _uiState.update { it.copy(undoing = true, error = null, notice = null) }
         viewModelScope.launch {
             try {
@@ -819,7 +825,7 @@ class ChatViewModel private constructor(
 
     fun renameSession(id: String, title: String) {
         val store = sessions ?: return
-        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.activity != null || sendJob?.isActive == true) return
+        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges || sendJob?.isActive == true) return
         viewModelScope.launch {
             try {
                 store.rename(id, title)
@@ -833,7 +839,7 @@ class ChatViewModel private constructor(
 
     private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
         val store = sessions ?: return
-        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.activity != null || sendJob?.isActive == true) return
+        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges || sendJob?.isActive == true) return
         val ticket = ++generation
         approvals.cancel()
         viewModelScope.launch {

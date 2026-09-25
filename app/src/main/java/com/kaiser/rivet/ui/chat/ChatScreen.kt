@@ -112,7 +112,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             verticalAlignment = Alignment.CenterVertically) {
             if (state.projectName != null || state.messages.isNotEmpty()) {
                 TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
-                    enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing && state.activity == null) {
+                    enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
                     Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
                     Text(displaySafeText(state.projectName ?: "Choose project"), maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
@@ -159,7 +159,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 modifier = Modifier.widthIn(max = MAX_COLUMN_WIDTH).align(Alignment.CenterHorizontally))
         }
         InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null && !wrongProject &&
-            providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && state.activity == null,
+            providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges,
             acceptedMessageCount = state.acceptedMessageCount,
             error = state.error, notice = state.notice,
             onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
@@ -199,7 +199,7 @@ private fun SessionPicker(viewModel: ChatViewModel, state: ChatUiState) {
         }) { Text("Delete") } },
         dismissButton = { TextButton(onClick = { delete = false }) { Text("Cancel") } })
     Box {
-        TextButton(onClick = { menu = true }, enabled = !state.streaming && !state.projectLoading && !state.undoing && state.activity == null) {
+        TextButton(onClick = { menu = true }, enabled = !state.streaming && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
             Text((state.currentSessionTitle?.replace("New session", "New conversation") ?: "Conversations").take(18),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             Icon(painterResource(R.drawable.ic_chevron_down), "Conversation history")
