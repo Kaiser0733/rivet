@@ -77,7 +77,9 @@ their own request shapes.
 Streaming: the client accumulates and returns the full response text while
 invoking `onDelta` per chunk; the ViewModel appends into UI state. The SSE
 loop lives on OkHttp's callback thread; coroutine cancellation cancels the
-underlying call, which unblocks the reader.
+underlying call, which unblocks the reader. It requires each provider's native
+completion marker and limits streamed lines to 128 KiB and each response to
+1 MiB; error bodies are read only to a bounded prefix.
 
 The agent transcript represents user and assistant text, structured tool calls,
 and correlated tool results without provider wire syntax. Adapters translate it
@@ -93,12 +95,17 @@ message only; the active request completes (or is stopped) on its own.
 ## Persistence
 
 - Provider configs + active selection: DataStore Preferences, keys
-  `configs` / `active_id`, JSON-encoded list.
+  `configs` / `active_id`, JSON-encoded list. Custom header values are
+  AES-GCM encrypted before persistence and legacy plaintext values migrate on
+  first read; the API key remains in its separate secret store.
 - Coding sessions: SQLite stores provider-neutral full event rows, a bounded
   active model transcript, compaction summaries, and per-request usage. The
   previous DataStore `agent_messages` transcript imports once; its source is
   retained. Sessions bind to the selected workspace and can be resumed or
   switched independently of provider/model selection.
+- The stable Rivet security policy stays in the system role. Applicable
+  `AGENTS.md` contents and the prior task summary are added as untrusted user
+  context before the current request, and are rebuilt from their sources.
 - API keys: app-private preferences contain versioned IV+ciphertext records.
   A non-exportable AES-256 key in AndroidKeyStore encrypts each value with
   AES/GCM/NoPadding; the provider id is authenticated as associated data.
@@ -234,7 +241,10 @@ baseline is checked; any external change returns a conflict and leaves local
 work in the mirror. Local creates, modifications, and deletions then use the
 existing SAF path and provider confirmation rules. A failed or interrupted
 sync retains the mirror; a later stale baseline cannot silently replay writes.
-No recursive file contents are retained in memory.
+No recursive file contents are retained in memory. A conflict stops the turn
+and keeps the pending mirror data; the user must resolve the project state
+before a later operation can proceed. Unsafe mirror entries also stop the
+turn instead of triggering repeated tool calls.
 
 `run_command` starts `/system/bin/sh -lc` with a workspace-relative cwd and
 an explicit HOME/PATH/TMPDIR/PWD/LANG/TERM environment. HOME is under
@@ -272,8 +282,9 @@ SQLite keeps full events independently of the active transcript. Context
 pressure first removes older complete call/result groups from active context,
 then stores a bounded task-state summary; full rows remain. Recent complete
 groups stay verbatim. A clear provider context-overflow response may trigger
-one smaller model request, never a replay of completed tools. Rivet policy,
-approvals, workspace identity, and bounded applicable `AGENTS.md` instructions
-are rebuilt outside the summary on each request. Usage is recorded as reported,
+one smaller model request, never a replay of completed tools. Rivet policy and
+workspace/tool contracts are reconstructed for each request. Applicable
+`AGENTS.md` instructions are re-read as untrusted user context; neither they nor
+a stored task summary supply policy. Usage is recorded as reported,
 estimated from a compatible reported anchor, or unknown; model context-window
 size is not inferred from an unverified model-name table.

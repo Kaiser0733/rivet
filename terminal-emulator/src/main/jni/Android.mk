@@ -1,3 +1,4 @@
+# Modified by Rivet from termux/termux-app; see THIRD_PARTY_NOTICES.md.
 LOCAL_PATH:= $(call my-dir)
 include $(CLEAR_VARS)
 LOCAL_MODULE:= libtermux
