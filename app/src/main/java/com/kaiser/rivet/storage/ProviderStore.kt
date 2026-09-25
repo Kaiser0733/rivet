@@ -26,6 +26,7 @@ private val Context.providerData: DataStore<Preferences> by preferencesDataStore
 class ProviderStore(
     private val context: Context,
     private val secrets: SecretStore = SecretStore(context),
+    private val dataStore: DataStore<Preferences> = context.providerData,
 ) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -36,11 +37,11 @@ class ProviderStore(
 
     val configs: Flow<List<ProviderConfig>> = flow {
         migrateLegacyHeaderValues()
-        emitAll(context.providerData.data.map { prefs -> decodeForUse(prefs[configsKey]) }
+        emitAll(dataStore.data.map { prefs -> decodeForUse(prefs[configsKey]) }
             .flowOn(Dispatchers.IO))
     }
 
-    val activeId: Flow<String?> = context.providerData.data.map { it[activeKey] }
+    val activeId: Flow<String?> = dataStore.data.map { it[activeKey] }
 
     private fun decode(raw: String?): List<ProviderConfig> = try {
         if (raw == null) emptyList()
@@ -52,7 +53,7 @@ class ProviderStore(
     suspend fun save(config: ProviderConfig) {
         migrateLegacyHeaderValues()
         val protected = withContext(Dispatchers.IO) { protectHeaders(config) }
-        context.providerData.edit { prefs ->
+        dataStore.edit { prefs ->
             val current = decode(prefs[configsKey]).toMutableList()
             val idx = current.indexOfFirst { it.id == protected.id }
             if (idx >= 0) current[idx] = protected else current.add(protected)
@@ -62,7 +63,7 @@ class ProviderStore(
 
     suspend fun delete(id: String) {
         migrateLegacyHeaderValues()
-        context.providerData.edit { prefs ->
+        dataStore.edit { prefs ->
             val remaining = decode(prefs[configsKey]).filterNot { it.id == id }
             prefs[configsKey] = json.encodeToString(ListSerializer(ProviderConfig.serializer()), remaining)
         }
@@ -71,7 +72,7 @@ class ProviderStore(
     }
 
     suspend fun setActive(id: String?) {
-        context.providerData.edit {
+        dataStore.edit {
             if (id == null) it.remove(activeKey) else it[activeKey] = id
         }
     }
@@ -83,7 +84,7 @@ class ProviderStore(
     suspend fun configSnapshot(): List<ProviderConfig> = configs.first()
 
     private suspend fun migrateLegacyHeaderValues() {
-        context.providerData.edit { prefs ->
+        dataStore.edit { prefs ->
             val current = decode(prefs[configsKey])
             val migrated = current.map { config -> config.copy(
                 headers = config.headers.mapIndexed { index, header ->

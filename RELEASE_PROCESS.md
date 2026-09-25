@@ -21,9 +21,9 @@ installed build:
 3. `versionCode` is higher.
 
 Fail any one and Android refuses the install (or requires an uninstall,
-which loses user data). The release workflow's verification step checks
-identity, version, and signer against the keystore used for the build,
-so a mismatch cannot ship quietly.
+which loses user data). The release workflow checks identity and version,
+then compares the APK signer both with the build keystore and with a
+separately committed production certificate fingerprint.
 
 ## Required GitHub secrets
 
@@ -49,6 +49,12 @@ longer update installed copies.
 Add the four secrets in GitHub: Settings → Secrets and variables →
 Actions. Store the b64 contents in `RIVET_KEYSTORE_BASE64`.
 
+Commit the verified production certificate SHA-256 as the sole lowercase
+hexadecimal line in `release/production-signer.sha256`. Establish that
+fingerprint from the permanent certificate independently of the CI secret.
+Until this file exists with the real fingerprint, production releases are
+intentionally unavailable. Do not use the debug certificate as its pin.
+
 ## Workflows
 
 `.github/workflows/android-build.yml` — every push to `main` and every
@@ -57,9 +63,10 @@ APK verification, artifact upload.
 
 `.github/workflows/release.yml` — manual trigger. Refuses to run unless
 all four release secrets exist, decodes the keystore, builds and signs
-the release APK, verifies signer and identity, uploads the APK as an
+the release APK, verifies signer against the committed pin and identity,
+uploads the APK as an
 artifact, and optionally opens a draft GitHub Release with the APK
-attached when a tag input is given.
+attached when a tag input exactly matches `v` plus the APK version name.
 
 ## Releasing, in order
 
