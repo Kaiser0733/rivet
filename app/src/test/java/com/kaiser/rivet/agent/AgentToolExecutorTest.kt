@@ -18,7 +18,6 @@ class AgentToolExecutorTest {
         var text: String = "content",
         var readHash: String = "a".repeat(64),
     ) : AgentWorkspace {
-        override suspend fun stat(path: String) = AgentWorkspaceEntry(path, directory = false, size = 80_106)
         var writes = 0
         var deletes = 0
         var failure: String? = null
@@ -32,6 +31,11 @@ class AgentToolExecutorTest {
         var searchBytesScanned = 5L
         var searchSkipped = 1
         var createdPath: String? = null
+        val directories = mutableSetOf<String>()
+
+        override suspend fun stat(path: String) = AgentWorkspaceEntry(
+            path, directory = path in directories, size = if (path in directories) null else 80_106,
+        )
 
         override suspend fun list(path: String) = listedEntries
         override suspend fun read(path: String) = AgentFileSnapshot(
@@ -56,7 +60,10 @@ class AgentToolExecutorTest {
         override suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>) =
             write(path, edits.single().newText, expectedHash)
         override suspend fun createFile(path: String) = AgentCreatedFile(createdPath ?: path, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0)
-        override suspend fun createDirectory(path: String) = AgentWorkspaceEntry(path, directory = true, size = null)
+        override suspend fun createDirectory(path: String): AgentWorkspaceEntry {
+            directories += path
+            return AgentWorkspaceEntry(path, directory = true, size = null)
+        }
         override suspend fun rename(path: String, newName: String) = AgentWorkspaceEntry(
             path.substringBeforeLast('/', "").let { parent -> if (parent.isEmpty()) newName else "$parent/$newName" },
             directory = false,
@@ -67,7 +74,7 @@ class AgentToolExecutorTest {
             directory = false,
             size = 0,
         )
-        override suspend fun delete(path: String) { deletes++ }
+        override suspend fun delete(path: String) { deletes++; directories.remove(path) }
     }
 
     @Test

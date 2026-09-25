@@ -112,9 +112,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             verticalAlignment = Alignment.CenterVertically) {
             if (state.projectName != null || state.messages.isNotEmpty()) {
                 TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
-                    enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing) {
+                    enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
                     Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
-                    Text(state.projectName ?: "Choose project", maxLines = 1,
+                    Text(displaySafeText(state.projectName ?: "Choose project"), maxLines = 1,
                         overflow = TextOverflow.Ellipsis)
                 }
             } else Spacer(Modifier.weight(1f))
@@ -151,7 +151,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             EmptyState("Tell Rivet what you want to change.", "Rivet can inspect this project and will ask before changing files.",
                 "", {}, Modifier.weight(1f))
         } else {
-            MessageList(state, chatViewModel::clearError, onOpenSettings,
+            MessageList(state, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
                 Modifier.weight(1f).align(Alignment.CenterHorizontally))
         }
         if (state.undoCheckpointId != null || state.undoing) {
@@ -159,7 +159,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 modifier = Modifier.widthIn(max = MAX_COLUMN_WIDTH).align(Alignment.CenterHorizontally))
         }
         InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null && !wrongProject &&
-            providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing,
+            providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges,
             acceptedMessageCount = state.acceptedMessageCount,
             error = state.error, notice = state.notice,
             onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
@@ -199,7 +199,7 @@ private fun SessionPicker(viewModel: ChatViewModel, state: ChatUiState) {
         }) { Text("Delete") } },
         dismissButton = { TextButton(onClick = { delete = false }) { Text("Cancel") } })
     Box {
-        TextButton(onClick = { menu = true }, enabled = !state.streaming && !state.projectLoading && !state.undoing) {
+        TextButton(onClick = { menu = true }, enabled = !state.streaming && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
             Text((state.currentSessionTitle?.replace("New session", "New conversation") ?: "Conversations").take(18),
                 maxLines = 1, overflow = TextOverflow.Ellipsis)
             Icon(painterResource(R.drawable.ic_chevron_down), "Conversation history")
@@ -248,7 +248,8 @@ private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewM
 
 @Composable
 private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
-                        onOpenSettings: () -> Unit, modifier: Modifier = Modifier) {
+                        onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
+                        modifier: Modifier = Modifier) {
     val visible = visibleConversation(state.messages)
     val listState = rememberLazyListState()
     val atBottom by remember { derivedStateOf {
@@ -257,20 +258,29 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     } }
     LaunchedEffect(visible.size, state.activity, state.error, state.notice) {
         if (atBottom) listState.animateScrollToItem((visible.size +
-            (if (state.streaming) 1 else 0) + (if (state.error != null) 1 else 0) +
+            (if (state.activity != null) 1 else 0) + (if (state.error != null) 1 else 0) +
             (if (state.notice != null) 1 else 0) - 1).coerceAtLeast(0))
     }
     LazyColumn(state = listState, modifier = modifier.widthIn(max = MAX_COLUMN_WIDTH).fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(visible) { message -> MessageRow(message) }
-        if (state.streaming) item {
-            Text(state.activity ?: "Working on it…", color = MaterialTheme.colorScheme.onSurfaceVariant)
+        state.activity?.let { activity ->
+            item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         state.error?.let { error -> item {
             ErrorRow(error, onDismissError,
-                if (state.errorAction == ChatErrorAction.OpenSettings) onOpenSettings else null)
+                when (state.errorAction) {
+                    ChatErrorAction.OpenSettings -> "Open Settings"
+                    ChatErrorAction.RetryProjectChanges -> "Try again"
+                    null -> null
+                },
+                when (state.errorAction) {
+                    ChatErrorAction.OpenSettings -> onOpenSettings
+                    ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
+                    null -> null
+                })
         } }
     }
 }
@@ -308,7 +318,7 @@ private fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> U
         title = { Text(displaySafeText(approvalTitle(request))) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(displaySafeText(request.detail))
-            if (command) Text("Project commands can execute code on this device.")
+            if (command) Text(COMMAND_APPROVAL_WARNING)
         } },
         confirmButton = { TextButton(onClick = { onApprove(request.approvalToken) }) {
             Text(if (delete) "Delete" else "Allow")
@@ -340,13 +350,13 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
 }
 
 @Composable
-private fun ErrorRow(error: String, onDismiss: () -> Unit, onOpenSettings: (() -> Unit)?) {
+private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?, onAction: (() -> Unit)?) {
     Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(6.dp)) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text(error, color = MaterialTheme.colorScheme.onErrorContainer,
                 style = MaterialTheme.typography.bodyMedium)
             Row {
-                if (onOpenSettings != null) TextButton(onClick = onOpenSettings) { Text("Open Settings") }
+                if (onAction != null && actionLabel != null) TextButton(onClick = onAction) { Text(actionLabel) }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_error_dismiss)) }
             }
         }

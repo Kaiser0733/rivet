@@ -206,7 +206,8 @@ The Phase 6 SQLite migration under D29 supersedes the transcript storage medium.
 
 What: shell processes use an app-private worktree. Binary streaming copies
 and a content-hash baseline connect it to the selected SAF tree. A stale SAF
-baseline stops sync before mutation; partial failures preserve the mirror.
+baseline stops sync before mutation; retry may resume entries already matching
+the mirror target, while third-party states preserve both sides and block writes.
 Why: SAF documents are not POSIX paths, and shell changes must not silently
 overwrite external edits or disappear on process death.
 

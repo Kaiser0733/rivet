@@ -62,9 +62,10 @@ class CommandToolTest {
             RuntimeCommandResult(7, "hello\n", "warning\n", cwd = cwd, sync = "conflict", syncPath = "src/file")
         })
         val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)), AgentResponse(text = "done")))
+        var requests = 0
         val running = async {
             AgentLoop(
-                requestModel = { _, _, _ -> responses.removeFirst() },
+                requestModel = { _, _, _ -> requests++; responses.removeFirst() },
                 prepareTool = executor::prepare,
                 requestApproval = gate::await,
             ).run(listOf(AgentMessage.user("Run it")), AgentToolExecutor.definitions)
@@ -74,8 +75,11 @@ class CommandToolTest {
         val approvalToken = gate.pending.value!!.approvalToken
         assertTrue(gate.resolve(approvalToken, true))
         assertFalse(gate.resolve(approvalToken, true))
-        val result = running.await().messages.flatMap { it.toolResults }.single()
+        val run = running.await()
+        val result = run.messages.flatMap { it.toolResults }.single()
         val value = Json.parseToJsonElement(result.content).jsonObject
+        assertEquals(AgentStopReason.RuntimeBlocked, run.stopReason)
+        assertEquals(1, requests)
         assertEquals(1, executions)
         assertEquals(call.id, result.callId)
         assertEquals("7", value["exit_code"]!!.jsonPrimitive.content)

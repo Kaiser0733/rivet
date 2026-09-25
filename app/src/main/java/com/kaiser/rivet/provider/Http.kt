@@ -46,9 +46,26 @@ internal fun OkHttpClient.quick(): OkHttpClient =
 // malformed endpoint from retaining an unbounded event or response on-device.
 internal const val MAX_SSE_LINE_BYTES = 128 * 1024
 internal const val MAX_SSE_RESPONSE_BYTES = 1024 * 1024
+// Model-list metadata is small; cap it at the same aggregate size as streamed replies.
+internal const val MAX_PROVIDER_JSON_BODY_BYTES = 1024 * 1024
 private const val MAX_ERROR_BODY_BYTES = 64 * 1024
 
-private fun Response.errorText(): String? {
+internal fun Response.readBoundedBody(limitBytes: Int = MAX_PROVIDER_JSON_BODY_BYTES): String? {
+    require(limitBytes > 0)
+    val responseBody = body ?: return null
+    if (responseBody.contentLength() > limitBytes) throw ProviderError.ResponseTooLarge()
+    val source = responseBody.source()
+    val bytes = Buffer()
+    val limit = limitBytes.toLong()
+    while (true) {
+        val count = source.read(bytes, (limit + 1 - bytes.size).coerceAtLeast(1L))
+        if (count < 0) break
+        if (bytes.size > limit) throw ProviderError.ResponseTooLarge()
+    }
+    return bytes.readUtf8()
+}
+
+internal fun Response.errorText(): String? {
     val source = body?.source() ?: return null
     val bytes = Buffer()
     var remaining = MAX_ERROR_BODY_BYTES + 1L
