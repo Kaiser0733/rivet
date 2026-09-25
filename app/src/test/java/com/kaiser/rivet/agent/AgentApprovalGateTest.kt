@@ -24,6 +24,25 @@ class AgentApprovalGateTest {
     }
 
     @Test
+    fun reusedProviderCallIdCannotResolveALaterApproval() = runTest {
+        val gate = AgentApprovalGate()
+        val request = AgentApprovalRequest(
+            AgentToolCall("same-id", "write_file", "{}"), "Edit", "A.kt",
+        )
+        val first = async { gate.await(request) }
+        yield()
+        assertTrue(gate.resolve("same-id", approved = true))
+        assertTrue(first.await())
+
+        val second = async { gate.await(request) }
+        yield()
+
+        assertFalse(gate.resolve("same-id", approved = true))
+        assertTrue(gate.pending.value != null)
+        second.cancelAndJoin()
+    }
+
+    @Test
     fun cancelledWaitRemovesExecutableApproval() = runTest {
         val call = AgentToolCall("call-1", "delete_path", "{}")
         val gate = AgentApprovalGate()
