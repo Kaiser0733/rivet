@@ -236,15 +236,17 @@ expose URIs or document IDs. There is no repository index.
 The selected SAF tree remains the external workspace. `WorkspaceMirror`
 streams regular file bytes into `files/runtime/workspaces/<sha256-tree-id>/current/worktree`
 and keeps a compact path/type/size/SHA-256 baseline beside the worktree.
-It rejects symlinks and special local entries. Before applying mirror changes, the SAF
-baseline is checked; any external change returns a conflict and leaves local
-work in the mirror. Local creates, modifications, and deletions then use the
-existing SAF path and provider confirmation rules. A failed or interrupted
-sync retains the mirror; a later stale baseline cannot silently replay writes.
-No recursive file contents are retained in memory. A conflict stops the turn
-and keeps the pending mirror data; the user must resolve the project state
-before a later operation can proceed. Unsafe mirror entries also stop the
-turn instead of triggering repeated tool calls.
+It rejects symlinks and special local entries. Before applying mirror changes, each SAF
+entry must still match either the recorded baseline or the mirror's exact target.
+This lets a retry resume completed writes after a partial provider failure; any
+third state returns a conflict without overwriting it. Local creates,
+modifications, and deletions then use the existing SAF path and provider
+confirmation rules. A failed or interrupted sync retains the mirror, and Chat
+offers a contextual retry that rechecks the selected project and SAF state.
+No recursive file contents are retained in memory. An unresolved conflict keeps
+both the pending mirror data and external project data until the project state
+is resolved. Unsafe mirror entries also stop the turn instead of triggering
+repeated tool calls.
 
 `run_command` starts `/system/bin/sh -lc` with a workspace-relative cwd and
 an explicit HOME/PATH/TMPDIR/PWD/LANG/TERM environment. HOME is under
