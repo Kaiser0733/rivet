@@ -85,19 +85,22 @@ class ProviderStore(
     private suspend fun migrateLegacyHeaderValues() {
         context.providerData.edit { prefs ->
             val current = decode(prefs[configsKey])
-            if (current.none { config -> config.headers.withIndex().any { (index, header) ->
-                    !secrets.isEncryptedProviderHeader(config.id, index, header.value)
-                } }) {
-                return@edit
-            }
             val migrated = current.map { config -> config.copy(
                 headers = config.headers.mapIndexed { index, header ->
-                    if (secrets.isEncryptedProviderHeader(config.id, index, header.value)) header
-                    else header.copy(value = secrets.encryptProviderHeader(config.id, index, header.value)
-                        ?: throw IllegalStateException("provider header encryption failed"))
+                    if (secrets.isTaggedProviderHeader(header.value)) {
+                        check(secrets.decryptProviderHeader(config.id, index, header.value) != null) {
+                            "provider header decryption failed"
+                        }
+                        header
+                    } else {
+                        header.copy(value = secrets.encryptProviderHeader(config.id, index, header.value)
+                            ?: throw IllegalStateException("provider header encryption failed"))
+                    }
                 },
             ) }
-            prefs[configsKey] = json.encodeToString(ListSerializer(ProviderConfig.serializer()), migrated)
+            if (migrated != current) {
+                prefs[configsKey] = json.encodeToString(ListSerializer(ProviderConfig.serializer()), migrated)
+            }
         }
     }
 
