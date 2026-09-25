@@ -55,6 +55,35 @@ class SecretStore(context: Context) {
 
     fun hasApiKey(providerId: String): Boolean = apiKey(providerId) != null
 
+    internal fun encryptProviderHeader(providerId: String, index: Int, value: String): String? = try {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, encryptionKey())
+        cipher.updateAAD(headerAad(providerId, index))
+        HEADER_PREFIX + encodeSecretRecord(cipher.iv, cipher.doFinal(value.toByteArray(Charsets.UTF_8)))
+    } catch (e: GeneralSecurityException) {
+        null
+    } catch (e: IOException) {
+        null
+    }
+
+    internal fun decryptProviderHeader(providerId: String, index: Int, value: String): String? {
+        if (!value.startsWith(HEADER_PREFIX)) return null
+        val record = decodeSecretRecord(value.removePrefix(HEADER_PREFIX)) ?: return null
+        return try {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, encryptionKey(), GCMParameterSpec(GCM_TAG_BITS, record.iv))
+            cipher.updateAAD(headerAad(providerId, index))
+            String(cipher.doFinal(record.ciphertext), Charsets.UTF_8)
+        } catch (e: GeneralSecurityException) {
+            null
+        } catch (e: IOException) {
+            null
+        }
+    }
+
+    internal fun isEncryptedProviderHeader(providerId: String, index: Int, value: String): Boolean =
+        decryptProviderHeader(providerId, index, value) != null
+
     fun clearApiKey(providerId: String) {
         prefs.edit().remove(providerId).apply()
     }
@@ -81,12 +110,16 @@ class SecretStore(context: Context) {
         generator.generateKey()
     }
 
+    private fun headerAad(providerId: String, index: Int) =
+        "$providerId\u0000provider-header\u0000$index".toByteArray(Charsets.UTF_8)
+
     private companion object {
         const val PREFS_NAME = "rivet_secret_ciphertext_v1"
         const val KEY_ALIAS = "rivet_api_key_aes_v1"
         const val KEYSTORE_PROVIDER = "AndroidKeyStore"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_TAG_BITS = 128
+        const val HEADER_PREFIX = "rivet-encrypted:v1:"
         val keyLock = Any()
     }
 }

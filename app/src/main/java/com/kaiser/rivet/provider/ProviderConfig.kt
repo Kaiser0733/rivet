@@ -18,7 +18,8 @@ enum class ReasoningLevel { Default, Low, Medium, High, Max }
 @Serializable
 data class ProviderHeader(val name: String, val value: String)
 
-// API keys never live in this structure; they go to SecretStore only.
+// API keys never live in this structure. ProviderStore encrypts custom
+// header values before persisting this otherwise provider-neutral config.
 @Serializable
 data class ProviderConfig(
     val id: String,

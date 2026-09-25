@@ -16,13 +16,14 @@ internal object AgentToolError {
         "denied" to "The user denied this mutation. Do not retry it without a new request.",
         "checkpoint_unavailable" to "Resolve workspace or storage changes before retrying the mutation.",
         "interrupted" to "Inspect workspace state before retrying; the operation outcome is unknown.",
+        "unsafe_entry" to "Rivet found a project item it could not safely access. Remove or rename it before retrying.",
     )
     private val deterministic = setOf("terminal_active", "sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "denied", "checkpoint_unavailable",
-        "invalid_arguments", "invalid_path", "unknown_tool")
+        "invalid_arguments", "invalid_path", "unknown_tool", "unsafe_entry")
     private val runtimeStops = setOf("terminal_active", "sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
-        "materialize_failed", "baseline_invalid", "storage", "mirror_dirty")
+        "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry")
 
     fun content(code: String): String = buildJsonObject {
         put("error", code)

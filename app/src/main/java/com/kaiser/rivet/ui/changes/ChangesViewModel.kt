@@ -105,8 +105,8 @@ class ChangesViewModel : ViewModel() {
             else -> "Checkpoint operation failed (${error.code})."
         }
         is MirrorFailure -> when (error.code) {
-            "terminal_active" -> "Stop the Terminal before reviewing or undoing changes."
-            "sync_required", "mirror_dirty" -> "Sync or resolve pending Terminal changes first."
+            "terminal_active" -> "Rivet's command runner is busy. Try again."
+            "sync_required", "mirror_dirty" -> "Rivet found project changes it couldn't safely reconcile. Review the project before trying again."
             "conflict" -> "The workspace changed outside Rivet. Undo stopped without overwriting it."
             else -> "Workspace operation failed (${error.code})."
         }
