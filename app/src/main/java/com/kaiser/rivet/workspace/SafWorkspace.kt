@@ -134,9 +134,13 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         return WorkspaceStructuralStamp(entry.documentId, parent.documentId, entry.directory, state, recursive)
     }
 
-    suspend fun writeFileFrom(path: WorkspacePath, input: InputStream, expectedSha256: String): BinaryFingerprint = io {
+    suspend fun writeFileFrom(path: WorkspacePath, input: InputStream, expectedSha256: String,
+                              expectedDocumentId: String? = null): BinaryFingerprint = io {
         mutations.withLock {
             val entry = resolve(path)
+            if (expectedDocumentId != null && entry.documentId != expectedDocumentId) {
+                fail(WorkspaceFailure.Reason.CONFLICT)
+            }
             if (entry.directory) fail(WorkspaceFailure.Reason.NOT_FILE)
             if (!entry.capabilities.write) fail(WorkspaceFailure.Reason.UNSUPPORTED)
             if (stream(entry, null).sha256 != expectedSha256) fail(WorkspaceFailure.Reason.CONFLICT)
