@@ -33,7 +33,8 @@ class ChatPresentationTest {
         assertEquals("Run a project command?", approvalTitle(command))
         assertEquals("Delete existing file?", approvalTitle(deletion))
         assertTrue(COMMAND_APPROVAL_WARNING.contains("Rivet's saved data"))
-        assertTrue(COMMAND_APPROVAL_WARNING.contains("change your project"))
+        assertTrue(COMMAND_APPROVAL_WARNING.contains("read, change, or delete project files"))
+        assertTrue(COMMAND_APPROVAL_WARNING.contains("network"))
     }
 
     @Test fun bidiFormattingControlsAreVisibleInApprovalAndPathText() {
