@@ -145,7 +145,7 @@ class ChatViewModelTest {
         assertEquals("run-1", awaiting.pendingApproval?.call?.id)
         assertEquals(tree.toString(), awaiting.projectIdentity)
         assertEquals(1, provider.requests.size)
-        viewModel.deny("run-1")
+        viewModel.deny(awaiting.pendingApproval!!.approvalToken)
     }
 
     @Test fun runtimeFailureMessagesGiveChatRecoveryWithoutRemovedControls() {
@@ -362,7 +362,7 @@ class ChatViewModelTest {
         assertFalse(restored.interrupted)
         assertEquals("create", restored.messages.last().toolResults.single().callId)
         assertTrue("session_limit" in restored.messages.last().toolResults.single().content)
-        viewModel.approve("create")
+        viewModel.approve(0L)
         assertEquals(0, documents.createCalls)
         val instruction = provider.requests.single().system
         assertTrue(instruction.contains("untrusted project data"))
@@ -410,7 +410,10 @@ class ChatViewModelTest {
         assertNull(complete.pendingApproval)
         assertEquals(createdBefore, documents.createCalls)
         assertEquals(2, provider.requests.size)
-        assertTrue(provider.requests[1].system.contains("Use the project naming rule."))
+        assertTrue(provider.requests[1].messages.any { message ->
+            message.role == com.kaiser.rivet.agent.AgentRole.User &&
+                message.text.contains("Use the project naming rule.")
+        })
         assertTrue(provider.requests[1].messages.any { message ->
             message.toolResults.any { "project_instructions_loaded" in it.content }
         })
@@ -448,7 +451,8 @@ class ChatViewModelTest {
         assertTrue(sessions.load().messages.size < history.size)
         assertTrue(sessions.load().summary.contains("Prior files"))
         assertEquals(2, provider.requests.size)
-        assertTrue(provider.requests[1].system.contains("Prior task state"))
+        assertTrue(provider.requests[1].messages.last().text.contains("Prior task summary"))
+        assertFalse(provider.requests[1].system.contains("Prior files were inspected"))
         assertTrue(provider.requests[1].messages.size < history.size)
         assertEquals(68, sessions.recent(id, 100).size)
 
@@ -460,7 +464,7 @@ class ChatViewModelTest {
         switched.send("Follow up")
         await(switched) { !it.streaming && it.messages.lastOrNull()?.text == "After switch" }
         assertEquals("model-b", switchedProvider.requests.single().model)
-        assertTrue(switchedProvider.requests.single().system.contains("Prior files were inspected"))
+        assertTrue(switchedProvider.requests.single().messages.last().text.contains("Prior files were inspected"))
         assertEquals(70, sessions.fullEventCount(id))
     }
 

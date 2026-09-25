@@ -83,6 +83,27 @@ class AgentLoopTest {
         }
     }
 
+    @Test fun unsafeRuntimeEntryStopsBeforeAnotherModelTurn() = runTest {
+        val call = AgentToolCall("read-1", "read_file", """{"path":"unsafe"}""")
+        var requests = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                requests++
+                if (requests == 1) AgentResponse(toolCalls = listOf(call))
+                else AgentResponse(text = "I read the file successfully")
+            },
+            prepareTool = { requested -> PreparedAgentTool(requested, null) {
+                AgentToolResult(requested.id, requested.name, AgentToolError.content("unsafe_entry"), error = true)
+            } },
+            requestApproval = { error("Read-only operation has no approval") },
+        ).run(listOf(AgentMessage.user("Read it")), emptyList())
+
+        assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
+        assertEquals("unsafe_entry", result.failureCode)
+        assertEquals(1, requests)
+        assertFalse(result.messages.any { it.text.contains("read the file successfully") })
+    }
+
     @Test fun repeatedTerminalBlockStopsWithoutSecondApprovalOrCommand() = runTest {
         val first = AgentToolCall("one", "run_command", """{"command":"pwd"}""")
         val second = first.copy(id = "two")
@@ -297,13 +318,14 @@ class AgentLoopTest {
         yield()
         assertEquals("move-existing", gate.pending.value?.call?.id)
         assertEquals(0, workspace.deletes)
-        assertTrue(gate.resolve("move-existing", true))
+        assertTrue(gate.resolve(gate.pending.value!!.approvalToken, true))
         yield()
         assertEquals("delete-existing", gate.pending.value?.call?.id)
         assertTrue(approvals.last().dangerous)
         assertEquals(0, workspace.deletes)
-        assertTrue(gate.resolve("delete-existing", false))
-        assertFalse(gate.resolve("delete-existing", true))
+        val deleteToken = gate.pending.value!!.approvalToken
+        assertTrue(gate.resolve(deleteToken, false))
+        assertFalse(gate.resolve(deleteToken, true))
         assertEquals(0, workspace.deletes)
         assertEquals(AgentStopReason.Completed, running.await().stopReason)
     }

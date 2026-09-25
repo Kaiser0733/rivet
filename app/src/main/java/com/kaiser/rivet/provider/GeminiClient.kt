@@ -157,6 +157,7 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
     private val signatures = linkedMapOf<String, String>()
     private var textSignature: String? = null
     private var usage: com.kaiser.rivet.agent.AgentUsage? = null
+    private var finished = false
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
@@ -164,8 +165,9 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
             throw providerMessage(it, root["error"]?.obj()?.get("status")?.str())
         }
         geminiUsage(root)?.let { usage = it }
-        val parts = root["candidates"]?.arr()?.firstOrNull()?.obj()
-            ?.get("content")?.obj()?.get("parts")?.arr() ?: return
+        val candidate = root["candidates"]?.arr()?.firstOrNull()?.obj()
+        if (candidate?.get("finishReason")?.str() != null) finished = true
+        val parts = candidate?.get("content")?.obj()?.get("parts")?.arr() ?: return
         parts.forEach { element ->
             val part = element.obj() ?: throw ProviderError.InvalidResponse("invalid response part")
             part["text"]?.str()?.let { value ->
@@ -188,20 +190,23 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
         }
     }
 
-    fun response() = AgentResponse(
-        text.toString(),
-        calls.toList(),
-        signatures.takeIf { it.isNotEmpty() }.let { values ->
-            if (values == null && textSignature == null) null else buildJsonObject {
-                put("provider", "gemini")
-                values?.let { callSignatures -> put("call_signatures", buildJsonObject {
-                    callSignatures.forEach { (id, signature) -> put(id, signature) }
-                }) }
-                textSignature?.let { put("text_signature", it) }
-            }.toString()
-        },
-        usage,
-    )
+    fun response(): AgentResponse {
+        if (!finished) throw ProviderError.InvalidResponse("incomplete stream")
+        return AgentResponse(
+            text.toString(),
+            calls.toList(),
+            signatures.takeIf { it.isNotEmpty() }.let { values ->
+                if (values == null && textSignature == null) null else buildJsonObject {
+                    put("provider", "gemini")
+                    values?.let { callSignatures -> put("call_signatures", buildJsonObject {
+                        callSignatures.forEach { (id, signature) -> put(id, signature) }
+                    }) }
+                    textSignature?.let { put("text_signature", it) }
+                }.toString()
+            },
+            usage,
+        )
+    }
 }
 
 private const val GEMINI_LOCAL_ID_PREFIX = "_rivet_gemini_"

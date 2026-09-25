@@ -5,6 +5,7 @@ sealed class ProviderError(message: String) : Exception(message) {
     class Forbidden : ProviderError("forbidden")
     class RateLimited : ProviderError("rate limited")
     class ResourceExhausted : ProviderError("resource exhausted")
+    class UsageLimit : ProviderError("provider usage limit")
     class ContextOverflow : ProviderError("context overflow")
     class ModelNotFound(val model: String) : ProviderError("model not found: $model")
     class UnsupportedEndpoint : ProviderError("endpoint not supported")
@@ -12,6 +13,7 @@ sealed class ProviderError(message: String) : Exception(message) {
     class Network(val reason: String) : ProviderError("network: $reason")
     class Timeout : ProviderError("timeout")
     class InvalidResponse(val detail: String) : ProviderError("invalid response: $detail")
+    class ResponseTooLarge : ProviderError("provider response exceeded Rivet's size limit")
     class Server(val status: Int) : ProviderError("server error: $status")
     object EmptyResponse : ProviderError("empty response")
     class ProviderMessage(val text: String) : ProviderError(text)
@@ -23,6 +25,7 @@ sealed class ProviderError(message: String) : Exception(message) {
         is Forbidden -> "The provider rejected access for this key."
         is RateLimited -> "Rate limited by the provider. Wait a moment and try again."
         is ResourceExhausted -> "The provider's request capacity is exhausted. Wait before trying again or choose another model."
+        is UsageLimit -> "The provider account has reached its usage limit. Check its billing or usage settings."
         is ContextOverflow -> "The model's context is full. Rivet could not reduce this request enough to continue."
         is ModelNotFound -> "Model \"$model\" was not found by this provider."
         is UnsupportedEndpoint -> "This endpoint is not supported by the provider."
@@ -36,6 +39,7 @@ sealed class ProviderError(message: String) : Exception(message) {
         }
         is Timeout -> "The provider took too long to respond."
         is InvalidResponse -> "The provider returned a response Rivet could not parse."
+        is ResponseTooLarge -> "The provider sent more data than Rivet can safely process. Try again or choose another model."
         is Server -> "Provider server error (HTTP $status)."
         EmptyResponse -> "The provider returned an empty response."
         is ProviderMessage -> "The model provider couldn't complete this request. Try again or check its settings."

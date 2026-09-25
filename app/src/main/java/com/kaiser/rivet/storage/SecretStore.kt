@@ -12,7 +12,11 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class SecretStore(context: Context) {
+class SecretStore private constructor(context: Context, private val keyProvider: () -> SecretKey) {
+    constructor(context: Context) : this(context, { androidKey() })
+
+    internal constructor(context: Context, testKey: SecretKey) : this(context, { testKey })
+
     private val prefs = context.applicationContext.getSharedPreferences(
         PREFS_NAME,
         Context.MODE_PRIVATE,
@@ -55,31 +59,40 @@ class SecretStore(context: Context) {
 
     fun hasApiKey(providerId: String): Boolean = apiKey(providerId) != null
 
+    internal fun encryptProviderHeader(providerId: String, index: Int, value: String): String? = try {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, encryptionKey())
+        cipher.updateAAD(headerAad(providerId, index))
+        HEADER_PREFIX + encodeSecretRecord(cipher.iv, cipher.doFinal(value.toByteArray(Charsets.UTF_8)))
+    } catch (e: GeneralSecurityException) {
+        null
+    } catch (e: IOException) {
+        null
+    }
+
+    internal fun decryptProviderHeader(providerId: String, index: Int, value: String): String? {
+        if (!value.startsWith(HEADER_PREFIX)) return null
+        val record = decodeSecretRecord(value.removePrefix(HEADER_PREFIX)) ?: return null
+        return try {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(Cipher.DECRYPT_MODE, encryptionKey(), GCMParameterSpec(GCM_TAG_BITS, record.iv))
+            cipher.updateAAD(headerAad(providerId, index))
+            String(cipher.doFinal(record.ciphertext), Charsets.UTF_8)
+        } catch (e: GeneralSecurityException) {
+            null
+        } catch (e: IOException) {
+            null
+        }
+    }
+
+    internal fun isEncryptedProviderHeader(providerId: String, index: Int, value: String): Boolean =
+        decryptProviderHeader(providerId, index, value) != null
+
     fun clearApiKey(providerId: String) {
         prefs.edit().remove(providerId).apply()
     }
 
-    private fun encryptionKey(): SecretKey = synchronized(keyLock) {
-        val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
-        (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let {
-            return@synchronized it
-        }
-        val generator = KeyGenerator.getInstance(
-            KeyProperties.KEY_ALGORITHM_AES,
-            KEYSTORE_PROVIDER,
-        )
-        generator.init(
-            KeyGenParameterSpec.Builder(
-                KEY_ALIAS,
-                KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
-            )
-                .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
-                .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
-                .setKeySize(256)
-                .build(),
-        )
-        generator.generateKey()
-    }
+    private fun encryptionKey(): SecretKey = keyProvider()
 
     private companion object {
         const val PREFS_NAME = "rivet_secret_ciphertext_v1"
@@ -87,8 +100,34 @@ class SecretStore(context: Context) {
         const val KEYSTORE_PROVIDER = "AndroidKeyStore"
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_TAG_BITS = 128
+        const val HEADER_PREFIX = "rivet-encrypted:v1:"
         val keyLock = Any()
+
+        private fun androidKey(): SecretKey = synchronized(keyLock) {
+            val keyStore = KeyStore.getInstance(KEYSTORE_PROVIDER).apply { load(null) }
+            (keyStore.getKey(KEY_ALIAS, null) as? SecretKey)?.let {
+                return@synchronized it
+            }
+            val generator = KeyGenerator.getInstance(
+                KeyProperties.KEY_ALGORITHM_AES,
+                KEYSTORE_PROVIDER,
+            )
+            generator.init(
+                KeyGenParameterSpec.Builder(
+                    KEY_ALIAS,
+                    KeyProperties.PURPOSE_ENCRYPT or KeyProperties.PURPOSE_DECRYPT,
+                )
+                    .setBlockModes(KeyProperties.BLOCK_MODE_GCM)
+                    .setEncryptionPaddings(KeyProperties.ENCRYPTION_PADDING_NONE)
+                    .setKeySize(256)
+                    .build(),
+            )
+            generator.generateKey()
+        }
     }
+
+    private fun headerAad(providerId: String, index: Int) =
+        "$providerId\u0000provider-header\u0000$index".toByteArray(Charsets.UTF_8)
 }
 
 internal data class SecretRecord(

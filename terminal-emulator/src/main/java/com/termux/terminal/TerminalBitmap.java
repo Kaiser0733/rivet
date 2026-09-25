@@ -1,3 +1,4 @@
+// Modified by Rivet from termux/termux-app; see THIRD_PARTY_NOTICES.md.
 package com.termux.terminal;
 
 import android.app.WallpaperManager;

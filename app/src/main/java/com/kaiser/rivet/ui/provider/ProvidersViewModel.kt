@@ -21,6 +21,7 @@ import java.util.UUID
 data class ProviderListUiState(
     val configs: List<ProviderConfig> = emptyList(),
     val activeId: String? = null,
+    val loadError: String? = null,
 )
 
 // List + editor state for the provider screens. API keys enter through
@@ -39,8 +40,16 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     init {
         viewModelScope.launch {
-            store.configs.collect { configs ->
-                _listState.update { it.copy(configs = configs) }
+            try {
+                store.configs.collect { configs ->
+                    _listState.update { it.copy(configs = configs, loadError = null) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _listState.update {
+                    it.copy(loadError = "Rivet couldn't securely read provider settings. Re-enter any custom headers in Settings.")
+                }
             }
         }
         viewModelScope.launch {
@@ -114,7 +123,16 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                 }
                 return@launch
             }
-            store.save(config)
+            try {
+                store.save(config)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _editorState.update {
+                    it.copy(test = TestUi(false, "Rivet couldn't save these provider settings securely. Try again."))
+                }
+                return@launch
+            }
             if (state.isNew) {
                 store.setActive(config.id)
             }
