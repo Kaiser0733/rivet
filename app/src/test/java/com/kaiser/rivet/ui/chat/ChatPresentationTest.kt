@@ -6,6 +6,7 @@ import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatPresentationTest {
@@ -31,6 +32,8 @@ class ChatPresentationTest {
             "Delete existing file?", "old-config.json", dangerous = true)
         assertEquals("Run a project command?", approvalTitle(command))
         assertEquals("Delete existing file?", approvalTitle(deletion))
+        assertTrue(COMMAND_APPROVAL_WARNING.contains("Rivet's saved data"))
+        assertTrue(COMMAND_APPROVAL_WARNING.contains("change your project"))
     }
 
     @Test fun bidiFormattingControlsAreVisibleInApprovalAndPathText() {

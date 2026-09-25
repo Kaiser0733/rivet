@@ -207,6 +207,11 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
         if (active.hasLocalChanges()) "sync_required" else null
     }
 
+    suspend fun retryPendingChanges(expectedWorkspace: String): MirrorSyncResult? = operations.withLock {
+        if (terminal != null || selection.currentIdentity() != expectedWorkspace) return@withLock null
+        currentMirror()?.sync()
+    }
+
     suspend fun awaitIdentityChange(identity: String) = selection.awaitIdentityChange(identity)
 
     private suspend fun currentMirror(): WorkspaceMirror? {

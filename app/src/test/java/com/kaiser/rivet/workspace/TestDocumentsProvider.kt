@@ -17,6 +17,7 @@ class TestDocumentsProvider : DocumentsProvider() {
     var writable = true
     var rejectDelete = false
     var rejectRead = false
+    var rejectWriteOnceFor: String? = null
     var blockNextRead: CountDownLatch? = null
     var readStarted: CountDownLatch? = null
     var reportMetadata = true
@@ -70,6 +71,11 @@ class TestDocumentsProvider : DocumentsProvider() {
     }
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
         if (rejectRead && mode == "r") throw java.io.FileNotFoundException("read refused")
+        val node = nodes[documentId] ?: throw java.io.FileNotFoundException()
+        if (mode != "r" && node.name == rejectWriteOnceFor) {
+            rejectWriteOnceFor = null
+            throw java.io.FileNotFoundException("write refused")
+        }
         if (mode == "r") {
             blockNextRead?.let { blocked ->
                 blockNextRead = null
@@ -79,7 +85,6 @@ class TestDocumentsProvider : DocumentsProvider() {
                 if (signal?.isCanceled == true) throw android.os.OperationCanceledException()
             }
         }
-        val node = nodes[documentId] ?: throw java.io.FileNotFoundException()
         return ParcelFileDescriptor.open(node.bytes, ParcelFileDescriptor.parseMode(mode))
     }
     override fun isChildDocument(parentDocumentId: String, documentId: String): Boolean {

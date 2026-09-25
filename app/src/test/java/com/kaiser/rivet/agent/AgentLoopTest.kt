@@ -299,6 +299,32 @@ class AgentLoopTest {
     }
 
     @Test
+    fun deletingAgentCreatedDirectoryUsesStrongerApproval() = runTest {
+        val workspace = AgentToolExecutorTest.FakeWorkspace()
+        val executor = AgentToolExecutor(workspace)
+        val calls = listOf(
+            AgentToolCall("mkdir", "create_directory", """{"path":".rivet-test"}"""),
+            AgentToolCall("rmdir", "delete_path", """{"path":".rivet-test"}"""),
+        )
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = calls), AgentResponse(text = "Stopped")))
+        val approvals = mutableListOf<AgentApprovalRequest>()
+
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = executor::prepare,
+            requestApproval = { approvals += it; it.call.id != "rmdir" },
+            describeDestructive = executor::describeDestructive,
+        ).run(listOf(AgentMessage.user("Clean up test files")), AgentToolExecutor.definitions)
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        val removal = approvals.single { it.call.id == "rmdir" }
+        assertTrue(removal.dangerous)
+        assertTrue(removal.title.contains("folder"))
+        assertTrue(removal.detail.contains("files added outside Rivet"))
+        assertEquals(0, workspace.deletes)
+    }
+
+    @Test
     fun movedExistingPathRemainsDangerousAndGateBlocksExecutionUntilResolved() = runTest {
         val workspace = AgentToolExecutorTest.FakeWorkspace()
         val executor = AgentToolExecutor(workspace)

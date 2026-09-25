@@ -152,6 +152,28 @@ class WorkspaceMirrorTest {
         assertArrayEquals("outside work".toByteArray(), bytes("file.txt"))
         assertEquals("mirror work", local.readText())
         assertTrue(mirror.hasLocalChanges())
+        assertEquals(MirrorSync.Conflict, mirror.sync().state)
+        assertArrayEquals("outside work".toByteArray(), bytes("file.txt"))
+        assertEquals("mirror work", local.readText())
+    }
+
+    @Test fun retryResumesAfterProviderFailureWithoutOverwritingExternalChanges() = runBlocking {
+        source("a.txt", "before a".toByteArray())
+        source("b.txt", "before b".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, "a.txt").writeText("after a")
+        File(root, "b.txt").writeText("after b")
+        provider.rejectWriteOnceFor = "b.txt"
+
+        assertEquals(MirrorSync.Failed, mirror.sync().state)
+        assertEquals("after a", String(bytes("a.txt")))
+        assertEquals("before b", String(bytes("b.txt")))
+
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        assertEquals("after a", String(bytes("a.txt")))
+        assertEquals("after b", String(bytes("b.txt")))
+        assertFalse(mirror.hasLocalChanges())
     }
 
     @Test fun cleanMirrorRefreshesExternalChangesAndDirtyMirrorSurvivesRestart() = runBlocking {

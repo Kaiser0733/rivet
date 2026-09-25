@@ -61,6 +61,7 @@ class AgentLoop(
         }
         val deniedMutations = mutableSetOf<String>()
         val createdPaths = mutableSetOf<String>()
+        val createdDirectories = mutableSetOf<String>()
         val movedExistingPaths = mutableSetOf<String>()
         var lastDeterministicFailure: Triple<String, String, String>? = null
         var modelIterations = 0
@@ -207,10 +208,17 @@ class AgentLoop(
                     }
                     val approval = prepared.approval?.let { request ->
                         val target = request.destructivePath
-                        if (target != null &&
-                            (target !in createdPaths || movedExistingPaths.any { it == target || it.startsWith("$target/") })) {
-                            describeDestructive(request)
-                        } else request
+                        when {
+                            target != null && target in createdDirectories -> request.copy(
+                                title = "Delete folder?",
+                                detail = "${request.detail}\nThis folder may contain files added outside Rivet.",
+                                dangerous = true,
+                            )
+                            target != null &&
+                                (target !in createdPaths || movedExistingPaths.any { it == target || it.startsWith("$target/") }) ->
+                                describeDestructive(request)
+                            else -> request
+                        }
                     }
                     val denied = approval != null &&
                         (previouslyDenied || !requestApproval(approval))
@@ -262,7 +270,9 @@ class AgentLoop(
                     val deterministic = AgentToolError.deterministicCode(bounded)
                     lastDeterministicFailure = if (deterministic != null)
                         Triple(denialKey, deterministic, failureState()) else null
-                    if (!denied && !bounded.error) recordProvenance(call, bounded, createdPaths, movedExistingPaths)
+                    if (!denied && !bounded.error) recordProvenance(
+                        call, bounded, createdPaths, createdDirectories, movedExistingPaths,
+                    )
                 }
             } catch (e: CancellationException) {
                 results += pending("cancelled")
@@ -328,6 +338,7 @@ class AgentLoop(
         call: AgentToolCall,
         result: AgentToolResult,
         created: MutableSet<String>,
+        createdDirectories: MutableSet<String>,
         movedExisting: MutableSet<String>,
     ) {
         if (call.name !in setOf("create_file", "create_directory", "delete_path", "rename_path", "move_path")) return
@@ -337,9 +348,14 @@ class AgentLoop(
         fun field(name: String) = value[name]?.jsonPrimitive?.content
         val path = field("path") ?: return
         when (call.name) {
-            "create_file", "create_directory" -> created += path
+            "create_file" -> created += path
+            "create_directory" -> {
+                created += path
+                createdDirectories += path
+            }
             "delete_path" -> {
                 created.removeAll { it == path || it.startsWith("$path/") }
+                createdDirectories.removeAll { it == path || it.startsWith("$path/") }
                 movedExisting.removeAll { it == path || it.startsWith("$path/") }
             }
             "rename_path", "move_path" -> {
@@ -351,6 +367,7 @@ class AgentLoop(
                     paths.addAll(affected.map { path + it.removePrefix(source) })
                 }
                 relocate(created)
+                relocate(createdDirectories)
                 relocate(movedExisting)
                 if (!wasCreated) movedExisting += path
             }
