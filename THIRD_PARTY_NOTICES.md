@@ -89,7 +89,8 @@ to its GPLv3 app license. The Apache-2.0 license text is in Rivet's `LICENSE`.
 Rivet keeps the `com.termux.terminal` and `com.termux.view` package names.
 Rivet changes Gradle packaging, fixes native error cleanup, replaces reflective
 file-descriptor access with `ParcelFileDescriptor`, and adds process-group
-cleanup. Rivet's `command.c` in the same native library is original code.
+cleanup. Modified upstream files carry a notice at the top of the file.
+Rivet's `command.c` in the same native library is original code.
 
 `terminal-emulator/AndroidUtils.java` says it contains code sourced from the
 upstream `termux-shared` Android utility. That source directory is MIT-licensed
@@ -114,6 +115,38 @@ AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
 LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN
 THE SOFTWARE.
+
+`WcWidth.java` includes code and Unicode tables derived from
+[`jquast/wcwidth`](https://github.com/jquast/wcwidth), revision
+`1b9b6585b0080ea5cb88dc9815796505724793fe`. The applicable MIT notice is:
+
+    The MIT License (MIT)
+
+    Copyright (c) 2014 Jeff Quast <contact@jeffquast.com>
+
+    Permission is hereby granted, free of charge, to any person obtaining a copy
+    of this software and associated documentation files (the "Software"), to deal
+    in the Software without restriction, including without limitation the rights
+    to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+    copies of the Software, and to permit persons to whom the Software is
+    furnished to do so, subject to the following conditions:
+
+    The above copyright notice and this permission notice shall be included in all
+    copies or substantial portions of the Software.
+
+    THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+    IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+    FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+    AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+    LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+    OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+    SOFTWARE.
+
+    Markus Kuhn -- 2007-05-26 (Unicode 5.0)
+
+    Permission to use, copy, modify, and distribute this software
+    for any purpose and without fee is hereby granted. The author
+    disclaims all warranties with regard to this software.
 
 The modern [`termux-play-store/termux-exec`](https://github.com/termux-play-store/termux-exec)
 implementation was reviewed at `47633d5df2db3dfea34cef568c6c82a7ba8dcc2e`

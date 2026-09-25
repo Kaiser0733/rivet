@@ -20,9 +20,8 @@ conversation.
 
 Native SAF selection with persisted tree permission, nested browsing, bounded
 UTF-8 reading/editing, fingerprint conflicts, native create/delete/rename/move,
-literal search, and exact-context patching. No model workspace access or runtime.
-Implementation is covered by JVM logic and simulated DocumentsProvider tests;
-physical-device/provider compatibility validation remains required.
+literal search, and exact-context patching. Later phases added agent access and
+runtime synchronization through the same selected project boundary.
 
 ## Phase 4 — Agent Loop (complete)
 
@@ -30,23 +29,25 @@ Provider-neutral coding-agent conversation with native structured calls for all
 supported transports, bounded workspace tools, mutation approvals, cancellation,
 streaming activity UI, and migrated persistent transcripts.
 
-## Phase 5 — Embedded Runtime
+## Phase 5 — Embedded Runtime (complete)
 
 On-device command execution, an interactive terminal, and a conflict-safe
 private POSIX mirror of the SAF workspace. Runtime packages build on this
 execution substrate after physical validation. Termux-derived components
 receive a file-level license review before incorporation.
 
-## Phase 6 — Coding-Agent Features
+## Phase 6 — Coding-Agent Features (complete)
 
 Diff viewing and application, Git integration, and higher-level coding workflows.
 
-## Phase 7 — Chat-First Product Simplification
+## Phase 7 — Chat-First Product Simplification (complete)
 
 Chat and Settings are the only normal surfaces. Project choice, approvals,
 activity, results, and Undo are contextual in Chat. Runtime, files, Git, and
 checkpoint systems remain agent infrastructure rather than user destinations.
 
-## Phase 8 — Release Candidate
+## Phase 8 — Release Candidate Engineering (in progress)
 
-Final hardening, release documentation, distribution readiness.
+Audit the accepted product, fix concrete release risks, verify upgrade and
+signing paths, and prepare a candidate for independent review and physical
+acceptance. This does not publish a release.

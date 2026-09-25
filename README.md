@@ -4,8 +4,8 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: early development.** Current phase: 4 of 8 (Agent Loop) —
-see [MASTER_ROADMAP.md](MASTER_ROADMAP.md).
+**Status: 0.8.0 release-candidate engineering.** Rivet is not publicly
+released; independent review and physical acceptance remain pending.
 
 ## What works today
 
@@ -18,32 +18,34 @@ see [MASTER_ROADMAP.md](MASTER_ROADMAP.md).
   everywhere else.
 - Live streaming responses with stop control; provider and model
   switchable between messages.
-- One persistent conversation; completed chat history, provider
-  configuration, and selection restore from app-private storage after a
-  restart.
+- Multiple persistent conversations; completed history, provider
+  configuration, and selected project restore after a restart.
 
-- Native project-folder selection through Android's Storage Access Framework;
-  nested browsing, UTF-8 editing, create/rename/delete, and provider-native moves.
-- SHA-256-checked saves, exact-context patches, and bounded literal project search.
-- Native structured workspace tools across OpenAI-compatible, OpenRouter,
-  Anthropic, and Gemini transports.
-- Automatic bounded reads and explicit approval for every file mutation, with
-  stop control and workspace binding for active turns.
-- Provider-neutral agent history, including tool calls and results, with one-time
-  migration of existing chat history.
+- Project-folder selection from Chat, with contained file reads, search, edits,
+  and exact-context patches.
+- Structured tools for OpenAI-compatible, OpenRouter, Anthropic, and Gemini
+  providers. File and command changes require approval.
+- Approved project commands run through Rivet's on-device runtime. Git status
+  and diffs are read-only; completed agent changes can be undone when safe.
+- Bounded project instructions from `AGENTS.md`, durable conversation history,
+  model switching, usage records, and automatic context reduction.
 
-Terminal/runtime and Git integration are not implemented. Workspace access stays inside the selected document tree;
-no broad storage permission is requested. Files above 1 MiB and binary/non-UTF-8
-files cannot be edited. Read-only/cloud providers may reject mutations. Save
-conflicts retain the draft; SAF writes are not universally atomic. Unsaved
-drafts survive rotation, not process death. See ARCHITECTURE.md for limits.
+Rivet's native file tools are confined to the selected project folder. Approved
+project commands run with Rivet's Android application UID; they are not a
+security sandbox and may access app-private files available to that UID. Rivet
+does not include stored API keys in the command environment. No broad storage
+permission is requested. Files above 1 MiB and binary/non-UTF-8 files cannot be
+edited. Some document providers reject writes or rename operations. External
+project changes stop synchronization rather than being overwritten; Rivet may
+need the project state resolved before work can continue. The contextual Undo
+action is not restored after process restart. See [ARCHITECTURE.md](ARCHITECTURE.md)
+for recovery and provider limits.
 
 ## Building
 
 GitHub Actions is the primary build environment — push to `main` (or
 open a PR) and CI runs tests, lint, and the debug APK build, uploading
-the APK as an artifact. Local builds work with any JDK 17 + Android SDK
-35 setup:
+the APK as an artifact. Local builds work with JDK 17 and Android SDK 35:
 
     ./gradlew assembleDebug
 

@@ -11,12 +11,17 @@ android {
     namespace = "com.kaiser.rivet"
     compileSdk = 35
 
+    sourceSets.getByName("main").assets.apply {
+        srcDir(rootProject.projectDir)
+        include("LICENSE", "THIRD_PARTY_NOTICES.md")
+    }
+
     defaultConfig {
         applicationId = "com.kaiser.rivet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 13
-        versionName = "0.7.1"
+        versionCode = 14
+        versionName = "0.8.0"
     }
 
     buildFeatures {
