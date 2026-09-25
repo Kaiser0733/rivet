@@ -167,6 +167,23 @@ class GeminiClientTest {
     }
 
     @Test
+    fun maxTokensTextIsNotPresentedAsCompleted() = runTest {
+        val sse = """data: {"candidates":[{"content":{"parts":[{"text":"I changed the file"}]},"finishReason":"MAX_TOKENS"}]}
+
+"""
+        server.enqueue(MockResponse().setBody(sse))
+
+        try {
+            GeminiClient(config(), "key").streamChat(
+                ChatRequest("gemini-x", emptyList(), "", ReasoningLevel.Default),
+            ) {}
+            throw AssertionError("A MAX_TOKENS answer must not be presented as complete")
+        } catch (_: ProviderError) {
+            // expected
+        }
+    }
+
+    @Test
     fun toolSchemaUsesJsonSchemaFieldAndTextSignatureIsReturned() = runTest {
         val sse = "data: {\"candidates\":[{\"content\":{\"parts\":[" +
             "{\"text\":\"\",\"thoughtSignature\":\"text-sig\"}," +

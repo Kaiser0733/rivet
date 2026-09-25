@@ -234,6 +234,38 @@ class OpenAiCompatibleClientTest {
         }
     }
 
+    @Test
+    fun completeLookingToolCallIsRejectedWhenGenerationHitsLengthLimit() = runTest {
+        val tool = """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"delete_path","arguments":"{\"path\":\"Max.txt\"}"}}]}}]}"""
+        val limited = """{"choices":[{"delta":{},"finish_reason":"length"}]}"""
+        server.enqueue(MockResponse().setBody("data: $tool\n\ndata: $limited\n\ndata: [DONE]\n\n"))
+
+        try {
+            OpenAiCompatibleClient(config(), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            fail("A length-limited generation must not return a tool call")
+        } catch (_: ProviderError) {
+            // expected
+        }
+    }
+
+    @Test
+    fun lengthLimitedTextIsNotPresentedAsCompleted() = runTest {
+        val text = """{"choices":[{"delta":{"content":"I changed the file"}}]}"""
+        val limited = """{"choices":[{"delta":{},"finish_reason":"length"}]}"""
+        server.enqueue(MockResponse().setBody("data: $text\n\ndata: $limited\n\ndata: [DONE]\n\n"))
+
+        try {
+            OpenAiCompatibleClient(config(), "key").streamChat(
+                ChatRequest("test-model", emptyList(), "", ReasoningLevel.Default),
+            ) {}
+            fail("A length-limited answer must not be presented as complete")
+        } catch (_: ProviderError) {
+            // expected
+        }
+    }
+
     @Test fun knownProvidersRequestAndParseFinalUsageButCustomShapeStaysBaseline() = runTest {
         val sse = "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"}}]}\n\n" +
             "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":12," +
