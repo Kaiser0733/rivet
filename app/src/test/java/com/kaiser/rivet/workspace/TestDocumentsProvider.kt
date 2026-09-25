@@ -24,6 +24,7 @@ class TestDocumentsProvider : DocumentsProvider() {
     var readStarted: CountDownLatch? = null
     var reportMetadata = true
     var childQueries = 0
+    var afterChildQuery: ((Int) -> Unit)? = null
     var createCalls = 0
     var normalizeTextFileNames = false
     var videoMimeForTs = false
@@ -47,7 +48,9 @@ class TestDocumentsProvider : DocumentsProvider() {
     override fun queryDocument(documentId: String, projection: Array<out String>?): Cursor = rows(listOf(documentId), projection)
     override fun queryChildDocuments(parentDocumentId: String, projection: Array<out String>?, sortOrder: String?): Cursor {
         childQueries++
-        return rows(nodes.filterValues { it.parent == parentDocumentId }.keys.toList(), projection)
+        val snapshot = rows(nodes.filterValues { it.parent == parentDocumentId }.keys.toList(), projection)
+        afterChildQuery?.invoke(childQueries)
+        return snapshot
     }
     private fun rows(ids: List<String>, projection: Array<out String>?): Cursor {
         val columns = projection ?: arrayOf(Document.COLUMN_DOCUMENT_ID, Document.COLUMN_DISPLAY_NAME, Document.COLUMN_MIME_TYPE)
