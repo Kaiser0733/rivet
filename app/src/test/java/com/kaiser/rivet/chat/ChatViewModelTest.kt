@@ -145,7 +145,7 @@ class ChatViewModelTest {
         assertEquals("run-1", awaiting.pendingApproval?.call?.id)
         assertEquals(tree.toString(), awaiting.projectIdentity)
         assertEquals(1, provider.requests.size)
-        viewModel.deny("run-1")
+        viewModel.deny(awaiting.pendingApproval!!.approvalToken)
     }
 
     @Test fun runtimeFailureMessagesGiveChatRecoveryWithoutRemovedControls() {
@@ -362,7 +362,7 @@ class ChatViewModelTest {
         assertFalse(restored.interrupted)
         assertEquals("create", restored.messages.last().toolResults.single().callId)
         assertTrue("session_limit" in restored.messages.last().toolResults.single().content)
-        viewModel.approve("create")
+        viewModel.approve(0L)
         assertEquals(0, documents.createCalls)
         val instruction = provider.requests.single().system
         assertTrue(instruction.contains("untrusted project data"))
