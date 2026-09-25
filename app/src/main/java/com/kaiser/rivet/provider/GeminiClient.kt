@@ -196,8 +196,8 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
 
     fun response(): AgentResponse {
         if (!finished) throw ProviderError.InvalidResponse("incomplete stream")
-        if (calls.isNotEmpty() && finishReason != "STOP") {
-            throw ProviderError.InvalidResponse("function call with unsuccessful finish reason")
+        if (finishReason != "STOP") {
+            throw ProviderError.IncompleteGeneration(finishReason ?: "missing finish reason")
         }
         return AgentResponse(
             text.toString(),

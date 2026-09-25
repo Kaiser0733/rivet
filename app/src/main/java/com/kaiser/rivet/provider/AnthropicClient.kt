@@ -179,16 +179,20 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
     private val thinking = sortedMapOf<Int, Thinking>()
     private var usage: com.kaiser.rivet.agent.AgentUsage? = null
     private var messageStopped = false
+    private var stopReason: String? = null
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
         when (root["type"]?.str()) {
             "message_stop" -> messageStopped = true
             "message_start" -> anthropicUsage(root["message"]?.obj() ?: root)?.let { usage = it }
-            "message_delta" -> anthropicUsage(root)?.let { delta ->
-                val prior = usage
-                usage = delta.copy(inputTokens = delta.inputTokens ?: prior?.inputTokens,
-                    cacheReadTokens = delta.cacheReadTokens ?: prior?.cacheReadTokens)
+            "message_delta" -> {
+                root["delta"]?.obj()?.get("stop_reason")?.str()?.let { stopReason = it }
+                anthropicUsage(root)?.let { delta ->
+                    val prior = usage
+                    usage = delta.copy(inputTokens = delta.inputTokens ?: prior?.inputTokens,
+                        cacheReadTokens = delta.cacheReadTokens ?: prior?.cacheReadTokens)
+                }
             }
             "error" -> {
                 val message = root["error"]?.obj()?.get("message")?.str()
@@ -230,6 +234,11 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
 
     fun response(): AgentResponse {
         if (!messageStopped) throw ProviderError.InvalidResponse("incomplete stream")
+        val reason = stopReason
+        if (tools.isNotEmpty() && reason != "tool_use" ||
+            tools.isEmpty() && reason !in setOf("end_turn", "stop_sequence", "refusal")) {
+            throw ProviderError.IncompleteGeneration(reason ?: "missing stop reason")
+        }
         val calls = tools.values.map { tool ->
             val arguments = tool.fragments.toString().ifEmpty { tool.initial.toString() }
             try {
