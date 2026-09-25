@@ -188,6 +188,47 @@ class AnthropicClientTest {
     }
 
     @Test
+    fun completeLookingToolUseIsRejectedWhenGenerationHitsMaxTokens() = runTest {
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"delete_path","input":{"path":"Max.txt"}}}""",
+            """{"type":"content_block_stop","index":0}""",
+            """{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}""",
+            """{"type":"message_stop"}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse))
+
+        try {
+            AnthropicClient(config(), "key").streamAgent(
+                AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            throw AssertionError("A max_tokens tool decision must not be executed")
+        } catch (_: ProviderError) {
+            // expected
+        }
+    }
+
+    @Test
+    fun maxTokensTextIsNotPresentedAsCompleted() = runTest {
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"text","text":""}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"I changed the file"}}""",
+            """{"type":"content_block_stop","index":0}""",
+            """{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}""",
+            """{"type":"message_stop"}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse))
+
+        try {
+            AnthropicClient(config(), "key").streamChat(
+                ChatRequest("claude-x", emptyList(), "", ReasoningLevel.Default),
+            ) {}
+            throw AssertionError("A max_tokens answer must not be presented as complete")
+        } catch (_: ProviderError) {
+            // expected
+        }
+    }
+
+    @Test
     fun multipleToolUsesRemainDistinct() = runTest {
         val sse = listOf(
             """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"a","name":"read_file","input":{"path":"A.kt"}}}""",
