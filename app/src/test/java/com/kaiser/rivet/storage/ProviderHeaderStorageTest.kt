@@ -69,6 +69,16 @@ class ProviderHeaderStorageTest {
     }
 
     @Test
+    fun unknownStoredProviderTypeDegradesToEmptyWithoutRewritingHistory() = runBlocking {
+        val payload = """[{"id":"x","type":"future_thing","name":"X","baseUrl":"https://x","model":"m"}]"""
+        dataStore.edit { it[configsKey] = payload }
+        val before = file.readBytes()
+
+        assertEquals(emptyList<ProviderConfig>(), store().configSnapshot())
+        assertEquals(before.toList(), file.readBytes().toList())
+    }
+
+    @Test
     fun customHeaderValueIsEncryptedAtRestAndRestoredForRequests() = runBlocking {
         val id = UUID.randomUUID().toString()
         val secret = "header-secret-${UUID.randomUUID()}"

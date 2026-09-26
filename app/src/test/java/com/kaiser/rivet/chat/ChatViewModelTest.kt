@@ -15,7 +15,6 @@ import com.kaiser.rivet.workspace.TestDocumentsProvider
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.provider.AgentRequest
-import com.kaiser.rivet.provider.ChatRequest
 import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
@@ -299,7 +298,6 @@ class ChatViewModelTest {
         val provider = object : ProviderClient {
             override suspend fun listModels(): List<ModelInfo> = emptyList()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit) = ""
             override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
                 throw ProviderError.Unauthorized()
             }
@@ -627,7 +625,6 @@ class ChatViewModelTest {
         val requests = mutableListOf<AgentRequest>()
         override suspend fun listModels(): List<ModelInfo> = emptyList()
         override suspend fun testConnection() = TestResult(true, "ok")
-        override suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit) = ""
         override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
             requests += request
             return responses.removeFirst()
