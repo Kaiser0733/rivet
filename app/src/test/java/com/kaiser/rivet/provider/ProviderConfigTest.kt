@@ -26,6 +26,17 @@ class ProviderConfigTest {
     }
 
     @Test
+    fun listedLimitAppliesOnlyToItsModelAndEndpoint() {
+        val base = ProviderConfig("id", ProviderType.Gemini, "Gemini", "https://models.example", "m",
+            modelContextLimit = ModelContextLimit("m", "https://models.example", 32000))
+        assertEquals(32000, base.trustedInputLimitTokens())
+        assertEquals(null, base.copy(model = "other").trustedInputLimitTokens())
+        assertEquals(null, base.copy(baseUrl = "https://other.example").trustedInputLimitTokens())
+        val json = Json.encodeToString(ProviderConfig.serializer(), base)
+        assertEquals(32000, Json.decodeFromString(ProviderConfig.serializer(), json).trustedInputLimitTokens())
+    }
+
+    @Test
     fun headerSanitizationDropsAuthHeaders() {
         val headers = listOf(
             ProviderHeader("Authorization", "Bearer evil"),
