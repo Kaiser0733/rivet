@@ -55,6 +55,12 @@ class GeminiClientTest {
     }
 
     @Test
+    fun listModelsKeepsReportedInputLimit() = runTest {
+        server.enqueue(MockResponse().setBody("""{"models":[{"name":"models/gemini-a","supportedGenerationMethods":["generateContent"],"inputTokenLimit":1048576}]}"""))
+        assertEquals(1048576, GeminiClient(config(), "key").listModels().single().inputLimitTokens)
+    }
+
+    @Test
     fun listModelsRejectsOversizedResponse() = runTest {
         server.enqueue(MockResponse().setBody("x".repeat(MAX_PROVIDER_JSON_BODY_BYTES + 1)))
         try {
