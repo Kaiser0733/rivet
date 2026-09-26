@@ -147,6 +147,8 @@ internal object AgentContext {
         return groups
     }
 
+    fun validGroups(messages: List<AgentMessage>): Boolean = completeGroups(messages) != null
+
     private fun summarizeInput(messages: List<AgentMessage>): String {
         val body = buildString {
             for (message in messages) {
