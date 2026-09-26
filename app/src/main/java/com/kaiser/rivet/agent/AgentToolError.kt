@@ -8,7 +8,6 @@ import kotlinx.serialization.json.put
 
 internal object AgentToolError {
     private val actions = mapOf(
-        "terminal_active" to "The command runner is busy. Try again after its state changes.",
         "sync_required" to "Rivet could not safely reconcile project changes. Stop and review the project before retrying.",
         "workspace_unavailable" to "Choose the project again before retrying the command.",
         "workspace_changed" to "The selected project changed. Start a new request in the current project.",
@@ -19,10 +18,10 @@ internal object AgentToolError {
         "unsafe_entry" to "Rivet found a project item it could not safely access. Remove or rename it before retrying.",
         "stale_target" to "This project item changed during approval. Inspect it before requesting a new approval.",
     )
-    private val deterministic = setOf("terminal_active", "sync_required", "workspace_unavailable",
+    private val deterministic = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "denied", "checkpoint_unavailable",
         "invalid_arguments", "invalid_path", "unknown_tool", "unsafe_entry", "stale_target")
-    private val runtimeStops = setOf("terminal_active", "sync_required", "workspace_unavailable",
+    private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry")
 

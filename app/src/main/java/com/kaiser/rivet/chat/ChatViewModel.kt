@@ -98,7 +98,6 @@ internal fun runtimeFailureMessage(code: String?): String = when (code) {
         "Rivet couldn't prepare command access for this project. Choose the project again and retry."
     "workspace_changed" ->
         "The project changed while Rivet was working, so it stopped before running the command."
-    "terminal_active" -> "Rivet's command runner is busy. Try again."
     "sync_required", "mirror_dirty" ->
         "Rivet found pending project changes it couldn't safely reconcile. It kept the pending copy and stopped before another command."
     "sync_conflict", "conflict" ->
@@ -448,7 +447,7 @@ class ChatViewModel private constructor(
                             if (checkpointBroken) "checkpoint_unavailable" else null
                         } catch (e: CancellationException) { throw e
                         } catch (e: MirrorFailure) {
-                            e.code.takeIf { it == "terminal_active" || it == "sync_required" ||
+                            e.code.takeIf { it == "sync_required" ||
                                 it == "workspace_unavailable" || it == "workspace_changed" }
                                 ?: "checkpoint_unavailable"
                         }
