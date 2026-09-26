@@ -8,6 +8,31 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentContextTest {
+    @Test fun oldSuccessfulToolBodyPrunesWithoutChangingHistoryOrCorrelatedErrors() {
+        val oldCall = AgentToolCall("old", "read_file", "{\"path\":\"A.kt\"}")
+        val failedCall = AgentToolCall("failed", "write_file", "{\"path\":\"B.kt\"}")
+        val history = listOf(
+            AgentMessage.user("Inspect A"),
+            AgentMessage.assistant("", listOf(oldCall)),
+            AgentMessage.tools(listOf(AgentToolResult("old", "read_file",
+                "{\"content\":\"${"x".repeat(22_000)}\",\"sha256\":\"abc\"}", summary = "Read A.kt"))),
+            AgentMessage.user("Fix B"),
+            AgentMessage.assistant("", listOf(failedCall)),
+            AgentMessage.tools(listOf(AgentToolResult("failed", "write_file",
+                "{\"error\":\"conflict\"}", error = true, summary = "Conflict B.kt"))),
+        )
+
+        val pruned = AgentContext.pruneOldResults(history, protectedTailBytes = 1024)!!
+
+        assertEquals("Fix B", pruned[3].text)
+        assertTrue(pruned[2].toolResults.single().content.contains("\"output_pruned\":true"))
+        assertTrue(pruned[2].toolResults.single().content.contains("\"sha256\":\"abc\""))
+        assertEquals("old", pruned[2].toolResults.single().callId)
+        assertEquals(history[5], pruned[5])
+        assertTrue(history[2].toolResults.single().content.contains("x".repeat(22_000)))
+        assertNull(AgentContext.pruneOldResults(pruned, protectedTailBytes = 1024))
+    }
+
     @Test fun pressureRemovesOldBulkyResultsAndKeepsRecentPairs() {
         val history = mutableListOf<AgentMessage>()
         repeat(22) { index ->
