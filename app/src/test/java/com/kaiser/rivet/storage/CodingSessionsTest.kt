@@ -9,12 +9,9 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
-import com.kaiser.rivet.chat.ChatMessage
-import com.kaiser.rivet.chat.ChatRole
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerializationException
-import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -60,9 +57,7 @@ class CodingSessionsTest {
     }
 
     @Test fun preAgentChatHistorySurvivesBothMigrationsAndSqliteRestart() = runBlocking {
-        val old = listOf(ChatMessage(ChatRole.User, "old question"),
-            ChatMessage(ChatRole.Assistant, "old answer"))
-        val payload = Json.encodeToString(ListSerializer(ChatMessage.serializer()), old)
+        val payload = """[{"role":"User","text":"old question"},{"role":"Assistant","text":"old answer"}]"""
         app.chatData.edit {
             it.remove(booleanPreferencesKey("agent_migrated"))
             it[stringPreferencesKey("messages")] = payload
