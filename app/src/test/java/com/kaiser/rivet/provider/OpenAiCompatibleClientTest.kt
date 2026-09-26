@@ -55,6 +55,18 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun openRouterModelLimitIsScopedToItsProvider() = runTest {
+        val listing = """{"data":[{"id":"m","context_length":32000,"top_provider":{"context_length":16000}}]}"""
+        server.enqueue(MockResponse().setBody(listing))
+        val routed = OpenAiCompatibleClient(config(ProviderType.OpenRouter), "key").listModels().single()
+        assertEquals(16000, routed.inputLimitTokens)
+
+        server.enqueue(MockResponse().setBody(listing))
+        val custom = OpenAiCompatibleClient(config(ProviderType.OpenAiCompatible), "key").listModels().single()
+        assertEquals(null, custom.inputLimitTokens)
+    }
+
+    @Test
     fun listModelsEmptyAndMalformed() = runTest {
         server.enqueue(MockResponse().setBody("""{"data":[]}"""))
         assertEquals(emptyList<ModelInfo>(), OpenAiCompatibleClient(config(), "key").listModels())
