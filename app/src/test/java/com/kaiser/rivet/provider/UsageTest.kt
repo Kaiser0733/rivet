@@ -9,7 +9,8 @@ class UsageTest {
     @Test fun anthropicCachedInputCountsTowardPromptOccupancy() {
         val response = Json.parseToJsonElement("""{"usage":{"input_tokens":20,"output_tokens":5,"cache_creation_input_tokens":30,"cache_read_input_tokens":70}}""").jsonObject
         val usage = anthropicUsage(response)!!
-        assertEquals(120L, usage.inputTokens)
+        assertEquals(20L, usage.inputTokens)
+        assertEquals(120L, usage.contextInputTokens(ProviderType.Anthropic))
         assertEquals(30L, usage.cacheCreationTokens)
         assertEquals(70L, usage.cacheReadTokens)
         assertEquals(5L, usage.outputTokens)

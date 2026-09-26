@@ -175,7 +175,8 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
                 anthropicUsage(root)?.let { delta ->
                     val prior = usage
                     usage = delta.copy(inputTokens = delta.inputTokens ?: prior?.inputTokens,
-                        cacheReadTokens = delta.cacheReadTokens ?: prior?.cacheReadTokens)
+                        cacheReadTokens = delta.cacheReadTokens ?: prior?.cacheReadTokens,
+                        cacheCreationTokens = delta.cacheCreationTokens ?: prior?.cacheCreationTokens)
                 }
             }
             "error" -> {
