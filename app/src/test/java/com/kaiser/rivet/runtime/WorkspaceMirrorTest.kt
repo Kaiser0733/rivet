@@ -240,6 +240,44 @@ class WorkspaceMirrorTest {
         assertFalse(files.walkTopDown().any { it.name == "partial-create.json" })
     }
 
+    @Test fun partialCreateReceiptRejectsDirectReplacementWithSameEmptyBytes() = runBlocking {
+        val mirror = mirror()
+        File(mirror.prepare().worktree, "new.txt").writeText("target")
+        provider.rejectWriteOnceFor = "new.txt"
+        assertEquals(MirrorSync.Failed, mirror.sync().state)
+        val original = workspace.stat(path("new.txt"))
+        workspace.delete(path("new.txt"))
+        val replacement = workspace.createFile(path("new.txt"))
+        assertFalse(original.documentId == replacement.documentId)
+
+        assertEquals(MirrorSync.Conflict, mirror().sync().state)
+        assertArrayEquals(byteArrayOf(), bytes("new.txt"))
+    }
+
+    @Test fun replacementBetweenReceiptCheckAndWriteCannotReceiveMirrorContent() = runBlocking {
+        val mirror = mirror()
+        File(mirror.prepare().worktree, "new.txt").writeText("target")
+        provider.rejectWriteOnceFor = "new.txt"
+        assertEquals(MirrorSync.Failed, mirror.sync().state)
+        val startQueries = provider.childQueries
+        var replaced = false
+        provider.afterChildQuery = { count ->
+            if (count == startQueries + 3) {
+                provider.afterChildQuery = null
+                val old = provider.nodes.entries.first { it.value.name == "new.txt" }
+                provider.nodes.remove(old.key)?.bytes?.delete()
+                provider.createDocument("root", "application/octet-stream", "new.txt")
+                replaced = true
+            }
+        }
+
+        val result = mirror.sync()
+
+        assertTrue(replaced)
+        assertEquals(MirrorSync.Conflict, result.state)
+        assertArrayEquals(byteArrayOf(), bytes("new.txt"))
+    }
+
     @Test fun cleanMirrorRefreshesExternalChangesAndDirtyMirrorSurvivesRestart() = runBlocking {
         source("file.txt", "base".toByteArray())
         val mirror = mirror()
