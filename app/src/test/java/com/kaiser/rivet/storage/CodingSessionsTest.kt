@@ -6,6 +6,7 @@ import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
@@ -242,6 +243,51 @@ class CodingSessionsTest {
         } catch (_: IllegalArgumentException) { Unit }
         assertEquals(original, sessions.load().messages)
         assertEquals(2, sessions.fullEventCount(id))
+    }
+
+    @Test fun projectedToolPruningKeepsCanonicalHistoryAndValidatesStoredSummary() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val call = AgentToolCall("read", "read_file", "{\"path\":\"A.kt\"}")
+        val original = listOf(
+            AgentMessage.user("Inspect A"),
+            AgentMessage.assistant("", listOf(call)),
+            AgentMessage.tools(listOf(AgentToolResult("read", "read_file",
+                "{\"content\":\"${"x".repeat(22_000)}\"}", summary = "Read A.kt"))),
+            AgentMessage.user("Continue the task"),
+        )
+        sessions.save(original, interrupted = false)
+        val projected = AgentContext.pruneOldResults(original, protectedTailBytes = 1024)!!
+        sessions.compact(original, projected, "Prior work was inspected")
+
+        assertEquals(projected, CodingSessions(app).load().messages)
+        assertEquals(original, CodingSessions(app).recent(id))
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("UPDATE sessions SET summary='Unverified replacement' WHERE id=?", arrayOf(id))
+        }
+        val recovered = CodingSessions(app).load()
+        assertEquals("", recovered.summary)
+        assertTrue(recovered.messages.any { it.role == com.kaiser.rivet.agent.AgentRole.User &&
+            it.text == "Continue the task" })
+        assertEquals(original, CodingSessions(app).recent(id))
+    }
+
+    @Test fun changedCanonicalPrefixCannotReuseCompactionSummary() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val original = listOf(AgentMessage.user("Original task"), AgentMessage.assistant("Done"),
+            AgentMessage.user("Continue"))
+        sessions.save(original, interrupted = false)
+        sessions.compact(original, listOf(original.last()), "Original task was done")
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("UPDATE events SET payload=? WHERE id=(SELECT MIN(id) FROM events WHERE session_id=?)",
+                arrayOf(Json.encodeToString(AgentMessage.serializer(), AgentMessage.user("Changed canonical task")), id))
+        }
+
+        val restored = CodingSessions(app).load()
+        assertEquals("", restored.summary)
+        assertEquals("Changed canonical task", CodingSessions(app).recent(id).first().text)
+        assertTrue(restored.messages.any { it.text == "Continue" })
     }
 
     @Test fun usageAnchorPricesOnlyNewDeltaAndInvalidatesOnCompactionOrModelSwitch() = runBlocking {
