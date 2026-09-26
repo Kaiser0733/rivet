@@ -6,12 +6,18 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.kaiser.rivet.agent.AgentContext
+import com.kaiser.rivet.agent.AgentToolDefinition
+import com.kaiser.rivet.agent.ContextBudget
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.workspace.WorkspaceSelection
+import com.kaiser.rivet.provider.AgentRequest
+import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.ReasoningLevel
+import com.kaiser.rivet.provider.contextInputTokens
 import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.util.UUID
@@ -235,56 +241,65 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     suspend fun recordUsage(sessionId: String, turnId: String, providerId: String, model: String,
                             usage: AgentUsage?, requestMessages: List<AgentMessage> = emptyList(),
-                            system: String = "") = onDatabase { db ->
+                            system: String = "", tools: List<AgentToolDefinition> = emptyList(),
+                            endpoint: String = "", providerType: ProviderType? = null) = onDatabase { db ->
         val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
             if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
             it.getInt(0)
         }
+        val contextInput = usage?.let { if (providerType == null) it.inputTokens else it.contextInputTokens(providerType) }
         db.insertOrThrow("usage", null, ContentValues().apply {
             put("session_id", sessionId); put("turn_id", turnId)
             put("provider_id", providerId); put("model", model)
-            put("source", if (usage == null) "unknown" else "reported")
+            put("source", if (contextInput != null && contextInput > 0) "reported" else "unknown")
             put("input_tokens", usage?.inputTokens); put("output_tokens", usage?.outputTokens)
             put("cache_read_tokens", usage?.cacheReadTokens)
+            put("cache_creation_tokens", usage?.cacheCreationTokens)
+            put("context_input_tokens", contextInput)
             put("reasoning_tokens", usage?.reasoningTokens)
             put("total_tokens", usage?.totalTokens)
             put("base_count", requestMessages.size)
             put("base_last_hash", requestMessages.lastOrNull()?.let(::messageHash))
-            put("system_hash", hash(system))
+            put("base_prefix_hash", hashMessages(requestMessages))
+            put("system_hash", requestEnvironmentHash(endpoint, system, tools))
             put("active_generation", generation)
             put("created_at", System.currentTimeMillis())
         })
     }
 
+    private data class UsageAnchor(val input: Long, val count: Int, val prefixHash: String?,
+                                   val environmentHash: String, val generation: Int)
+
     suspend fun contextEstimate(sessionId: String, providerId: String, model: String,
-                                messages: List<AgentMessage>, system: String): ContextEstimate = onDatabase { db ->
+                                messages: List<AgentMessage>, system: String,
+                                tools: List<AgentToolDefinition> = emptyList(),
+                                endpoint: String = ""): ContextEstimate = onDatabase { db ->
         val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
             if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
             it.getInt(0)
         }
-        val anchor = db.rawQuery("SELECT input_tokens,output_tokens,base_count,base_last_hash,system_hash,active_generation " +
-            "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' AND input_tokens IS NOT NULL " +
+        val request = AgentRequest(model, messages, system, ReasoningLevel.Default, tools)
+        val estimated = ContextBudget.estimateRequestTokens(request)
+        val anchor = db.rawQuery("SELECT context_input_tokens,base_count,base_prefix_hash,system_hash,active_generation " +
+            "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' AND context_input_tokens IS NOT NULL " +
             "ORDER BY id DESC LIMIT 1", arrayOf(sessionId, providerId, model)).use { cursor ->
-            if (!cursor.moveToFirst()) null else listOf(
-                cursor.getLong(0).toString(), if (cursor.isNull(1)) "0" else cursor.getLong(1).toString(),
-                cursor.getInt(2).toString(), if (cursor.isNull(3)) "" else cursor.getString(3),
-                cursor.getString(4), cursor.getInt(5).toString())
+            if (!cursor.moveToFirst()) null else UsageAnchor(cursor.getLong(0), cursor.getInt(1),
+                if (cursor.isNull(2)) null else cursor.getString(2), cursor.getString(3), cursor.getInt(4))
         }
         if (anchor != null) {
-            val count = anchor[2].toInt()
-            if (anchor[5].toInt() == generation && anchor[4] == hash(system) &&
-                count in 1..messages.size && anchor[3] == messageHash(messages[count - 1])) {
-                val later = messages.drop(count).let { tail ->
-                    if (tail.firstOrNull()?.role == AgentRole.Assistant) tail.drop(1) else tail
+            if (anchor.generation == generation &&
+                anchor.environmentHash == requestEnvironmentHash(endpoint, system, tools) &&
+                anchor.count in 1..messages.size &&
+                anchor.prefixHash == hashMessages(messages.take(anchor.count))) {
+                if (anchor.count == messages.size) return@onDatabase ContextEstimate(anchor.input, "reported")
+                val base = ContextBudget.estimateRequestTokens(request.copy(messages = messages.take(anchor.count)))
+                val delta = (estimated - base).coerceAtLeast(0)
+                if (anchor.input <= Long.MAX_VALUE - delta) {
+                    return@onDatabase ContextEstimate(anchor.input + delta, "estimated")
                 }
-                return@onDatabase ContextEstimate(anchor[0].toLong() + anchor[1].toLong() +
-                    (AgentContext.serializedBytes(later) / 4),
-                    if (later.isEmpty()) "reported" else "estimated")
             }
         }
-        val approximate = (AgentContext.serializedBytes(messages).toLong() +
-            system.toByteArray(Charsets.UTF_8).size) / 4
-        ContextEstimate(approximate, "estimated")
+        ContextEstimate(estimated, "estimated")
     }
 
     suspend fun usage(sessionId: String): SessionUsage = onDatabase { db ->
@@ -385,6 +400,19 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         json.decodeFromString(AgentMessage.serializer(), payload)
 
     private fun messageHash(message: AgentMessage): String = hash(json.encodeToString(AgentMessage.serializer(), message))
+
+    private fun requestEnvironmentHash(endpoint: String, system: String,
+                                       tools: List<AgentToolDefinition>): String = hash(buildString {
+        fun part(value: String) { append(value.length).append(':').append(value) }
+        part(endpoint)
+        part(system)
+        append(tools.size).append(':')
+        tools.forEach { tool ->
+            part(tool.name)
+            part(tool.description)
+            part(tool.parameters.toString())
+        }
+    })
 
     private fun hashMessages(messages: List<AgentMessage>): String =
         hash(json.encodeToString(ListSerializer(AgentMessage.serializer()), messages))
@@ -604,6 +632,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
         db.execSQL("CREATE INDEX events_session_id ON events(session_id,id)")
         db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         createUsage(db)
+        addContextUsageColumns(db)
         createCompaction(db)
         addProjectionHashes(db)
     }
@@ -630,12 +659,21 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
                 db.execSQL("ALTER TABLE usage ADD COLUMN active_generation INTEGER NOT NULL DEFAULT 0")
             }
         }
-        if (oldVersion <= 4) addProjectionHashes(db)
+        if (oldVersion <= 4) {
+            addContextUsageColumns(db)
+            addProjectionHashes(db)
+        }
     }
 
     private fun createUsage(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE usage (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, turn_id TEXT NOT NULL, provider_id TEXT NOT NULL, model TEXT NOT NULL, source TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, reasoning_tokens INTEGER, total_tokens INTEGER, created_at INTEGER NOT NULL, base_count INTEGER NOT NULL DEFAULT 0, base_last_hash TEXT, system_hash TEXT, active_generation INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE INDEX usage_session_id ON usage(session_id,id)")
+    }
+
+    private fun addContextUsageColumns(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE usage ADD COLUMN cache_creation_tokens INTEGER")
+        db.execSQL("ALTER TABLE usage ADD COLUMN context_input_tokens INTEGER")
+        db.execSQL("ALTER TABLE usage ADD COLUMN base_prefix_hash TEXT")
     }
 
     private fun createCompaction(db: SQLiteDatabase) {

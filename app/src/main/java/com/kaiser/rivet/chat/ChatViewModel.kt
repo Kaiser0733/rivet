@@ -381,7 +381,8 @@ class ChatViewModel private constructor(
                     val response = client.streamAgent(request, onText)
                     if (sessionId != null) {
                         try { sessions?.recordUsage(sessionId, turnId, snapshot.config.id, snapshot.config.model,
-                            response.usage, request.messages, request.system) }
+                            response.usage, request.messages, request.system, request.tools,
+                            snapshot.config.baseUrl, snapshot.config.type) }
                         catch (e: CancellationException) { throw e
                         } catch (_: Exception) { /* A completed provider response remains usable if usage storage fails. */ }
                     }
@@ -639,7 +640,8 @@ class ChatViewModel private constructor(
             if (outputBytes > 8 * 1024) throw IllegalStateException("context_summary_limit")
         }
         try { sessions?.recordUsage(sessionId, "compaction-$turnId", snapshot.config.id,
-            snapshot.config.model, response.usage, request.messages, request.system) }
+            snapshot.config.model, response.usage, request.messages, request.system, request.tools,
+            snapshot.config.baseUrl, snapshot.config.type) }
         catch (e: CancellationException) { throw e
         } catch (_: Exception) { /* A summary remains valid if usage metadata cannot be saved. */ }
         val summary = AgentContext.redact(response.text.trim())
