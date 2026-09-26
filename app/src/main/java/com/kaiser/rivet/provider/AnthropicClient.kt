@@ -35,7 +35,7 @@ internal class AnthropicClient(
             return data.mapNotNull { el ->
                 val o = el.obj() ?: return@mapNotNull null
                 val id = o["id"]?.str() ?: return@mapNotNull null
-                ModelInfo(id, o["display_name"]?.str() ?: id)
+                ModelInfo(id, o["display_name"]?.str() ?: id, o["max_input_tokens"].positiveInt())
             }.sortedBy { it.id.lowercase() }
         }
     }
