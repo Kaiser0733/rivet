@@ -8,6 +8,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentContextTest {
+    @Test fun budgetPlanKeepsAContiguousRecentTailAndLatestUserTurns() {
+        val history = buildList {
+            repeat(10) { index ->
+                add(AgentMessage.user(if (index == 0) "Fix login without changing auth policy" else "Inspect $index"))
+                add(AgentMessage.assistant("", listOf(AgentToolCall("call-$index", "read_file", "{}"))))
+                add(AgentMessage.tools(listOf(AgentToolResult("call-$index", "read_file",
+                    "x".repeat(8_000), summary = "Read $index"))))
+            }
+        }
+
+        val plan = AgentContext.plan(history, targetBytes = 35_000)!!
+
+        assertTrue(plan.retainedBytes <= 35_000)
+        assertTrue(plan.retained.any { it.role == AgentRole.User && it.text == "Inspect 8" })
+        assertTrue(plan.retained.any { it.role == AgentRole.User && it.text == "Inspect 9" })
+        assertFalse(plan.retained.any { it.text == "Fix login without changing auth policy" })
+        assertTrue(plan.summaryInput.contains("Fix login without changing auth policy"))
+        for (index in plan.retained.indices) {
+            val call = plan.retained[index].toolCalls.firstOrNull() ?: continue
+            assertEquals(call.id, plan.retained[index + 1].toolResults.single().callId)
+        }
+        assertEquals(30, history.size)
+    }
+
     @Test fun oldSuccessfulToolBodyPrunesWithoutChangingHistoryOrCorrelatedErrors() {
         val oldCall = AgentToolCall("old", "read_file", "{\"path\":\"A.kt\"}")
         val failedCall = AgentToolCall("failed", "write_file", "{\"path\":\"B.kt\"}")
