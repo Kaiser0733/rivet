@@ -5,6 +5,7 @@ import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.intOrNull
 
 // Safe navigational casts for tolerant parsing: providers add fields, omit
 // fields, and occasionally send unexpected types; every accessor yields
@@ -15,6 +16,9 @@ internal fun JsonElement.arr(): JsonArray? = this as? JsonArray
 
 internal fun JsonElement.str(): String? =
     (this as? JsonPrimitive)?.takeIf { it.isString }?.content
+
+internal fun JsonElement?.positiveInt(): Int? =
+    (this as? JsonPrimitive)?.intOrNull?.takeIf { it > 0 }
 
 // A 200 with a non-JSON body is a broken server, not an empty model list;
 // callers surface InvalidResponse rather than an unhandled decode crash.

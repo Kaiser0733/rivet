@@ -34,7 +34,8 @@ internal class GeminiClient(
                 if ("generateContent" !in (o["supportedGenerationMethods"]?.arr()
                         ?.mapNotNull { it.str() } ?: emptyList())) return@mapNotNull null
                 val name = o["name"]?.str() ?: return@mapNotNull null
-                ModelInfo(name.removePrefix("models/"), o["displayName"]?.str() ?: name)
+                ModelInfo(name.removePrefix("models/"), o["displayName"]?.str() ?: name,
+                    o["inputTokenLimit"].positiveInt())
             }.sortedBy { it.id.lowercase() }
         }
     }
