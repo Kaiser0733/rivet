@@ -3,7 +3,9 @@ package com.kaiser.rivet.agent
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 data class ContextPlan(
     val retained: List<AgentMessage>,
@@ -24,6 +26,47 @@ internal object AgentContext {
 
     fun serializedBytes(messages: List<AgentMessage>): Int =
         Json.encodeToString(serializer, messages).toByteArray(Charsets.UTF_8).size
+
+    fun pruneOldResults(messages: List<AgentMessage>, protectedTailBytes: Int): List<AgentMessage>? {
+        require(protectedTailBytes >= 0)
+        val groups = completeGroups(messages) ?: return null
+        if (groups.size < 2) return null
+        val sizes = groups.map { serializedBytes(it) - 2 }
+        val protected = mutableSetOf(groups.lastIndex)
+        val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
+        if (latestUser >= 0) protected += latestUser
+        var tailBytes = sizes.last()
+        for (index in groups.lastIndex - 1 downTo 0) {
+            if (tailBytes + sizes[index] > protectedTailBytes) break
+            protected += index
+            tailBytes += sizes[index]
+        }
+        val projected = groups.flatMapIndexed { index, group ->
+            if (index in protected || group.size != 2) group else {
+                val tool = group[1]
+                listOf(group[0], tool.copy(toolResults = tool.toolResults.map { result ->
+                    if (result.error || result.content.toByteArray(Charsets.UTF_8).size < 2048) result
+                    else result.copy(content = prunedContent(result))
+                }))
+            }
+        }
+        return projected.takeIf { serializedBytes(messages) - serializedBytes(it) >= 4096 }
+    }
+
+    private fun prunedContent(result: AgentToolResult): String {
+        val old = try { Json.parseToJsonElement(result.content).jsonObject }
+            catch (_: Exception) { null }
+        return buildJsonObject {
+            put("output_pruned", true)
+            put("original_bytes", result.content.toByteArray(Charsets.UTF_8).size)
+            put("summary", clipped(result.summary, 180))
+            for (key in listOf("path", "sha256", "size", "exit_code", "sync", "limited",
+                    "files_scanned", "entries_visited", "bytes_scanned", "eof", "next_offset", "truncated")) {
+                val value = old?.get(key) as? JsonPrimitive ?: continue
+                if (value.isString) put(key, clipped(value.content, 200)) else put(key, value)
+            }
+        }.toString()
+    }
 
     fun plan(messages: List<AgentMessage>, force: Boolean = false): ContextPlan? {
         val originalBytes = serializedBytes(messages)
