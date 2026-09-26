@@ -43,6 +43,7 @@ class ProviderEditorRequestsTest {
     fun responseFromReplacedEditorIsStale() = runTest {
         val owner = ProviderEditorRequests(this)
         val started = CompletableDeferred<ProviderEditorRequests.Ticket>()
+        val replacement = CompletableDeferred<ProviderEditorRequests.Ticket>()
 
         assertTrue(owner.tryLaunch("provider-a") { ticket ->
             started.complete(ticket)
@@ -50,8 +51,14 @@ class ProviderEditorRequestsTest {
         })
         val oldTicket = started.await()
         owner.cancel {}
-
-        assertFalse(owner.isCurrent(oldTicket, "provider-b"))
+        assertTrue(owner.tryLaunch("provider-b") { ticket ->
+            replacement.complete(ticket)
+            awaitCancellation()
+        })
+        val newTicket = replacement.await()
+        assertFalse(owner.isCurrent(oldTicket, "provider-a"))
+        assertTrue(owner.isCurrent(newTicket, "provider-b"))
+        owner.cancel {}
     }
 
     @Test

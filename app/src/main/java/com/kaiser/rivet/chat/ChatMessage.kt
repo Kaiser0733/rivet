@@ -3,14 +3,11 @@ package com.kaiser.rivet.chat
 import kotlinx.serialization.Serializable
 
 @Serializable
-enum class ChatRole {
-    User, Assistant;
+internal enum class ChatRole { User, Assistant }
 
-    val wireName: String get() = name.lowercase()
-}
-
+// Historical DataStore payload only; CodingSessions imports it once into agent events.
 @Serializable
-data class ChatMessage(
+internal data class ChatMessage(
     val role: ChatRole,
     val text: String,
 )

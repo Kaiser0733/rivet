@@ -83,16 +83,16 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun streamChatAccumulatesDeltas() = runTest {
+    fun agentStreamAccumulatesDeltas() = runTest {
         val sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n" +
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" +
             "data: [DONE]\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val out = StringBuilder()
-        val full = OpenAiCompatibleClient(config(), "key").streamChat(
-            ChatRequest("test-model", emptyList(), "sys", ReasoningLevel.Default),
+        val full = OpenAiCompatibleClient(config(), "key").streamAgent(
+            AgentRequest("test-model", emptyList(), "sys", ReasoningLevel.Default, emptyList()),
         ) { out.append(it) }
-        assertEquals("Hello", full)
+        assertEquals("Hello", full.text)
         assertEquals("Hello", out.toString())
 
         val recorded = server.takeRequest()
@@ -105,8 +105,8 @@ class OpenAiCompatibleClientTest {
     @Test
     fun genericProviderOmitsReasoningEffort() = runTest {
         server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
-        OpenAiCompatibleClient(config(), "key").streamChat(
-            ChatRequest("test-model", emptyList(), "", ReasoningLevel.High),
+        OpenAiCompatibleClient(config(), "key").streamAgent(
+            AgentRequest("test-model", emptyList(), "", ReasoningLevel.High, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(!body.contains("reasoning_effort"))
@@ -118,8 +118,8 @@ class OpenAiCompatibleClientTest {
         OpenAiCompatibleClient(
             config(ProviderType.OpenAi, "gpt-5"),
             "key",
-        ).streamChat(
-            ChatRequest("gpt-5", emptyList(), "", ReasoningLevel.High),
+        ).streamAgent(
+            AgentRequest("gpt-5", emptyList(), "", ReasoningLevel.High, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"reasoning_effort\":\"high\""))
@@ -131,15 +131,15 @@ class OpenAiCompatibleClientTest {
         OpenAiCompatibleClient(
             config(ProviderType.OpenRouter),
             "key",
-        ).streamChat(
-            ChatRequest("test-model", emptyList(), "", ReasoningLevel.Max),
+        ).streamAgent(
+            AgentRequest("test-model", emptyList(), "", ReasoningLevel.Max, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"reasoning_effort\":\"xhigh\""))
     }
 
     @Test
-    fun streamChatSendsAuthAndCustomHeaders() = runTest {
+    fun agentStreamSendsAuthAndCustomHeaders() = runTest {
         server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
         val cfg = config().copy(
             headers = listOf(
@@ -149,8 +149,8 @@ class OpenAiCompatibleClientTest {
                 ProviderHeader("x-api-key", "evil"),
             ),
         )
-        OpenAiCompatibleClient(cfg, "key").streamChat(
-            ChatRequest("test-model", emptyList(), "", ReasoningLevel.Default),
+        OpenAiCompatibleClient(cfg, "key").streamAgent(
+            AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
         ) {}
         val recorded = server.takeRequest()
         assertEquals("Bearer key", recorded.getHeader("Authorization"))
@@ -263,8 +263,8 @@ class OpenAiCompatibleClientTest {
         server.enqueue(MockResponse().setBody("data: $text\n\ndata: $limited\n\ndata: [DONE]\n\n"))
 
         try {
-            OpenAiCompatibleClient(config(), "key").streamChat(
-                ChatRequest("test-model", emptyList(), "", ReasoningLevel.Default),
+            OpenAiCompatibleClient(config(), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
             ) {}
             fail("A length-limited answer must not be presented as complete")
         } catch (_: ProviderError) {

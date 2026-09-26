@@ -72,8 +72,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         if (!retractEmpty && (messages.size < count || (count > 0 && messages[count - 1] != last))) {
             throw IllegalStateException("Session event prefix changed")
         }
-        // Until context compaction lands, the active model transcript keeps the
-        // Phase 4 limit. The database's complete event history has no such cap.
+        // Only the active model transcript has a size limit; complete event history does not.
         if (!AgentSessionCodec.fits(messages, summary(db, id).toByteArray(Charsets.UTF_8).size)) {
             throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
         }
