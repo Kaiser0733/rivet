@@ -110,15 +110,15 @@ Changing the selected tree stops the turn instead of redirecting work. Stop
 cancels the provider request, pending approval, future calls, and cancellable
 reads. A SAF commit that already began retains Phase 3 non-cancellable commit
 semantics, and its completed result is persisted. Tool errors remain correlated.
-Repeating an unchanged deterministic blocker stops the turn; a changed
-Terminal/sync state permits a later retry.
+Repeating an unchanged deterministic blocker stops the turn; resolving a
+mirror/sync blocker permits a later retry.
 
 ## Workspace boundary
 
 `ACTION_OPEN_DOCUMENT_TREE` runs through the Activity Result API. Only the
 returned read/write grants are persisted. App-private `workspace` preferences
-store the tree URI, last browsed directory, and open-file path; existing provider/chat stores
-are unchanged. Canceling the picker changes nothing. Missing grants require
+store the tree URI and legacy last-browsed directory/open-file paths for
+installed-data compatibility. Canceling the picker changes nothing. Missing grants require
 selection again; unavailable providers produce recoverable errors.
 
 Every operation starts at the captured tree root and resolves validated names
@@ -147,12 +147,13 @@ MIME veto so its confirmed contents can supply the hash handoff.
 
 ## Text and mutation limits
 
-Editing supports strict UTF-8, up to 1 MiB of bytes. NUL/control-byte or invalid
-UTF-8 content is shown as metadata with an unsupported-editing message. Streams
+Text tool mutations support strict UTF-8, up to 1 MiB of bytes. NUL/control-byte or invalid
+UTF-8 content is reported as unsupported. Streams
 are bounded even when providers omit sizes. File snapshots fingerprint original
 bytes with SHA-256. Every save requires the previous fingerprint, rereads current
 bytes before opening a truncating descriptor, and verifies bytes after writing.
-Mismatches preserve the editor draft and report conflict. Exact patches require
+A prewrite mismatch refuses the write; a verification mismatch reports conflict.
+Exact patches require
 a nonempty old-text match occurring exactly once (including overlapping matches);
 edits are evaluated sequentially in memory, then committed only after all pass.
 
