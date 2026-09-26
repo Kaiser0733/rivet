@@ -104,7 +104,7 @@ class AgentLoopTest {
         assertFalse(result.messages.any { it.text.contains("read the file successfully") })
     }
 
-    @Test fun repeatedTerminalBlockStopsWithoutSecondApprovalOrCommand() = runTest {
+    @Test fun repeatedSyncBlockStopsWithoutSecondApprovalOrCommand() = runTest {
         val first = AgentToolCall("one", "run_command", """{"command":"pwd"}""")
         val second = first.copy(id = "two")
         var modelRequests = 0
@@ -121,19 +121,19 @@ class AgentLoopTest {
                 AgentToolResult(call.id, call.name, "{}")
             } },
             requestApproval = { approvals++; true },
-            mutationBlocker = { "terminal_active" },
+            mutationBlocker = { "sync_required" },
             beforeMutation = { checkpoints++; null },
-            failureState = { "terminal_active" },
+            failureState = { "sync_required" },
         ).run(listOf(AgentMessage.user("Run pwd")), emptyList())
         val results = result.messages.flatMap { it.toolResults }
         assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
-        assertEquals("terminal_active", result.failureCode)
+        assertEquals("sync_required", result.failureCode)
         assertEquals(1, modelRequests)
         assertEquals(0, approvals)
         assertEquals(0, checkpoints)
         assertEquals(0, executions)
         assertEquals(listOf("one"), results.map { it.callId })
-        assertTrue(results[0].content.contains("command runner is busy"))
+        assertTrue(results[0].content.contains("safely reconcile"))
     }
 
     @Test fun changedBlockerStateAllowsCommandInLaterTurnAndRepeatedSuccessfulReads() = runTest {
@@ -143,7 +143,7 @@ class AgentLoopTest {
             AgentToolCall("read1", "read_file", """{"path":"Main.kt"}"""),
             AgentToolCall("read2", "read_file", """{"path":"Main.kt"}"""),
         )
-        var state = "terminal_active"
+        var state = "sync_required"
         var executions = 0
         fun loop(responses: ArrayDeque<AgentResponse>) = AgentLoop(
             requestModel = { _, _, _ -> responses.removeFirst() },
@@ -153,7 +153,7 @@ class AgentLoopTest {
                 AgentToolResult(call.id, call.name, "{}")
             } },
             requestApproval = { true },
-            mutationBlocker = { if (state == "terminal_active") "terminal_active" else null },
+            mutationBlocker = { if (state == "sync_required") "sync_required" else null },
             failureState = { state },
         )
         val blocked = loop(ArrayDeque(listOf(AgentResponse(toolCalls = listOf(calls[0])))))
