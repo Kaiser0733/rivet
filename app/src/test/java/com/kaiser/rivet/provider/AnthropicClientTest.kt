@@ -269,6 +269,7 @@ class AnthropicClientTest {
         assertEquals(25L, response.usage?.inputTokens)
         assertEquals(15L, response.usage?.outputTokens)
         assertEquals(5L, response.usage?.cacheReadTokens)
+        assertEquals(30L, response.usage?.contextInputTokens(ProviderType.Anthropic))
     }
 
     @Test
