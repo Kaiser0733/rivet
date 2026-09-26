@@ -7,7 +7,7 @@ against this document.
 
 Rivet is an Android-native AI coding harness: provider-agnostic model access,
 a coding agent with tool execution, a project workspace, an embedded runtime,
-and Git-backed change review — all on-device, with no companion desktop
+and optional read-only Git inspection — all on-device, with no companion desktop
 setup required by the user.
 
 Out of scope: analytics, accounts, cloud relays of user code, and any
@@ -15,9 +15,9 @@ feature that does not serve the on-device coding workflow.
 
 ## Architecture
 
-- Direct code over speculative abstraction. No interface with a single
-  implementation, no factory for one product, no layer a current feature
-  does not use.
+- Direct code over speculative abstraction. An interface needs a current
+  consumer or a concrete platform/test boundary; no factory for one product
+  or layer a current feature does not use.
 - No global mutable state.
 - Pure logic stays separable from Android framework types where it
   improves testability; the test suite decides where that boundary pays.
@@ -49,7 +49,10 @@ feature that does not serve the on-device coding workflow.
 
 - API keys and secrets are never committed, never logged, and never stored
   in plain-text preferences.
-- The release keystore and its passwords live only in GitHub Secrets.
+- Generate the permanent production signing key once on a trusted machine.
+  Retain a safe offline recovery backup and provide an encoded CI copy and
+  signing passwords through GitHub Secrets. Pin the certificate fingerprint
+  independently before public release.
 - No telemetry, no analytics, no crash reporting to third parties by
   default.
 - Third-party code keeps its own license; obligations are followed, not
@@ -66,6 +69,6 @@ feature that does not serve the on-device coding workflow.
 
 ## Licensing
 
-Rivet's own code is Apache-2.0. Third-party components retain their
-licenses. Any later Termux/runtime integration requires a dedicated license
-review before incorporation; Rivet is not affiliated with Termux.
+Rivet's own code is Apache-2.0. Incorporated Termux-derived emulator code
+retains its applicable license and notices; future third-party runtime additions
+require license review before incorporation. Rivet is not affiliated with Termux.
