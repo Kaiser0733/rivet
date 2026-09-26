@@ -72,6 +72,36 @@ internal object AgentContext {
         }.toString()
     }
 
+    fun plan(messages: List<AgentMessage>, targetBytes: Int): ContextPlan? {
+        require(targetBytes > 0)
+        val originalBytes = serializedBytes(messages)
+        if (originalBytes <= targetBytes) return null
+        val groups = completeGroups(messages) ?: return null
+        if (groups.size < 2) return null
+        val sizes = groups.map { serializedBytes(it) - 2 }
+        val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
+        var first = groups.lastIndex
+        var tailBytes = 2 + sizes[first]
+        while (first > 0 && tailBytes + sizes[first - 1] + 1 <= targetBytes) {
+            first--
+            tailBytes += sizes[first] + 1
+        }
+        fun selectedIndices(): Set<Int> = (first..groups.lastIndex).toSet() +
+            if (latestUser >= 0) setOf(latestUser) else emptySet()
+        var selected = selectedIndices()
+        var retained = selected.sorted().flatMap(groups::get)
+        while (serializedBytes(retained) > targetBytes && first < groups.lastIndex) {
+            first++
+            selected = selectedIndices()
+            retained = selected.sorted().flatMap(groups::get)
+        }
+        val retainedBytes = serializedBytes(retained)
+        if (retainedBytes > targetBytes || originalBytes - retainedBytes < 4096) return null
+        val removed = groups.indices.filterNot { it in selected }.flatMap(groups::get)
+        if (removed.isEmpty()) return null
+        return ContextPlan(retained, summarizeInput(removed), originalBytes, retainedBytes)
+    }
+
     fun plan(messages: List<AgentMessage>, force: Boolean = false): ContextPlan? {
         val originalBytes = serializedBytes(messages)
         if (!force && originalBytes < PRESSURE_BYTES) return null
