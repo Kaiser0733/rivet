@@ -81,12 +81,12 @@ SLF4J's MIT notice:
     OF CONTRACT, TORT OR OTHERWISE,  ARISING FROM, OUT OF OR IN CONNECTION
     WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
 
-Rivet includes `terminal-emulator` and `terminal-view` source from
+Rivet includes `terminal-emulator` source from
 [`termux/termux-app`](https://github.com/termux/termux-app), pinned to
 `084d709fbf23ea83b5cb85fd3d795c775be06676`. The upstream repository's
-`LICENSE.md` identifies these two terminal libraries as Apache-2.0 exceptions
+`LICENSE.md` identifies this terminal library as an Apache-2.0 exception
 to its GPLv3 app license. The Apache-2.0 license text is in Rivet's `LICENSE`.
-Rivet keeps the `com.termux.terminal` and `com.termux.view` package names.
+Rivet keeps the `com.termux.terminal` package name.
 Rivet changes Gradle packaging, fixes native error cleanup, replaces reflective
 file-descriptor access with `ParcelFileDescriptor`, and adds process-group
 cleanup. Modified upstream files carry a notice at the top of the file.
