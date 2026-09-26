@@ -3,8 +3,6 @@ package com.kaiser.rivet.runtime
 import android.content.Context
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.workspace.WorkspaceSelection
-import com.termux.terminal.TerminalSession
-import com.termux.terminal.TerminalSessionClient
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -30,10 +28,8 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
     private val operations = Mutex()
     private var mirrorIdentity: String? = null
     private var mirror: WorkspaceMirror? = null
-    @Volatile private var terminal: TerminalSession? = null
 
     suspend fun runCommand(command: String, cwd: String, timeoutMs: Long): RuntimeCommandResult = operations.withLock {
-        if (terminal != null) return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "terminal_active")
         val active = currentMirror() ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) {
@@ -55,30 +51,7 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
             sync.state.code, sync.path)
     }
 
-    suspend fun startTerminal(client: TerminalSessionClient): TerminalSession = operations.withLock {
-        terminal?.let { return@withLock it }
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        val ready = active.prepare()
-        val root = ready.worktree
-        val session = TerminalSession("/system/bin/sh", root.absolutePath,
-            arrayOf("/system/bin/sh", "-l"), environment(active, root), 2000, client)
-        terminal = session
-        session
-    }
-
-    suspend fun syncTerminal(): MirrorSyncResult = operations.withLock {
-        if (terminal != null) throw MirrorFailure("terminal_active")
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        active.sync()
-    }
-
-    suspend fun terminalDirty(): Boolean = operations.withLock {
-        val active = currentMirror() ?: return@withLock false
-        active.hasLocalChanges()
-    }
-
     suspend fun requireSafCurrent() = operations.withLock {
-        if (terminal != null) throw MirrorFailure("terminal_active")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         if (active.hasLocalChanges()) throw MirrorFailure("sync_required")
     }
@@ -93,7 +66,6 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
 
     suspend fun beginCheckpoint(workspaceId: String): String = operations.withLock {
         if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
-        if (terminal != null) throw MirrorFailure("terminal_active")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
@@ -102,7 +74,6 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
 
     suspend fun finishCheckpoint(workspaceId: String, id: String): Boolean = operations.withLock {
         if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
-        if (terminal != null) throw MirrorFailure("terminal_active")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
@@ -111,7 +82,6 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
 
     suspend fun recordCheckpointPost(workspaceId: String, id: String) = operations.withLock {
         if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
-        if (terminal != null) throw MirrorFailure("terminal_active")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
@@ -120,7 +90,6 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
 
     suspend fun checkpointMatchesPost(workspaceId: String, id: String): Boolean = operations.withLock {
         if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
-        if (terminal != null) throw MirrorFailure("terminal_active")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
@@ -132,27 +101,12 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
         checkpoints(identity).latest()
     }
 
-    suspend fun checkpointChanges(record: CheckpointRecord): List<CheckpointChange> = operations.withLock {
-        if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
-        if (terminal != null) throw MirrorFailure("terminal_active")
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        checkpoints(record.workspace).changesFromCurrent(record, active.prepare().worktree)
-    }
-
     suspend fun checkpointTurnChanges(record: CheckpointRecord): List<CheckpointChange> = operations.withLock {
         if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
         checkpoints(record.workspace).changes(record)
     }
 
-    suspend fun checkpointDiff(record: CheckpointRecord, path: String): CheckpointDiff = operations.withLock {
-        if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
-        if (terminal != null) throw MirrorFailure("terminal_active")
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        checkpoints(record.workspace).diff(record, path, active.prepare().worktree)
-    }
-
     suspend fun undoLastCheckpoint(): MirrorSyncResult = operations.withLock {
-        if (terminal != null) throw MirrorFailure("terminal_active")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val identity = selection.currentIdentity() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
@@ -175,26 +129,16 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
     private fun checkpoints(identity: String) = TurnCheckpoint(File(app.filesDir, "checkpoints"), identity)
 
     private suspend fun gitInspection(): GitInspection {
-        if (terminal != null) throw MirrorFailure("terminal_active")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
         return GitInspection(ready.worktree)
     }
 
-    fun stopTerminal() { terminal?.finishIfRunning() }
-
-    fun terminalFinished(session: TerminalSession) {
-        if (terminal === session) terminal = null
-    }
-
-    fun invalidateTerminal() { stopTerminal() }
-
     suspend fun currentIdentity(): String? = selection.currentIdentity()
 
     suspend fun agentFailureState(): String = operations.withLock {
         val identity = selection.currentIdentity() ?: return@withLock ":workspace_unavailable"
-        if (terminal != null) return@withLock "$identity:terminal_active"
         val dirty = try { currentMirror()?.hasLocalChanges() == true }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { false }
@@ -202,13 +146,12 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
     }
 
     suspend fun commandBlocker(): String? = operations.withLock {
-        if (terminal != null) return@withLock "terminal_active"
         val active = currentMirror() ?: return@withLock "workspace_unavailable"
         if (active.hasLocalChanges()) "sync_required" else null
     }
 
     suspend fun retryPendingChanges(expectedWorkspace: String): MirrorSyncResult? = operations.withLock {
-        if (terminal != null || selection.currentIdentity() != expectedWorkspace) return@withLock null
+        if (selection.currentIdentity() != expectedWorkspace) return@withLock null
         currentMirror()?.sync()
     }
 

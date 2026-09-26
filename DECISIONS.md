@@ -11,8 +11,10 @@ Change trigger: none. This decision is not reversible.
 
 ## D2 — Release signing certificate is permanent from first signed release
 
-What: every release APK is signed by the same key, held only in GitHub
-Secrets.
+What: every release APK uses the same permanent certificate. Generate its
+key once on a trusted machine, retain a safe offline backup, provide an
+encoded CI copy through GitHub Secrets, and pin the certificate fingerprint
+independently before public release.
 Why: Android updates an installation only when application ID and signer
 certificate both match.
 Change trigger: a compromised key, handled as an explicit migration event
@@ -35,15 +37,15 @@ whole matrix re-validated together — never piecemeal dependency bumps.
 
 ## D5 — Compose, plain single-activity shell, no DI framework
 
-What: one activity hosting a Compose shell; navigation is tab state in
+What: one activity hosting a Compose shell; Chat/Settings navigation is state in
 `rememberSaveable`.
 Why: the app is a single-surface tool; framework navigation and DI would
 add machinery the current code does not need.
 
 ## D6 — Hand-drawn vector icons, no icon library
 
-What: the four navigation glyphs plus settings are hand-authored
-`res/drawable` vectors.
+What: UI icons use hand-authored `res/drawable` vectors. The original four
+navigation glyphs were reduced with the Chat-first surface under D30.
 Why: the old `material-icons-core` artifacts publish as empty stubs, and
 an icon dependency for five glyphs is not worth its weight.
 
@@ -55,7 +57,8 @@ on the table if a real request exists.
 
 ## D8 — Speculative abstraction is banned
 
-What: no interfaces with one implementation, no future-proofing packages.
+What: no speculative interface or package without a present consumer or
+testable platform boundary.
 Why: the codebase grows by feature, and structure that exists before the
 feature it serves is the primary decay vector for a repository like this.
 Change trigger: a second real implementation demanding a seam.
@@ -63,23 +66,23 @@ Change trigger: a second real implementation demanding a seam.
 ## D9 — Pinned debug keystore committed, release key never committed
 
 What: `debug.keystore` (public android/android credentials) is in the
-repository; every other key material is gitignored and CI-only.
+repository; production key material is never committed. An offline recovery
+backup and an encoded CI-secret copy are retained separately.
 Why: consecutive CI debug APKs update in place instead of demanding
-uninstall; release trust must live only in GitHub Secrets.
+uninstall; release trust depends on the independently pinned production signer.
 
 ## D10 — Apache-2.0 for Rivet's own code
 
 What: Rivet-authored code is Apache-2.0.
-Why: permissive and adequate for Phase 1 scope. Future Termux-derived
-runtime components bring their own (GPL) obligations and require a
-dedicated review before incorporation; no combined-work licensing claims
-are made now.
+Why: Rivet's original code uses a permissive license. Incorporated
+Termux-derived emulator code retains its upstream Apache-2.0 exception and
+component notices; later third-party additions require a separate review.
 
 ## D11 — Versioning: explicit `versionCode`/`versionName`, no automation
 
 What: humans bump `versionCode`/`versionName` in `app/build.gradle.kts`
 per release; rules in RELEASE_PROCESS.md.
-Why: simple, auditable, impossible to get wrong silently.
+Why: simple and auditable when the APK identity and upgrade path are verified.
 
 ## D12 — No icon-font or emoji glyphs in the UI
 
@@ -133,12 +136,11 @@ Change trigger: none expected.
 
 ## D17 — DataStore Preferences for non-secret persistence
 
-What: provider configs, active provider id, and the one chat conversation
-live in three Preference DataStores with stable string keys.
-Why: small data, reactive, schema-evolution via JSON list decode with
-`ignoreUnknownKeys`; a database is unjustified for this size.
-Change trigger: multi-session chat (Phase 4+) demanding relational storage.
-Agent history moved to SQLite under D29; provider configuration stays in DataStore.
+Historical choice: provider configs, active provider id, and a single chat
+conversation used Preference DataStores with stable string keys.
+Why: those early values were small and reactive. Superseded for conversations
+by D29: current session history is SQLite, while provider configuration stays
+in DataStore. The old chat keys remain readable for one-time migration.
 
 ## D18 — SAF tree as the workspace boundary
 
@@ -167,13 +169,11 @@ protocol, with explicit directory semantics.
 
 ## D21 — ViewModel drafts and bounded unindexed search
 
-What: activity-scoped workspace state, generation-checked reads/searches,
-serialized mutations, and persisted URI/directory/file paths only. Search has explicit
-file/entry/byte/result limits and cancellation. Test-only Robolectric runs a
-small disposable DocumentsProvider to exercise the native contract.
-Why: rotation keeps edits and jobs without saving whole project contents;
-process death does not pretend to preserve drafts or active asynchronous work.
-Phase 4 reuses these operations through the separately approved agent boundary.
+Historical Phase 3 choice: the Files ViewModel kept drafts and jobs across
+rotation, generation-checked reads, serialized mutations, and persisted only
+URI/path identity. The Files presentation was retired in 0.8.2. Bounded SAF
+search and its DocumentsProvider tests remain because the agent's read-only
+search tool uses that native workspace contract.
 
 ## D22 — Provider-neutral transcripts, native provider tools
 
@@ -194,13 +194,12 @@ turn from changing a replacement workspace or replaying after process death.
 
 ## D24 — Durable completed events, interrupted turns do not resume
 
-What: DataStore holds one provider-neutral transcript plus an active-turn marker.
-Legacy text chat imports once. Completed assistant/tool events persist; pending
-approvals and partial tool calls do not. Restart reports interruption and never
-resumes work.
+Historical storage: DataStore held one provider-neutral transcript and an
+active-turn marker, importing older text chat once. D29 superseded the storage
+medium with SQLite. The durable rule remains: completed events survive;
+pending approvals and partial calls do not resume after restart.
 Why: process death cannot safely reconstruct network or mutation authority, while
 completed context and existing user data must survive an in-place update.
-The Phase 6 SQLite migration under D29 supersedes the transcript storage medium.
 
 ## D25 — Private POSIX mirror with SAF as external authority
 
@@ -211,11 +210,14 @@ the mirror target, while third-party states preserve both sides and block writes
 Why: SAF documents are not POSIX paths, and shell changes must not silently
 overwrite external edits or disappear on process death.
 
-## D26 — System shell and pinned terminal libraries first
+## D26 — System shell and pinned terminal components first
 
-What: Phase 5 uses `/system/bin/sh` and selected Android system utilities.
-The Apache-exception Termux terminal libraries are pinned and adapted for PTY
-display. No writable app-data executable or Termux package is required.
+Historical Phase 5 choice: `/system/bin/sh` and selected Android utilities,
+with pinned Apache-exception Termux terminal components for a PTY prototype.
+After D30, interactive PTY presentation and `:terminal-view` were retired;
+`:terminal-emulator` still packages Rivet's native `command.c` launcher for
+the active agent command tool. No writable app-data executable or Termux
+package is required.
 Why: target SDK 35 blocks direct execution of writable app data. Packaged
 executables need their own linker and shebang compatibility work after the
 runtime and sync boundary is validated on a device.
@@ -249,7 +251,9 @@ Security policy, approvals, and project guidance are rebuilt outside summaries.
 
 What: Chat and Settings are the only normal destinations. Project selection,
 approvals, activity, changed files, and Undo appear in Chat when relevant.
-File, Terminal, Git, checkpoint, and synchronization systems remain available
-to the agent without permanent user navigation.
+SAF tools, the command runtime, read-only Git inspection, checkpoints, and
+synchronization remain available to the agent without technical navigation.
+The former Files, Changes, and interactive Terminal presentation was retired
+for the 0.8.2 cleanup candidate.
 Why: local coding work should start with a project and a request; users should
 not need to operate the engine's development and recovery screens.

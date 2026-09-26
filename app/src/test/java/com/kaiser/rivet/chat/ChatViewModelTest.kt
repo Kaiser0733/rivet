@@ -15,7 +15,6 @@ import com.kaiser.rivet.workspace.TestDocumentsProvider
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.provider.AgentRequest
-import com.kaiser.rivet.provider.ChatRequest
 import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
@@ -152,9 +151,8 @@ class ChatViewModelTest {
     @Test fun runtimeFailureMessagesGiveChatRecoveryWithoutRemovedControls() {
         assertTrue(runtimeFailureMessage("workspace_unavailable").contains("Choose the project again"))
         assertTrue(runtimeFailureMessage("workspace_changed").contains("stopped before running"))
-        assertTrue(runtimeFailureMessage("terminal_active").contains("command runner is busy"))
         assertTrue(runtimeFailureMessage("sync_required").contains("kept the pending copy"))
-        listOf("workspace_unavailable", "terminal_active", "sync_required").forEach { code ->
+        listOf("workspace_unavailable", "sync_required").forEach { code ->
             val message = runtimeFailureMessage(code)
             assertFalse(message.contains("Terminal"))
             assertFalse(message.contains("Sync"))
@@ -299,7 +297,6 @@ class ChatViewModelTest {
         val provider = object : ProviderClient {
             override suspend fun listModels(): List<ModelInfo> = emptyList()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit) = ""
             override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
                 throw ProviderError.Unauthorized()
             }
@@ -627,7 +624,6 @@ class ChatViewModelTest {
         val requests = mutableListOf<AgentRequest>()
         override suspend fun listModels(): List<ModelInfo> = emptyList()
         override suspend fun testConnection() = TestResult(true, "ok")
-        override suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit) = ""
         override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
             requests += request
             return responses.removeFirst()

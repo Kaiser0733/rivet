@@ -18,7 +18,8 @@ class HttpErrorTest {
     @Test
     fun anthropicStyleModelNotFound() {
         val e = httpError(404, """{"type":"error","error":{"message":"model: claude-x"}}""")
-        assertTrue(e.text().isNotEmpty())
+        assertTrue(e is ProviderError.ModelNotFound)
+        assertTrue((e as ProviderError.ModelNotFound).model.contains("claude-x"))
     }
 
     @Test

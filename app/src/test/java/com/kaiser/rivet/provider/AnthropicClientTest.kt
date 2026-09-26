@@ -60,7 +60,7 @@ class AnthropicClientTest {
     }
 
     @Test
-    fun streamChatExtractsTextDeltas() = runTest {
+    fun agentStreamExtractsTextDeltas() = runTest {
         val sse = listOf(
             """{"type":"message_start","message":{}}""",
             """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi "}}""",
@@ -70,10 +70,10 @@ class AnthropicClientTest {
             """{"type":"message_stop"}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
-        val full = AnthropicClient(config(), "key").streamChat(
-            ChatRequest("claude-x", emptyList(), "sys", ReasoningLevel.Default),
+        val full = AnthropicClient(config(), "key").streamAgent(
+            AgentRequest("claude-x", emptyList(), "sys", ReasoningLevel.Default, emptyList()),
         ) {}
-        assertEquals("Hi there", full)
+        assertEquals("Hi there", full.text)
 
         val recorded = server.takeRequest()
         assertEquals("key", recorded.getHeader("x-api-key"))
@@ -86,8 +86,8 @@ class AnthropicClientTest {
     @Test
     fun olderModelUsesManualThinkingBudget() = runTest {
         server.enqueue(MockResponse().setBody(finished("end_turn")))
-        AnthropicClient(config("claude-haiku-4-5-20251001"), "key").streamChat(
-            ChatRequest("claude-haiku-4-5-20251001", emptyList(), "", ReasoningLevel.High),
+        AnthropicClient(config("claude-haiku-4-5-20251001"), "key").streamAgent(
+            AgentRequest("claude-haiku-4-5-20251001", emptyList(), "", ReasoningLevel.High, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"thinking\":{\"type\":\"enabled\",\"budget_tokens\":32768}"))
@@ -98,8 +98,8 @@ class AnthropicClientTest {
     @Test
     fun currentModelUsesAdaptiveThinkingAndEffort() = runTest {
         server.enqueue(MockResponse().setBody(finished("end_turn")))
-        AnthropicClient(config("claude-opus-4-8"), "key").streamChat(
-            ChatRequest("claude-opus-4-8", emptyList(), "", ReasoningLevel.High),
+        AnthropicClient(config("claude-opus-4-8"), "key").streamAgent(
+            AgentRequest("claude-opus-4-8", emptyList(), "", ReasoningLevel.High, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"thinking\":{\"type\":\"adaptive\"}"))
@@ -110,8 +110,8 @@ class AnthropicClientTest {
     @Test
     fun unknownModelOmitsReasoningConfiguration() = runTest {
         server.enqueue(MockResponse().setBody(finished("end_turn")))
-        AnthropicClient(config("claude-opus-4-9"), "key").streamChat(
-            ChatRequest("claude-opus-4-9", emptyList(), "", ReasoningLevel.High),
+        AnthropicClient(config("claude-opus-4-9"), "key").streamAgent(
+            AgentRequest("claude-opus-4-9", emptyList(), "", ReasoningLevel.High, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(!body.contains("\"thinking\""))
@@ -122,8 +122,8 @@ class AnthropicClientTest {
     @Test
     fun defaultReasoningSendsNoThinkingBlock() = runTest {
         server.enqueue(MockResponse().setBody(finished("end_turn")))
-        AnthropicClient(config(), "key").streamChat(
-            ChatRequest("claude-x", emptyList(), "", ReasoningLevel.Default),
+        AnthropicClient(config(), "key").streamAgent(
+            AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(!body.contains("\"thinking\""))
@@ -221,8 +221,8 @@ class AnthropicClientTest {
         server.enqueue(MockResponse().setBody(sse))
 
         try {
-            AnthropicClient(config(), "key").streamChat(
-                ChatRequest("claude-x", emptyList(), "", ReasoningLevel.Default),
+            AnthropicClient(config(), "key").streamAgent(
+                AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
             ) {}
             throw AssertionError("A max_tokens answer must not be presented as complete")
         } catch (_: ProviderError) {

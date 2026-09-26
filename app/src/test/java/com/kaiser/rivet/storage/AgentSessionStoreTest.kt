@@ -10,6 +10,8 @@ import com.kaiser.rivet.chat.ChatMessage
 import com.kaiser.rivet.chat.ChatRole
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -31,11 +33,20 @@ class AgentSessionStoreTest {
         }
     }
 
+    private suspend fun writeLegacy(messages: List<ChatMessage>): String {
+        val encoded = Json.encodeToString(ListSerializer(ChatMessage.serializer()), messages)
+        context.chatData.edit { it[stringPreferencesKey("messages")] = encoded }
+        return encoded
+    }
+
+    private suspend fun storedLegacy(): String? =
+        context.chatData.data.first()[stringPreferencesKey("messages")]
+
     @Test
     fun migrationRestorationInterruptionAndClearAreDurable() = runTest {
         resetStore()
         val legacy = listOf(ChatMessage(ChatRole.User, "old"), ChatMessage(ChatRole.Assistant, "reply"))
-        ChatStore(context).save(legacy)
+        val legacyPayload = writeLegacy(legacy)
         val store = AgentSessionStore(context)
 
         val first = store.load()
@@ -46,7 +57,7 @@ class AgentSessionStoreTest {
         assertEquals(listOf("old", "reply"), first.messages.map { it.text })
         assertEquals(first, repeatedMigration)
         assertEquals(listOf("old", "reply", "new"), second.messages.map { it.text })
-        assertEquals(legacy, ChatStore(context).messages.first())
+        assertEquals(legacyPayload, storedLegacy())
 
         val messages = listOf(AgentMessage.tools(listOf(
             AgentToolResult("c", "delete_path", "{\"error\":\"denied\"}", error = true),
@@ -129,7 +140,7 @@ class AgentSessionStoreTest {
     fun oversizedLegacyHistoryRemainsUntouchedWhenMigrationCannotFit() = runTest {
         resetStore()
         val legacy = listOf(ChatMessage(ChatRole.User, "x".repeat(AgentSessionCodec.MAX_SERIALIZED_BYTES)))
-        ChatStore(context).save(legacy)
+        val legacyPayload = writeLegacy(legacy)
         val store = AgentSessionStore(context)
 
         var failures = 0
@@ -142,6 +153,6 @@ class AgentSessionStoreTest {
         }
 
         assertEquals(2, failures)
-        assertEquals(legacy, ChatStore(context).messages.first())
+        assertEquals(legacyPayload, storedLegacy())
     }
 }

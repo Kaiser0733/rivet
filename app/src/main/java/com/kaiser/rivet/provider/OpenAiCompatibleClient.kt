@@ -50,22 +50,6 @@ internal class OpenAiCompatibleClient(
         }
     }
 
-    override suspend fun streamChat(request: ChatRequest, onDelta: (String) -> Unit): String {
-        return streamAgent(
-            AgentRequest(
-                request.model,
-                request.messages.map { message -> AgentMessage(
-                    if (message.role.wireName == "assistant") AgentRole.Assistant else AgentRole.User,
-                    text = message.text,
-                ) },
-                request.system,
-                request.reasoning,
-                emptyList(),
-            ),
-            onDelta,
-        ).text
-    }
-
     override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
         val body = buildJsonObject {
             put("model", request.model)

@@ -1,8 +1,6 @@
 package com.kaiser.rivet.runtime
 
 import com.kaiser.rivet.workspace.WorkspacePath
-import com.kaiser.rivet.workspace.WorkspaceText
-import com.kaiser.rivet.workspace.WorkspaceFailure
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -23,9 +21,6 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import org.eclipse.jgit.diff.DiffAlgorithm
-import org.eclipse.jgit.diff.RawText
-import org.eclipse.jgit.diff.RawTextComparator
 
 class CheckpointFailure(val code: String) : Exception(code)
 
@@ -44,7 +39,6 @@ data class CheckpointRecord(
 )
 
 data class CheckpointChange(val path: String, val kind: String, val beforeSize: Long?, val afterSize: Long?)
-data class CheckpointDiff(val text: String, val limited: Boolean, val beforeSize: Long?, val afterSize: Long?)
 
 /** One immutable pre-turn archive plus a post-turn fingerprint manifest. Both live in app storage. */
 class TurnCheckpoint(private val storage: File, private val workspace: String) {
@@ -120,63 +114,6 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         }
     }
 
-    suspend fun changesFromCurrent(record: CheckpointRecord, worktree: File): List<CheckpointChange> =
-        changes(record.copy(after = scanOnIo(worktree)))
-
-    suspend fun diff(record: CheckpointRecord, path: String, worktree: File): CheckpointDiff = withContext(Dispatchers.IO) {
-        val relative = WorkspacePath.parse(path)
-        if (relative.isRoot || relative.segments.any { it == ".git" }) throw CheckpointFailure("invalid_path")
-        val old = record.before[path]
-        val newFile = File(worktree, path)
-        val newSize = if (newFile.isFile) newFile.length() else null
-        val oldSize = old?.takeUnless { it.directory }?.size
-        if (old?.directory == true || newFile.isDirectory || (oldSize ?: 0) > DIFF_FILE_BYTES ||
-            (newSize ?: 0) > DIFF_FILE_BYTES) {
-            return@withContext CheckpointDiff("Directory or large file: text diff unavailable.", false, oldSize, newSize)
-        }
-        val before = fileBefore(record, path) ?: byteArrayOf()
-        val after = if (newFile.isFile) FileInputStream(newFile).use {
-            WorkspaceText.readBounded(it, DIFF_FILE_BYTES)
-        } else byteArrayOf()
-        try {
-            WorkspaceText.decode(before)
-            WorkspaceText.decode(after)
-        } catch (_: WorkspaceFailure) {
-            return@withContext CheckpointDiff("Binary file: text diff unavailable.", false, oldSize, newSize)
-        }
-        val previous = RawText(before)
-        val current = RawText(after)
-        val edits = DiffAlgorithm.getAlgorithm(DiffAlgorithm.SupportedAlgorithm.HISTOGRAM)
-            .diff(RawTextComparator.DEFAULT, previous, current)
-        val output = StringBuilder()
-        var limited = false
-        fun line(prefix: String, value: String) {
-            val clipped = value.take(400).dropLastWhile { it.isHighSurrogate() }
-            output.append(prefix).append(clipped)
-            if (clipped.length != value.length) output.append(" [line truncated]")
-            output.append('\n')
-        }
-        for (edit in edits) {
-            output.append("@@ -${edit.beginA + 1},${edit.endA - edit.beginA} +${edit.beginB + 1},${edit.endB - edit.beginB} @@\n")
-            for (index in maxOf(0, edit.beginA - 2) until edit.beginA) line(" ", previous.getString(index))
-            for (index in edit.beginA until edit.endA) line("-", previous.getString(index))
-            for (index in edit.beginB until edit.endB) line("+", current.getString(index))
-            for (index in edit.endA until minOf(previous.size(), edit.endA + 2)) line(" ", previous.getString(index))
-            if (output.toString().toByteArray(Charsets.UTF_8).size > DIFF_OUTPUT_BYTES) {
-                limited = true
-                break
-            }
-        }
-        var text = output.toString()
-        while (text.toByteArray(Charsets.UTF_8).size > DIFF_OUTPUT_BYTES) {
-            text = text.take(text.length / 2).dropLastWhile { it.isHighSurrogate() }
-            limited = true
-        }
-        CheckpointDiff(text, limited, oldSize, newSize)
-    }
-
-    private suspend fun scanOnIo(worktree: File) = withContext(Dispatchers.IO) { scan(worktree) }
-
     suspend fun stageUndo(record: CheckpointRecord, current: File): File = withContext(Dispatchers.IO) {
         if (record.undone || !record.complete || record.after == null) throw CheckpointFailure("undo_unavailable")
         if (scan(current) != record.after) throw CheckpointFailure("undo_conflict")
@@ -218,15 +155,6 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
 
     suspend fun discardStagedUndo(id: String) = withContext(Dispatchers.IO) {
         removeTree(File(folder(id), "restore-worktree"))
-    }
-
-    suspend fun fileBefore(record: CheckpointRecord, path: String): ByteArray? = withContext(Dispatchers.IO) {
-        val entry = record.before[path] ?: return@withContext null
-        if (entry.directory || entry.size > DIFF_FILE_BYTES) return@withContext null
-        ZipFile(File(folder(record.id), "before.zip")).use { archive ->
-            val source = archive.getEntry(path) ?: throw CheckpointFailure("corrupt")
-            archive.getInputStream(source).use { WorkspaceText.readBounded(it, DIFF_FILE_BYTES) }
-        }
     }
 
     private suspend fun scan(root: File, zip: ZipOutputStream? = null): Map<String, CheckpointEntry> {
@@ -374,8 +302,6 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
     }
 
     companion object {
-        const val DIFF_FILE_BYTES = 128 * 1024
-        const val DIFF_OUTPUT_BYTES = 16 * 1024
         private const val MAX_ENTRIES = 50_000
         private const val MAX_CONTENT_BYTES = 1024L * 1024 * 1024
         private const val MAX_HISTORY_BYTES = 2L * 1024 * 1024 * 1024

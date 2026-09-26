@@ -31,14 +31,15 @@ streaming activity UI, and migrated persistent transcripts.
 
 ## Phase 5 — Embedded Runtime (complete)
 
-On-device command execution, an interactive terminal, and a conflict-safe
-private POSIX mirror of the SAF workspace. Runtime packages build on this
-execution substrate after physical validation. Termux-derived components
-receive a file-level license review before incorporation.
+On-device command execution, an interactive terminal prototype, and a
+conflict-safe private POSIX mirror of the SAF workspace. Termux-derived
+components were reviewed for incorporation. The interactive Terminal surface
+was retired after the Phase 7 Chat-first decision; the command runner remains.
 
 ## Phase 6 — Coding-Agent Features (complete)
 
-Diff viewing and application, Git integration, and higher-level coding workflows.
+Diff review, read-only Git inspection, and pre-turn checkpoints for Undo. The
+standalone Changes surface was retired in Phase 7; contextual changes remain in Chat.
 
 ## Phase 7 — Chat-First Product Simplification (complete)
 
@@ -48,6 +49,10 @@ checkpoint systems remain agent infrastructure rather than user destinations.
 
 ## Phase 8 — Release Candidate Engineering (in progress)
 
-Audit the accepted product, fix concrete release risks, verify upgrade and
-signing paths, and prepare a candidate for independent review and physical
-acceptance. This does not publish a release.
+Source and CI review found and fixed concrete 0.8.1 release risks. The 0.8.1
+debug RC then passed physical Android acceptance, including in-place upgrade,
+project and session persistence, approved and denied mutations, commands,
+partial-failure recovery, and Undo. Version 0.8.2 retires unreachable
+presentation and obsolete API residue and prepares for independent verification
+and a short physical regression test. Production signing remains gated by the
+permanent certificate pin; no public release has been published.

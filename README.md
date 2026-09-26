@@ -4,8 +4,10 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: 0.8.0 release-candidate engineering.** Rivet is not publicly
-released; independent review and physical acceptance remain pending.
+**Status: 0.8.2 cleanup candidate.** The 0.8.1 debug RC passed on-device
+acceptance, including an in-place upgrade, agent file and command work, Undo,
+denial, and restart persistence. This cleanup build still needs independent
+verification and a short physical regression test. Rivet is not publicly released.
 
 ## What works today
 
@@ -16,8 +18,9 @@ released; independent review and physical acceptance remain pending.
   plaintext.
 - Model discovery where the provider supports listing, manual model entry
   everywhere else.
-- Live streaming responses with stop control; provider and model
-  switchable between messages.
+- Provider transport streams internally with stop control; Chat renders
+  completed assistant messages rather than token-by-token text. Provider and
+  model can be switched between messages.
 - Multiple persistent conversations; completed history, provider
   configuration, and selected project restore after a restart.
 
@@ -63,5 +66,6 @@ is in [RELEASE_PROCESS.md](RELEASE_PROCESS.md).
 ## License
 
 Apache-2.0 for Rivet's own code (see [LICENSE](LICENSE)). Third-party
-components retain their licenses. Rivet is not affiliated with Termux;
-any future runtime integration undergoes dedicated license review first.
+components retain their licenses; the incorporated Termux-derived emulator
+source is attributed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Rivet is not affiliated with Termux.

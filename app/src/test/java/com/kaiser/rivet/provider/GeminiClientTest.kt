@@ -66,16 +66,16 @@ class GeminiClientTest {
     }
 
     @Test
-    fun streamChatConcatenatesParts() = runTest {
+    fun agentStreamConcatenatesParts() = runTest {
         val sse = listOf(
             """{"candidates":[{"content":{"parts":[{"text":"Hi "}]}}]}""",
             """{"candidates":[{"content":{"parts":[{"text":"there"},{"text":"!"}]},"finishReason":"STOP"}]}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
-        val full = GeminiClient(config(), "key").streamChat(
-            ChatRequest("gemini-x", emptyList(), "sys", ReasoningLevel.High),
+        val full = GeminiClient(config(), "key").streamAgent(
+            AgentRequest("gemini-x", emptyList(), "sys", ReasoningLevel.High, emptyList()),
         ) {}
-        assertEquals("Hi there!", full)
+        assertEquals("Hi there!", full.text)
 
         val recorded = server.takeRequest()
         assertTrue(recorded.path!!.startsWith("/v1beta/models/gemini-x:streamGenerateContent"))
@@ -94,8 +94,8 @@ class GeminiClientTest {
         val sse = "data: {\"error\":{\"code\":429,\"message\":\"Resource exhausted\"}}\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         try {
-            GeminiClient(config(), "key").streamChat(
-                ChatRequest("gemini-x", emptyList(), "", ReasoningLevel.Default),
+            GeminiClient(config(), "key").streamAgent(
+                AgentRequest("gemini-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
             ) {}
             throw AssertionError("expected ProviderMessage")
         } catch (e: ProviderError.ProviderMessage) {
@@ -174,8 +174,8 @@ class GeminiClientTest {
         server.enqueue(MockResponse().setBody(sse))
 
         try {
-            GeminiClient(config(), "key").streamChat(
-                ChatRequest("gemini-x", emptyList(), "", ReasoningLevel.Default),
+            GeminiClient(config(), "key").streamAgent(
+                AgentRequest("gemini-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
             ) {}
             throw AssertionError("A MAX_TOKENS answer must not be presented as complete")
         } catch (_: ProviderError) {

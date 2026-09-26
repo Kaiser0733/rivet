@@ -21,9 +21,17 @@ installed build:
 3. `versionCode` is higher.
 
 Fail any one and Android refuses the install (or requires an uninstall,
-which loses user data). The release workflow checks identity and version,
-then compares the APK signer both with the build keystore and with a
-separately committed production certificate fingerprint.
+which loses user data). APK verification compares the built package, version,
+and SDK levels with the current Gradle declarations; an optional release tag
+must match the built version name. It does not compare `versionCode` with a
+previous release. Check that increase against the installed build before
+publishing. The signer is compared with the build keystore and a separately
+committed production certificate fingerprint.
+
+The 0.8.1 debug RC passed physical in-place upgrade and core Chat/agent
+acceptance. The 0.8.2 cleanup candidate needs independent verification and
+a short on-device regression test. Debug acceptance does not establish
+production-signing readiness or constitute a public release.
 
 ## Required GitHub secrets
 
@@ -36,9 +44,10 @@ separately committed production certificate fingerprint.
 
 ## One-time keystore setup (documented, never automated)
 
-Generate the production key once, on a trusted machine, and keep a
-backup in safe storage. Losing it means every future release can no
-longer update installed copies.
+Generate the production key once, on a trusted machine, and keep a safe
+offline recovery backup. Losing it means every future release can no
+longer update installed copies. GitHub Secrets hold an encoded CI copy and
+the signing passwords, not the only permanent copy.
 
     keytool -genkeypair -keystore rivet-release.keystore \
         -alias rivet -keyalg RSA -keysize 4096 -validity 10000
@@ -89,8 +98,9 @@ What must change: `versionCode` (and normally `versionName`).
 
 ## Signing hygiene
 
-- The keystore exists in decoded form only inside a CI runner step and
-  is deleted in an `if: always()` cleanup.
+- During CI signing, the secret is decoded only on the runner and the
+  temporary file is deleted in an `if: always()` cleanup. The trusted-machine
+  original and offline recovery backup are separate from that CI file.
 - Passwords travel as env vars read by Gradle at configuration time;
   they are never written into the repository or logs.
 - With secrets missing, the release workflow fails early and the debug
