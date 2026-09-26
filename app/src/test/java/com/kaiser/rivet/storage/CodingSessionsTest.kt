@@ -290,6 +290,47 @@ class CodingSessionsTest {
         assertTrue(restored.messages.any { it.text == "Continue" })
     }
 
+    @Test fun versionFourCompactionMigratesOnceWithoutLosingHistoryOrUsage() = runBlocking {
+        val id = "v4-session"
+        val events = listOf(AgentMessage.user("Original objective"), AgentMessage.assistant("Investigated"),
+            AgentMessage.user("Continue"))
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL DEFAULT '', active_generation INTEGER NOT NULL DEFAULT 0)")
+            db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, payload TEXT NOT NULL)")
+            db.execSQL("CREATE TABLE active_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, payload TEXT NOT NULL)")
+            db.execSQL("CREATE TABLE compactions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, through_event_id INTEGER NOT NULL, summary TEXT NOT NULL, before_count INTEGER NOT NULL, after_count INTEGER NOT NULL, created_at INTEGER NOT NULL)")
+            db.execSQL("CREATE TABLE usage (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, turn_id TEXT NOT NULL, provider_id TEXT NOT NULL, model TEXT NOT NULL, source TEXT NOT NULL, input_tokens INTEGER, output_tokens INTEGER, cache_read_tokens INTEGER, reasoning_tokens INTEGER, total_tokens INTEGER, created_at INTEGER NOT NULL, base_count INTEGER NOT NULL DEFAULT 0, base_last_hash TEXT, system_hash TEXT, active_generation INTEGER NOT NULL DEFAULT 0)")
+            db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            db.execSQL("INSERT INTO sessions(id,title,workspace_id,created_at,updated_at,summary,active_generation) VALUES(?,?,?,?,?,?,?)",
+                arrayOf(id, "Previous work", "content://v4/project", 1L, 1L, "Original objective remains", 1))
+            events.forEach { message -> db.execSQL("INSERT INTO events(session_id,payload) VALUES(?,?)",
+                arrayOf(id, Json.encodeToString(AgentMessage.serializer(), message))) }
+            db.execSQL("INSERT INTO active_events(session_id,payload) VALUES(?,?)",
+                arrayOf(id, Json.encodeToString(AgentMessage.serializer(), events.last())))
+            db.execSQL("INSERT INTO compactions(session_id,through_event_id,summary,before_count,after_count,created_at) VALUES(?,?,?,?,?,?)",
+                arrayOf(id, 3L, "Original objective remains", 3, 1, 1L))
+            db.execSQL("INSERT INTO usage(session_id,turn_id,provider_id,model,source,input_tokens,output_tokens,created_at) VALUES(?,?,?,?,?,?,?,?)",
+                arrayOf(id, "turn", "provider", "model", "reported", 100, 10, 1L))
+            db.execSQL("INSERT INTO metadata(key,value) VALUES('active_session',?)", arrayOf(id))
+            db.execSQL("INSERT INTO metadata(key,value) VALUES('legacy_migrated','1')")
+            db.version = 4
+        }
+
+        repeat(2) {
+            val sessions = CodingSessions(app)
+            assertEquals(events.last(), sessions.load().messages.single())
+            assertEquals("Original objective remains", sessions.load().summary)
+            assertEquals(events, sessions.recent(id))
+            assertEquals(1, sessions.usage(id).reportedRequests)
+        }
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.rawQuery("SELECT prefix_hash,active_hash,summary_hash FROM compactions", null).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertTrue((0..2).all { !cursor.isNull(it) })
+            }
+        }
+    }
+
     @Test fun usageAnchorPricesOnlyNewDeltaAndInvalidatesOnCompactionOrModelSwitch() = runBlocking {
         val sessions = CodingSessions(app)
         val id = sessions.load().id!!
