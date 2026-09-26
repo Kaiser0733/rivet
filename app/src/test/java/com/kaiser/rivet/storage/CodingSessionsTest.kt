@@ -10,10 +10,14 @@ import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
+import com.kaiser.rivet.agent.AgentToolDefinition
+import com.kaiser.rivet.provider.ProviderType
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotEquals
@@ -337,17 +341,53 @@ class CodingSessionsTest {
         var active = listOf(AgentMessage.user("initial request"))
         sessions.save(active, interrupted = true)
         sessions.recordUsage(id, "turn", "provider-a", "model-a", AgentUsage(100, 25), active, "system")
-        assertEquals(ContextEstimate(125, "reported"),
+        assertEquals(ContextEstimate(100, "reported"),
             sessions.contextEstimate(id, "provider-a", "model-a", active, "system"))
         active = active + AgentMessage.assistant("answer") + AgentMessage.user("more " + "x".repeat(400))
         sessions.save(active, interrupted = false)
         val delta = sessions.contextEstimate(id, "provider-a", "model-a", active, "system")
         assertEquals("estimated", delta.source)
-        assertTrue(delta.tokens!! > 125)
+        assertTrue(delta.tokens!! > 100)
         assertEquals("estimated", sessions.contextEstimate(id, "provider-a", "model-b", active, "system").source)
 
         val retained = listOf(active.last())
         sessions.compact(active, retained, "short summary")
         assertEquals("estimated", sessions.contextEstimate(id, "provider-a", "model-a", retained, "system").source)
+    }
+
+    @Test fun exactRequestAnchorIncludesToolsEndpointAndAnthropicCachedInput() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val messages = listOf(AgentMessage.user("Project instructions and task"))
+        val tools = listOf(AgentToolDefinition("read_file", "Read a bounded chunk",
+            buildJsonObject { put("type", "object") }))
+        sessions.save(messages, interrupted = true)
+        sessions.recordUsage(id, "turn", "anthropic", "claude", AgentUsage(20, 5, 70,
+            cacheCreationTokens = 30), messages, "system", tools = tools,
+            endpoint = "https://api.anthropic.com", providerType = ProviderType.Anthropic)
+
+        val reopened = CodingSessions(app)
+        assertEquals(ContextEstimate(120, "reported"), reopened.contextEstimate(id, "anthropic",
+            "claude", messages, "system", tools = tools, endpoint = "https://api.anthropic.com"))
+        assertEquals(20L, reopened.usage(id).reportedInputTokens)
+        assertEquals("estimated", reopened.contextEstimate(id, "anthropic", "claude",
+            listOf(AgentMessage.user("Changed project instructions")), "system", tools = tools,
+            endpoint = "https://api.anthropic.com").source)
+        assertEquals("estimated", reopened.contextEstimate(id, "anthropic", "claude", messages,
+            "system", tools = emptyList(), endpoint = "https://api.anthropic.com").source)
+        assertEquals("estimated", reopened.contextEstimate(id, "anthropic", "claude", messages,
+            "system", tools = tools, endpoint = "https://other.example").source)
+    }
+
+    @Test fun outputOnlyUsageCannotBecomeTrustedInputAnchor() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val messages = listOf(AgentMessage.user("Question"))
+        sessions.save(messages, interrupted = true)
+        sessions.recordUsage(id, "turn", "provider", "model", AgentUsage(outputTokens = 10), messages,
+            "system")
+        assertEquals(1, sessions.usage(id).unknownRequests)
+        assertEquals("estimated", sessions.contextEstimate(id, "provider", "model", messages,
+            "system").source)
     }
 }
