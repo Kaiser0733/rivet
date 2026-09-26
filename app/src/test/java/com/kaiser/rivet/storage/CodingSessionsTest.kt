@@ -3,6 +3,7 @@ package com.kaiser.rivet.storage
 import android.app.Application
 import android.content.Context
 import androidx.datastore.preferences.core.edit
+import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentToolCall
@@ -53,6 +54,22 @@ class CodingSessionsTest {
         val reopened = CodingSessions(app)
         assertEquals(original, reopened.load().messages)
         assertEquals(1, reopened.list().size)
+    }
+
+    @Test fun preAgentChatHistorySurvivesBothMigrationsAndSqliteRestart() = runBlocking {
+        val payload = """[{"role":"User","text":"old question"},{"role":"Assistant","text":"old answer"}]"""
+        app.chatData.edit {
+            it.remove(booleanPreferencesKey("agent_migrated"))
+            it[stringPreferencesKey("messages")] = payload
+        }
+
+        val imported = CodingSessions(app).load()
+        assertEquals(listOf("old question", "old answer"), imported.messages.map { it.text })
+        assertEquals(listOf(AgentMessage.user("old question"), AgentMessage.assistant("old answer")),
+            imported.messages)
+        assertEquals(payload, app.chatData.data.first()[stringPreferencesKey("messages")])
+        assertEquals(imported.messages, CodingSessions(app).load().messages)
+        assertEquals(1, CodingSessions(app).list().size)
     }
 
     @Test fun interruptedToolCallGetsOneCorrelatedUnknownResultOnRestart() = runBlocking {

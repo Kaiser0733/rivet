@@ -1,81 +1,34 @@
 # Rivet Architecture
 
-Describes what exists today. Phase-by-phase growth is recorded in
-MASTER_ROADMAP.md; anything not listed here is not in the tree.
+Describes current boundaries and failure semantics. Phase history is in
+MASTER_ROADMAP.md.
 
-## Current shape (Phase 7: Chat-first product)
+## Current shape (Chat-first product)
 
-The `:app` module uses vendored `:terminal-emulator` and `:terminal-view`
-modules. The application ID remains `com.kaiser.rivet`.
+The `:app` module routes Chat and Settings only. `chat/` owns the turn's UI
+state; `agent/` validates and runs tool calls; `workspace/` owns native SAF
+operations; `runtime/` owns the private mirror, command process, Git inspection,
+and checkpoints. `provider/` adapts three wire protocols; `storage/` owns
+configuration, secrets, and SQLite conversations. Legacy DataStore chat decoding
+remains for installed-history migration, not as another live chat stack.
 
-```
-app/src/main/java/com/kaiser/rivet/
-    MainActivity.kt            # single activity, supplies ViewModels + version
-    provider/
-        ProviderClient.kt     # client interface + request/result types + factory fn
-        ProviderConfig.kt     # config model, types, reasoning levels, header rules
-        ProviderError.kt     # sealed error taxonomy + user-facing text
-        Endpoints.kt         # all URL construction, centralized
-        Http.kt              # OkHttp client, await(), SSE reader
-        Json.kt               # tolerant JSON accessors
-        OpenAiCompatibleClient.kt  # OpenAI / OpenRouter / compatible endpoints
-        AnthropicClient.kt   # native Messages API
-        GeminiClient.kt      # native generateContent
-    chat/
-        ChatMessage.kt        # message + role model
-        ChatViewModel.kt     # agent orchestration, snapshots, cancellation
-    agent/
-        AgentProtocol.kt      # persisted provider-neutral transcript
-        AgentLoop.kt          # capped model/tool/result loop
-        AgentApprovalGate.kt  # one-shot mutation approval authority
-        AgentToolExecutor.kt  # strict workspace tool schemas and validation
-        SafAgentWorkspace.kt  # adapter to the trusted SAF boundary
-        AgentContext.kt       # bounded active-context planning
-        ProjectInstructions.kt # bounded root-to-target AGENTS.md loading
-    runtime/
-        WorkspaceMirror.kt    # streamed SAF mirror and baseline
-        RuntimeController.kt  # command/terminal workspace association
-        CommandProcess.kt     # bounded command capture and cleanup
-        TerminalViewModel.kt  # retained PTY session and explicit sync
-        GitInspection.kt      # read-only JGit status and bounded diff
-        TurnCheckpoint.kt     # private pre-turn archive and undo fingerprints
-    storage/
-        ProviderStore.kt     # DataStore: provider configs + active id
-        SecretStore.kt       # Android Keystore + AES-GCM API-key storage
-        ChatStore.kt         # legacy chat plus migrated agent session
-        CodingSessions.kt    # SQLite full events, active context, usage
-    workspace/
-        SafWorkspace.kt       # native SAF traversal and document operations
-        WorkspaceSelection.kt # persisted tree grant and directory navigation
-        WorkspacePath.kt      # validated workspace-relative names
-        WorkspaceText.kt      # UTF-8 bounds, byte fingerprints, exact edits
-        WorkspaceSearch.kt    # bounded, cancellable literal search
-        WorkspaceEntry.kt     # metadata, capabilities, operation epochs
-        WorkspaceFailure.kt   # safe user-facing failures
-    ui/
-        RivetApp.kt           # Chat and Settings routing
-        RivetDestination.kt  # two normal surfaces
-        Theme.kt             # dark color scheme, shape set
-        files/               # retained workspace browser/editor code; not routed
-        chat/ChatScreen.kt   # conversation, project choice, approval, Undo
-        terminal/TerminalScreen.kt # retained PTY UI; not routed
-        changes/             # retained Git/checkpoint review code; not routed
-        provider/SettingsScreen.kt    # provider list, add/edit/delete
-        provider/ProviderEditor.kt    # provider form, test, fetch models
-        provider/ProvidersViewModel.kt
-        provider/ProviderEditorState.kt
-```
+`:app` depends directly on the vendored `:terminal-emulator` module because
+`CommandProcess` loads its `libtermux` native library containing Rivet's
+`command.c` launcher. The interactive Terminal and `:terminal-view` were
+retired; the active command runner, mirror, and synchronization remain.
+The application ID is `com.kaiser.rivet`.
 
 ## Provider boundary
 
-`ProviderClient` is the one interface with multiple implementations:
-`listModels`, `testConnection`, `streamChat`, and `streamAgent`. All three transports share
+`ProviderClient` has three protocol implementations with `listModels`,
+`testConnection`, and `streamAgent`. All three transports share
 `Http.kt` (OkHttp, SSE reader) and `Endpoints.kt`; OpenAI, OpenRouter, and
 custom endpoints share one client class — only Anthropic and Gemini get
 their own request shapes.
 
 Streaming: the client accumulates and returns the full response text while
-invoking `onDelta` per chunk; the ViewModel appends into UI state. The SSE
+receiving deltas per chunk. Chat shows activity during the request and renders
+the completed assistant message, not token-by-token text. The SSE
 loop lives on OkHttp's callback thread; coroutine cancellation cancels the
 underlying call, which unblocks the reader. It requires each provider's native
 completion marker and limits streamed lines to 128 KiB and each response to
@@ -100,8 +53,9 @@ message only; the active request completes (or is stopped) on its own.
   first read; the API key remains in its separate secret store.
 - Coding sessions: SQLite stores provider-neutral full event rows, a bounded
   active model transcript, compaction summaries, and per-request usage. The
-  previous DataStore `agent_messages` transcript imports once; its source is
-  retained. Sessions bind to the selected workspace and can be resumed or
+  previous DataStore `agent_messages` transcript imports once; still older
+  `messages` text-chat records are decoded into agent events first. Their
+  source bytes are retained. Sessions bind to the selected workspace and can be resumed or
   switched independently of provider/model selection.
 - The stable Rivet security policy stays in the system role. Applicable
   `AGENTS.md` contents and the prior task summary are added as untrusted user
@@ -156,15 +110,15 @@ Changing the selected tree stops the turn instead of redirecting work. Stop
 cancels the provider request, pending approval, future calls, and cancellable
 reads. A SAF commit that already began retains Phase 3 non-cancellable commit
 semantics, and its completed result is persisted. Tool errors remain correlated.
-Repeating an unchanged deterministic blocker stops the turn; a changed
-Terminal/sync state permits a later retry.
+Repeating an unchanged deterministic blocker stops the turn; resolving a
+mirror/sync blocker permits a later retry.
 
 ## Workspace boundary
 
 `ACTION_OPEN_DOCUMENT_TREE` runs through the Activity Result API. Only the
 returned read/write grants are persisted. App-private `workspace` preferences
-store the tree URI, last browsed directory, and open-file path; existing provider/chat stores
-are unchanged. Canceling the picker changes nothing. Missing grants require
+store the tree URI and legacy last-browsed directory/open-file paths for
+installed-data compatibility. Canceling the picker changes nothing. Missing grants require
 selection again; unavailable providers produce recoverable errors.
 
 Every operation starts at the captured tree root and resolves validated names
@@ -193,12 +147,13 @@ MIME veto so its confirmed contents can supply the hash handoff.
 
 ## Text and mutation limits
 
-Editing supports strict UTF-8, up to 1 MiB of bytes. NUL/control-byte or invalid
-UTF-8 content is shown as metadata with an unsupported-editing message. Streams
+Text tool mutations support strict UTF-8, up to 1 MiB of bytes. NUL/control-byte or invalid
+UTF-8 content is reported as unsupported. Streams
 are bounded even when providers omit sizes. File snapshots fingerprint original
 bytes with SHA-256. Every save requires the previous fingerprint, rereads current
 bytes before opening a truncating descriptor, and verifies bytes after writing.
-Mismatches preserve the editor draft and report conflict. Exact patches require
+A prewrite mismatch refuses the write; a verification mismatch reports conflict.
+Exact patches require
 a nonempty old-text match occurring exactly once (including overlapping matches);
 edits are evaluated sequentially in memory, then committed only after all pass.
 
@@ -223,13 +178,11 @@ self-tests against an existing user project.
 Provider I/O runs on Dispatchers.IO. Cancellation signals and closing active
 read descriptors support cancellation; providers can delay or ignore requests.
 
-FilesViewModel survives rotation with navigation, draft, and active operation
-state. Navigation and search epochs reject late results; saves/mutations block
-editor navigation until completion. Back navigation/discard and deletion require
-confirmation. Process death ends asynchronous work and loses unsaved drafts;
-only the selected tree, directory, and file path restore (file bytes are reread).
-Whole project contents are not persisted in preferences. Tool results never
-expose URIs or document IDs. There is no repository index.
+Chat retains project selection across rotation and process restart. The old
+directory/file location preferences may still be read for compatibility, but
+there is no routed file editor or draft. Whole project contents are not
+persisted in preferences. Tool results never expose URIs or document IDs.
+There is no repository index.
 
 ## Runtime boundary
 
@@ -256,13 +209,11 @@ bounded head/tail text, exit status remains separate from sync status, and a
 timeout or Stop terminates the process group. The shell shares Rivet's Android
 UID: cwd checks are not a security sandbox. No API keys are exported.
 
-The retained Terminal implementation uses a PTY, the vendored Termux terminal
-emulator/view, and one `/system/bin/sh` session retained across rotation. The
-Terminal screen is not routed in the Phase 7 product. Agent commands still use
-the runtime, process-group cancellation, and automatic mirror-to-SAF sync. A
-workspace switch cannot retarget an active command. Android system utilities
-provide the initial command set. No
-Termux installation, package manager, or app-data ELF execution is present.
+The interactive PTY UI is no longer compiled. Agent commands use the native
+launcher in `:terminal-emulator`, process-group cancellation, and automatic
+mirror-to-SAF sync. A workspace switch cannot retarget an active command.
+Android system utilities provide the initial command set. No Termux
+installation, package manager, or app-data ELF execution is present.
 The inspected modern `termux-exec` linker/interception approach is reserved
 for future packaged binaries; direct app-data execution is not assumed.
 

@@ -25,8 +25,8 @@ android {
         applicationId = "com.kaiser.rivet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 15
-        versionName = "0.8.1"
+        versionCode = 16
+        versionName = "0.8.2"
     }
 
     buildFeatures {
@@ -90,7 +90,7 @@ kotlin {
 }
 
 dependencies {
-    implementation(project(":terminal-view"))
+    implementation(project(":terminal-emulator"))
     val composeBom = platform("androidx.compose:compose-bom:2025.03.00")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.10.1")

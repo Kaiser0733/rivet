@@ -115,34 +115,34 @@ class CommandToolTest {
         assertEquals(0, executions)
     }
 
-    @Test fun activeTerminalPreventsSafToolResultsAndMutations() = runTest {
+    @Test fun pendingSyncPreventsSafToolResultsAndMutations() = runTest {
         val workspace = AgentToolExecutorTest.FakeWorkspace()
         val executor = AgentToolExecutor(workspace, requireSafCurrent = {
-            throw MirrorFailure("terminal_active")
+            throw MirrorFailure("sync_required")
         })
         val read = executor.prepare(AgentToolCall("read", "read_file", """{"path":"Main.kt"}""")).execute()
         val write = executor.prepare(AgentToolCall("write", "write_file",
             """{"path":"Main.kt","content":"edit","expected_sha256":"${"a".repeat(64)}"}"""))
         val blockedWrite = write.execute()
 
-        assertEquals("terminal_active", Json.parseToJsonElement(read.content).jsonObject["error"]!!.jsonPrimitive.content)
+        assertEquals("sync_required", Json.parseToJsonElement(read.content).jsonObject["error"]!!.jsonPrimitive.content)
         assertEquals("false", Json.parseToJsonElement(read.content).jsonObject["retryable"]!!.jsonPrimitive.content)
-        assertTrue(Json.parseToJsonElement(read.content).jsonObject["required_action"]!!.jsonPrimitive.content.contains("command runner"))
+        assertTrue(Json.parseToJsonElement(read.content).jsonObject["required_action"]!!.jsonPrimitive.content.contains("reconcile"))
         assertNotNull(write.approval)
-        assertEquals("terminal_active", Json.parseToJsonElement(blockedWrite.content).jsonObject["error"]!!.jsonPrimitive.content)
+        assertEquals("sync_required", Json.parseToJsonElement(blockedWrite.content).jsonObject["error"]!!.jsonPrimitive.content)
         assertEquals(0, workspace.writes)
     }
 
     @Test fun blockedCommandExplainsRequiredActionWithoutInventingExitStatus() = runTest {
         val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace(), runCommand = { _, cwd, _ ->
-            RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "terminal_active")
+            RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "sync_required")
         })
         val result = executor.prepare(call).execute()
         val value = Json.parseToJsonElement(result.content).jsonObject
         assertTrue(result.error)
-        assertEquals("terminal_active", value["error"]!!.jsonPrimitive.content)
+        assertEquals("sync_required", value["error"]!!.jsonPrimitive.content)
         assertEquals("false", value["retryable"]!!.jsonPrimitive.content)
-        assertTrue(value["required_action"]!!.jsonPrimitive.content.contains("command runner"))
+        assertTrue(value["required_action"]!!.jsonPrimitive.content.contains("reconcile"))
         assertNull(value["exit_code"])
     }
 
