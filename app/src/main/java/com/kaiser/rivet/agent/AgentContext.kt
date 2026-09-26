@@ -22,7 +22,11 @@ internal object AgentContext {
     private const val MAX_REQUIRED_TAIL_BYTES = 256 * 1024
     private const val SUMMARY_INPUT_BYTES = 96 * 1024
     private val serializer = ListSerializer(AgentMessage.serializer())
-    private val secretPattern = Regex("(?i)(sk-[a-z0-9_-]{12,}|ghp_[a-z0-9]{20,}|AIza[a-z0-9_-]{20,})")
+    private val secretPattern = Regex("(?i)(sk-[a-z0-9_-]{12,}|gh[pousr]_[a-z0-9]{20,}|AIza[a-z0-9_-]{20,}|AKIA[A-Z0-9]{16})")
+    private val bearerPattern = Regex("(?i)\\bBearer\\s+[a-z0-9._~+/-]{12,}")
+    private val assignedSecretPattern = Regex("(?i)\\b(?:api[_-]?key|access[_-]?token|password|secret)\\s*[:=]\\s*['\"]?[a-z0-9._~+/-]{12,}")
+    private val privateKeyPattern = Regex("-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+        RegexOption.DOT_MATCHES_ALL)
 
     fun serializedBytes(messages: List<AgentMessage>): Int =
         Json.encodeToString(serializer, messages).toByteArray(Charsets.UTF_8).size
@@ -163,5 +167,8 @@ internal object AgentContext {
             if (safe.length > length) " [truncated]" else ""
     }
 
-    fun redact(value: String): String = value.replace(secretPattern, "[redacted]")
+    fun redact(value: String): String = value.replace(privateKeyPattern, "[redacted private key]")
+        .replace(bearerPattern, "Bearer [redacted]")
+        .replace(assignedSecretPattern, "[redacted credential]")
+        .replace(secretPattern, "[redacted]")
 }
