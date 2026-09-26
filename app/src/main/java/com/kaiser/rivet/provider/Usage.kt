@@ -25,8 +25,13 @@ internal fun anthropicUsage(root: JsonObject): AgentUsage? {
     val input = usage["input_tokens"].count()
     val output = usage["output_tokens"].count()
     val cache = usage["cache_read_input_tokens"].count()
-    if (input == null && output == null && cache == null) return null
-    return AgentUsage(input, output, cache)
+    val creation = usage["cache_creation_input_tokens"].count()
+    if (input == null && output == null && cache == null && creation == null) return null
+    val effectiveInput = try {
+        if (input == null && cache == null && creation == null) null else
+            Math.addExact(Math.addExact(input ?: 0, cache ?: 0), creation ?: 0)
+    } catch (_: ArithmeticException) { null }
+    return AgentUsage(effectiveInput, output, cache, cacheCreationTokens = creation)
 }
 
 internal fun geminiUsage(root: JsonObject): AgentUsage? {

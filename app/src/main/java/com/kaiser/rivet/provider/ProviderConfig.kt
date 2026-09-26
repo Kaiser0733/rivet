@@ -18,6 +18,9 @@ enum class ReasoningLevel { Default, Low, Medium, High, Max }
 @Serializable
 data class ProviderHeader(val name: String, val value: String)
 
+@Serializable
+data class ModelContextLimit(val model: String, val baseUrl: String, val inputLimitTokens: Int)
+
 // API keys never live in this structure. ProviderStore encrypts custom
 // header values before persisting this otherwise provider-neutral config.
 @Serializable
@@ -29,6 +32,19 @@ data class ProviderConfig(
     val model: String,
     val reasoning: ReasoningLevel = ReasoningLevel.Default,
     val headers: List<ProviderHeader> = emptyList(),
+    val modelContextLimit: ModelContextLimit? = null,
+)
+
+fun ProviderConfig.trustedInputLimitTokens(): Int? = modelContextLimit?.takeIf {
+    type in setOf(ProviderType.Anthropic, ProviderType.Gemini, ProviderType.OpenRouter) &&
+        it.model == model && it.baseUrl == baseUrl && it.inputLimitTokens > 0
+}?.inputLimitTokens
+
+fun ProviderConfig.selectListedModel(info: ModelInfo): ProviderConfig = copy(
+    model = info.id,
+    modelContextLimit = info.inputLimitTokens?.takeIf {
+        it > 0 && type in setOf(ProviderType.Anthropic, ProviderType.Gemini, ProviderType.OpenRouter)
+    }?.let { ModelContextLimit(info.id, baseUrl, it) },
 )
 
 private val standardReasoning = listOf(

@@ -34,6 +34,10 @@ class ProviderConfigTest {
         assertEquals(null, base.copy(baseUrl = "https://other.example").trustedInputLimitTokens())
         val json = Json.encodeToString(ProviderConfig.serializer(), base)
         assertEquals(32000, Json.decodeFromString(ProviderConfig.serializer(), json).trustedInputLimitTokens())
+
+        val selected = base.copy(model = "other").selectListedModel(ModelInfo("small", "Small", 8000))
+        assertEquals("small", selected.model)
+        assertEquals(8000, selected.trustedInputLimitTokens())
     }
 
     @Test
