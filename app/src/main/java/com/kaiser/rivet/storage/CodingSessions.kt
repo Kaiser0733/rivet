@@ -5,13 +5,20 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import com.kaiser.rivet.agent.AgentContext
+import com.kaiser.rivet.agent.AgentToolDefinition
+import com.kaiser.rivet.agent.ContextBudget
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
-import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.workspace.WorkspaceSelection
+import com.kaiser.rivet.provider.AgentRequest
+import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.ReasoningLevel
+import com.kaiser.rivet.provider.contextInputTokens
+import java.nio.ByteBuffer
 import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.Dispatchers
@@ -19,6 +26,10 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.builtins.ListSerializer
+import kotlinx.serialization.json.booleanOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 
 data class CodingSessionHeader(
     val id: String,
@@ -51,6 +62,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     override suspend fun load(): AgentSession = onDatabase { db ->
         val id = activeId(db)
         val header = header(db, id)
+        validateProjection(db, id)
         val summary = summary(db, id)
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
         val messages = recoverInterrupted(db, id, header.interrupted, activeMessages(db, id), summaryBytes)
@@ -140,6 +152,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     suspend fun select(id: String): AgentSession = onDatabase { db ->
         val selected = header(db, id)
+        validateProjection(db, id)
         val summary = summary(db, id)
         val messages = recoverInterrupted(db, id, selected.interrupted, activeMessages(db, id),
             summary.toByteArray(Charsets.UTF_8).size)
@@ -186,8 +199,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String) = onDatabase { db ->
         val id = activeId(db)
         require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
-        require(retained.size < expected.size)
-        require(validRetained(expected, retained))
+        require(retained != expected)
+        require(validProjection(expected, retained))
         if (activeMessages(db, id) != expected) throw IllegalStateException("Active context changed")
         if (!AgentSessionCodec.fits(retained, summary.toByteArray(Charsets.UTF_8).size)) {
             throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
@@ -195,12 +208,17 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(id)).use {
             it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
         }
+        val prefixHash = canonicalPrefixHash(db, id, through)
+        val activeHash = hashMessages(retained)
+        val summaryHash = hash(summary)
         db.beginTransaction()
         try {
             db.insertOrThrow("compactions", null, ContentValues().apply {
                 put("session_id", id); put("through_event_id", through)
                 put("summary", summary); put("before_count", expected.size)
                 put("after_count", retained.size); put("created_at", System.currentTimeMillis())
+                put("prefix_hash", prefixHash); put("active_hash", activeHash)
+                put("summary_hash", summaryHash)
             })
             db.delete("active_events", "session_id=?", arrayOf(id))
             retained.forEach { message ->
@@ -223,56 +241,65 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     suspend fun recordUsage(sessionId: String, turnId: String, providerId: String, model: String,
                             usage: AgentUsage?, requestMessages: List<AgentMessage> = emptyList(),
-                            system: String = "") = onDatabase { db ->
+                            system: String = "", tools: List<AgentToolDefinition> = emptyList(),
+                            endpoint: String = "", providerType: ProviderType? = null) = onDatabase { db ->
         val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
             if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
             it.getInt(0)
         }
+        val contextInput = usage?.let { if (providerType == null) it.inputTokens else it.contextInputTokens(providerType) }
         db.insertOrThrow("usage", null, ContentValues().apply {
             put("session_id", sessionId); put("turn_id", turnId)
             put("provider_id", providerId); put("model", model)
-            put("source", if (usage == null) "unknown" else "reported")
+            put("source", if (contextInput != null && contextInput > 0) "reported" else "unknown")
             put("input_tokens", usage?.inputTokens); put("output_tokens", usage?.outputTokens)
             put("cache_read_tokens", usage?.cacheReadTokens)
+            put("cache_creation_tokens", usage?.cacheCreationTokens)
+            put("context_input_tokens", contextInput)
             put("reasoning_tokens", usage?.reasoningTokens)
             put("total_tokens", usage?.totalTokens)
             put("base_count", requestMessages.size)
             put("base_last_hash", requestMessages.lastOrNull()?.let(::messageHash))
-            put("system_hash", hash(system))
+            put("base_prefix_hash", hashMessages(requestMessages))
+            put("system_hash", requestEnvironmentHash(endpoint, system, tools))
             put("active_generation", generation)
             put("created_at", System.currentTimeMillis())
         })
     }
 
+    private data class UsageAnchor(val input: Long, val count: Int, val prefixHash: String?,
+                                   val environmentHash: String, val generation: Int)
+
     suspend fun contextEstimate(sessionId: String, providerId: String, model: String,
-                                messages: List<AgentMessage>, system: String): ContextEstimate = onDatabase { db ->
+                                messages: List<AgentMessage>, system: String,
+                                tools: List<AgentToolDefinition> = emptyList(),
+                                endpoint: String = ""): ContextEstimate = onDatabase { db ->
         val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
             if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
             it.getInt(0)
         }
-        val anchor = db.rawQuery("SELECT input_tokens,output_tokens,base_count,base_last_hash,system_hash,active_generation " +
-            "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' AND input_tokens IS NOT NULL " +
+        val request = AgentRequest(model, messages, system, ReasoningLevel.Default, tools)
+        val estimated = ContextBudget.estimateRequestTokens(request)
+        val anchor = db.rawQuery("SELECT context_input_tokens,base_count,base_prefix_hash,system_hash,active_generation " +
+            "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' AND context_input_tokens IS NOT NULL " +
             "ORDER BY id DESC LIMIT 1", arrayOf(sessionId, providerId, model)).use { cursor ->
-            if (!cursor.moveToFirst()) null else listOf(
-                cursor.getLong(0).toString(), if (cursor.isNull(1)) "0" else cursor.getLong(1).toString(),
-                cursor.getInt(2).toString(), if (cursor.isNull(3)) "" else cursor.getString(3),
-                cursor.getString(4), cursor.getInt(5).toString())
+            if (!cursor.moveToFirst()) null else UsageAnchor(cursor.getLong(0), cursor.getInt(1),
+                if (cursor.isNull(2)) null else cursor.getString(2), cursor.getString(3), cursor.getInt(4))
         }
         if (anchor != null) {
-            val count = anchor[2].toInt()
-            if (anchor[5].toInt() == generation && anchor[4] == hash(system) &&
-                count in 1..messages.size && anchor[3] == messageHash(messages[count - 1])) {
-                val later = messages.drop(count).let { tail ->
-                    if (tail.firstOrNull()?.role == AgentRole.Assistant) tail.drop(1) else tail
+            if (anchor.generation == generation &&
+                anchor.environmentHash == requestEnvironmentHash(endpoint, system, tools) &&
+                anchor.count in 1..messages.size &&
+                anchor.prefixHash == hashMessages(messages.take(anchor.count))) {
+                if (anchor.count == messages.size) return@onDatabase ContextEstimate(anchor.input, "reported")
+                val base = ContextBudget.estimateRequestTokens(request.copy(messages = messages.take(anchor.count)))
+                val delta = (estimated - base).coerceAtLeast(0)
+                if (anchor.input <= Long.MAX_VALUE - delta) {
+                    return@onDatabase ContextEstimate(anchor.input + delta, "estimated")
                 }
-                return@onDatabase ContextEstimate(anchor[0].toLong() + anchor[1].toLong() +
-                    (AgentContext.serializedBytes(later) / 4),
-                    if (later.isEmpty()) "reported" else "estimated")
             }
         }
-        val approximate = (AgentContext.serializedBytes(messages).toLong() +
-            system.toByteArray(Charsets.UTF_8).size) / 4
-        ContextEstimate(approximate, "estimated")
+        ContextEstimate(estimated, "estimated")
     }
 
     suspend fun usage(sessionId: String): SessionUsage = onDatabase { db ->
@@ -374,13 +401,160 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     private fun messageHash(message: AgentMessage): String = hash(json.encodeToString(AgentMessage.serializer(), message))
 
+    private fun requestEnvironmentHash(endpoint: String, system: String,
+                                       tools: List<AgentToolDefinition>): String = hash(buildString {
+        fun part(value: String) { append(value.length).append(':').append(value) }
+        part(endpoint)
+        part(system)
+        append(tools.size).append(':')
+        tools.forEach { tool ->
+            part(tool.name)
+            part(tool.description)
+            part(tool.parameters.toString())
+        }
+    })
+
+    private fun hashMessages(messages: List<AgentMessage>): String =
+        hash(json.encodeToString(ListSerializer(AgentMessage.serializer()), messages))
+
+    private fun canonicalPrefixHash(db: SQLiteDatabase, id: String, through: Long): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        db.rawQuery("SELECT id,payload FROM events WHERE session_id=? AND id<=? ORDER BY id",
+            arrayOf(id, through.toString())).use { cursor ->
+            while (cursor.moveToNext()) {
+                val payload = cursor.getString(1).toByteArray(Charsets.UTF_8)
+                digest.update(ByteBuffer.allocate(12).putLong(cursor.getLong(0)).putInt(payload.size).array())
+                digest.update(payload)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 255) }
+    }
+
+    private data class Boundary(
+        val rowId: Long,
+        val through: Long,
+        val afterCount: Int,
+        val summary: String,
+        val prefixHash: String?,
+        val activeHash: String?,
+        val summaryHash: String?,
+    )
+
+    private fun validateProjection(db: SQLiteDatabase, id: String) {
+        val boundary = db.rawQuery("SELECT id,through_event_id,after_count,summary,prefix_hash," +
+            "active_hash,summary_hash FROM compactions WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            arrayOf(id)).use { cursor ->
+            if (!cursor.moveToFirst()) null else Boundary(cursor.getLong(0), cursor.getLong(1),
+                cursor.getInt(2), cursor.getString(3),
+                if (cursor.isNull(4)) null else cursor.getString(4),
+                if (cursor.isNull(5)) null else cursor.getString(5),
+                if (cursor.isNull(6)) null else cursor.getString(6))
+        } ?: return
+        val active = activeMessages(db, id)
+        val currentSummary = summary(db, id)
+        val shapeValid = boundary.afterCount in 0..active.size &&
+            canonicalSuffixMatches(db, id, boundary.through, active.drop(boundary.afterCount)) &&
+            currentSummary == boundary.summary
+        val prefix = if (shapeValid) canonicalPrefixHash(db, id, boundary.through) else ""
+        val valid = shapeValid && if (boundary.prefixHash != null && boundary.activeHash != null &&
+            boundary.summaryHash != null) {
+            prefix == boundary.prefixHash &&
+                hashMessages(active.take(boundary.afterCount)) == boundary.activeHash &&
+                hash(currentSummary) == boundary.summaryHash
+        } else canonicalSubsequence(db, id, boundary.through, active.take(boundary.afterCount))
+        if (valid) {
+            if (boundary.prefixHash == null) db.execSQL("UPDATE compactions SET prefix_hash=?,active_hash=?,summary_hash=? WHERE id=?",
+                arrayOf(prefix, hashMessages(active.take(boundary.afterCount)), hash(currentSummary), boundary.rowId))
+            return
+        }
+        rebuildProjection(db, id, active.size)
+    }
+
+    private fun canonicalSubsequence(db: SQLiteDatabase, id: String, through: Long,
+                                     retained: List<AgentMessage>): Boolean {
+        var index = 0
+        db.rawQuery("SELECT payload FROM events WHERE session_id=? AND id<=? ORDER BY id",
+            arrayOf(id, through.toString())).use { cursor ->
+            while (cursor.moveToNext() && index < retained.size) {
+                if (decode(cursor.getString(0)) == retained[index]) index++
+            }
+        }
+        return index == retained.size
+    }
+
+    private fun canonicalSuffixMatches(db: SQLiteDatabase, id: String, through: Long,
+                                       activeSuffix: List<AgentMessage>): Boolean {
+        var index = 0
+        db.rawQuery("SELECT payload FROM events WHERE session_id=? AND id>? ORDER BY id",
+            arrayOf(id, through.toString())).use { cursor ->
+            while (cursor.moveToNext()) {
+                if (index >= activeSuffix.size || decode(cursor.getString(0)) != activeSuffix[index]) return false
+                index++
+            }
+        }
+        return index == activeSuffix.size
+    }
+
+    private fun rebuildProjection(db: SQLiteDatabase, id: String, oldCount: Int) {
+        val recent = db.rawQuery("SELECT payload FROM events WHERE session_id=? ORDER BY id DESC LIMIT 256",
+            arrayOf(id)).use { cursor ->
+            buildList {
+                var bytes = 0
+                while (cursor.moveToNext()) {
+                    val payload = cursor.getString(0)
+                    val size = payload.toByteArray(Charsets.UTF_8).size
+                    if (isNotEmpty() && bytes + size > 1024 * 1024) break
+                    add(decode(payload))
+                    bytes += size
+                }
+            }.asReversed()
+        }
+        val pending = recent.lastOrNull()?.takeIf { it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty() }
+        val tail = recent.dropLast(if (pending == null) 0 else 1).toMutableList()
+        fun dropFirstGroup() {
+            if (tail.isEmpty()) return
+            val paired = tail.first().role == AgentRole.Assistant && tail.first().toolCalls.isNotEmpty() &&
+                tail.getOrNull(1)?.role == AgentRole.Tool
+            tail.removeAt(0)
+            if (paired) tail.removeAt(0)
+            while (tail.firstOrNull()?.role == AgentRole.Tool) tail.removeAt(0)
+        }
+        while (tail.firstOrNull()?.role == AgentRole.Tool) tail.removeAt(0)
+        while (tail.isNotEmpty() && (!AgentSessionCodec.fits(tail + listOfNotNull(pending)) ||
+                !AgentContext.validGroups(tail))) dropFirstGroup()
+        val recovered = tail + listOfNotNull(pending)
+        val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(id)).use {
+            it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
+        }
+        val prefix = canonicalPrefixHash(db, id, through)
+        db.beginTransaction()
+        try {
+            db.delete("active_events", "session_id=?", arrayOf(id))
+            recovered.forEach { message ->
+                db.insertOrThrow("active_events", null, ContentValues().apply {
+                    put("session_id", id); put("payload", json.encodeToString(AgentMessage.serializer(), message))
+                })
+            }
+            db.execSQL("UPDATE sessions SET summary='',active_generation=active_generation+1 WHERE id=?", arrayOf(id))
+            db.insertOrThrow("compactions", null, ContentValues().apply {
+                put("session_id", id); put("through_event_id", through); put("summary", "")
+                put("before_count", oldCount); put("after_count", recovered.size)
+                put("created_at", System.currentTimeMillis())
+                put("prefix_hash", prefix); put("active_hash", hashMessages(recovered))
+                put("summary_hash", hash(""))
+            })
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+        summaryBytes = 0
+    }
+
     private fun hash(value: String): String = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it.toInt() and 255) }
 
-    private fun validRetained(expected: List<AgentMessage>, retained: List<AgentMessage>): Boolean {
+    private fun validProjection(expected: List<AgentMessage>, retained: List<AgentMessage>): Boolean {
         var original = 0
         for (message in retained) {
-            while (original < expected.size && expected[original] != message) original++
+            while (original < expected.size && !sameOrPruned(expected[original], message)) original++
             if (original == expected.size) return false
             original++
         }
@@ -398,6 +572,23 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             }
         }
         return true
+    }
+
+    private fun sameOrPruned(original: AgentMessage, projected: AgentMessage): Boolean {
+        if (original == projected) return true
+        if (original.role != AgentRole.Tool || projected.role != AgentRole.Tool ||
+            original.toolResults.size != projected.toolResults.size ||
+            original.copy(toolResults = projected.toolResults) != projected) return false
+        return original.toolResults.zip(projected.toolResults).all { (before, after) ->
+            if (before == after) true else {
+                val marker = try { json.parseToJsonElement(after.content).jsonObject["output_pruned"]
+                    ?.jsonPrimitive?.booleanOrNull == true }
+                    catch (_: IllegalArgumentException) { false }
+                !before.error && marker && after.content.toByteArray(Charsets.UTF_8).size <
+                    before.content.toByteArray(Charsets.UTF_8).size &&
+                    before.copy(content = after.content) == after
+            }
+        }
     }
 
     private fun header(db: SQLiteDatabase, id: String): CodingSessionHeader =
@@ -434,14 +625,16 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 }
 
-private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 4) {
+private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 5) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL DEFAULT '', active_generation INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL)")
         db.execSQL("CREATE INDEX events_session_id ON events(session_id,id)")
         db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         createUsage(db)
+        addContextUsageColumns(db)
         createCompaction(db)
+        addProjectionHashes(db)
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -450,7 +643,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 1 || newVersion != 4) throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
+        if (oldVersion < 1 || newVersion != 5) throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
         if (oldVersion == 1) createUsage(db)
         if (oldVersion <= 2) {
             db.execSQL("ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
@@ -466,6 +659,10 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
                 db.execSQL("ALTER TABLE usage ADD COLUMN active_generation INTEGER NOT NULL DEFAULT 0")
             }
         }
+        if (oldVersion <= 4) {
+            addContextUsageColumns(db)
+            addProjectionHashes(db)
+        }
     }
 
     private fun createUsage(db: SQLiteDatabase) {
@@ -473,9 +670,21 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
         db.execSQL("CREATE INDEX usage_session_id ON usage(session_id,id)")
     }
 
+    private fun addContextUsageColumns(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE usage ADD COLUMN cache_creation_tokens INTEGER")
+        db.execSQL("ALTER TABLE usage ADD COLUMN context_input_tokens INTEGER")
+        db.execSQL("ALTER TABLE usage ADD COLUMN base_prefix_hash TEXT")
+    }
+
     private fun createCompaction(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE active_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL)")
         db.execSQL("CREATE INDEX active_events_session_id ON active_events(session_id,id)")
         db.execSQL("CREATE TABLE compactions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, through_event_id INTEGER NOT NULL, summary TEXT NOT NULL, before_count INTEGER NOT NULL, after_count INTEGER NOT NULL, created_at INTEGER NOT NULL)")
+    }
+
+    private fun addProjectionHashes(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE compactions ADD COLUMN prefix_hash TEXT")
+        db.execSQL("ALTER TABLE compactions ADD COLUMN active_hash TEXT")
+        db.execSQL("ALTER TABLE compactions ADD COLUMN summary_hash TEXT")
     }
 }

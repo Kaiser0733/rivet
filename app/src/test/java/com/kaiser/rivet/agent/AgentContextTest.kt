@@ -8,6 +8,55 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentContextTest {
+    @Test fun budgetPlanKeepsAContiguousRecentTailAndLatestUserTurns() {
+        val history = buildList {
+            repeat(10) { index ->
+                add(AgentMessage.user(if (index == 0) "Fix login without changing auth policy" else "Inspect $index"))
+                add(AgentMessage.assistant("", listOf(AgentToolCall("call-$index", "read_file", "{}"))))
+                add(AgentMessage.tools(listOf(AgentToolResult("call-$index", "read_file",
+                    "x".repeat(8_000), summary = "Read $index"))))
+            }
+        }
+
+        val plan = AgentContext.plan(history, targetBytes = 35_000)!!
+
+        assertTrue(plan.retainedBytes <= 35_000)
+        assertTrue(plan.retained.any { it.role == AgentRole.User && it.text == "Inspect 8" })
+        assertTrue(plan.retained.any { it.role == AgentRole.User && it.text == "Inspect 9" })
+        assertFalse(plan.retained.any { it.text == "Fix login without changing auth policy" })
+        assertTrue(plan.summaryInput.contains("Fix login without changing auth policy"))
+        for (index in plan.retained.indices) {
+            val call = plan.retained[index].toolCalls.firstOrNull() ?: continue
+            assertEquals(call.id, plan.retained[index + 1].toolResults.single().callId)
+        }
+        assertEquals(30, history.size)
+    }
+
+    @Test fun oldSuccessfulToolBodyPrunesWithoutChangingHistoryOrCorrelatedErrors() {
+        val oldCall = AgentToolCall("old", "read_file", "{\"path\":\"A.kt\"}")
+        val failedCall = AgentToolCall("failed", "write_file", "{\"path\":\"B.kt\"}")
+        val history = listOf(
+            AgentMessage.user("Inspect A"),
+            AgentMessage.assistant("", listOf(oldCall)),
+            AgentMessage.tools(listOf(AgentToolResult("old", "read_file",
+                "{\"content\":\"${"x".repeat(22_000)}\",\"sha256\":\"abc\"}", summary = "Read A.kt"))),
+            AgentMessage.user("Fix B"),
+            AgentMessage.assistant("", listOf(failedCall)),
+            AgentMessage.tools(listOf(AgentToolResult("failed", "write_file",
+                "{\"error\":\"conflict\"}", error = true, summary = "Conflict B.kt"))),
+        )
+
+        val pruned = AgentContext.pruneOldResults(history, protectedTailBytes = 1024)!!
+
+        assertEquals("Fix B", pruned[3].text)
+        assertTrue(pruned[2].toolResults.single().content.contains("\"output_pruned\":true"))
+        assertTrue(pruned[2].toolResults.single().content.contains("\"sha256\":\"abc\""))
+        assertEquals("old", pruned[2].toolResults.single().callId)
+        assertEquals(history[5], pruned[5])
+        assertTrue(history[2].toolResults.single().content.contains("x".repeat(22_000)))
+        assertNull(AgentContext.pruneOldResults(pruned, protectedTailBytes = 1024))
+    }
+
     @Test fun pressureRemovesOldBulkyResultsAndKeepsRecentPairs() {
         val history = mutableListOf<AgentMessage>()
         repeat(22) { index ->

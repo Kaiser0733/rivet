@@ -49,6 +49,14 @@ class AnthropicClientTest {
     }
 
     @Test
+    fun listModelsKeepsOnlyPositiveReportedInputLimit() = runTest {
+        server.enqueue(MockResponse().setBody("""{"data":[{"id":"large","max_input_tokens":200000},{"id":"unknown","max_input_tokens":0}]}"""))
+        val models = AnthropicClient(config(), "key").listModels().associateBy { it.id }
+        assertEquals(200000, models["large"]?.inputLimitTokens)
+        assertEquals(null, models["unknown"]?.inputLimitTokens)
+    }
+
+    @Test
     fun listModelsRejectsOversizedResponse() = runTest {
         server.enqueue(MockResponse().setBody("x".repeat(MAX_PROVIDER_JSON_BODY_BYTES + 1)))
         try {
@@ -261,6 +269,7 @@ class AnthropicClientTest {
         assertEquals(25L, response.usage?.inputTokens)
         assertEquals(15L, response.usage?.outputTokens)
         assertEquals(5L, response.usage?.cacheReadTokens)
+        assertEquals(30L, response.usage?.contextInputTokens(ProviderType.Anthropic))
     }
 
     @Test

@@ -3,7 +3,9 @@ package com.kaiser.rivet.agent
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.put
 
 data class ContextPlan(
     val retained: List<AgentMessage>,
@@ -20,10 +22,85 @@ internal object AgentContext {
     private const val MAX_REQUIRED_TAIL_BYTES = 256 * 1024
     private const val SUMMARY_INPUT_BYTES = 96 * 1024
     private val serializer = ListSerializer(AgentMessage.serializer())
-    private val secretPattern = Regex("(?i)(sk-[a-z0-9_-]{12,}|ghp_[a-z0-9]{20,}|AIza[a-z0-9_-]{20,})")
+    private val secretPattern = Regex("(?i)(sk-[a-z0-9_-]{12,}|gh[pousr]_[a-z0-9]{20,}|AIza[a-z0-9_-]{20,}|AKIA[A-Z0-9]{16})")
+    private val bearerPattern = Regex("(?i)\\bBearer\\s+[a-z0-9._~+/-]{12,}")
+    private val assignedSecretPattern = Regex("(?i)\\b(?:api[_-]?key|access[_-]?token|password|secret)\\s*[:=]\\s*['\"]?[a-z0-9._~+/-]{12,}")
+    private val privateKeyPattern = Regex("-----BEGIN [A-Z ]*PRIVATE KEY-----.*?-----END [A-Z ]*PRIVATE KEY-----",
+        RegexOption.DOT_MATCHES_ALL)
 
     fun serializedBytes(messages: List<AgentMessage>): Int =
         Json.encodeToString(serializer, messages).toByteArray(Charsets.UTF_8).size
+
+    fun pruneOldResults(messages: List<AgentMessage>, protectedTailBytes: Int): List<AgentMessage>? {
+        require(protectedTailBytes >= 0)
+        val groups = completeGroups(messages) ?: return null
+        if (groups.size < 2) return null
+        val sizes = groups.map { serializedBytes(it) - 2 }
+        val protected = mutableSetOf(groups.lastIndex)
+        val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
+        if (latestUser >= 0) protected += latestUser
+        var tailBytes = sizes.last()
+        for (index in groups.lastIndex - 1 downTo 0) {
+            if (tailBytes + sizes[index] > protectedTailBytes) break
+            protected += index
+            tailBytes += sizes[index]
+        }
+        val projected = groups.flatMapIndexed { index, group ->
+            if (index in protected || group.size != 2) group else {
+                val tool = group[1]
+                listOf(group[0], tool.copy(toolResults = tool.toolResults.map { result ->
+                    if (result.error || result.content.toByteArray(Charsets.UTF_8).size < 2048) result
+                    else result.copy(content = prunedContent(result))
+                }))
+            }
+        }
+        return projected.takeIf { serializedBytes(messages) - serializedBytes(it) >= 4096 }
+    }
+
+    private fun prunedContent(result: AgentToolResult): String {
+        val old = try { Json.parseToJsonElement(result.content).jsonObject }
+            catch (_: Exception) { null }
+        return buildJsonObject {
+            put("output_pruned", true)
+            put("original_bytes", result.content.toByteArray(Charsets.UTF_8).size)
+            put("summary", clipped(result.summary, 180))
+            for (key in listOf("path", "sha256", "size", "exit_code", "sync", "limited",
+                    "files_scanned", "entries_visited", "bytes_scanned", "eof", "next_offset", "truncated")) {
+                val value = old?.get(key) as? JsonPrimitive ?: continue
+                if (value.isString) put(key, clipped(value.content, 200)) else put(key, value)
+            }
+        }.toString()
+    }
+
+    fun plan(messages: List<AgentMessage>, targetBytes: Int): ContextPlan? {
+        require(targetBytes > 0)
+        val originalBytes = serializedBytes(messages)
+        if (originalBytes <= targetBytes) return null
+        val groups = completeGroups(messages) ?: return null
+        if (groups.size < 2) return null
+        val sizes = groups.map { serializedBytes(it) - 2 }
+        val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
+        var first = groups.lastIndex
+        var tailBytes = 2 + sizes[first]
+        while (first > 0 && tailBytes + sizes[first - 1] + 1 <= targetBytes) {
+            first--
+            tailBytes += sizes[first] + 1
+        }
+        fun selectedIndices(): Set<Int> = (first..groups.lastIndex).toSet() +
+            if (latestUser >= 0) setOf(latestUser) else emptySet()
+        var selected = selectedIndices()
+        var retained = selected.sorted().flatMap(groups::get)
+        while (serializedBytes(retained) > targetBytes && first < groups.lastIndex) {
+            first++
+            selected = selectedIndices()
+            retained = selected.sorted().flatMap(groups::get)
+        }
+        val retainedBytes = serializedBytes(retained)
+        if (retainedBytes > targetBytes || originalBytes - retainedBytes < 4096) return null
+        val removed = groups.indices.filterNot { it in selected }.flatMap(groups::get)
+        if (removed.isEmpty()) return null
+        return ContextPlan(retained, summarizeInput(removed), originalBytes, retainedBytes)
+    }
 
     fun plan(messages: List<AgentMessage>, force: Boolean = false): ContextPlan? {
         val originalBytes = serializedBytes(messages)
@@ -69,6 +146,8 @@ internal object AgentContext {
         }
         return groups
     }
+
+    fun validGroups(messages: List<AgentMessage>): Boolean = completeGroups(messages) != null
 
     private fun summarizeInput(messages: List<AgentMessage>): String {
         val body = buildString {
@@ -120,5 +199,8 @@ internal object AgentContext {
             if (safe.length > length) " [truncated]" else ""
     }
 
-    fun redact(value: String): String = value.replace(secretPattern, "[redacted]")
+    fun redact(value: String): String = value.replace(privateKeyPattern, "[redacted private key]")
+        .replace(bearerPattern, "Bearer [redacted]")
+        .replace(assignedSecretPattern, "[redacted credential]")
+        .replace(secretPattern, "[redacted]")
 }
