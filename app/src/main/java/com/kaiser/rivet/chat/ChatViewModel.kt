@@ -339,7 +339,7 @@ class ChatViewModel private constructor(
             }
             if (!sessionStore.canSaveWithReserve(activeMessages + AgentMessage.user(trimmed), 0)) {
                 try {
-                    val reduced = context.prepare(activeMessages, force = true)
+                    val reduced = context.prepare(activeMessages, force = true, reason = "storage_pressure")
                     if (reduced != activeMessages) {
                         activeMessages = reduced
                         activeSummary = context.summary

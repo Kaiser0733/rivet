@@ -405,4 +405,45 @@ class CodingSessionsTest {
             "model", messages, "normal system"))
         assertEquals(2, sessions.usage(id).reportedRequests)
     }
+
+    @Test fun boundedLocalCompactionAttemptsKeepReasonBoundaryAndFailure() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = listOf(AgentMessage.user("Original task"), AgentMessage.assistant("Done"),
+            AgentMessage.user("Continue"))
+        sessions.save(history, interrupted = false)
+        sessions.compact(history, listOf(history.last()), "task state",
+            ContextAttempt("automatic", "estimated", 12_000, 4_000, "provider", "model"))
+        sessions.recordContextFailure(id,
+            ContextAttempt("overflow", "reported", 20_000, null, "provider", "model",
+                failure = "context_summary_invalid"))
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.rawQuery("SELECT reason,estimate_source,through_event_id,outcome,failure_code " +
+                "FROM context_attempts WHERE session_id=? ORDER BY id", arrayOf(id)).use { cursor ->
+                assertTrue(cursor.moveToFirst())
+                assertEquals("automatic", cursor.getString(0))
+                assertEquals("estimated", cursor.getString(1))
+                assertTrue(cursor.getLong(2) > 0)
+                assertEquals("compacted", cursor.getString(3))
+                assertTrue(cursor.moveToNext())
+                assertEquals("overflow", cursor.getString(0))
+                assertEquals("reported", cursor.getString(1))
+                assertEquals("failed", cursor.getString(3))
+                assertEquals("context_summary_invalid", cursor.getString(4))
+                assertFalse(cursor.moveToNext())
+            }
+        }
+        assertEquals(listOf(history.last()), CodingSessions(app).load().messages)
+        assertEquals(history, sessions.recent(id))
+        repeat(65) { index ->
+            sessions.recordContextFailure(id, ContextAttempt("overflow", "estimated", index.toLong(),
+                null, "provider", "model", failure = "context_headroom_unavailable"))
+        }
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.rawQuery("SELECT COUNT(*) FROM context_attempts WHERE session_id=?", arrayOf(id)).use {
+                it.moveToFirst()
+                assertEquals(64, it.getInt(0))
+            }
+        }
+    }
 }

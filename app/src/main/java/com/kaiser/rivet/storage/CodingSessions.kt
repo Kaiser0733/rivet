@@ -51,6 +51,16 @@ data class SessionUsage(
 
 data class ContextEstimate(val tokens: Long?, val source: String)
 
+data class ContextAttempt(
+    val reason: String,
+    val estimateSource: String,
+    val beforeTokens: Long,
+    val afterTokens: Long?,
+    val providerId: String,
+    val model: String,
+    val failure: String? = null,
+)
+
 /** Provider-neutral event rows. The old DataStore value is retained after migration. */
 internal class CodingSessions(private val context: Context) : AgentSessionPersistence {
     private val database = SessionDatabase(context)
@@ -196,7 +206,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         }
     }
 
-    suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String) = onDatabase { db ->
+    suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String,
+                        attempt: ContextAttempt? = null) = onDatabase { db ->
         val id = activeId(db)
         require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
         require(retained != expected)
@@ -213,7 +224,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val summaryHash = hash(summary)
         db.beginTransaction()
         try {
-            db.insertOrThrow("compactions", null, ContentValues().apply {
+            val compactionId = db.insertOrThrow("compactions", null, ContentValues().apply {
                 put("session_id", id); put("through_event_id", through)
                 put("summary", summary); put("before_count", expected.size)
                 put("after_count", retained.size); put("created_at", System.currentTimeMillis())
@@ -228,9 +239,44 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 })
             }
             db.execSQL("UPDATE sessions SET summary=?, active_generation=active_generation+1 WHERE id=?", arrayOf(summary, id))
+            if (attempt != null) insertContextAttempt(db, id, through, compactionId, attempt,
+                AgentContext.serializedBytes(expected), AgentContext.serializedBytes(retained),
+                summary.toByteArray(Charsets.UTF_8).size)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
+    }
+
+    suspend fun recordContextFailure(sessionId: String, attempt: ContextAttempt) = onDatabase { db ->
+        require(attempt.failure != null)
+        val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(sessionId)).use {
+            it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
+        }
+        db.beginTransaction()
+        try {
+            insertContextAttempt(db, sessionId, through, null, attempt, null, null, null)
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    private fun insertContextAttempt(db: SQLiteDatabase, sessionId: String, through: Long,
+                                     compactionId: Long?, attempt: ContextAttempt,
+                                     beforeBytes: Int?, afterBytes: Int?, summaryBytes: Int?) {
+        db.insertOrThrow("context_attempts", null, ContentValues().apply {
+            put("session_id", sessionId); put("through_event_id", through)
+            put("compaction_id", compactionId); put("reason", attempt.reason.take(40))
+            put("estimate_source", attempt.estimateSource.take(20))
+            put("before_tokens", attempt.beforeTokens); put("after_tokens", attempt.afterTokens)
+            put("before_bytes", beforeBytes); put("after_bytes", afterBytes)
+            put("summary_bytes", summaryBytes); put("provider_id", attempt.providerId.take(100))
+            put("model", attempt.model.take(200))
+            put("outcome", if (attempt.failure == null) "compacted" else "failed")
+            put("failure_code", attempt.failure?.take(80))
+            put("created_at", System.currentTimeMillis())
+        })
+        db.execSQL("DELETE FROM context_attempts WHERE session_id=? AND id NOT IN " +
+            "(SELECT id FROM context_attempts WHERE session_id=? ORDER BY id DESC LIMIT 64)",
+            arrayOf(sessionId, sessionId))
     }
 
     suspend fun fullEventCount(id: String): Int = onDatabase { db ->
@@ -636,6 +682,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
         addContextUsageColumns(db)
         createCompaction(db)
         addProjectionHashes(db)
+        createContextAttempts(db)
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -663,6 +710,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
         if (oldVersion <= 4) {
             addContextUsageColumns(db)
             addProjectionHashes(db)
+            createContextAttempts(db)
         }
     }
 
@@ -687,5 +735,16 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
         db.execSQL("ALTER TABLE compactions ADD COLUMN prefix_hash TEXT")
         db.execSQL("ALTER TABLE compactions ADD COLUMN active_hash TEXT")
         db.execSQL("ALTER TABLE compactions ADD COLUMN summary_hash TEXT")
+    }
+
+    private fun createContextAttempts(db: SQLiteDatabase) {
+        db.execSQL("CREATE TABLE context_attempts (id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+            "session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, " +
+            "through_event_id INTEGER NOT NULL, compaction_id INTEGER, reason TEXT NOT NULL, " +
+            "estimate_source TEXT NOT NULL, before_tokens INTEGER NOT NULL, after_tokens INTEGER, " +
+            "before_bytes INTEGER, after_bytes INTEGER, summary_bytes INTEGER, " +
+            "provider_id TEXT NOT NULL, model TEXT NOT NULL, outcome TEXT NOT NULL, " +
+            "failure_code TEXT, created_at INTEGER NOT NULL)")
+        db.execSQL("CREATE INDEX context_attempts_session_id ON context_attempts(session_id,id)")
     }
 }

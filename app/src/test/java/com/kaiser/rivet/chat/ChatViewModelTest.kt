@@ -31,6 +31,7 @@ import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -503,7 +504,7 @@ class ChatViewModelTest {
         })
     }
 
-    @Test fun compactionKeepsFullHistoryAndSendsSmallerContext() = runBlocking {
+    @Test fun cheapPruningKeepsFullHistoryAndSendsSmallerContext() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val sessions = CodingSessions(app)
@@ -517,10 +518,7 @@ class ChatViewModelTest {
             }
         }
         sessions.save(history, interrupted = false)
-        val provider = QueueProvider(ArrayDeque(listOf(
-            AgentResponse(text = """{"objective":"Prior files were inspected; continue the task.","completed":["Prior files were inspected"],"nextStep":"Continue"}"""),
-            AgentResponse(text = "Complete"),
-        )))
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Complete"))))
         val config = ProviderConfig(id = "test", type = ProviderType.Gemini, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "model-a",
             modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 40_000))
@@ -534,11 +532,11 @@ class ChatViewModelTest {
         assertNull(complete.error)
         assertEquals(68, sessions.fullEventCount(id))
         assertTrue(sessions.load().messages.size < history.size)
-        assertTrue(sessions.load().summary.contains("Prior files"))
-        assertEquals(2, provider.requests.size)
-        assertTrue(provider.requests[1].messages.last().text.contains("Prior task summary"))
-        assertFalse(provider.requests[1].system.contains("Prior files were inspected"))
-        assertTrue(provider.requests[1].messages.size < history.size)
+        assertEquals("", sessions.load().summary)
+        assertEquals(1, provider.requests.size)
+        assertTrue(provider.requests.single().messages.size < history.size)
+        assertTrue(provider.requests.single().messages.flatMap { it.toolResults }
+            .any { it.content.contains("output_pruned") })
         assertEquals(68, sessions.recent(id, 100).size)
 
         val switchedProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "After switch"))))
@@ -549,7 +547,7 @@ class ChatViewModelTest {
         switched.send("Follow up")
         await(switched) { !it.streaming && it.messages.lastOrNull()?.text == "After switch" }
         assertEquals("model-b", switchedProvider.requests.single().model)
-        assertTrue(switchedProvider.requests.single().messages.last().text.contains("Prior files were inspected"))
+        assertTrue(switchedProvider.requests.single().messages.last().text.contains("Follow up"))
         assertEquals(70, sessions.fullEventCount(id))
     }
 
@@ -638,6 +636,46 @@ class ChatViewModelTest {
         assertEquals(history + AgentMessage.user("Continue"), sessions.load().messages)
         assertEquals("", sessions.load().summary)
         assertEquals(1, provider.requests.size)
+    }
+
+    @Test fun cancellingSummaryPreservesPriorActiveContextAndCanonicalHistory() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(10) { index ->
+                add(AgentMessage.user("Inspect $index " + "x".repeat(5_000)))
+                add(AgentMessage.assistant("Analysis $index " + "y".repeat(2_000)))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val entered = CompletableDeferred<AgentRequest>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+                entered.complete(request)
+                awaitCancellation()
+            }
+        }
+        val endpoint = "https://example.invalid"
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+        val viewModel = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Continue")
+        assertTrue(withTimeout(5_000) { entered.await() }.system.contains("task state"))
+        viewModel.cancel()
+        await(viewModel) { !it.streaming }
+
+        val restored = CodingSessions(app).load()
+        assertEquals(history + AgentMessage.user("Continue"), restored.messages)
+        assertEquals("", restored.summary)
+        assertEquals(history.size + 1, sessions.fullEventCount(id))
+        assertFalse(restored.interrupted)
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
