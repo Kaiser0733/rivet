@@ -632,6 +632,7 @@ class ChatViewModel private constructor(
                 else -> "Rivet couldn't prepare a safe Undo, so it stopped before changing files. Try again."
             }
             AgentStopReason.ContextUnavailable -> "Rivet couldn't make room to continue this conversation. Your messages were kept. Try again or start a new conversation."
+            AgentStopReason.ContextTooSmall -> "This model's context capacity is too small for this request. Choose a model with a larger context window or shorten the request."
             AgentStopReason.NoProgress -> "Rivet couldn't get past the same problem. Check the last message, then tell it what to try next."
             AgentStopReason.RuntimeBlocked -> runtimeFailureMessage(result.failureCode)
         }

@@ -3,7 +3,9 @@ package com.kaiser.rivet.agent
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.put
 
@@ -12,6 +14,7 @@ data class ContextPlan(
     val summaryInput: String,
     val originalBytes: Int,
     val retainedBytes: Int,
+    val removed: List<AgentMessage> = emptyList(),
 )
 
 /** Plans a smaller active transcript without changing the durable event history. */
@@ -45,7 +48,8 @@ internal object AgentContext {
             if (index in protected || group.size != 2) group else {
                 val tool = group[1]
                 listOf(group[0], tool.copy(toolResults = tool.toolResults.map { result ->
-                    if (result.error || result.content.toByteArray(Charsets.UTF_8).size < 2048) result
+                    if (result.error || result.content.toByteArray(Charsets.UTF_8).size < 2048 ||
+                        result.name == "run_command" && !runCommandCanPrune(result)) result
                     else result.copy(content = prunedContent(result))
                 }))
             }
@@ -60,16 +64,22 @@ internal object AgentContext {
             put("output_pruned", true)
             put("original_bytes", result.content.toByteArray(Charsets.UTF_8).size)
             put("summary", clipped(result.summary, 180))
-            for (key in listOf("path", "sha256", "size", "exit_code", "sync", "limited",
-                    "files_scanned", "entries_visited", "bytes_scanned", "eof", "next_offset", "truncated")) {
+            for (key in listOf("path", "sha256", "size", "exit_code", "timed_out", "sync", "sync_path",
+                    "stdout_truncated", "stderr_truncated", "limited", "files_scanned", "entries_visited",
+                    "bytes_scanned", "eof", "next_offset", "truncated")) {
                 val value = old?.get(key) as? JsonPrimitive ?: continue
                 if (value.isString) put(key, clipped(value.content, 200)) else put(key, value)
             }
         }.toString()
     }
 
-    fun plan(messages: List<AgentMessage>, targetBytes: Int): ContextPlan? {
+    fun plan(
+        messages: List<AgentMessage>,
+        targetBytes: Int,
+        minimumSavingsBytes: Int = 4096,
+    ): ContextPlan? {
         require(targetBytes > 0)
+        require(minimumSavingsBytes >= 0)
         val originalBytes = serializedBytes(messages)
         if (originalBytes <= targetBytes) return null
         val groups = completeGroups(messages) ?: return null
@@ -92,10 +102,18 @@ internal object AgentContext {
             retained = selected.sorted().flatMap(groups::get)
         }
         val retainedBytes = serializedBytes(retained)
-        if (retainedBytes > targetBytes || originalBytes - retainedBytes < 4096) return null
+        if (retainedBytes > targetBytes || originalBytes - retainedBytes < minimumSavingsBytes) return null
         val removed = groups.indices.filterNot { it in selected }.flatMap(groups::get)
         if (removed.isEmpty()) return null
-        return ContextPlan(retained, summarizeInput(removed), originalBytes, retainedBytes)
+        return ContextPlan(retained, summarizeInput(removed, SUMMARY_INPUT_BYTES), originalBytes, retainedBytes, removed)
+    }
+
+    fun minimumProjection(messages: List<AgentMessage>): List<AgentMessage>? {
+        val groups = completeGroups(messages) ?: return null
+        if (groups.isEmpty()) return emptyList()
+        val newest = groups.lastIndex
+        val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
+        return (setOfNotNull(latestUser.takeIf { it >= 0 }, newest).sorted()).flatMap(groups::get)
     }
 
     private fun completeGroups(messages: List<AgentMessage>): List<List<AgentMessage>>? {
@@ -121,51 +139,130 @@ internal object AgentContext {
 
     fun validGroups(messages: List<AgentMessage>): Boolean = completeGroups(messages) != null
 
-    private fun summarizeInput(messages: List<AgentMessage>): String {
-        val body = buildString {
-            for (message in messages) {
-                when (message.role) {
-                    AgentRole.User -> append("USER: ").append(clipped(message.text, 1200)).append('\n')
-                    AgentRole.Assistant -> {
-                        if (message.text.isNotBlank()) append("ASSISTANT: ").append(clipped(message.text, 1200)).append('\n')
-                        message.toolCalls.forEach { call ->
-                            append("TOOL CALL: ").append(call.name)
-                            toolTarget(call)?.let { append(' ').append(it) }
-                            append('\n')
-                        }
+    fun summarizeInput(messages: List<AgentMessage>, maxBytes: Int = SUMMARY_INPUT_BYTES): String {
+        require(maxBytes > 0)
+        val groups = completeGroups(messages)
+            ?: throw IllegalArgumentException("summary_input_limit")
+        if (groups.isEmpty()) return ""
+
+        val selected = mutableListOf<String>()
+        var firstSelected = groups.size
+        for (index in groups.lastIndex downTo 0) {
+            val marker = if (index > 0) omittedMarker(maxBytes) ?: break else ""
+            var row: String? = null
+            for (detailLimit in listOf(1200, 600, 240, 80, 24, 0)) {
+                val candidateRow = summarizeGroup(groups[index], detailLimit)
+                val candidate = marker + candidateRow + selected.joinToString("")
+                if (candidate.toByteArray(Charsets.UTF_8).size <= maxBytes) {
+                    row = candidateRow
+                    break
+                }
+            }
+            if (row == null) break
+            selected.add(0, row)
+            firstSelected = index
+        }
+
+        val marker = if (firstSelected == 0) ""
+            else omittedMarker(maxBytes) ?: throw IllegalArgumentException("summary_input_limit")
+        val result = marker + selected.joinToString("")
+        if (result.toByteArray(Charsets.UTF_8).size > maxBytes) {
+            throw IllegalArgumentException("summary_input_limit")
+        }
+        return result
+    }
+
+    private fun summarizeGroup(group: List<AgentMessage>, detailLimit: Int): String = buildString {
+        for (message in group) {
+            when (message.role) {
+                AgentRole.User -> append("USER: ").append(clipped(message.text, detailLimit)).append('\n')
+                AgentRole.Assistant -> {
+                    if (message.text.isNotBlank()) {
+                        append("ASSISTANT: ").append(clipped(message.text, detailLimit)).append('\n')
+                    } else if (message.toolCalls.isEmpty()) {
+                        append("ASSISTANT: [empty response]\n")
                     }
-                    AgentRole.Tool -> message.toolResults.forEach { result ->
-                        append("TOOL RESULT: ").append(result.name).append(' ')
-                            .append(if (result.error) "error" else "ok").append(' ')
-                            .append(clipped(result.summary, 180)).append('\n')
+                    message.toolCalls.forEach { call ->
+                        append("TOOL CALL: ").append(clipped(call.name, 160))
+                        toolTarget(call, detailLimit)?.let { append(' ').append(it) }
+                        append('\n')
                     }
+                }
+                AgentRole.Tool -> message.toolResults.forEach { result ->
+                    append("TOOL RESULT: ").append(clipped(result.name, 160)).append(' ')
+                    if (result.name == "run_command") append(commandSummary(result))
+                    else append(if (result.error) "error " else "ok ")
+                        .append(clipped(result.summary, minOf(180, detailLimit)))
+                    append('\n')
                 }
             }
         }
-        val bytes = body.toByteArray(Charsets.UTF_8)
-        if (bytes.size <= SUMMARY_INPUT_BYTES) return body
-        var head = clipped(body, 24_000)
-        while (head.toByteArray(Charsets.UTF_8).size > 32 * 1024) {
-            head = head.take(head.length / 2).dropLastWhile { it.isHighSurrogate() }
-        }
-        var tail = body.takeLast(56_000).dropWhile { it.isLowSurrogate() }
-        while (tail.toByteArray(Charsets.UTF_8).size > 60 * 1024) {
-            tail = tail.takeLast(tail.length / 2).dropWhile { it.isLowSurrogate() }
-        }
-        return head + "\n[Earlier projected events omitted; complete history remains stored.]\n" + tail
     }
 
-    private fun toolTarget(call: AgentToolCall): String? {
+    private fun omittedMarker(maxBytes: Int): String? {
+        val markers = listOf(
+            "[Earlier removed events omitted; complete history remains stored.]\n",
+            "[Earlier removed events omitted.]\n",
+            "[older omitted]\n",
+        )
+        return markers.firstOrNull { it.toByteArray(Charsets.UTF_8).size <= maxBytes }
+    }
+
+    private fun commandSummary(result: AgentToolResult): String {
+        val value = parseObject(result.content)
+        val exitCode = (value?.get("exit_code") as? JsonPrimitive)?.intOrNull
+        val timedOut = (value?.get("timed_out") as? JsonPrimitive)?.booleanOrNull
+        val sync = (value?.get("sync") as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val stdoutTruncated = (value?.get("stdout_truncated") as? JsonPrimitive)?.booleanOrNull
+        val stderrTruncated = (value?.get("stderr_truncated") as? JsonPrimitive)?.booleanOrNull
+        val healthy = !result.error && value != null && "error" !in value && "sync_path" !in value &&
+            exitCode == 0 && timedOut == false && sync in setOf("ok", "no_changes") &&
+            stdoutTruncated != null && stderrTruncated != null
+        val failed = result.error || exitCode?.let { it != 0 } == true || timedOut == true
+        return buildString {
+            append(when { healthy -> "ok"; failed -> "failed"; else -> "unresolved" })
+            if (value == null) append(" status=malformed")
+            append(" exit_code=").append(exitCode ?: "unknown")
+            append(" timed_out=").append(timedOut ?: "unknown")
+            append(" sync=").append(sync?.let { clipped(it, 40) } ?: "unknown")
+            append(" stdout_truncated=").append(stdoutTruncated ?: "unknown")
+            append(" stderr_truncated=").append(stderrTruncated ?: "unknown")
+            (value?.get("sync_path") as? JsonPrimitive)?.content?.let {
+                append(" sync_path=").append(clipped(it, 120))
+            }
+        }
+    }
+
+    private fun runCommandCanPrune(result: AgentToolResult): Boolean {
+        if (result.error) return false
+        val value = parseObject(result.content) ?: return false
+        val exitCode = (value["exit_code"] as? JsonPrimitive)?.intOrNull
+        val timedOut = (value["timed_out"] as? JsonPrimitive)?.booleanOrNull
+        val sync = (value["sync"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+        val stdoutTruncated = (value["stdout_truncated"] as? JsonPrimitive)?.booleanOrNull
+        val stderrTruncated = (value["stderr_truncated"] as? JsonPrimitive)?.booleanOrNull
+        return "error" !in value && "sync_path" !in value && exitCode == 0 && timedOut == false &&
+            sync in setOf("ok", "no_changes") && stdoutTruncated != null && stderrTruncated != null
+    }
+
+    private fun parseObject(content: String) = try {
+        Json.parseToJsonElement(content).jsonObject
+    } catch (_: IllegalArgumentException) {
+        null
+    }
+
+    private fun toolTarget(call: AgentToolCall, maxChars: Int = 200): String? {
         val fields = try { Json.parseToJsonElement(call.arguments).jsonObject }
             catch (_: IllegalArgumentException) { return null }
         val path = listOf("path", "cwd", "destination").firstNotNullOfOrNull { key ->
             (fields[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
         }
-        if (path != null) return clipped(path, 200)
+        if (path != null) return clipped(path, maxChars)
         return null
     }
 
     private fun clipped(value: String, length: Int): String {
+        if (length <= 0) return ""
         val safe = redact(value)
         return safe.take(length).dropLastWhile { it.isHighSurrogate() } +
             if (safe.length > length) " [truncated]" else ""

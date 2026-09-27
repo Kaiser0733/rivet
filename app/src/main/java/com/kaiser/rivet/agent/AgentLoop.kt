@@ -24,6 +24,7 @@ enum class AgentStopReason {
     SessionLimit,
     CheckpointUnavailable,
     ContextUnavailable,
+    ContextTooSmall,
     NoProgress,
     RuntimeBlocked,
 }
@@ -83,6 +84,9 @@ class AgentLoop(
             val active = try { compactContext(messages.toList(), false) }
                 catch (e: CancellationException) { throw e
                 } catch (e: ProviderError) { throw e
+                } catch (_: ContextCapacityTooSmall) {
+                    return AgentRunResult(messages, AgentStopReason.ContextTooSmall, modelIterations, toolCalls,
+                        mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
                 } catch (_: Exception) {
                     return AgentRunResult(messages, AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
                         mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
@@ -104,6 +108,9 @@ class AgentLoop(
                     val reduced = try { compactContext(messages.toList(), true) }
                         catch (e: CancellationException) { throw e
                         } catch (e: ProviderError) { throw e
+                        } catch (_: ContextCapacityTooSmall) {
+                            return AgentRunResult(messages, AgentStopReason.ContextTooSmall, modelIterations, toolCalls,
+                                mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
                         } catch (_: Exception) { throw overflow }
                     if (reduced != messages) {
                         messages.clear()
@@ -284,6 +291,7 @@ class AgentLoop(
                         try {
                             prepared.execute()
                         } catch (e: CancellationException) {
+                            if (prepared.approval != null) results += stopped(call, "interrupted")
                             throw e
                         } catch (_: Exception) {
                             failed(call)

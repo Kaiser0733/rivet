@@ -99,6 +99,38 @@ class CodingSessionsTest {
         assertEquals(3, CodingSessions(app).load().messages.size)
     }
 
+    @Test fun danglingToolCallCannotBeMarkedClean() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val call = AgentToolCall("pending", "create_file", "{}")
+        val pending = listOf(AgentMessage.user("create"), AgentMessage.assistant("", listOf(call)))
+        sessions.save(pending, interrupted = false)
+        assertTrue(sessions.list().single { it.id == id }.interrupted)
+
+        sessions.markInterrupted(false)
+
+        assertTrue(sessions.list().single { it.id == id }.interrupted)
+        assertEquals(pending, sessions.recent(id))
+    }
+
+    @Test fun oldCleanFlagOrphanIsRecoveredWithoutReplayingItsTool() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val call = AgentToolCall("old-pending", "write_file", "{}")
+        sessions.save(listOf(AgentMessage.user("edit"), AgentMessage.assistant("", listOf(call))), true)
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("UPDATE sessions SET interrupted=0 WHERE id=?", arrayOf(id))
+        }
+
+        val restored = CodingSessions(app).load()
+
+        assertTrue(restored.interrupted)
+        assertEquals(call.id, restored.messages.last().toolResults.single().callId)
+        assertTrue(restored.messages.last().toolResults.single().content.contains("outcome is unknown"))
+        assertEquals(3, CodingSessions(app).fullEventCount(id))
+        assertEquals(3, CodingSessions(app).load().messages.size)
+    }
+
     @Test fun interruptedRecoveryAtActiveLimitPreservesPriorValidSummary() = runBlocking {
         val sessions = CodingSessions(app)
         val id = sessions.load().id!!
@@ -283,6 +315,40 @@ class CodingSessionsTest {
         } catch (_: IllegalArgumentException) { Unit }
         assertEquals(original, sessions.load().messages)
         assertEquals(2, sessions.fullEventCount(id))
+    }
+
+    @Test fun summaryOnlyReductionKeepsCanonicalAndActiveMessages() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val current = listOf(AgentMessage.user("Continue"))
+        sessions.save(current, interrupted = false)
+
+        sessions.compact(current, current, "Short task state")
+
+        val reopened = CodingSessions(app)
+        assertEquals(current, reopened.load().messages)
+        assertEquals(current, reopened.recent(id))
+        assertEquals("Short task state", reopened.load().summary)
+        assertEquals(1, reopened.fullEventCount(id))
+    }
+
+    @Test fun blankAssistantRetractionAfterCompactionKeepsCanonicalPrefix() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val original = listOf(AgentMessage.user("Original task"), AgentMessage.assistant("Done"),
+            AgentMessage.user("Continue"))
+        sessions.save(original, interrupted = false)
+        val retained = listOf(original.last())
+        sessions.compact(original, retained, "Prior work completed")
+        sessions.save(retained + AgentMessage.assistant(""), interrupted = true)
+
+        sessions.save(retained, interrupted = false)
+
+        val reopened = CodingSessions(app)
+        assertEquals(original, reopened.recent(id))
+        assertEquals(3, reopened.fullEventCount(id))
+        assertEquals(retained, reopened.load().messages)
+        assertEquals("Prior work completed", reopened.load().summary)
     }
 
     @Test fun projectedToolPruningKeepsCanonicalHistoryAndValidatesStoredSummary() = runBlocking {
