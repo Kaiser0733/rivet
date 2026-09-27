@@ -784,6 +784,49 @@ class ChatViewModelTest {
         assertEquals(history.size + 4, sessions.fullEventCount(id))
     }
 
+    @Test fun summaryPersistenceFailureCannotReplaceActiveOrCanonicalHistory() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(10) { index ->
+                add(AgentMessage.user("Inspect $index " + "x".repeat(5_000)))
+                add(AgentMessage.assistant("Analysis $index " + "y".repeat(2_000)))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val endpoint = "https://example.invalid"
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text =
+            """{"objective":"Keep coding","pending":["Verify"]}"""))))
+        val preparation = ContextPreparation(sessions, id, provider, config, "turn", "") {
+            messages, summary -> AgentRequest(config.model,
+                addUntrustedTaskContext(messages, "", summary), "System", config.reasoning, emptyList())
+        }
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("CREATE TRIGGER fail_compact BEFORE INSERT ON compactions BEGIN " +
+                "SELECT RAISE(FAIL, 'no storage'); END")
+        }
+        try {
+            try {
+                preparation.prepare(history)
+                throw AssertionError("Expected compaction storage failure")
+            } catch (_: android.database.SQLException) { Unit }
+        } finally {
+            app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+                db.execSQL("DROP TRIGGER IF EXISTS fail_compact")
+            }
+        }
+
+        val restored = CodingSessions(app).load()
+        assertEquals(history, restored.messages)
+        assertEquals("", restored.summary)
+        assertEquals(20, sessions.fullEventCount(id))
+        assertEquals(1, provider.requests.size)
+    }
+
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withTimeout(5_000) { viewModel.uiState.first(predicate) }
 

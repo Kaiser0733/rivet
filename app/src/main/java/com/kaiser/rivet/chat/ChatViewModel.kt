@@ -383,15 +383,8 @@ class ChatViewModel private constructor(
             var mutationStartedSincePost = false
 
             val loop = AgentLoop(
-                requestModel = { messages, definitions, onText ->
-                    if (project != null) projectText = project.load(observedPaths).text
-                    val request = AgentRequest(
-                        model = snapshot.config.model,
-                        messages = addUntrustedTaskContext(messages, projectText, context.summary),
-                        system = systemInstruction(workspace != null),
-                        reasoning = snapshot.config.reasoning,
-                        tools = definitions,
-                    )
+                requestModel = { messages, _, onText ->
+                    val request = context.requestFor(messages)
                     lastSystem = request.system
                     val response = client.streamAgent(request, onText)
                     if (sessionId != null) {

@@ -263,6 +263,39 @@ class AgentLoopTest {
         }
     }
 
+    @Test fun deniedMutationIsNotApprovedAgainAfterOverflowCompaction() = runTest {
+        val first = AgentToolCall("delete-1", "delete_path", """{"path":"A.kt"}""")
+        val repeated = first.copy(id = "delete-2")
+        var requests = 0
+        var approvals = 0
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ ->
+                requests++
+                when (requests) {
+                    1 -> AgentResponse(toolCalls = listOf(first))
+                    2 -> throw ProviderError.ContextOverflow()
+                    else -> AgentResponse(toolCalls = listOf(repeated))
+                }
+            },
+            prepareTool = { call -> PreparedAgentTool(call,
+                AgentApprovalRequest(call, "Delete", "A.kt")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; false },
+            compactContext = { messages, force -> if (force) messages.drop(1) else messages },
+        )
+        val result = loop.run(listOf(AgentMessage.user("Old " + "x".repeat(20_000)),
+            AgentMessage.user("Delete A.kt")), emptyList())
+
+        assertEquals(3, requests)
+        assertEquals(1, approvals)
+        assertEquals(0, executions)
+        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertEquals("delete-2", result.messages.flatMap { it.toolResults }.last().callId)
+    }
+
     @Test fun contextOverflowCompactsAndRetriesOnlyTheModelRequest() = runTest {
         val call = AgentToolCall("edit", "write_file", "{}")
         var requests = 0
