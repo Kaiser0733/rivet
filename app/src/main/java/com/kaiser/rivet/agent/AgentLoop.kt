@@ -47,6 +47,7 @@ class AgentLoop(
     private val beforeMutation: suspend (AgentToolCall) -> String? = { null },
     private val failureState: suspend () -> String = { "" },
     private val compactContext: suspend (List<AgentMessage>, Boolean) -> List<AgentMessage> = { messages, _ -> messages },
+    private val contextFootprint: (List<AgentMessage>) -> Long = { AgentContext.serializedBytes(it).toLong() },
 ) {
     suspend fun run(
         initial: List<AgentMessage>,
@@ -91,7 +92,7 @@ class AgentLoop(
                 try { requestOnce() }
                 catch (overflow: ProviderError.ContextOverflow) {
                     if (streamed.isNotEmpty()) throw overflow
-                    val before = AgentContext.serializedBytes(messages)
+                    val before = contextFootprint(messages.toList())
                     val reduced = try { compactContext(messages.toList(), true) }
                         catch (e: CancellationException) { throw e
                         } catch (_: Exception) { throw overflow }
@@ -99,7 +100,7 @@ class AgentLoop(
                         messages.clear()
                         messages.addAll(reduced)
                     }
-                    if (AgentContext.serializedBytes(messages) >= before * 9 / 10) throw overflow
+                    if (contextFootprint(messages.toList()) >= before * 9 / 10) throw overflow
                     requestOnce()
                 }
             } catch (e: CancellationException) {
