@@ -2,6 +2,8 @@ package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderConfig
+import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.anthropicOutputCeiling
 import com.kaiser.rivet.provider.trustedInputLimitTokens
 
 enum class TokenEstimateSource { Reported, Estimated, Unknown }
@@ -39,8 +41,12 @@ internal object ContextBudget {
 
     fun assess(config: ProviderConfig, inputTokens: Long?, source: TokenEstimateSource): ContextAssessment {
         val known = config.trustedInputLimitTokens()
-        val reserve = if (known == null) UNKNOWN_RESERVE else
-            minOf(known / 2, maxOf(2048, minOf(12_000, known / 3)))
+        val baseReserve = if (known == null) UNKNOWN_RESERVE else
+            maxOf(2048, minOf(12_000, known / 3))
+        val outputCeiling = if (config.type == ProviderType.Anthropic)
+            anthropicOutputCeiling(config.model, config.reasoning) else 0
+        val reserve = if (known == null) maxOf(baseReserve, outputCeiling) else
+            minOf(known - 1, maxOf(baseReserve, outputCeiling))
         val target = ((known ?: UNKNOWN_PLANNING_LIMIT) - reserve).coerceAtLeast(1)
         return ContextAssessment(inputTokens, source, known,
             if (known == null) CapacitySource.Unknown else CapacitySource.ProviderMetadata,
