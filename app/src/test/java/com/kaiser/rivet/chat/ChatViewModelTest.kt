@@ -521,8 +521,9 @@ class ChatViewModelTest {
             AgentResponse(text = """{"objective":"Prior files were inspected; continue the task.","completed":["Prior files were inspected"],"nextStep":"Continue"}"""),
             AgentResponse(text = "Complete"),
         )))
-        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
-            baseUrl = "https://example.invalid/v1", model = "model-a")
+        val config = ProviderConfig(id = "test", type = ProviderType.Gemini, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "model-a",
+            modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 48_000))
         val viewModel = ChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
@@ -600,8 +601,9 @@ class ChatViewModelTest {
         }
         sessions.save(history, interrupted = false)
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = ""))))
-        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
-            baseUrl = "https://example.invalid/v1", model = "model-a")
+        val config = ProviderConfig(id = "test", type = ProviderType.Gemini, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "model-a",
+            modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 16_000))
         val viewModel = ChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }

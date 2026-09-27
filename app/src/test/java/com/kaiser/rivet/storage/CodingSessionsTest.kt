@@ -390,4 +390,19 @@ class CodingSessionsTest {
         assertEquals("estimated", sessions.contextEstimate(id, "provider", "model", messages,
             "system").source)
     }
+
+    @Test fun compactionRequestUsageDoesNotShadowNormalRequestAnchor() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val messages = listOf(AgentMessage.user("Continue the task"))
+        sessions.save(messages, interrupted = true)
+        sessions.recordUsage(id, "turn", "provider", "model", AgentUsage(500, 20), messages,
+            "normal system")
+        sessions.recordUsage(id, "compaction-turn", "provider", "model", AgentUsage(40, 10),
+            listOf(AgentMessage.user("Older history")), "summary system")
+
+        assertEquals(ContextEstimate(500, "reported"), sessions.contextEstimate(id, "provider",
+            "model", messages, "normal system"))
+        assertEquals(2, sessions.usage(id).reportedRequests)
+    }
 }
