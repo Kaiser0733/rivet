@@ -10,6 +10,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -27,17 +28,35 @@ internal class AnthropicClient(
 ) : ProviderClient {
 
     override suspend fun listModels(): List<ModelInfo> {
-        val request = base(Endpoints.anthropicModels(config.baseUrl)).get().build()
-        http.quick().await(request).use { r ->
-            if (!r.isSuccessful) throw httpError(r.code, r.errorText())
-            val text = r.readBoundedBody() ?: throw ProviderError.InvalidResponse("no body")
-            val data = parseJsonObject(text)?.get("data")?.arr() ?: throw ProviderError.InvalidResponse("not a JSON object")
-            return data.mapNotNull { el ->
-                val o = el.obj() ?: return@mapNotNull null
-                val id = o["id"]?.str() ?: return@mapNotNull null
-                ModelInfo(id, o["display_name"]?.str() ?: id, o["max_input_tokens"].positiveInt())
-            }.sortedBy { it.id.lowercase() }
+        val root = requestBuilder(Endpoints.anthropicModels(config.baseUrl)).build().url
+        val models = linkedMapOf<String, ModelInfo>()
+        var afterId: String? = null
+        repeat(10) {
+            val url = root.newBuilder().addQueryParameter("limit", "1000").apply {
+                afterId?.let { addQueryParameter("after_id", it) }
+            }.build()
+            val request = base(url.toString()).get().build()
+            http.quick().await(request).use { r ->
+                if (!r.isSuccessful) throw httpError(r.code, r.errorText())
+                val text = r.readBoundedBody() ?: throw ProviderError.InvalidResponse("no body")
+                val page = parseJsonObject(text) ?: throw ProviderError.InvalidResponse("not a JSON object")
+                val data = page["data"]?.arr() ?: throw ProviderError.InvalidResponse("missing model data")
+                data.forEach { element ->
+                    val model = element.obj() ?: return@forEach
+                    val id = model["id"]?.str() ?: return@forEach
+                    models[id] = ModelInfo(id, model["display_name"]?.str() ?: id,
+                        model["max_input_tokens"].positiveInt())
+                }
+                if (page["has_more"]?.jsonPrimitive?.booleanOrNull != true) {
+                    return models.values.sortedBy { it.id.lowercase() }
+                }
+                val next = page["last_id"]?.str()
+                    ?: throw ProviderError.InvalidResponse("missing model cursor")
+                if (next == afterId) throw ProviderError.InvalidResponse("repeated model cursor")
+                afterId = next
+            }
         }
+        throw ProviderError.InvalidResponse("model listing exceeds page limit")
     }
 
     override suspend fun testConnection(): TestResult {
@@ -69,7 +88,7 @@ internal class AnthropicClient(
             } else {
                 0
             }
-            put("max_tokens", budget + 8192)
+            put("max_tokens", anthropicOutputCeiling(request.model, request.reasoning))
             if (request.system.isNotEmpty()) put("system", request.system)
             when (thinkingMode) {
                 AnthropicThinkingMode.Manual -> put("thinking", buildJsonObject {
@@ -255,6 +274,10 @@ private val ReasoningLevel.anthropicEffort: String
         ReasoningLevel.High, ReasoningLevel.Max -> "high"
         ReasoningLevel.Default -> "high"
     }
+
+internal fun anthropicOutputCeiling(model: String, reasoning: ReasoningLevel): Int =
+    8192 + if (reasoning != ReasoningLevel.Default &&
+        anthropicThinkingMode(model) == AnthropicThinkingMode.Manual) reasoning.anthropicBudget else 0
 
 private val ReasoningLevel.anthropicBudget: Int
     get() = when (this) {

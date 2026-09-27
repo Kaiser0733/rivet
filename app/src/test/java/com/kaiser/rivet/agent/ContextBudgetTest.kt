@@ -5,6 +5,7 @@ import com.kaiser.rivet.provider.ModelContextLimit
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.ReasoningLevel
+import com.kaiser.rivet.provider.anthropicOutputCeiling
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -45,5 +46,22 @@ class ContextBudgetTest {
         assertNull(unknown.knownInputLimitTokens)
         assertEquals(CapacitySource.Unknown, unknown.capacitySource)
         assertEquals(TokenEstimateSource.Estimated, unknown.estimateSource)
+    }
+
+    @Test fun listedAnthropicHighReasoningReservesItsActualRequestedOutput() {
+        val anthropic = ProviderConfig("a", ProviderType.Anthropic, "Anthropic",
+            "https://api.anthropic.com", "claude-opus-4-5", ReasoningLevel.High,
+            modelContextLimit = ModelContextLimit("claude-opus-4-5",
+                "https://api.anthropic.com", 200_000))
+
+        val assessed = ContextBudget.assess(anthropic, 180_000, TokenEstimateSource.Estimated)
+
+        assertEquals(40_960, anthropicOutputCeiling(anthropic.model, anthropic.reasoning))
+        assertEquals(40_960, assessed.reservedTokens)
+        assertTrue(assessed.needsReduction)
+        assertEquals(159_040, assessed.allowedInputTokens)
+        val default = ContextBudget.assess(anthropic.copy(reasoning = ReasoningLevel.Default),
+            180_000, TokenEstimateSource.Estimated)
+        assertFalse(default.needsReduction)
     }
 }

@@ -136,8 +136,10 @@ private fun isUsageLimit(text: String): Boolean {
 private fun isContextOverflow(text: String): Boolean {
     val value = text.lowercase(java.util.Locale.ROOT)
     return listOf("context_length_exceeded", "model_context_window_exceeded", "context window exceeded",
-        "maximum context length", "prompt is too long", "input token count exceeds", "request too large for context")
-        .any { it in value }
+        "context_window_exceeded", "maximum context length", "prompt is too long",
+        "input token count exceeds", "request too large for context").any { it in value } ||
+        (("context window" in value || "context length" in value) &&
+            ("exceed" in value || "too long" in value || "full" in value))
 }
 
 private fun isResourceExhausted(text: String): Boolean {

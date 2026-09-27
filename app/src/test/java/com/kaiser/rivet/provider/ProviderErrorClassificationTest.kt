@@ -9,7 +9,13 @@ class ProviderErrorClassificationTest {
         assertTrue(httpError(400, """{"error":{"code":"context_length_exceeded","message":"too long"}}""")
             is ProviderError.ContextOverflow)
         assertTrue(providerMessage("prompt is too long") is ProviderError.ContextOverflow)
+        assertTrue(httpError(400, """{"error":{"message":"input length exceeds this model's context window"}}""")
+            is ProviderError.ContextOverflow)
+        assertTrue(httpError(400, """{"error":{"message":"prompt exceeds the context window"}}""")
+            is ProviderError.ContextOverflow)
         assertTrue(httpError(400, """{"error":{"message":"invalid option"}}""")
+            is ProviderError.ProviderMessage)
+        assertTrue(httpError(400, """{"error":{"message":"set a context window option"}}""")
             is ProviderError.ProviderMessage)
     }
 

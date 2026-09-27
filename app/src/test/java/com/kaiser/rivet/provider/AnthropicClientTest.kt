@@ -57,6 +57,21 @@ class AnthropicClientTest {
     }
 
     @Test
+    fun listedModelOnSecondPageKeepsItsInputLimit() = runTest {
+        server.enqueue(MockResponse().setBody("""{"data":[{"id":"first"}],"has_more":true,"last_id":"first"}"""))
+        server.enqueue(MockResponse().setBody("""{"data":[{"id":"target","max_input_tokens":200000}],"has_more":false}"""))
+
+        val models = AnthropicClient(config(), "key").listModels().associateBy { it.id }
+
+        assertEquals(200000, models["target"]?.inputLimitTokens)
+        assertEquals(2, models.size)
+        assertEquals("1000", server.takeRequest().requestUrl?.queryParameter("limit"))
+        val second = server.takeRequest().requestUrl
+        assertEquals("1000", second?.queryParameter("limit"))
+        assertEquals("first", second?.queryParameter("after_id"))
+    }
+
+    @Test
     fun listModelsRejectsOversizedResponse() = runTest {
         server.enqueue(MockResponse().setBody("x".repeat(MAX_PROVIDER_JSON_BODY_BYTES + 1)))
         try {
