@@ -67,7 +67,7 @@ class AgentContextTest {
         }
         val original = history.toList()
 
-        val plan = AgentContext.plan(history)
+        val plan = AgentContext.plan(history, targetBytes = 160 * 1024)
 
         assertNotNull(plan)
         assertTrue(plan!!.retainedBytes < plan.originalBytes)
@@ -90,10 +90,10 @@ class AgentContextTest {
             AgentMessage.user("current task"),
             AgentMessage.assistant("response"),
         )
-        assertNull(AgentContext.plan(messages))
-        assertNotNull(AgentContext.plan(messages, force = true))
+        assertNull(AgentContext.plan(messages, targetBytes = 100 * 1024))
+        assertNotNull(AgentContext.plan(messages, targetBytes = 35 * 1024))
         assertNull(AgentContext.plan(messages + AgentMessage.tools(listOf(
-            AgentToolResult("missing", "read_file", "{}"))), force = true))
+            AgentToolResult("missing", "read_file", "{}"))), targetBytes = 35 * 1024))
     }
 
     @Test fun projectionHandlesMultibyteTextWithinByteLimit() {
@@ -103,7 +103,7 @@ class AgentContextTest {
                 add(AgentMessage.assistant("考察".repeat(1800)))
             }
         }
-        val plan = AgentContext.plan(messages)
+        val plan = AgentContext.plan(messages, targetBytes = 160 * 1024)
         assertNotNull(plan)
         val encoded = plan!!.summaryInput.toByteArray(Charsets.UTF_8)
         assertTrue(encoded.size <= 96 * 1024)
@@ -123,7 +123,7 @@ class AgentContextTest {
             messages += AgentMessage.assistant("", listOf(AgentToolCall("read-$index", "read_file", "{}")))
             messages += AgentMessage.tools(listOf(AgentToolResult("read-$index", "read_file", "x".repeat(22_000))))
         }
-        val plan = AgentContext.plan(messages)!!
+        val plan = AgentContext.plan(messages, targetBytes = 160 * 1024)!!
         assertTrue(plan.summaryInput.contains("run_command"))
         assertFalse(plan.summaryInput.contains("private-token-12345"))
     }

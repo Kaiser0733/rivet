@@ -16,10 +16,6 @@ data class ContextPlan(
 
 /** Plans a smaller active transcript without changing the durable event history. */
 internal object AgentContext {
-    private const val PRESSURE_BYTES = 384 * 1024
-    private const val NORMAL_TAIL_BYTES = 160 * 1024
-    private const val FORCED_TAIL_BYTES = 96 * 1024
-    private const val MAX_REQUIRED_TAIL_BYTES = 256 * 1024
     private const val SUMMARY_INPUT_BYTES = 96 * 1024
     private val serializer = ListSerializer(AgentMessage.serializer())
     private val secretPattern = Regex("(?i)(sk-[a-z0-9_-]{12,}|gh[pousr]_[a-z0-9]{20,}|AIza[a-z0-9_-]{20,}|AKIA[A-Z0-9]{16})")
@@ -99,32 +95,6 @@ internal object AgentContext {
         if (retainedBytes > targetBytes || originalBytes - retainedBytes < 4096) return null
         val removed = groups.indices.filterNot { it in selected }.flatMap(groups::get)
         if (removed.isEmpty()) return null
-        return ContextPlan(retained, summarizeInput(removed), originalBytes, retainedBytes)
-    }
-
-    fun plan(messages: List<AgentMessage>, force: Boolean = false): ContextPlan? {
-        val originalBytes = serializedBytes(messages)
-        if (!force && originalBytes < PRESSURE_BYTES) return null
-        val groups = completeGroups(messages) ?: return null
-        if (groups.size < 3) return null
-        val groupBytes = groups.map { serializedBytes(it) - 2 }
-        fun size(indices: Set<Int>): Int = 2 + indices.sumOf { groupBytes[it] } + maxOf(0, indices.size - 1)
-        val latestUser = groups.indexOfLast { group -> group.singleOrNull()?.role == AgentRole.User }
-        val required = mutableSetOf(groups.lastIndex)
-        if (latestUser >= 0) required += latestUser
-        val requiredBytes = size(required)
-        if (requiredBytes > MAX_REQUIRED_TAIL_BYTES) return null
-        val selected = required.toMutableSet()
-        val target = if (force) minOf(FORCED_TAIL_BYTES, originalBytes / 2) else NORMAL_TAIL_BYTES
-        for (index in groups.indices.reversed()) {
-            if (index in selected) continue
-            if (size(selected) + groupBytes[index] + 1 <= target) selected += index
-        }
-        val retained = selected.sorted().flatMap(groups::get)
-        val removed = groups.indices.filterNot { it in selected }.flatMap(groups::get)
-        if (removed.isEmpty()) return null
-        val retainedBytes = serializedBytes(retained)
-        if (retainedBytes >= originalBytes * 3 / 4) return null
         return ContextPlan(retained, summarizeInput(removed), originalBytes, retainedBytes)
     }
 

@@ -210,8 +210,8 @@ class AgentLoopTest {
 
         assertEquals(AgentStopReason.NoProgress, result.stopReason)
         assertTrue(requested < 20)
-        assertEquals(requested - 1, executed)
-        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("no_progress"))
+        assertEquals(requested, executed)
+        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("same"))
     }
 
     @Test fun contextOverflowCompactsAndRetriesOnlyTheModelRequest() = runTest {

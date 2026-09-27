@@ -20,8 +20,9 @@ data class ContextAssessment(
 
 /** Estimates request occupancy, while keeping unverified capacity explicitly unknown. */
 internal object ContextBudget {
-    private const val UNKNOWN_PLANNING_LIMIT = 32_000
-    private const val UNKNOWN_RESERVE = 12_000
+    // Unknown capacity is a planning threshold, not a claimed model limit.
+    private const val UNKNOWN_PLANNING_LIMIT = 64_000
+    private const val UNKNOWN_RESERVE = 16_000
 
     fun estimateRequestTokens(request: AgentRequest): Long {
         val messageBytes = AgentContext.serializedBytes(request.messages).toLong()
