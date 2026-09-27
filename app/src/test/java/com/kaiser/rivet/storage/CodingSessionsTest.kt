@@ -446,4 +446,23 @@ class CodingSessionsTest {
             }
         }
     }
+
+    @Test fun compactionCannotApplyToAnotherSelectedSessionWithMatchingMessages() = runBlocking {
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        val history = listOf(AgentMessage.user("Same task"), AgentMessage.assistant("Done"))
+        sessions.save(history, interrupted = false)
+        val second = sessions.create(null).id!!
+        sessions.save(history, interrupted = false)
+
+        try {
+            sessions.compact(history, listOf(history.last()), "wrong task", expectedSessionId = first)
+            throw AssertionError("Expected selected-session guard")
+        } catch (_: IllegalStateException) { Unit }
+
+        assertEquals(history, sessions.load().messages)
+        assertEquals("", sessions.load().summary)
+        assertEquals(history, sessions.select(first).messages)
+        assertEquals(history, sessions.select(second).messages)
+    }
 }

@@ -29,8 +29,8 @@ publishing. The signer is compared with the build keystore and a separately
 committed production certificate fingerprint.
 
 The 0.8.1 debug RC passed physical in-place upgrade and core Chat/agent
-acceptance. The 0.8.2 cleanup candidate needs independent verification and
-a short on-device regression test. Debug acceptance does not establish
+acceptance. The 0.9.0 debug candidate needs CI and on-device regression
+verification. Debug acceptance does not establish
 production-signing readiness or constitute a public release.
 
 ## Required GitHub secrets

@@ -257,3 +257,13 @@ The former Files, Changes, and interactive Terminal presentation was retired
 for the 0.8.2 cleanup candidate.
 Why: local coding work should start with a project and a request; users should
 not need to operate the engine's development and recovery screens.
+
+## D31 — Request-aware active context
+
+What: retain canonical SQLite events, but prepare each provider request against
+its actual assembled input and a capacity with explicit provenance. Prune old
+successful tool bodies before model-assisted compaction. Store a bounded
+structured task state and validate its event-prefix boundary on restart.
+Why: byte-only transcript thresholds miss system/tool input and smaller model
+windows. Projection-only reduction preserves historical truth and avoids
+unnecessary summary calls. Policy and approvals remain outside task state.
