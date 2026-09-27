@@ -1,7 +1,6 @@
 package com.kaiser.rivet.provider
 
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Call
@@ -81,20 +80,20 @@ internal fun Response.errorText(): String? {
 // Best-effort extraction of a human-readable message from any of the error
 // body shapes in use ({"error":{"message"}}, {"message"}).
 private fun errorBodyText(body: String?): String? = try {
-    val obj = Json.parseToJsonElement(body ?: return null).jsonObject
+    val obj = parseJsonObject(body ?: return null) ?: return null
     when {
         "error" in obj -> obj["error"]!!.jsonObject["message"]?.jsonPrimitive?.content
         "message" in obj -> obj["message"]?.jsonPrimitive?.content
         else -> null
     }
-} catch (e: Exception) {
+} catch (e: IllegalArgumentException) {
     null
 }
 
 private fun errorBodyCode(body: String?): String? = try {
-    val error = Json.parseToJsonElement(body ?: return null).jsonObject["error"]?.jsonObject
+    val error = parseJsonObject(body ?: return null)?.get("error")?.jsonObject
     error?.get("code")?.jsonPrimitive?.content ?: error?.get("type")?.jsonPrimitive?.content
-} catch (e: Exception) {
+} catch (e: IllegalArgumentException) {
     null
 }
 

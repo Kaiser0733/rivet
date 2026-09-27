@@ -4,7 +4,6 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
@@ -140,14 +139,14 @@ private fun anthropicMessage(message: AgentMessage): JsonObject = when (message.
         put("role", "assistant")
         put("content", buildJsonArray {
             message.transportState?.let { raw ->
-                val state = try { Json.parseToJsonElement(raw) as? JsonObject } catch (_: Exception) { null }
+                val state = parseJsonObject(raw)
                 if (state?.get("provider")?.str() == "anthropic") {
                     state["blocks"]?.arr()?.forEach(::add)
                 }
             }
             if (message.text.isNotEmpty()) add(buildJsonObject { put("type", "text"); put("text", message.text) })
             message.toolCalls.forEach { call ->
-                val input = try { Json.parseToJsonElement(call.arguments) as? JsonObject } catch (_: Exception) { null }
+                val input = parseJsonObject(call.arguments)
                     ?: throw ProviderError.InvalidResponse("invalid tool input")
                 add(buildJsonObject {
                     put("type", "tool_use"); put("id", call.id); put("name", call.name); put("input", input)
@@ -245,9 +244,7 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
         }
         val calls = tools.values.map { tool ->
             val arguments = tool.fragments.toString().ifEmpty { tool.initial.toString() }
-            try {
-                if (Json.parseToJsonElement(arguments) !is JsonObject) throw IllegalArgumentException()
-            } catch (_: Exception) {
+            if (!jsonNestingWithinLimit(arguments, 32) || parseJsonObject(arguments) == null) {
                 throw ProviderError.InvalidResponse("invalid tool input")
             }
             AgentToolCall(tool.id, tool.name, arguments)

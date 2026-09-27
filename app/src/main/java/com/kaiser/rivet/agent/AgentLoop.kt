@@ -1,6 +1,7 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.provider.ProviderError
+import com.kaiser.rivet.provider.jsonNestingWithinLimit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -73,7 +74,6 @@ class AgentLoop(
         val movedExistingPaths = mutableSetOf<String>()
         val deterministicFailures = linkedSetOf<Triple<String, String, String>>()
         val unchangedReads = linkedMapOf<Triple<String, String, String>, Int>()
-        var observedFailureState: String? = null
         var modelIterations = 0
         var toolCalls = 0
         var mutationsAttempted = 0
@@ -191,22 +191,18 @@ class AgentLoop(
                     }
                     val denialKey = operationKeys[callIndex]
                     val previouslyDenied = denialKey in deniedMutations
-                    val state = failureState()
-                    if (observedFailureState != null && observedFailureState != state) {
-                        deterministicFailures.clear()
-                        unchangedReads.clear()
-                    }
-                    observedFailureState = state
                     val previous = deterministicFailures.firstOrNull {
-                        it.first == denialKey && it.third == state
+                        it.first == denialKey
                     }
-                    if (previous != null) {
+                    if (previous != null &&
+                        (previous.second == "denied" || previous.third == failureState())) {
                         results += AgentToolResult(call.id, call.name,
                             AgentToolError.noProgress(previous.second), true, "Stopped  ${call.name}")
                         results += pending("no_progress")
                         stopReason = AgentStopReason.NoProgress
                         break
                     }
+                    if (previous != null) deterministicFailures.removeAll { it.first == denialKey }
                     val blocked = if (prepared.approval != null && !previouslyDenied) mutationBlocker(call) else null
                     if (blocked != null) {
                         val rejected = stopped(call, blocked)
@@ -225,7 +221,7 @@ class AgentLoop(
                         }
                         val deterministic = AgentToolError.deterministicCode(rejected)
                         if (deterministic != null) {
-                            deterministicFailures += Triple(denialKey, deterministic, state)
+                            deterministicFailures += Triple(denialKey, deterministic, failureState())
                             if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
                         }
                         continue
@@ -261,7 +257,7 @@ class AgentLoop(
                     if (denied) {
                         deniedMutations += denialKey
                         results += stopped(call, "denied")
-                        deterministicFailures += Triple(denialKey, "denied", state)
+                        deterministicFailures += Triple(denialKey, "denied", "")
                         if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
                         continue
                     }
@@ -313,7 +309,7 @@ class AgentLoop(
                     }
                     val deterministic = AgentToolError.deterministicCode(bounded)
                     if (deterministic != null) {
-                        deterministicFailures += Triple(denialKey, deterministic, state)
+                        deterministicFailures += Triple(denialKey, deterministic, failureState())
                         if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
                     }
                     if (!bounded.error) recordProvenance(
@@ -328,8 +324,8 @@ class AgentLoop(
                         val hash = MessageDigest.getInstance("SHA-256")
                             .digest(bounded.content.toByteArray(Charsets.UTF_8))
                             .joinToString("") { "%02x".format(it.toInt() and 255) }
-                        val key = Triple(denialKey, hash, state)
-                        unchangedReads.keys.removeAll { it.first == denialKey && it.third == state && it.second != hash }
+                        val key = Triple(denialKey, hash, "")
+                        unchangedReads.keys.removeAll { it.first == denialKey && it.second != hash }
                         val count = (unchangedReads[key] ?: 0) + 1
                         unchangedReads[key] = count
                         if (unchangedReads.size > 64) unchangedReads.remove(unchangedReads.keys.first())
@@ -386,16 +382,12 @@ class AgentLoop(
     } catch (_: SerializationException) { false
     } catch (_: IllegalArgumentException) { false }
 
-    private class TooDeepToolArguments : IllegalArgumentException()
-
     private fun operationKey(call: AgentToolCall): String {
-        if (!argumentsWithinDepth(call.arguments)) {
+        if (!jsonNestingWithinLimit(call.arguments, 32)) {
             throw ProviderError.InvalidResponse("tool arguments too deeply nested")
         }
         val canonical = try {
-            canonicalArguments(Json.parseToJsonElement(call.arguments), 0)
-        } catch (_: TooDeepToolArguments) {
-            throw ProviderError.InvalidResponse("tool arguments too deeply nested")
+            canonicalArguments(Json.parseToJsonElement(call.arguments))
         } catch (_: IllegalArgumentException) { call.arguments }
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(canonical.toByteArray(Charsets.UTF_8))
@@ -403,35 +395,12 @@ class AgentLoop(
         return "${call.name}\n$digest"
     }
 
-    private fun argumentsWithinDepth(raw: String): Boolean {
-        var depth = 0
-        var quoted = false
-        var escaped = false
-        for (char in raw) {
-            if (quoted) {
-                when {
-                    escaped -> escaped = false
-                    char == '\\' -> escaped = true
-                    char == '"' -> quoted = false
-                }
-            } else {
-                when (char) {
-                    '"' -> quoted = true
-                    '{', '[' -> if (++depth > 32) return false
-                    '}', ']' -> depth--
-                }
-            }
-        }
-        return true
-    }
-
-    private fun canonicalArguments(value: JsonElement, depth: Int): String {
-        if (depth > 32) throw TooDeepToolArguments()
+    private fun canonicalArguments(value: JsonElement): String {
         return when (value) {
             is JsonObject -> value.entries.sortedBy { it.key }.joinToString(",", "{", "}") {
-                JsonPrimitive(it.key).toString() + ":" + canonicalArguments(it.value, depth + 1)
+                JsonPrimitive(it.key).toString() + ":" + canonicalArguments(it.value)
             }
-            is JsonArray -> value.joinToString(",", "[", "]") { canonicalArguments(it, depth + 1) }
+            is JsonArray -> value.joinToString(",", "[", "]") { canonicalArguments(it) }
             else -> value.toString()
         }
     }
