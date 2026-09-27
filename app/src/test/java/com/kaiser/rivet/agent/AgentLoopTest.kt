@@ -214,6 +214,55 @@ class AgentLoopTest {
         assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("same"))
     }
 
+    @Test fun relevantStateChangePermitsPreviouslyFailedCall() = runTest {
+        val read = AgentToolCall("read-1", "read_file", """{"path":"A.kt"}""")
+        val create = AgentToolCall("create", "create_file", """{"path":"A.kt"}""")
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(read)),
+            AgentResponse(toolCalls = listOf(create)),
+            AgentResponse(toolCalls = listOf(read.copy(id = "read-2"))),
+            AgentResponse(text = "Done")))
+        var state = "missing"
+        var reads = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = { call -> PreparedAgentTool(call,
+                if (call.name == "create_file") AgentApprovalRequest(call, "Create", "A.kt") else null) {
+                if (call.name == "create_file") {
+                    state = "created"
+                    AgentToolResult(call.id, call.name, """{"path":"A.kt"}""")
+                } else {
+                    reads++
+                    if (state == "missing") AgentToolResult(call.id, call.name,
+                        AgentToolError.content("invalid_path"), error = true)
+                    else AgentToolResult(call.id, call.name, """{"path":"A.kt","sha256":"abc"}""")
+                }
+            } },
+            requestApproval = { true },
+            failureState = { state },
+        ).run(listOf(AgentMessage.user("Create and inspect A.kt")), emptyList())
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(2, reads)
+        assertEquals("Done", result.messages.last().text)
+    }
+
+    @Test fun overflowNeedsSmallerFullRequestBeforeRetry() = runTest {
+        var requests = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> requests++; throw ProviderError.ContextOverflow() },
+            prepareTool = { error("No tools") },
+            requestApproval = { error("No approval") },
+            compactContext = { messages, force -> if (force) messages.takeLast(1) else messages },
+            contextFootprint = { 100_000L },
+        )
+        try {
+            loop.run(listOf(AgentMessage.user("Old"), AgentMessage.user("Current")), emptyList())
+            error("Expected context overflow")
+        } catch (_: ProviderError.ContextOverflow) {
+            assertEquals(1, requests)
+        }
+    }
+
     @Test fun contextOverflowCompactsAndRetriesOnlyTheModelRequest() = runTest {
         val call = AgentToolCall("edit", "write_file", "{}")
         var requests = 0

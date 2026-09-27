@@ -45,7 +45,7 @@ data class TaskState(
             }
             if (text.toByteArray(Charsets.UTF_8).size > MAX_BYTES) return null
             val state = try { json.decodeFromString(serializer(), text) }
-                catch (_: Exception) { return null }
+                catch (_: IllegalArgumentException) { return null }
             val scalars = listOf(state.objective, state.current, state.verification, state.nextStep)
             val lists = listOf(state.userConstraints, state.decisions, state.completed,
                 state.pending, state.failures, state.importantFiles)
