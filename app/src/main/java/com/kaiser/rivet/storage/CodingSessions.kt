@@ -308,7 +308,6 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             put("reasoning_tokens", usage?.reasoningTokens)
             put("total_tokens", usage?.totalTokens)
             put("base_count", requestMessages.size)
-            put("base_last_hash", requestMessages.lastOrNull()?.let(::messageHash))
             put("base_prefix_hash", hashMessages(requestMessages))
             put("system_hash", requestEnvironmentHash(endpoint, system, tools))
             put("active_generation", generation)
@@ -460,8 +459,6 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     private fun decode(payload: String): AgentMessage =
         json.decodeFromString(AgentMessage.serializer(), payload)
-
-    private fun messageHash(message: AgentMessage): String = hash(json.encodeToString(AgentMessage.serializer(), message))
 
     private fun requestEnvironmentHash(endpoint: String, system: String,
                                        tools: List<AgentToolDefinition>): String = hash(buildString {
