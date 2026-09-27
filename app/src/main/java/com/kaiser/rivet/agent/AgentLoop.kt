@@ -78,6 +78,7 @@ class AgentLoop(
             currentCoroutineContext().ensureActive()
             val active = try { compactContext(messages.toList(), false) }
                 catch (e: CancellationException) { throw e
+                } catch (e: ProviderError) { throw e
                 } catch (_: Exception) {
                     return AgentRunResult(messages, AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
                         mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
@@ -98,6 +99,7 @@ class AgentLoop(
                     val before = contextFootprint(messages.toList())
                     val reduced = try { compactContext(messages.toList(), true) }
                         catch (e: CancellationException) { throw e
+                        } catch (e: ProviderError) { throw e
                         } catch (_: Exception) { throw overflow }
                     if (reduced != messages) {
                         messages.clear()
