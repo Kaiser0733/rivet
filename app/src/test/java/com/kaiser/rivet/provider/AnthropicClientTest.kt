@@ -83,6 +83,34 @@ class AnthropicClientTest {
     }
 
     @Test
+    fun deeplyNestedStreamedToolArgumentsFailBeforeRecursiveParse() = runTest {
+        val nested = "[".repeat(10_000) + "0" + "]".repeat(10_000)
+        val delta = buildJsonObject {
+            put("type", "content_block_delta")
+            put("index", 0)
+            put("delta", buildJsonObject {
+                put("type", "input_json_delta")
+                put("partial_json", nested)
+            })
+        }
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"deep","name":"read_file","input":{}}}""",
+            delta.toString(),
+            """{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""",
+            """{"type":"message_stop"}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+
+        try {
+            AnthropicClient(config(), "key").streamAgent(AgentRequest(
+                "claude-x", emptyList(), "", ReasoningLevel.Default,
+                listOf(AgentToolDefinition("read_file", "Read", buildJsonObject { put("type", "object") })),
+            )) {}
+            throw AssertionError("Expected invalid tool input")
+        } catch (_: ProviderError.InvalidResponse) { Unit }
+    }
+
+    @Test
     fun agentStreamExtractsTextDeltas() = runTest {
         val sse = listOf(
             """{"type":"message_start","message":{}}""",
