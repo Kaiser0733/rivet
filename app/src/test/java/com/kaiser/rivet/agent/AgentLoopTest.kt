@@ -5,6 +5,8 @@ import com.kaiser.rivet.provider.ProviderError
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.cancel
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -312,6 +314,62 @@ class AgentLoopTest {
         assertEquals("delete-2", result.messages.flatMap { it.toolResults }.last().callId)
     }
 
+    @Test fun duplicateToolIdsCannotReachApprovalOrExecution() = runTest {
+        val calls = listOf(AgentToolCall("same", "delete_path", """{"path":"A.kt"}"""),
+            AgentToolCall("same", "delete_path", """{"path":"B.kt"}"""))
+        var approvals = 0
+        var executions = 0
+        val completed = mutableListOf<AgentMessage>()
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = calls) },
+            prepareTool = { call -> PreparedAgentTool(call,
+                AgentApprovalRequest(call, "Delete", "file")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; true },
+        )
+        try {
+            loop.run(listOf(AgentMessage.user("Delete files")), emptyList(), onMessage = { completed += it })
+            error("Expected invalid provider response")
+        } catch (_: ProviderError.InvalidResponse) {
+            assertEquals(0, approvals)
+            assertEquals(0, executions)
+            assertTrue(completed.isEmpty())
+        }
+    }
+
+    @Test fun repeatedReadDoesNotSkipLaterMutationInSameToolBatch() = runTest {
+        var requests = 0
+        var writes = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                requests++
+                when {
+                    requests <= 15 -> AgentResponse(toolCalls = listOf(AgentToolCall(
+                        "read-$requests", "read_file", """{"path":"A.kt"}""")))
+                    requests == 16 -> AgentResponse(toolCalls = listOf(
+                        AgentToolCall("read-16", "read_file", """{"path":"A.kt"}"""),
+                        AgentToolCall("edit", "write_file", """{"path":"A.kt"}""")))
+                    else -> AgentResponse(text = "Done")
+                }
+            },
+            prepareTool = { call -> PreparedAgentTool(call,
+                if (call.name == "write_file") AgentApprovalRequest(call, "Edit", "A.kt") else null) {
+                if (call.name == "write_file") {
+                    writes++
+                    AgentToolResult(call.id, call.name, """{"path":"A.kt"}""")
+                } else AgentToolResult(call.id, call.name,
+                    """{"path":"A.kt","content":"same","sha256":"same"}""")
+            } },
+            requestApproval = { true },
+        ).run(listOf(AgentMessage.user("Inspect then edit")), emptyList())
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(1, writes)
+        assertEquals(17, requests)
+    }
+
     @Test fun contextOverflowCompactsAndRetriesOnlyTheModelRequest() = runTest {
         val call = AgentToolCall("edit", "write_file", "{}")
         var requests = 0
@@ -578,7 +636,7 @@ class AgentLoopTest {
             "delete_path",
             """{"path":"src/Old.kt"}""",
         )
-        val repeated = call.copy(id = "second")
+        val repeated = call.copy(id = "second", arguments = """{ "path" : "src/Old.kt" }""")
         val responses = ArrayDeque(
             listOf(
                 AgentResponse(toolCalls = listOf(call)),
@@ -612,6 +670,53 @@ class AgentLoopTest {
         assertEquals(2, result.messages.flatMap { it.toolResults }.count { it.error })
         assertEquals(AgentStopReason.NoProgress, result.stopReason)
         assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("no_progress"))
+    }
+
+    @Test fun reorderedMutationArgumentsDoNotReopenDeniedApproval() = runTest {
+        val first = AgentToolCall("one", "move_path", """{"path":"A.kt","destination":"B.kt"}""")
+        val second = AgentToolCall("two", "move_path", """{"destination":"B.kt","path":"A.kt"}""")
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(first)),
+            AgentResponse(toolCalls = listOf(second))))
+        var approvals = 0
+        var executions = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = { call -> PreparedAgentTool(call, AgentApprovalRequest(call, "Move", "A.kt")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; false },
+        ).run(listOf(AgentMessage.user("Move A.kt")), emptyList())
+
+        assertEquals(1, approvals)
+        assertEquals(0, executions)
+        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertEquals("two", result.messages.flatMap { it.toolResults }.last().callId)
+    }
+
+    @Test fun denialRemainsDurableWhenStopArrivesImmediatelyAfterDecision() = runTest {
+        val call = AgentToolCall("delete", "delete_path", """{"path":"A.kt"}""")
+        val completed = mutableListOf<AgentMessage>()
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Delete", "A.kt")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = {
+                currentCoroutineContext().cancel()
+                false
+            },
+        )
+        val running = async {
+            loop.run(listOf(AgentMessage.user("Delete A.kt")), emptyList(), onMessage = { completed += it })
+        }
+        running.join()
+
+        assertEquals(0, executions)
+        assertEquals("delete", completed.last().toolResults.single().callId)
+        assertTrue(completed.last().toolResults.single().content.contains("denied"))
     }
 
     @Test
