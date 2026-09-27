@@ -518,7 +518,7 @@ class ChatViewModelTest {
         }
         sessions.save(history, interrupted = false)
         val provider = QueueProvider(ArrayDeque(listOf(
-            AgentResponse(text = "Prior files were inspected; continue the task."),
+            AgentResponse(text = """{"objective":"Prior files were inspected; continue the task.","completed":["Prior files were inspected"],"nextStep":"Continue"}"""),
             AgentResponse(text = "Complete"),
         )))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
