@@ -894,6 +894,7 @@ class AgentLoopTest {
     fun sixtyCallsAcrossThirtyIterationsCompleteNormally() = runTest {
         var requests = 0
         var executions = 0
+        var stateChecks = 0
         val loop = AgentLoop(
             requestModel = { _, _, _ ->
                 if (requests++ < 30) AgentResponse(toolCalls = (1..2).map {
@@ -906,11 +907,13 @@ class AgentLoopTest {
             } },
             requestApproval = { error("No approval") },
             canPersistToolOutput = { candidate, reserve -> AgentSessionCodec.fits(candidate, reserve) },
+            failureState = { stateChecks++; "unchanged" },
         )
         val result = loop.run(listOf(AgentMessage.user("Inspect")), emptyList())
         assertEquals(60, executions)
         assertEquals(31, result.modelIterations)
         assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(0, stateChecks)
         assertTrue(result.messages.flatMap { it.toolResults }.none { it.error })
     }
 
