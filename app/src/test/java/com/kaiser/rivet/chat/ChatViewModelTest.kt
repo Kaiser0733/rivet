@@ -523,7 +523,7 @@ class ChatViewModelTest {
         )))
         val config = ProviderConfig(id = "test", type = ProviderType.Gemini, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "model-a",
-            modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 48_000))
+            modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 40_000))
         val viewModel = ChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
@@ -584,6 +584,28 @@ class ChatViewModelTest {
         assertTrue(provider.requests[1].messages.size < history.size + 1)
         assertTrue(sessions.load().summary.contains("Finish the project task"))
         assertEquals(history.size + 2, sessions.fullEventCount(id))
+    }
+
+    @Test fun latestUserMessageThatCannotFitStopsBeforeProviderCall() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val provider = QueueProvider(ArrayDeque())
+        val endpoint = "https://example.invalid"
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
+        val viewModel = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("x".repeat(100_000))
+        val stopped = await(viewModel) { !it.streaming && it.error?.contains("make room") == true }
+
+        assertEquals(0, provider.requests.size)
+        assertEquals(1, sessions.fullEventCount(id))
+        assertEquals(100_000, sessions.load().messages.single().text.length)
+        assertNull(stopped.pendingApproval)
     }
 
     @Test fun failedSummaryKeepsFullOriginalHistory() = runBlocking {

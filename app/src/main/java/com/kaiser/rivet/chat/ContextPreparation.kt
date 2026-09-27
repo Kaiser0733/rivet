@@ -65,14 +65,15 @@ internal class ContextPreparation(
         }
 
         val basis = pruned ?: messages
-        val plan = AgentContext.plan(basis, targetBytes) ?: return messages
+        val plan = AgentContext.plan(basis, targetBytes)
+            ?: return noHeadroom(messages, force)
         val next = taskState(plan.summaryInput, id,
             minOf(96 * 1024L, budget.allowedInputTokens.toLong() * 2).toInt())
         val encoded = next.encode()
         val after = ContextBudget.estimateRequestTokens(request(plan.retained, encoded))
         if (after > budget.allowedInputTokens ||
             (force && after >= baseline * 9 / 10) ||
-            after >= baseline || plan.retained == messages) return messages
+            after >= baseline || plan.retained == messages) return noHeadroom(messages, force)
         commit(durableStore, messages, plan.retained, encoded)
         return plan.retained
     }
@@ -80,6 +81,11 @@ internal class ContextPreparation(
     private fun fits(candidate: List<AgentMessage>, target: Long, baseline: Long, force: Boolean): Boolean {
         val after = footprint(candidate)
         return after <= target && (!force || after < baseline * 9 / 10)
+    }
+
+    private fun noHeadroom(messages: List<AgentMessage>, force: Boolean): List<AgentMessage> {
+        if (!force) throw IllegalStateException("context_headroom_unavailable")
+        return messages
     }
 
     private suspend fun commit(store: CodingSessions, expected: List<AgentMessage>,

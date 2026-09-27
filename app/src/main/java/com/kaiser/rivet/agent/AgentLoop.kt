@@ -10,6 +10,7 @@ import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.security.MessageDigest
 
 enum class AgentStopReason {
     Completed,
@@ -66,7 +67,9 @@ class AgentLoop(
         val createdPaths = mutableSetOf<String>()
         val createdDirectories = mutableSetOf<String>()
         val movedExistingPaths = mutableSetOf<String>()
-        var lastDeterministicFailure: Triple<String, String, String>? = null
+        val deterministicFailures = linkedSetOf<Triple<String, String, String>>()
+        val unchangedReads = linkedMapOf<Triple<String, String, String>, Int>()
+        var observedFailureState: String? = null
         var modelIterations = 0
         var toolCalls = 0
         var mutationsAttempted = 0
@@ -177,8 +180,16 @@ class AgentLoop(
                     }
                     val denialKey = "${call.name}\n${call.arguments}"
                     val previouslyDenied = denialKey in deniedMutations
-                    val previous = lastDeterministicFailure
-                    if (previous != null && previous.first == denialKey && previous.third == failureState()) {
+                    val state = failureState()
+                    if (observedFailureState != null && observedFailureState != state) {
+                        deterministicFailures.clear()
+                        unchangedReads.clear()
+                    }
+                    observedFailureState = state
+                    val previous = deterministicFailures.firstOrNull {
+                        it.first == denialKey && it.third == state
+                    }
+                    if (previous != null) {
                         results += AgentToolResult(call.id, call.name,
                             AgentToolError.noProgress(previous.second), true, "Stopped  ${call.name}")
                         results += pending("no_progress")
@@ -202,8 +213,10 @@ class AgentLoop(
                             break
                         }
                         val deterministic = AgentToolError.deterministicCode(rejected)
-                        lastDeterministicFailure = if (deterministic != null)
-                            Triple(denialKey, deterministic, failureState()) else null
+                        if (deterministic != null) {
+                            deterministicFailures += Triple(denialKey, deterministic, state)
+                            if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
+                        }
                         continue
                     }
                     // Only mutations need prospective headroom. Include completed results
@@ -284,11 +297,32 @@ class AgentLoop(
                         break
                     }
                     val deterministic = AgentToolError.deterministicCode(bounded)
-                    lastDeterministicFailure = if (deterministic != null)
-                        Triple(denialKey, deterministic, failureState()) else null
+                    if (deterministic != null) {
+                        deterministicFailures += Triple(denialKey, deterministic, state)
+                        if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
+                    }
                     if (!denied && !bounded.error) recordProvenance(
                         call, bounded, createdPaths, createdDirectories, movedExistingPaths,
                     )
+                    if (!denied && !bounded.error && prepared.approval != null) {
+                        deterministicFailures.clear()
+                        unchangedReads.clear()
+                    }
+                    if (!bounded.error && call.name in STABLE_READ_TOOLS) {
+                        val hash = MessageDigest.getInstance("SHA-256")
+                            .digest(bounded.content.toByteArray(Charsets.UTF_8))
+                            .joinToString("") { "%02x".format(it.toInt() and 255) }
+                        val key = Triple(denialKey, hash, state)
+                        unchangedReads.keys.removeAll { it.first == denialKey && it.third == state && it.second != hash }
+                        val count = (unchangedReads[key] ?: 0) + 1
+                        unchangedReads[key] = count
+                        if (unchangedReads.size > 64) unchangedReads.remove(unchangedReads.keys.first())
+                        if (count >= 8) {
+                            results += pending("no_progress")
+                            stopReason = AgentStopReason.NoProgress
+                            break
+                        }
+                    }
                 }
             } catch (e: CancellationException) {
                 results += pending("cancelled")
@@ -329,6 +363,7 @@ class AgentLoop(
         const val MAX_TOOL_RESULT_BYTES = 24 * 1024
         const val OUTPUT_LIMIT_CONTENT =
             "{\"error\":\"output_limit\",\"scope\":\"result\",\"limit_bytes\":24576}"
+        private val STABLE_READ_TOOLS = setOf("read_file", "list_directory", "search_files", "git_status", "git_diff")
     }
 
     private fun stopped(call: AgentToolCall, code: String) = AgentToolResult(
