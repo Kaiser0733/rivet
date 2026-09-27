@@ -389,6 +389,9 @@ class AgentLoop(
     private class TooDeepToolArguments : IllegalArgumentException()
 
     private fun operationKey(call: AgentToolCall): String {
+        if (!argumentsWithinDepth(call.arguments)) {
+            throw ProviderError.InvalidResponse("tool arguments too deeply nested")
+        }
         val canonical = try {
             canonicalArguments(Json.parseToJsonElement(call.arguments), 0)
         } catch (_: TooDeepToolArguments) {
@@ -398,6 +401,28 @@ class AgentLoop(
             .digest(canonical.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 255) }
         return "${call.name}\n$digest"
+    }
+
+    private fun argumentsWithinDepth(raw: String): Boolean {
+        var depth = 0
+        var quoted = false
+        var escaped = false
+        for (char in raw) {
+            if (quoted) {
+                when {
+                    escaped -> escaped = false
+                    char == '\\' -> escaped = true
+                    char == '"' -> quoted = false
+                }
+            } else {
+                when (char) {
+                    '"' -> quoted = true
+                    '{', '[' -> if (++depth > 32) return false
+                    '}', ']' -> depth--
+                }
+            }
+        }
+        return true
     }
 
     private fun canonicalArguments(value: JsonElement, depth: Int): String {
