@@ -80,26 +80,26 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) = onDatabase { db ->
-        val id = activeId(db)
-        val count = db.rawQuery("SELECT COUNT(*) FROM active_events WHERE session_id=?", arrayOf(id)).use {
-            it.moveToFirst(); it.getInt(0)
-        }
-        val tail = db.rawQuery("SELECT id,payload FROM active_events WHERE session_id=? ORDER BY id DESC LIMIT 2", arrayOf(id)).use {
-            buildList { while (it.moveToNext()) add(it.getLong(0) to decode(it.getString(1))) }
-        }
-        val last = tail.firstOrNull()?.second
-        val retractEmpty = messages.size == count - 1 && last?.role == AgentRole.Assistant &&
-            last.text.isBlank() && last.toolCalls.isEmpty() &&
-            (count == 1 || messages.lastOrNull() == tail.getOrNull(1)?.second)
-        if (!retractEmpty && (messages.size < count || (count > 0 && messages[count - 1] != last))) {
-            throw IllegalStateException("Session event prefix changed")
-        }
-        // Only the active model transcript has a size limit; complete event history does not.
-        if (!AgentSessionCodec.fits(messages, summary(db, id).toByteArray(Charsets.UTF_8).size)) {
-            throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
-        }
         db.beginTransaction()
         try {
+            val id = activeId(db)
+            val count = db.rawQuery("SELECT COUNT(*) FROM active_events WHERE session_id=?", arrayOf(id)).use {
+                it.moveToFirst(); it.getInt(0)
+            }
+            val tail = db.rawQuery("SELECT id,payload FROM active_events WHERE session_id=? ORDER BY id DESC LIMIT 2", arrayOf(id)).use {
+                buildList { while (it.moveToNext()) add(it.getLong(0) to decode(it.getString(1))) }
+            }
+            val last = tail.firstOrNull()?.second
+            val retractEmpty = messages.size == count - 1 && last?.role == AgentRole.Assistant &&
+                last.text.isBlank() && last.toolCalls.isEmpty() &&
+                (count == 1 || messages.lastOrNull() == tail.getOrNull(1)?.second)
+            if (!retractEmpty && (messages.size < count || (count > 0 && messages[count - 1] != last))) {
+                throw IllegalStateException("Session event prefix changed")
+            }
+            // Only the active model transcript has a size limit; complete event history does not.
+            if (!AgentSessionCodec.fits(messages, summary(db, id).toByteArray(Charsets.UTF_8).size)) {
+                throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
+            }
             if (retractEmpty) {
                 db.delete("active_events", "id=?", arrayOf(tail.first().first.toString()))
                 db.execSQL("DELETE FROM events WHERE id=(SELECT MAX(id) FROM events WHERE session_id=?)", arrayOf(id))
@@ -210,23 +210,23 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String,
                         attempt: ContextAttempt? = null,
                         expectedSessionId: String? = null) = onDatabase { db ->
-        val id = activeId(db)
-        if (expectedSessionId != null && id != expectedSessionId) throw IllegalStateException("Session changed")
         require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
         require(retained != expected)
         require(validProjection(expected, retained))
-        if (activeMessages(db, id) != expected) throw IllegalStateException("Active context changed")
         if (!AgentSessionCodec.fits(retained, summary.toByteArray(Charsets.UTF_8).size)) {
             throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
         }
-        val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(id)).use {
-            it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
-        }
-        val prefixHash = canonicalPrefixHash(db, id, through)
         val activeHash = hashMessages(retained)
         val summaryHash = hash(summary)
         db.beginTransaction()
         try {
+            val id = activeId(db)
+            if (expectedSessionId != null && id != expectedSessionId) throw IllegalStateException("Session changed")
+            if (activeMessages(db, id) != expected) throw IllegalStateException("Active context changed")
+            val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(id)).use {
+                it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
+            }
+            val prefixHash = canonicalPrefixHash(db, id, through)
             val compactionId = db.insertOrThrow("compactions", null, ContentValues().apply {
                 put("session_id", id); put("through_event_id", through)
                 put("summary", summary); put("before_count", expected.size)
@@ -426,13 +426,25 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val payload = json.encodeToString(AgentMessage.serializer(), result)
         db.beginTransaction()
         try {
-            db.insertOrThrow("events", null, ContentValues().apply {
+            val through = db.insertOrThrow("events", null, ContentValues().apply {
                 put("session_id", id); put("payload", payload)
             })
             if (fits) db.insertOrThrow("active_events", null, ContentValues().apply {
                 put("session_id", id); put("payload", payload)
-            }) else db.execSQL("DELETE FROM active_events WHERE id=(SELECT MAX(id) FROM active_events WHERE session_id=?)",
-                arrayOf(id))
+            }) else {
+                db.execSQL("DELETE FROM active_events WHERE id=(SELECT MAX(id) FROM active_events WHERE session_id=?)",
+                    arrayOf(id))
+                val retained = active.dropLast(1)
+                val currentSummary = summary(db, id)
+                db.insertOrThrow("compactions", null, ContentValues().apply {
+                    put("session_id", id); put("through_event_id", through)
+                    put("summary", currentSummary); put("before_count", active.size + 1)
+                    put("after_count", retained.size); put("created_at", System.currentTimeMillis())
+                    put("prefix_hash", canonicalPrefixHash(db, id, through))
+                    put("active_hash", hashMessages(retained))
+                    put("summary_hash", hash(currentSummary))
+                })
+            }
             db.execSQL("UPDATE sessions SET active_generation=active_generation+1, updated_at=? WHERE id=?",
                 arrayOf(System.currentTimeMillis(), id))
             db.setTransactionSuccessful()

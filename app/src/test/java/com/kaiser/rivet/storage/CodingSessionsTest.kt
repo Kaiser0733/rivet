@@ -9,6 +9,7 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
+import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.AgentToolDefinition
 import com.kaiser.rivet.provider.ProviderType
@@ -96,6 +97,41 @@ class CodingSessionsTest {
         assertEquals(3, CodingSessions(app).load().messages.size)
         sessions.markInterrupted(false)
         assertEquals(3, CodingSessions(app).load().messages.size)
+    }
+
+    @Test fun interruptedRecoveryAtActiveLimitPreservesPriorValidSummary() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val initial = listOf(AgentMessage.user("Older task"), AgentMessage.assistant("Done"),
+            AgentMessage.user("Continue"))
+        sessions.save(initial, interrupted = false)
+        sessions.compact(initial, listOf(initial.last()), "Keep the earlier objective")
+        val call = AgentToolCall("pending", "write_file", "{}")
+        val synthetic = AgentMessage.tools(listOf(AgentToolResult(call.id, call.name,
+            AgentToolError.content("interrupted"), error = true, summary = "Interrupted write_file")))
+        fun pending(size: Int) = listOf(initial.last(), AgentMessage.user("x".repeat(size)),
+            AgentMessage.assistant("", listOf(call)))
+        var low = 0
+        var high = AgentSessionCodec.MAX_SERIALIZED_BYTES
+        while (low < high) {
+            val middle = (low + high + 1) / 2
+            if (AgentSessionCodec.fits(pending(middle), "Keep the earlier objective".toByteArray().size))
+                low = middle else high = middle - 1
+        }
+        val nearLimit = pending(low)
+        assertFalse(AgentSessionCodec.fits(nearLimit + synthetic,
+            "Keep the earlier objective".toByteArray().size))
+        sessions.save(nearLimit, interrupted = true)
+
+        val firstLoad = CodingSessions(app).load()
+        val secondLoad = CodingSessions(app).load()
+
+        assertTrue(firstLoad.interrupted)
+        assertEquals("Keep the earlier objective", firstLoad.summary)
+        assertEquals("Keep the earlier objective", secondLoad.summary)
+        assertEquals(nearLimit.dropLast(1), secondLoad.messages)
+        assertEquals(1, sessions.recent(id).last().toolResults.count { it.callId == call.id })
+        assertEquals(6, sessions.fullEventCount(id))
     }
 
     @Test fun migratedInterruptedToolCallIsRecoveredWithoutRerunningIt() = runBlocking {
@@ -464,5 +500,25 @@ class CodingSessionsTest {
         assertEquals("", sessions.load().summary)
         assertEquals(history, sessions.select(first).messages)
         assertEquals(history, sessions.select(second).messages)
+    }
+
+    @Test fun staleCompactionFromAnotherStoreCannotDropNewlySavedEvent() = runBlocking {
+        val first = CodingSessions(app)
+        val id = first.load().id!!
+        val original = listOf(AgentMessage.user("Inspect"), AgentMessage.assistant("Done"))
+        first.save(original, interrupted = false)
+        val second = CodingSessions(app)
+        assertEquals(original, second.load().messages)
+        val newer = original + AgentMessage.user("New instruction")
+        second.save(newer, interrupted = false)
+
+        try {
+            first.compact(original, listOf(original.last()), "stale task", expectedSessionId = id)
+            throw AssertionError("Expected stale compaction rejection")
+        } catch (_: IllegalStateException) { Unit }
+
+        assertEquals(newer, CodingSessions(app).load().messages)
+        assertEquals(newer, first.recent(id))
+        assertEquals("", first.load().summary)
     }
 }
