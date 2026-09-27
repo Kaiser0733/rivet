@@ -8,6 +8,10 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.security.MessageDigest
@@ -117,6 +121,10 @@ class AgentLoop(
                 throw e
             }
             modelIterations++
+            val callIds = response.toolCalls.map { it.id }
+            if (callIds.any(String::isBlank) || callIds.toSet().size != callIds.size) {
+                throw ProviderError.InvalidResponse("ambiguous tool call ids")
+            }
             val assistant = AgentMessage.assistant(
                 text = response.text,
                 toolCalls = response.toolCalls,
@@ -180,7 +188,7 @@ class AgentLoop(
                     } catch (_: Exception) {
                         PreparedAgentTool(call, null) { failed(call) }
                     }
-                    val denialKey = "${call.name}\n${call.arguments}"
+                    val denialKey = operationKey(call)
                     val previouslyDenied = denialKey in deniedMutations
                     val state = failureState()
                     if (observedFailureState != null && observedFailureState != state) {
@@ -249,13 +257,20 @@ class AgentLoop(
                     }
                     val denied = approval != null &&
                         (previouslyDenied || !requestApproval(approval))
+                    if (denied) {
+                        deniedMutations += denialKey
+                        results += stopped(call, "denied")
+                        deterministicFailures += Triple(denialKey, "denied", state)
+                        if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
+                        continue
+                    }
                     currentCoroutineContext().ensureActive()
                     if (!workspaceIsCurrent()) {
                         results += pending("workspace_changed")
                         stopReason = AgentStopReason.WorkspaceChanged
                         break
                     }
-                    val mutationBlocker = if (!denied && prepared.approval != null) {
+                    val mutationBlocker = if (prepared.approval != null) {
                         try { beforeMutation(call) }
                         catch (e: CancellationException) { throw e }
                         catch (_: Exception) { "checkpoint_unavailable" }
@@ -265,10 +280,7 @@ class AgentLoop(
                         stopReason = AgentStopReason.CheckpointUnavailable
                         break
                     }
-                    val result = if (denied) {
-                        deniedMutations += denialKey
-                        stopped(call, "denied")
-                    } else if (mutationBlocker != null) {
+                    val result = if (mutationBlocker != null) {
                         stopped(call, mutationBlocker)
                     } else {
                         if (prepared.approval != null) mutationsAttempted++
@@ -280,7 +292,7 @@ class AgentLoop(
                             failed(call)
                         }
                     }
-                    if (prepared.approval != null && !denied && mutationBlocker == null && !result.error) {
+                    if (prepared.approval != null && mutationBlocker == null && !result.error) {
                         mutationsCompleted++
                     }
                     val bounded = boundResult(result, prepared.resultContentLimitBytes)
@@ -303,14 +315,15 @@ class AgentLoop(
                         deterministicFailures += Triple(denialKey, deterministic, state)
                         if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
                     }
-                    if (!denied && !bounded.error) recordProvenance(
+                    if (!bounded.error) recordProvenance(
                         call, bounded, createdPaths, createdDirectories, movedExistingPaths,
                     )
-                    if (!denied && !bounded.error && prepared.approval != null) {
+                    if (!bounded.error && prepared.approval != null) {
                         deterministicFailures.clear()
                         unchangedReads.clear()
                     }
-                    if (!bounded.error && call.name == "read_file" && hasFileFingerprint(bounded.content)) {
+                    if (!bounded.error && response.toolCalls.size == 1 &&
+                        call.name == "read_file" && hasFileFingerprint(bounded.content)) {
                         val hash = MessageDigest.getInstance("SHA-256")
                             .digest(bounded.content.toByteArray(Charsets.UTF_8))
                             .joinToString("") { "%02x".format(it.toInt() and 255) }
@@ -371,6 +384,27 @@ class AgentLoop(
         Json.parseToJsonElement(content).jsonObject["sha256"]?.jsonPrimitive?.content?.isNotBlank() == true
     } catch (_: SerializationException) { false
     } catch (_: IllegalArgumentException) { false }
+
+    private fun operationKey(call: AgentToolCall): String {
+        val canonical = try {
+            canonicalArguments(Json.parseToJsonElement(call.arguments), 0)
+        } catch (_: IllegalArgumentException) { call.arguments }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 255) }
+        return "${call.name}\n$digest"
+    }
+
+    private fun canonicalArguments(value: JsonElement, depth: Int): String {
+        require(depth <= 32)
+        return when (value) {
+            is JsonObject -> value.entries.sortedBy { it.key }.joinToString(",", "{", "}") {
+                JsonPrimitive(it.key).toString() + ":" + canonicalArguments(it.value, depth + 1)
+            }
+            is JsonArray -> value.joinToString(",", "[", "]") { canonicalArguments(it, depth + 1) }
+            else -> value.toString()
+        }
+    }
 
     private fun stopped(call: AgentToolCall, code: String) = AgentToolResult(
         call.id, call.name, AgentToolError.content(code), error = true,

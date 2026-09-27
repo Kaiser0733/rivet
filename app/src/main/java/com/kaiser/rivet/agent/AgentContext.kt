@@ -106,6 +106,8 @@ internal object AgentContext {
             if (message.role == AgentRole.Tool) return null
             if (message.role == AgentRole.Assistant && message.toolCalls.isNotEmpty()) {
                 val result = messages.getOrNull(index + 1)?.takeIf { it.role == AgentRole.Tool } ?: return null
+                if (message.toolCalls.any { it.id.isBlank() } ||
+                    message.toolCalls.map { it.id }.toSet().size != message.toolCalls.size) return null
                 if (message.toolCalls.map { it.id } != result.toolResults.map { it.callId }) return null
                 groups += listOf(message, result)
                 index += 2
