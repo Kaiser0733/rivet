@@ -135,6 +135,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             db.delete("events", "session_id=?", arrayOf(id))
             db.delete("active_events", "session_id=?", arrayOf(id))
             db.delete("compactions", "session_id=?", arrayOf(id))
+            db.delete("context_attempts", "session_id=?", arrayOf(id))
             db.delete("usage", "session_id=?", arrayOf(id))
             db.execSQL("UPDATE sessions SET interrupted=0, summary='', active_generation=active_generation+1, updated_at=? WHERE id=?",
                 arrayOf(System.currentTimeMillis(), id))
@@ -207,8 +208,10 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String,
-                        attempt: ContextAttempt? = null) = onDatabase { db ->
+                        attempt: ContextAttempt? = null,
+                        expectedSessionId: String? = null) = onDatabase { db ->
         val id = activeId(db)
+        if (expectedSessionId != null && id != expectedSessionId) throw IllegalStateException("Session changed")
         require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
         require(retained != expected)
         require(validProjection(expected, retained))

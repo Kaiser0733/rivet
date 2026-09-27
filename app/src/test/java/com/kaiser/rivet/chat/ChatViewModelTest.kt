@@ -6,6 +6,7 @@ import android.content.Intent
 import android.content.pm.ProviderInfo
 import android.provider.DocumentsContract
 import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.storage.AgentSessionCodec
@@ -531,10 +532,12 @@ class ChatViewModelTest {
 
         assertNull(complete.error)
         assertEquals(68, sessions.fullEventCount(id))
-        assertTrue(sessions.load().messages.size < history.size)
+        assertTrue(AgentContext.serializedBytes(sessions.load().messages) <
+            AgentContext.serializedBytes(history) / 2)
         assertEquals("", sessions.load().summary)
         assertEquals(1, provider.requests.size)
-        assertTrue(provider.requests.single().messages.size < history.size)
+        assertTrue(AgentContext.serializedBytes(provider.requests.single().messages) <
+            AgentContext.serializedBytes(history) / 2)
         assertTrue(provider.requests.single().messages.flatMap { it.toolResults }
             .any { it.content.contains("output_pruned") })
         assertEquals(68, sessions.recent(id, 100).size)

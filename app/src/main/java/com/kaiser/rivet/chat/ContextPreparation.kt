@@ -124,7 +124,7 @@ internal class ContextPreparation(
                                retained: List<AgentMessage>, nextSummary: String,
                                attempt: ContextAttempt) {
         withContext(NonCancellable) {
-            store.compact(expected, retained, nextSummary, attempt)
+            store.compact(expected, retained, nextSummary, attempt, sessionId)
             summary = nextSummary
         }
     }
