@@ -339,6 +339,28 @@ class AgentLoopTest {
         }
     }
 
+    @Test fun overNestedToolArgumentsStopBeforeMutation() = runTest {
+        val nested = "[".repeat(34) + "0" + "]".repeat(34)
+        val call = AgentToolCall("deep", "delete_path", nested)
+        var approvals = 0
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Delete", "A.kt")) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; true },
+        )
+        try {
+            loop.run(listOf(AgentMessage.user("Delete A.kt")), emptyList())
+            error("Expected invalid provider response")
+        } catch (_: ProviderError.InvalidResponse) {
+            assertEquals(0, approvals)
+            assertEquals(0, executions)
+        }
+    }
+
     @Test fun repeatedReadDoesNotSkipLaterMutationInSameToolBatch() = runTest {
         var requests = 0
         var writes = 0
