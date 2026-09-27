@@ -20,6 +20,8 @@ data class ContextAssessment(
     val needsReduction: Boolean get() = inputTokens != null && inputTokens >= allowedInputTokens
 }
 
+internal class ContextCapacityTooSmall : Exception("context_capacity_too_small")
+
 /** Estimates request occupancy, while keeping unverified capacity explicitly unknown. */
 internal object ContextBudget {
     // Unknown capacity is a planning threshold, not a claimed model limit.
@@ -43,11 +45,13 @@ internal object ContextBudget {
         val known = config.trustedInputLimitTokens()
         val baseReserve = if (known == null) UNKNOWN_RESERVE else
             maxOf(2048, minOf(12_000, known / 3))
-        val outputCeiling = if (config.type == ProviderType.Anthropic)
-            anthropicOutputCeiling(config.model, config.reasoning) else 0
-        val reserve = if (known == null) maxOf(baseReserve, outputCeiling) else
-            minOf(known - 1, maxOf(baseReserve, outputCeiling))
-        val target = ((known ?: UNKNOWN_PLANNING_LIMIT) - reserve).coerceAtLeast(1)
+        val reserve = when {
+            known == null -> UNKNOWN_RESERVE
+            config.type == ProviderType.Gemini -> 0 // Gemini publishes a separate input limit.
+            config.type == ProviderType.Anthropic -> minOf(known, anthropicOutputCeiling(config))
+            else -> minOf(known, baseReserve)
+        }
+        val target = ((known ?: UNKNOWN_PLANNING_LIMIT) - reserve).coerceAtLeast(0)
         return ContextAssessment(inputTokens, source, known,
             if (known == null) CapacitySource.Unknown else CapacitySource.ProviderMetadata,
             target, reserve)
