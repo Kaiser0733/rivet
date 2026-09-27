@@ -167,6 +167,53 @@ class AgentLoopTest {
         assertEquals(0, result.messages.flatMap { it.toolResults }.count { it.error })
     }
 
+    @Test fun alternatingIdenticalFailuresStopBeforeRepeatingTheFirstCall() = runTest {
+        val calls = listOf(
+            AgentToolCall("a1", "read_file", """{"path":"A.kt"}"""),
+            AgentToolCall("b1", "read_file", """{"path":"B.kt"}"""),
+            AgentToolCall("a2", "read_file", """{"path":"A.kt"}"""),
+        )
+        var requested = 0
+        var executed = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(calls[requested++])) },
+            prepareTool = { call -> PreparedAgentTool(call, null) {
+                executed++
+                AgentToolResult(call.id, call.name, AgentToolError.content("invalid_path"), error = true)
+            } },
+            requestApproval = { error("No approval") },
+            failureState = { "unchanged" },
+        ).run(listOf(AgentMessage.user("Read the project")), emptyList())
+
+        assertEquals(3, requested)
+        assertEquals(2, executed)
+        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("no_progress"))
+    }
+
+    @Test fun unchangedSuccessfulRereadsStopBeforeEmergencyWatchdog() = runTest {
+        var requested = 0
+        var executed = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                requested++
+                AgentResponse(toolCalls = listOf(AgentToolCall("read-$requested", "read_file",
+                    """{"path":"A.kt"}""")))
+            },
+            prepareTool = { call -> PreparedAgentTool(call, null) {
+                executed++
+                AgentToolResult(call.id, call.name, """{"content":"same","sha256":"same"}""")
+            } },
+            requestApproval = { error("No approval") },
+            failureState = { "unchanged" },
+        ).run(listOf(AgentMessage.user("Inspect A.kt")), emptyList())
+
+        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertTrue(requested < 20)
+        assertEquals(requested - 1, executed)
+        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("no_progress"))
+    }
+
     @Test fun contextOverflowCompactsAndRetriesOnlyTheModelRequest() = runTest {
         val call = AgentToolCall("edit", "write_file", "{}")
         var requests = 0
