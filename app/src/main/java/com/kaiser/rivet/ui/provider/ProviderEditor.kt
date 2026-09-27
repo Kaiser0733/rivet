@@ -146,7 +146,9 @@ fun ProviderEditor(
 
         OutlinedTextField(
             value = config.model,
-            onValueChange = { v -> viewModel.updateConfig { it.copy(model = v, modelContextLimit = null) } },
+            onValueChange = { v -> viewModel.updateConfig {
+                it.copy(model = v, modelContextLimit = null, anthropicModelMetadata = null)
+            } },
             label = { Text(stringResource(R.string.provider_model_label)) },
             placeholder = { Text(stringResource(R.string.provider_model_hint)) },
             singleLine = true,
@@ -180,7 +182,7 @@ fun ProviderEditor(
         TextButton(onClick = { advanced = !advanced }) {
             Text(if (advanced) "Hide advanced options" else "Advanced options")
         }
-        val reasoningOptions = offeredReasoning(config.type, config.model)
+        val reasoningOptions = offeredReasoning(config)
         if (advanced && reasoningOptions.size > 1) {
             Text(
                 stringResource(R.string.provider_reasoning_label),

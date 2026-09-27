@@ -50,10 +50,113 @@ class AnthropicClientTest {
 
     @Test
     fun listModelsKeepsOnlyPositiveReportedInputLimit() = runTest {
-        server.enqueue(MockResponse().setBody("""{"data":[{"id":"large","max_input_tokens":200000},{"id":"unknown","max_input_tokens":0}]}"""))
+        server.enqueue(MockResponse().setBody(
+            """{"data":[{"id":"large","max_input_tokens":200000,"max_tokens":128000,"capabilities":{"thinking":{"supported":true,"types":{"adaptive":{"supported":true},"enabled":{"supported":false}}}}},{"id":"unknown","max_input_tokens":0}]}""",
+        ))
         val models = AnthropicClient(config(), "key").listModels().associateBy { it.id }
         assertEquals(200000, models["large"]?.inputLimitTokens)
         assertEquals(null, models["unknown"]?.inputLimitTokens)
+        assertEquals(128000, models["large"]?.anthropicMetadata?.maxOutputTokens)
+        assertEquals(true, models["large"]?.anthropicMetadata?.thinkingSupported)
+        assertEquals(true, models["large"]?.anthropicMetadata?.adaptiveThinkingSupported)
+        assertEquals(false, models["large"]?.anthropicMetadata?.manualThinkingSupported)
+        assertEquals(config().baseUrl, models["large"]?.anthropicMetadata?.baseUrl)
+    }
+
+    @Test
+    fun listedAdaptiveMetadataSetsActualMaxTokensAndLeavesFullProviderHeadroom() = runTest {
+        server.enqueue(MockResponse().setBody(
+            """{"data":[{"id":"claude-opus-5","max_input_tokens":1000000,"max_tokens":128000,"capabilities":{"thinking":{"supported":true,"types":{"adaptive":{"supported":true},"enabled":{"supported":false}}}}}]}""",
+        ))
+        val listed = AnthropicClient(config(), "key").listModels().single()
+        server.takeRequest()
+        val selected = config().selectListedModel(listed).copy(reasoning = ReasoningLevel.High)
+        assertEquals(AnthropicThinkingMode.Adaptive, anthropicThinkingMode(selected))
+        assertEquals(128_000, anthropicOutputCeiling(selected))
+
+        server.enqueue(MockResponse().setBody(finished("end_turn")))
+        AnthropicClient(selected, "key").streamAgent(
+            AgentRequest(selected.model, emptyList(), "", ReasoningLevel.High, emptyList()),
+        ) {}
+
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"max_tokens\":128000"))
+        assertTrue(body.contains("\"thinking\":{\"type\":\"adaptive\"}"))
+    }
+
+    @Test
+    fun smallListedAdaptiveWindowBoundsActualMaxTokensByQuarterItsInputLimit() = runTest {
+        server.enqueue(MockResponse().setBody(
+            """{"data":[{"id":"claude-small-adaptive","max_input_tokens":4096,"max_tokens":128000,"capabilities":{"thinking":{"supported":true,"types":{"adaptive":{"supported":true}}}}}]}""",
+        ))
+        val listed = AnthropicClient(config(), "key").listModels().single()
+        server.takeRequest()
+        val selected = config().selectListedModel(listed).copy(reasoning = ReasoningLevel.High)
+
+        assertEquals(1_024, anthropicOutputCeiling(selected))
+        server.enqueue(MockResponse().setBody(finished("end_turn")))
+        AnthropicClient(selected, "key").streamAgent(
+            AgentRequest(selected.model, emptyList(), "", ReasoningLevel.High, emptyList()),
+        ) {}
+
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"max_tokens\":1024"))
+        assertTrue(body.contains("\"thinking\":{\"type\":\"adaptive\"}"))
+    }
+
+    @Test
+    fun manualThinkingFitsReportedMaximumAndKeepsResponseHeadroom() = runTest {
+        val cfg = config("claude-sonnet-4-5").copy(
+            reasoning = ReasoningLevel.High,
+            anthropicModelMetadata = AnthropicModelMetadata(
+                model = "claude-sonnet-4-5",
+                baseUrl = config().baseUrl,
+                maxOutputTokens = 20_000,
+                thinkingSupported = true,
+                adaptiveThinkingSupported = false,
+                manualThinkingSupported = true,
+            ),
+        )
+        assertEquals(20_000, anthropicOutputCeiling(cfg))
+        assertEquals(11_808, anthropicThinkingBudget(cfg))
+
+        server.enqueue(MockResponse().setBody(finished("end_turn")))
+        AnthropicClient(cfg, "key").streamAgent(
+            AgentRequest(cfg.model, emptyList(), "", ReasoningLevel.High, emptyList()),
+        ) {}
+
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"max_tokens\":20000"))
+        assertTrue(body.contains("\"budget_tokens\":11808"))
+        assertTrue(anthropicThinkingBudget(cfg) < anthropicOutputCeiling(cfg))
+        assertEquals(8_192, anthropicOutputCeiling(cfg) - anthropicThinkingBudget(cfg))
+    }
+
+    @Test
+    fun manualThinkingWithTooSmallWindowFailsBeforeSendingARequest() = runTest {
+        val base = config("claude-sonnet-4-5")
+        val cfg = base.copy(
+            reasoning = ReasoningLevel.High,
+            modelContextLimit = ModelContextLimit(base.model, base.baseUrl, 4_096),
+            anthropicModelMetadata = AnthropicModelMetadata(
+                model = base.model,
+                baseUrl = base.baseUrl,
+                maxOutputTokens = 128_000,
+                thinkingSupported = true,
+                adaptiveThinkingSupported = false,
+                manualThinkingSupported = true,
+            ),
+        )
+
+        try {
+            AnthropicClient(cfg, "key").streamAgent(
+                AgentRequest(cfg.model, emptyList(), "", ReasoningLevel.High, emptyList()),
+            ) {}
+            throw AssertionError("manual thinking that cannot fit must be rejected")
+        } catch (_: ProviderError.UnsupportedConfiguration) {
+            Unit
+        }
+        assertEquals(0, server.requestCount)
     }
 
     @Test
@@ -137,7 +240,8 @@ class AnthropicClientTest {
     @Test
     fun olderModelUsesManualThinkingBudget() = runTest {
         server.enqueue(MockResponse().setBody(finished("end_turn")))
-        AnthropicClient(config("claude-haiku-4-5-20251001"), "key").streamAgent(
+        val cfg = withThinking(config("claude-haiku-4-5-20251001"), adaptive = false)
+        AnthropicClient(cfg, "key").streamAgent(
             AgentRequest("claude-haiku-4-5-20251001", emptyList(), "", ReasoningLevel.High, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
@@ -149,7 +253,8 @@ class AnthropicClientTest {
     @Test
     fun currentModelUsesAdaptiveThinkingAndEffort() = runTest {
         server.enqueue(MockResponse().setBody(finished("end_turn")))
-        AnthropicClient(config("claude-opus-4-8"), "key").streamAgent(
+        val cfg = withThinking(config("claude-opus-4-8"), adaptive = true)
+        AnthropicClient(cfg, "key").streamAgent(
             AgentRequest("claude-opus-4-8", emptyList(), "", ReasoningLevel.High, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
@@ -334,4 +439,15 @@ class AnthropicClientTest {
     private fun finished(reason: String) =
         "data: {\"type\":\"message_delta\",\"delta\":{\"stop_reason\":\"$reason\"}}\n\n" +
             "data: {\"type\":\"message_stop\"}\n\n"
+
+    private fun withThinking(config: ProviderConfig, adaptive: Boolean) = config.copy(
+        anthropicModelMetadata = AnthropicModelMetadata(
+            model = config.model,
+            baseUrl = config.baseUrl,
+            maxOutputTokens = 64_000,
+            thinkingSupported = true,
+            adaptiveThinkingSupported = adaptive,
+            manualThinkingSupported = !adaptive,
+        ),
+    )
 }

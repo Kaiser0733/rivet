@@ -9,6 +9,7 @@ sealed class ProviderError(message: String) : Exception(message) {
     class ContextOverflow : ProviderError("context overflow")
     class ModelNotFound(val model: String) : ProviderError("model not found: $model")
     class UnsupportedEndpoint : ProviderError("endpoint not supported")
+    class UnsupportedConfiguration : ProviderError("unsupported generation configuration")
     class MalformedUrl(val url: String) : ProviderError("malformed url")
     class Network(val reason: String) : ProviderError("network: $reason")
     class Timeout : ProviderError("timeout")
@@ -30,6 +31,7 @@ sealed class ProviderError(message: String) : Exception(message) {
         is ContextOverflow -> "The model's context is full. Rivet could not reduce this request enough to continue."
         is ModelNotFound -> "Model \"$model\" was not found by this provider."
         is UnsupportedEndpoint -> "This endpoint is not supported by the provider."
+        is UnsupportedConfiguration -> "This model's output limit is too small for manual thinking. Select a model with a larger output limit or set reasoning to Default."
         is MalformedUrl -> "The base URL is not a valid URL."
         is Network -> when (reason) {
             "dns" -> "Could not resolve the host. Check the base URL and connection."

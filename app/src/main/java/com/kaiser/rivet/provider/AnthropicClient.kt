@@ -4,8 +4,10 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
+import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
@@ -17,10 +19,9 @@ import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
 
-// Anthropic Messages API in its native shape. Reasoning is selected by
-// documented model family: manual budgets on older models, adaptive thinking
-// plus output_config.effort on current models, and no optional fields when
-// capability is unknown. Thinking deltas are not rendered.
+// Anthropic Messages API in its native shape. Selected model metadata controls
+// manual versus adaptive reasoning; legacy official-provider configs retain
+// their documented model-family defaults. Thinking deltas are not rendered.
 internal class AnthropicClient(
     private val config: ProviderConfig,
     private val apiKey: String,
@@ -43,8 +44,19 @@ internal class AnthropicClient(
                 data.forEach { element ->
                     val model = element.obj() ?: return@forEach
                     val id = model["id"]?.str() ?: return@forEach
+                    val thinking = model["capabilities"]?.obj()?.get("thinking")?.obj()
+                    val types = thinking?.get("types")?.obj()
                     models[id] = ModelInfo(id, model["display_name"]?.str() ?: id,
-                        model["max_input_tokens"].positiveInt())
+                        model["max_input_tokens"].positiveInt(), AnthropicModelMetadata(
+                            model = id,
+                            baseUrl = config.baseUrl,
+                            maxOutputTokens = model["max_tokens"].positiveInt(),
+                            thinkingSupported = thinking?.get("supported").booleanValue(),
+                            adaptiveThinkingSupported = types?.get("adaptive")?.obj()
+                                ?.get("supported").booleanValue(),
+                            manualThinkingSupported = types?.get("enabled")?.obj()
+                                ?.get("supported").booleanValue(),
+                        ))
                 }
                 if (page["has_more"]?.jsonPrimitive?.booleanOrNull != true) {
                     return models.values.sortedBy { it.id.lowercase() }
@@ -77,17 +89,23 @@ internal class AnthropicClient(
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)
+            val modelConfig = if (config.model == request.model) config else config.copy(
+                model = request.model,
+                anthropicModelMetadata = null,
+                modelContextLimit = null,
+            )
+            val turnConfig = modelConfig.copy(reasoning = request.reasoning)
             val thinkingMode = if (request.reasoning == ReasoningLevel.Default) {
                 AnthropicThinkingMode.Unsupported
             } else {
-                anthropicThinkingMode(request.model)
+                anthropicThinkingMode(modelConfig)
             }
-            val budget = if (thinkingMode == AnthropicThinkingMode.Manual) {
-                request.reasoning.anthropicBudget
-            } else {
-                0
+            val budget = if (thinkingMode == AnthropicThinkingMode.Manual)
+                anthropicThinkingBudget(turnConfig) else 0
+            if (thinkingMode == AnthropicThinkingMode.Manual && budget < MIN_MANUAL_THINKING_BUDGET) {
+                throw ProviderError.UnsupportedConfiguration()
             }
-            put("max_tokens", anthropicOutputCeiling(request.model, request.reasoning))
+            put("max_tokens", anthropicOutputCeiling(turnConfig))
             if (request.system.isNotEmpty()) put("system", request.system)
             when (thinkingMode) {
                 AnthropicThinkingMode.Manual -> put("thinking", buildJsonObject {
@@ -272,8 +290,37 @@ private val ReasoningLevel.anthropicEffort: String
         ReasoningLevel.Default -> "high"
     }
 
+internal fun anthropicOutputCeiling(config: ProviderConfig): Int {
+    val mode = anthropicThinkingMode(config)
+    val legacyCeiling = when {
+        mode == AnthropicThinkingMode.Adaptive ->
+            config.trustedAnthropicModelMetadata()?.maxOutputTokens ?: DEFAULT_OUTPUT_TOKENS
+        mode == AnthropicThinkingMode.Manual && config.reasoning != ReasoningLevel.Default ->
+            DEFAULT_OUTPUT_TOKENS + config.reasoning.anthropicBudget
+        else -> DEFAULT_OUTPUT_TOKENS
+    }
+    val outputLimit = config.trustedAnthropicModelMetadata()?.maxOutputTokens
+    val inputWindowOutputCap = config.trustedInputLimitTokens()?.let { maxOf(1, it / 4) }
+    val actualMaximum = listOfNotNull(outputLimit, inputWindowOutputCap).minOrNull()
+    return actualMaximum?.let { minOf(legacyCeiling, it) } ?: legacyCeiling
+}
+
+// Manual budgets leave the existing 8K response allowance when possible and
+// never exceed Anthropic's max_tokens ceiling or its minimum 1K budget rule.
+internal fun anthropicThinkingBudget(config: ProviderConfig): Int {
+    if (config.reasoning == ReasoningLevel.Default ||
+        anthropicThinkingMode(config) != AnthropicThinkingMode.Manual) return 0
+    val outputCeiling = anthropicOutputCeiling(config)
+    if (outputCeiling < MIN_MANUAL_THINKING_BUDGET * 2) return 0
+    return minOf(
+        config.reasoning.anthropicBudget,
+        maxOf(MIN_MANUAL_THINKING_BUDGET, outputCeiling - DEFAULT_OUTPUT_TOKENS),
+    )
+}
+
+// Retain the 0.9.0 name-table helper for callers that only have legacy model data.
 internal fun anthropicOutputCeiling(model: String, reasoning: ReasoningLevel): Int =
-    8192 + if (reasoning != ReasoningLevel.Default &&
+    DEFAULT_OUTPUT_TOKENS + if (reasoning != ReasoningLevel.Default &&
         anthropicThinkingMode(model) == AnthropicThinkingMode.Manual) reasoning.anthropicBudget else 0
 
 private val ReasoningLevel.anthropicBudget: Int
@@ -283,3 +330,8 @@ private val ReasoningLevel.anthropicBudget: Int
         ReasoningLevel.High, ReasoningLevel.Max -> 32768
         ReasoningLevel.Default -> 8192
     }
+
+private fun JsonElement?.booleanValue(): Boolean? = (this as? JsonPrimitive)?.booleanOrNull
+
+private const val DEFAULT_OUTPUT_TOKENS = 8192
+private const val MIN_MANUAL_THINKING_BUDGET = 1024
