@@ -127,4 +127,19 @@ class AgentContextTest {
         assertTrue(plan.summaryInput.contains("run_command"))
         assertFalse(plan.summaryInput.contains("private-token-12345"))
     }
+
+    @Test fun removedUserTextIsRedactedBeforeSummaryRequest() {
+        val secret = "sk-abcdefghijklmnopqrstuvwxyz123456"
+        val messages = listOf(
+            AgentMessage.user("Use token $secret while investigating " + "x".repeat(8_000)),
+            AgentMessage.assistant("Investigation complete"),
+            AgentMessage.user("Continue with the fix"),
+        )
+
+        val plan = AgentContext.plan(messages, targetBytes = 2_000)!!
+
+        assertFalse(plan.summaryInput.contains(secret))
+        assertTrue(plan.summaryInput.contains("[redacted]"))
+        assertEquals("Continue with the fix", plan.retained.last().text)
+    }
 }

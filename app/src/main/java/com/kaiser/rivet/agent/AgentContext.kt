@@ -55,7 +55,7 @@ internal object AgentContext {
 
     private fun prunedContent(result: AgentToolResult): String {
         val old = try { Json.parseToJsonElement(result.content).jsonObject }
-            catch (_: Exception) { null }
+            catch (_: IllegalArgumentException) { null }
         return buildJsonObject {
             put("output_pruned", true)
             put("original_bytes", result.content.toByteArray(Charsets.UTF_8).size)
@@ -155,7 +155,7 @@ internal object AgentContext {
 
     private fun toolTarget(call: AgentToolCall): String? {
         val fields = try { Json.parseToJsonElement(call.arguments).jsonObject }
-            catch (_: Exception) { return null }
+            catch (_: IllegalArgumentException) { return null }
         val path = listOf("path", "cwd", "destination").firstNotNullOfOrNull { key ->
             (fields[key] as? JsonPrimitive)?.takeIf { it.isString }?.content
         }
