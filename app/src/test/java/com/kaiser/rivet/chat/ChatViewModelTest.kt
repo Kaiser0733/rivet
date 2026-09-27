@@ -16,6 +16,7 @@ import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ModelInfo
+import com.kaiser.rivet.provider.ModelContextLimit
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
@@ -549,6 +550,39 @@ class ChatViewModelTest {
         assertEquals("model-b", switchedProvider.requests.single().model)
         assertTrue(switchedProvider.requests.single().messages.last().text.contains("Prior files were inspected"))
         assertEquals(70, sessions.fullEventCount(id))
+    }
+
+    @Test fun knownCapacityPreparesContextBelowOldByteThreshold() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(10) { index ->
+                add(AgentMessage.user("Inspect $index " + "x".repeat(5_000)))
+                add(AgentMessage.assistant("Analysis $index " + "y".repeat(2_000)))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val taskState = """{"objective":"Finish the project task","userConstraints":["Preserve existing behavior"],"completed":["Inspected prior code"],"pending":["Verify change"],"nextStep":"Continue"}"""
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = taskState),
+            AgentResponse(text = "Done"))))
+        val endpoint = "https://example.invalid"
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+        val viewModel = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Continue")
+        val finished = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Done" }
+
+        assertNull(finished.error)
+        assertEquals(2, provider.requests.size)
+        assertTrue(provider.requests[0].system.contains("task state"))
+        assertTrue(provider.requests[1].messages.size < history.size + 1)
+        assertTrue(sessions.load().summary.contains("Finish the project task"))
+        assertEquals(history.size + 2, sessions.fullEventCount(id))
     }
 
     @Test fun failedSummaryKeepsFullOriginalHistory() = runBlocking {
