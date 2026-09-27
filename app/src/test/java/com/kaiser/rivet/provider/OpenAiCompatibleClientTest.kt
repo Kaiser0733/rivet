@@ -115,6 +115,34 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun nativeOpenAiAndOpenRouterTextRequireTerminalStopReason() = runTest {
+        for (type in listOf(ProviderType.OpenAi, ProviderType.OpenRouter)) {
+            server.enqueue(MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n" +
+                    "data: [DONE]\n\n",
+            ).setHeader("Content-Type", "text/event-stream"))
+
+            try {
+                OpenAiCompatibleClient(config(type), "key").streamAgent(
+                    AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+                ) {}
+                fail("$type text without finish_reason must be incomplete")
+            } catch (error: ProviderError.IncompleteGeneration) {
+                assertEquals("missing finish reason", error.reason)
+            }
+
+            server.enqueue(MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                    "data: [DONE]\n\n",
+            ).setHeader("Content-Type", "text/event-stream"))
+            assertEquals("answer", OpenAiCompatibleClient(config(type), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}.text)
+        }
+    }
+
+    @Test
     fun genericProviderOmitsReasoningEffort() = runTest {
         server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
         OpenAiCompatibleClient(config(), "key").streamAgent(

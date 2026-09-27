@@ -86,7 +86,10 @@ internal class OpenAiCompatibleClient(
         val httpRequest = base(Endpoints.openAiChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val stream = OpenAiAgentStream(onDelta)
+        val stream = OpenAiAgentStream(
+            onDelta,
+            strictTextFinishReason = config.type in setOf(ProviderType.OpenAi, ProviderType.OpenRouter),
+        )
         val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
@@ -118,7 +121,10 @@ private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (mess
     } }
 }
 
-private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
+private class OpenAiAgentStream(
+    private val onDelta: (String) -> Unit,
+    private val strictTextFinishReason: Boolean,
+) {
     private data class Pending(
         var id: String? = null,
         val name: StringBuilder = StringBuilder(),
@@ -159,7 +165,7 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
     fun response(): AgentResponse {
         val reason = finishReason
         if (tools.isNotEmpty() && reason != "tool_calls" ||
-            tools.isEmpty() && reason != null && reason != "stop") {
+            tools.isEmpty() && (if (strictTextFinishReason) reason != "stop" else reason != null && reason != "stop")) {
             throw ProviderError.IncompleteGeneration(reason ?: "missing finish reason")
         }
         return AgentResponse(

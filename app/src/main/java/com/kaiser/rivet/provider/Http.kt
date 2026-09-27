@@ -111,7 +111,7 @@ fun httpError(code: Int, body: String?): ProviderError {
         // Wrong-model bodies arrive as 400 or 404 depending on the service
         // (OpenAI 400 "model 'x' does not exist", others 404 with the id
         // in the message); check the body before assuming endpoint shape.
-        detail?.let { it.contains("model", ignoreCase = true) && code in intArrayOf(400, 404) } == true ->
+        detail?.let { isModelNotFound(code, it) } == true ->
             ProviderError.ModelNotFound(extractModelName(detail))
         code == 404 -> ProviderError.UnsupportedEndpoint()
         detail != null -> ProviderError.ProviderMessage(detail)
@@ -137,8 +137,21 @@ private fun isContextOverflow(text: String): Boolean {
     return listOf("context_length_exceeded", "model_context_window_exceeded", "context window exceeded",
         "context_window_exceeded", "maximum context length", "prompt is too long",
         "input token count exceeds", "request too large for context").any { it in value } ||
+        Regex("""input token count\s*\(\s*[\d,]+\s*\)\s*exceeds\s*the maximum number of tokens allowed\s*\(\s*[\d,]+\s*\)""")
+            .containsMatchIn(value) ||
+        Regex("""input token count\s+is\s+[\d,]+\s+but\s+model\s+only\s+supports\s+up\s+to\s+[\d,]+""")
+            .containsMatchIn(value) ||
         (("context window" in value || "context length" in value) &&
             ("exceed" in value || "too long" in value || "full" in value))
+}
+
+private fun isModelNotFound(code: Int, detail: String): Boolean {
+    if (code == 404) return detail.contains("model", ignoreCase = true)
+    if (code != 400 || !detail.contains("model", ignoreCase = true)) return false
+    val value = detail.lowercase(java.util.Locale.ROOT)
+    return "model_not_found" in value || "unknown model" in value || "no such model" in value ||
+        "could not find model" in value ||
+        ("model" in value && ("not found" in value || "does not exist" in value || "doesn't exist" in value))
 }
 
 private fun isResourceExhausted(text: String): Boolean {
