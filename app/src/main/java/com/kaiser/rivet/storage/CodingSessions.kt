@@ -281,7 +281,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val request = AgentRequest(model, messages, system, ReasoningLevel.Default, tools)
         val estimated = ContextBudget.estimateRequestTokens(request)
         val anchor = db.rawQuery("SELECT context_input_tokens,base_count,base_prefix_hash,system_hash,active_generation " +
-            "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' AND context_input_tokens IS NOT NULL " +
+            "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' " +
+            "AND context_input_tokens IS NOT NULL AND turn_id NOT LIKE 'compaction-%' " +
             "ORDER BY id DESC LIMIT 1", arrayOf(sessionId, providerId, model)).use { cursor ->
             if (!cursor.moveToFirst()) null else UsageAnchor(cursor.getLong(0), cursor.getInt(1),
                 if (cursor.isNull(2)) null else cursor.getString(2), cursor.getString(3), cursor.getInt(4))

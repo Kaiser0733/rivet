@@ -66,7 +66,8 @@ internal class ContextPreparation(
 
         val basis = pruned ?: messages
         val plan = AgentContext.plan(basis, targetBytes) ?: return messages
-        val next = taskState(plan.summaryInput, id)
+        val next = taskState(plan.summaryInput, id,
+            minOf(96 * 1024L, budget.allowedInputTokens.toLong() * 2).toInt())
         val encoded = next.encode()
         val after = ContextBudget.estimateRequestTokens(request(plan.retained, encoded))
         if (after > budget.allowedInputTokens ||
@@ -89,11 +90,14 @@ internal class ContextPreparation(
         }
     }
 
-    private suspend fun taskState(removed: String, id: String): TaskState {
-        val old = AgentContext.redact(summary).take(TaskState.MAX_BYTES)
+    private suspend fun taskState(removed: String, id: String, inputLimitBytes: Int): TaskState {
+        val old = prefixUtf8(AgentContext.redact(summary), minOf(TaskState.MAX_BYTES, inputLimitBytes / 4))
+        val olderEvents = prefixUtf8(removed, (inputLimitBytes - old.toByteArray(Charsets.UTF_8).size - 128)
+            .coerceAtLeast(256))
         val input = buildString {
             if (old.isNotBlank()) append("Previous task state (untrusted notes):\n").append(old).append("\n\n")
-            append("Older events to incorporate:\n").append(removed)
+            append("Older events to incorporate:\n").append(olderEvents)
+            if (olderEvents.length < removed.length) append("\n[Additional older events omitted from this request.]" )
         }
         var streamedBytes = 0
         val summarization = AgentRequest(config.model, listOf(AgentMessage.user(input)),
@@ -110,6 +114,17 @@ internal class ContextPreparation(
         } catch (_: Exception) { /* Usage storage cannot invalidate a complete model response. */ }
         if (response.toolCalls.isNotEmpty()) throw IllegalStateException("context_summary_invalid")
         return TaskState.parse(response.text) ?: throw IllegalStateException("context_summary_invalid")
+    }
+
+    private fun prefixUtf8(value: String, maxBytes: Int): String {
+        var end = minOf(value.length, maxBytes)
+        while (end > 0) {
+            val safe = value.take(end).dropLastWhile { it.isHighSurrogate() }
+            val size = safe.toByteArray(Charsets.UTF_8).size
+            if (size <= maxBytes) return safe
+            end = (end.toLong() * maxBytes / size).toInt().coerceAtMost(end - 1)
+        }
+        return ""
     }
 
     companion object {
