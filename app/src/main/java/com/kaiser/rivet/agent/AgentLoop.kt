@@ -1,6 +1,7 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.provider.ProviderError
+import com.kaiser.rivet.provider.jsonNestingWithinLimit
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
@@ -8,8 +9,13 @@ import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import java.security.MessageDigest
 
 enum class AgentStopReason {
     Completed,
@@ -47,6 +53,7 @@ class AgentLoop(
     private val beforeMutation: suspend (AgentToolCall) -> String? = { null },
     private val failureState: suspend () -> String = { "" },
     private val compactContext: suspend (List<AgentMessage>, Boolean) -> List<AgentMessage> = { messages, _ -> messages },
+    private val contextFootprint: (List<AgentMessage>) -> Long = { AgentContext.serializedBytes(it).toLong() },
 ) {
     suspend fun run(
         initial: List<AgentMessage>,
@@ -65,7 +72,8 @@ class AgentLoop(
         val createdPaths = mutableSetOf<String>()
         val createdDirectories = mutableSetOf<String>()
         val movedExistingPaths = mutableSetOf<String>()
-        var lastDeterministicFailure: Triple<String, String, String>? = null
+        val deterministicFailures = linkedSetOf<Triple<String, String, String>>()
+        val unchangedReads = linkedMapOf<Triple<String, String, String>, Int>()
         var modelIterations = 0
         var toolCalls = 0
         var mutationsAttempted = 0
@@ -74,6 +82,7 @@ class AgentLoop(
             currentCoroutineContext().ensureActive()
             val active = try { compactContext(messages.toList(), false) }
                 catch (e: CancellationException) { throw e
+                } catch (e: ProviderError) { throw e
                 } catch (_: Exception) {
                     return AgentRunResult(messages, AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
                         mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
@@ -91,15 +100,16 @@ class AgentLoop(
                 try { requestOnce() }
                 catch (overflow: ProviderError.ContextOverflow) {
                     if (streamed.isNotEmpty()) throw overflow
-                    val before = AgentContext.serializedBytes(messages)
+                    val before = contextFootprint(messages.toList())
                     val reduced = try { compactContext(messages.toList(), true) }
                         catch (e: CancellationException) { throw e
+                        } catch (e: ProviderError) { throw e
                         } catch (_: Exception) { throw overflow }
                     if (reduced != messages) {
                         messages.clear()
                         messages.addAll(reduced)
                     }
-                    if (AgentContext.serializedBytes(messages) >= before * 9 / 10) throw overflow
+                    if (contextFootprint(messages.toList()) >= before * 9 / 10) throw overflow
                     requestOnce()
                 }
             } catch (e: CancellationException) {
@@ -111,6 +121,11 @@ class AgentLoop(
                 throw e
             }
             modelIterations++
+            val callIds = response.toolCalls.map { it.id }
+            if (callIds.any(String::isBlank) || callIds.toSet().size != callIds.size) {
+                throw ProviderError.InvalidResponse("ambiguous tool call ids")
+            }
+            val operationKeys = response.toolCalls.map(::operationKey)
             val assistant = AgentMessage.assistant(
                 text = response.text,
                 toolCalls = response.toolCalls,
@@ -159,7 +174,7 @@ class AgentLoop(
             suspend fun fits(candidate: List<AgentToolResult>, reserve: Int = 0): Boolean =
                 canPersistToolOutput(messages + AgentMessage.tools(candidate), reserve)
             try {
-                for (call in response.toolCalls) {
+                for ((callIndex, call) in response.toolCalls.withIndex()) {
                     currentCoroutineContext().ensureActive()
                     if (!workspaceIsCurrent()) {
                         results += pending("workspace_changed")
@@ -174,16 +189,20 @@ class AgentLoop(
                     } catch (_: Exception) {
                         PreparedAgentTool(call, null) { failed(call) }
                     }
-                    val denialKey = "${call.name}\n${call.arguments}"
+                    val denialKey = operationKeys[callIndex]
                     val previouslyDenied = denialKey in deniedMutations
-                    val previous = lastDeterministicFailure
-                    if (previous != null && previous.first == denialKey && previous.third == failureState()) {
+                    val previous = deterministicFailures.firstOrNull {
+                        it.first == denialKey
+                    }
+                    if (previous != null &&
+                        (previous.second == "denied" || previous.third == failureState())) {
                         results += AgentToolResult(call.id, call.name,
                             AgentToolError.noProgress(previous.second), true, "Stopped  ${call.name}")
                         results += pending("no_progress")
                         stopReason = AgentStopReason.NoProgress
                         break
                     }
+                    if (previous != null) deterministicFailures.removeAll { it.first == denialKey }
                     val blocked = if (prepared.approval != null && !previouslyDenied) mutationBlocker(call) else null
                     if (blocked != null) {
                         val rejected = stopped(call, blocked)
@@ -201,8 +220,10 @@ class AgentLoop(
                             break
                         }
                         val deterministic = AgentToolError.deterministicCode(rejected)
-                        lastDeterministicFailure = if (deterministic != null)
-                            Triple(denialKey, deterministic, failureState()) else null
+                        if (deterministic != null) {
+                            deterministicFailures += Triple(denialKey, deterministic, failureState())
+                            if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
+                        }
                         continue
                     }
                     // Only mutations need prospective headroom. Include completed results
@@ -233,13 +254,20 @@ class AgentLoop(
                     }
                     val denied = approval != null &&
                         (previouslyDenied || !requestApproval(approval))
+                    if (denied) {
+                        deniedMutations += denialKey
+                        results += stopped(call, "denied")
+                        deterministicFailures += Triple(denialKey, "denied", "")
+                        if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
+                        continue
+                    }
                     currentCoroutineContext().ensureActive()
                     if (!workspaceIsCurrent()) {
                         results += pending("workspace_changed")
                         stopReason = AgentStopReason.WorkspaceChanged
                         break
                     }
-                    val mutationBlocker = if (!denied && prepared.approval != null) {
+                    val mutationBlocker = if (prepared.approval != null) {
                         try { beforeMutation(call) }
                         catch (e: CancellationException) { throw e }
                         catch (_: Exception) { "checkpoint_unavailable" }
@@ -249,10 +277,7 @@ class AgentLoop(
                         stopReason = AgentStopReason.CheckpointUnavailable
                         break
                     }
-                    val result = if (denied) {
-                        deniedMutations += denialKey
-                        stopped(call, "denied")
-                    } else if (mutationBlocker != null) {
+                    val result = if (mutationBlocker != null) {
                         stopped(call, mutationBlocker)
                     } else {
                         if (prepared.approval != null) mutationsAttempted++
@@ -264,7 +289,7 @@ class AgentLoop(
                             failed(call)
                         }
                     }
-                    if (prepared.approval != null && !denied && mutationBlocker == null && !result.error) {
+                    if (prepared.approval != null && mutationBlocker == null && !result.error) {
                         mutationsCompleted++
                     }
                     val bounded = boundResult(result, prepared.resultContentLimitBytes)
@@ -283,11 +308,33 @@ class AgentLoop(
                         break
                     }
                     val deterministic = AgentToolError.deterministicCode(bounded)
-                    lastDeterministicFailure = if (deterministic != null)
-                        Triple(denialKey, deterministic, failureState()) else null
-                    if (!denied && !bounded.error) recordProvenance(
+                    if (deterministic != null) {
+                        deterministicFailures += Triple(denialKey, deterministic, failureState())
+                        if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
+                    }
+                    if (!bounded.error) recordProvenance(
                         call, bounded, createdPaths, createdDirectories, movedExistingPaths,
                     )
+                    if (!bounded.error && prepared.approval != null) {
+                        deterministicFailures.clear()
+                        unchangedReads.clear()
+                    }
+                    if (!bounded.error && response.toolCalls.size == 1 &&
+                        call.name == "read_file" && hasFileFingerprint(bounded.content)) {
+                        val hash = MessageDigest.getInstance("SHA-256")
+                            .digest(bounded.content.toByteArray(Charsets.UTF_8))
+                            .joinToString("") { "%02x".format(it.toInt() and 255) }
+                        val key = Triple(denialKey, hash, "")
+                        unchangedReads.keys.removeAll { it.first == denialKey && it.second != hash }
+                        val count = (unchangedReads[key] ?: 0) + 1
+                        unchangedReads[key] = count
+                        if (unchangedReads.size > 64) unchangedReads.remove(unchangedReads.keys.first())
+                        if (count >= 16) {
+                            results += pending("no_progress")
+                            stopReason = AgentStopReason.NoProgress
+                            break
+                        }
+                    }
                 }
             } catch (e: CancellationException) {
                 results += pending("cancelled")
@@ -328,6 +375,34 @@ class AgentLoop(
         const val MAX_TOOL_RESULT_BYTES = 24 * 1024
         const val OUTPUT_LIMIT_CONTENT =
             "{\"error\":\"output_limit\",\"scope\":\"result\",\"limit_bytes\":24576}"
+    }
+
+    private fun hasFileFingerprint(content: String): Boolean = try {
+        Json.parseToJsonElement(content).jsonObject["sha256"]?.jsonPrimitive?.content?.isNotBlank() == true
+    } catch (_: SerializationException) { false
+    } catch (_: IllegalArgumentException) { false }
+
+    private fun operationKey(call: AgentToolCall): String {
+        if (!jsonNestingWithinLimit(call.arguments, 32)) {
+            throw ProviderError.InvalidResponse("tool arguments too deeply nested")
+        }
+        val canonical = try {
+            canonicalArguments(Json.parseToJsonElement(call.arguments))
+        } catch (_: IllegalArgumentException) { call.arguments }
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(canonical.toByteArray(Charsets.UTF_8))
+            .joinToString("") { "%02x".format(it.toInt() and 255) }
+        return "${call.name}\n$digest"
+    }
+
+    private fun canonicalArguments(value: JsonElement): String {
+        return when (value) {
+            is JsonObject -> value.entries.sortedBy { it.key }.joinToString(",", "{", "}") {
+                JsonPrimitive(it.key).toString() + ":" + canonicalArguments(it.value)
+            }
+            is JsonArray -> value.joinToString(",", "[", "]") { canonicalArguments(it) }
+            else -> value.toString()
+        }
     }
 
     private fun stopped(call: AgentToolCall, code: String) = AgentToolResult(

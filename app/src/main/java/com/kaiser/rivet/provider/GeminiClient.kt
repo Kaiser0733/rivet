@@ -4,7 +4,6 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -34,7 +33,8 @@ internal class GeminiClient(
                 if ("generateContent" !in (o["supportedGenerationMethods"]?.arr()
                         ?.mapNotNull { it.str() } ?: emptyList())) return@mapNotNull null
                 val name = o["name"]?.str() ?: return@mapNotNull null
-                ModelInfo(name.removePrefix("models/"), o["displayName"]?.str() ?: name)
+                ModelInfo(name.removePrefix("models/"), o["displayName"]?.str() ?: name,
+                    o["inputTokenLimit"].positiveInt())
             }.sortedBy { it.id.lowercase() }
         }
     }
@@ -91,7 +91,7 @@ internal class GeminiClient(
 
 private fun geminiMessage(message: AgentMessage): JsonObject {
     val state = message.transportState?.let { raw ->
-        try { Json.parseToJsonElement(raw) as? JsonObject } catch (_: Exception) { null }
+        parseJsonObject(raw)
     } ?: buildJsonObject {}
     val signatures = state.takeIf { it["provider"]?.str() == "gemini" }
         ?.get("call_signatures")?.obj() ?: buildJsonObject {}
@@ -109,7 +109,7 @@ private fun geminiMessage(message: AgentMessage): JsonObject {
                     textSignature?.let { put("thoughtSignature", it) }
                 })
                 message.toolCalls.forEach { call ->
-                    val args = try { Json.parseToJsonElement(call.arguments) as? JsonObject } catch (_: Exception) { null }
+                    val args = parseJsonObject(call.arguments)
                         ?: throw ProviderError.InvalidResponse("invalid function arguments")
                     add(buildJsonObject {
                         put("functionCall", buildJsonObject {
@@ -124,8 +124,8 @@ private fun geminiMessage(message: AgentMessage): JsonObject {
         AgentRole.Tool -> buildJsonObject {
             put("role", "user")
             put("parts", buildJsonArray { message.toolResults.forEach { result ->
-                val parsed = try { Json.parseToJsonElement(result.content) } catch (_: Exception) { null }
-                val response = parsed as? JsonObject ?: buildJsonObject { put("output", result.content) }
+                val response = parseJsonObject(result.content)
+                    ?: buildJsonObject { put("output", result.content) }
                 add(buildJsonObject { put("functionResponse", buildJsonObject {
                     if (!result.callId.startsWith(GEMINI_LOCAL_ID_PREFIX)) put("id", result.callId)
                     put("name", result.name); put("response", response)

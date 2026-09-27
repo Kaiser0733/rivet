@@ -49,6 +49,29 @@ class AnthropicClientTest {
     }
 
     @Test
+    fun listModelsKeepsOnlyPositiveReportedInputLimit() = runTest {
+        server.enqueue(MockResponse().setBody("""{"data":[{"id":"large","max_input_tokens":200000},{"id":"unknown","max_input_tokens":0}]}"""))
+        val models = AnthropicClient(config(), "key").listModels().associateBy { it.id }
+        assertEquals(200000, models["large"]?.inputLimitTokens)
+        assertEquals(null, models["unknown"]?.inputLimitTokens)
+    }
+
+    @Test
+    fun listedModelOnSecondPageKeepsItsInputLimit() = runTest {
+        server.enqueue(MockResponse().setBody("""{"data":[{"id":"first"}],"has_more":true,"last_id":"first"}"""))
+        server.enqueue(MockResponse().setBody("""{"data":[{"id":"target","max_input_tokens":200000}],"has_more":false}"""))
+
+        val models = AnthropicClient(config(), "key").listModels().associateBy { it.id }
+
+        assertEquals(200000, models["target"]?.inputLimitTokens)
+        assertEquals(2, models.size)
+        assertEquals("1000", server.takeRequest().requestUrl?.queryParameter("limit"))
+        val second = server.takeRequest().requestUrl
+        assertEquals("1000", second?.queryParameter("limit"))
+        assertEquals("first", second?.queryParameter("after_id"))
+    }
+
+    @Test
     fun listModelsRejectsOversizedResponse() = runTest {
         server.enqueue(MockResponse().setBody("x".repeat(MAX_PROVIDER_JSON_BODY_BYTES + 1)))
         try {
@@ -57,6 +80,34 @@ class AnthropicClientTest {
         } catch (_: ProviderError.ResponseTooLarge) {
             // expected
         }
+    }
+
+    @Test
+    fun deeplyNestedStreamedToolArgumentsFailBeforeRecursiveParse() = runTest {
+        val nested = "[".repeat(10_000) + "0" + "]".repeat(10_000)
+        val delta = buildJsonObject {
+            put("type", "content_block_delta")
+            put("index", 0)
+            put("delta", buildJsonObject {
+                put("type", "input_json_delta")
+                put("partial_json", nested)
+            })
+        }
+        val sse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"deep","name":"read_file","input":{}}}""",
+            delta.toString(),
+            """{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""",
+            """{"type":"message_stop"}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+
+        try {
+            AnthropicClient(config(), "key").streamAgent(AgentRequest(
+                "claude-x", emptyList(), "", ReasoningLevel.Default,
+                listOf(AgentToolDefinition("read_file", "Read", buildJsonObject { put("type", "object") })),
+            )) {}
+            throw AssertionError("Expected invalid tool input")
+        } catch (_: ProviderError.InvalidResponse) { Unit }
     }
 
     @Test
@@ -261,6 +312,7 @@ class AnthropicClientTest {
         assertEquals(25L, response.usage?.inputTokens)
         assertEquals(15L, response.usage?.outputTokens)
         assertEquals(5L, response.usage?.cacheReadTokens)
+        assertEquals(30L, response.usage?.contextInputTokens(ProviderType.Anthropic))
     }
 
     @Test

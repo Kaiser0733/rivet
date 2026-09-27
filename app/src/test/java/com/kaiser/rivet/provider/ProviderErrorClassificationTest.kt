@@ -5,11 +5,27 @@ import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class ProviderErrorClassificationTest {
+    @Test fun providerJsonDepthIsBoundedBeforeParsing() {
+        val deeplyNested = "{\"args\":" + "[".repeat(10_000) + "0" + "]".repeat(10_000) + "}"
+        assertFalse(jsonNestingWithinLimit(deeplyNested))
+        assertTrue(parseJsonObject(deeplyNested) == null)
+        val braces = "{".repeat(100)
+        val quoted = """{"text":"$braces"}"""
+        assertTrue(jsonNestingWithinLimit(quoted))
+        assertTrue(parseJsonObject(quoted) != null)
+    }
+
     @Test fun onlyExplicitContextSignalsClassifyAsOverflow() {
         assertTrue(httpError(400, """{"error":{"code":"context_length_exceeded","message":"too long"}}""")
             is ProviderError.ContextOverflow)
         assertTrue(providerMessage("prompt is too long") is ProviderError.ContextOverflow)
+        assertTrue(httpError(400, """{"error":{"message":"input length exceeds this model's context window"}}""")
+            is ProviderError.ContextOverflow)
+        assertTrue(httpError(400, """{"error":{"message":"prompt exceeds the context window"}}""")
+            is ProviderError.ContextOverflow)
         assertTrue(httpError(400, """{"error":{"message":"invalid option"}}""")
+            is ProviderError.ProviderMessage)
+        assertTrue(httpError(400, """{"error":{"message":"set a context window option"}}""")
             is ProviderError.ProviderMessage)
     }
 

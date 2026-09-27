@@ -4,10 +4,10 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: 0.8.2 cleanup candidate.** The 0.8.1 debug RC passed on-device
+**Status: 0.9.0 debug candidate.** The 0.8.1 debug RC passed on-device
 acceptance, including an in-place upgrade, agent file and command work, Undo,
-denial, and restart persistence. This cleanup build still needs independent
-verification and a short physical regression test. Rivet is not publicly released.
+denial, and restart persistence. The 0.9.0 context update still needs device
+verification. Rivet is not publicly released.
 
 ## What works today
 

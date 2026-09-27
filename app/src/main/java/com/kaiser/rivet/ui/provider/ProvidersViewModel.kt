@@ -8,6 +8,7 @@ import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.parseHeaders
 import com.kaiser.rivet.provider.providerClient
+import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import kotlinx.coroutines.CancellationException
@@ -210,7 +211,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                                 // Keep a manually entered model; suggest the
                                 // first fetched id only when the field is empty.
                                 config = if (it.config.model.isBlank() && models.isNotEmpty()) {
-                                    it.config.copy(model = models.first().id)
+                                    it.config.selectListedModel(models.first())
                                 } else it.config,
                             )
                         }
