@@ -125,6 +125,7 @@ class AgentLoop(
             if (callIds.any(String::isBlank) || callIds.toSet().size != callIds.size) {
                 throw ProviderError.InvalidResponse("ambiguous tool call ids")
             }
+            val operationKeys = response.toolCalls.map(::operationKey)
             val assistant = AgentMessage.assistant(
                 text = response.text,
                 toolCalls = response.toolCalls,
@@ -173,7 +174,7 @@ class AgentLoop(
             suspend fun fits(candidate: List<AgentToolResult>, reserve: Int = 0): Boolean =
                 canPersistToolOutput(messages + AgentMessage.tools(candidate), reserve)
             try {
-                for (call in response.toolCalls) {
+                for ((callIndex, call) in response.toolCalls.withIndex()) {
                     currentCoroutineContext().ensureActive()
                     if (!workspaceIsCurrent()) {
                         results += pending("workspace_changed")
@@ -188,7 +189,7 @@ class AgentLoop(
                     } catch (_: Exception) {
                         PreparedAgentTool(call, null) { failed(call) }
                     }
-                    val denialKey = operationKey(call)
+                    val denialKey = operationKeys[callIndex]
                     val previouslyDenied = denialKey in deniedMutations
                     val state = failureState()
                     if (observedFailureState != null && observedFailureState != state) {
@@ -385,9 +386,13 @@ class AgentLoop(
     } catch (_: SerializationException) { false
     } catch (_: IllegalArgumentException) { false }
 
+    private class TooDeepToolArguments : IllegalArgumentException()
+
     private fun operationKey(call: AgentToolCall): String {
         val canonical = try {
             canonicalArguments(Json.parseToJsonElement(call.arguments), 0)
+        } catch (_: TooDeepToolArguments) {
+            throw ProviderError.InvalidResponse("tool arguments too deeply nested")
         } catch (_: IllegalArgumentException) { call.arguments }
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(canonical.toByteArray(Charsets.UTF_8))
@@ -396,7 +401,7 @@ class AgentLoop(
     }
 
     private fun canonicalArguments(value: JsonElement, depth: Int): String {
-        require(depth <= 32)
+        if (depth > 32) throw TooDeepToolArguments()
         return when (value) {
             is JsonObject -> value.entries.sortedBy { it.key }.joinToString(",", "{", "}") {
                 JsonPrimitive(it.key).toString() + ":" + canonicalArguments(it.value, depth + 1)
