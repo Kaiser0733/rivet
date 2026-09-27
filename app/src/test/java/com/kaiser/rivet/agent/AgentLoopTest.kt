@@ -263,6 +263,22 @@ class AgentLoopTest {
         }
     }
 
+    @Test fun summaryProviderFailureSurfacesWithoutSendingMainRequest() = runTest {
+        var requests = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> requests++; AgentResponse(text = "unreachable") },
+            prepareTool = { error("No tools") },
+            requestApproval = { error("No approval") },
+            compactContext = { _, _ -> throw ProviderError.ResourceExhausted() },
+        )
+        try {
+            loop.run(listOf(AgentMessage.user("Continue")), emptyList())
+            error("Expected provider resource failure")
+        } catch (_: ProviderError.ResourceExhausted) {
+            assertEquals(0, requests)
+        }
+    }
+
     @Test fun deniedMutationIsNotApprovedAgainAfterOverflowCompaction() = runTest {
         val first = AgentToolCall("delete-1", "delete_path", """{"path":"A.kt"}""")
         val repeated = first.copy(id = "delete-2")
