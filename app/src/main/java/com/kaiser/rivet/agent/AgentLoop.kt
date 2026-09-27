@@ -308,7 +308,7 @@ class AgentLoop(
                         deterministicFailures.clear()
                         unchangedReads.clear()
                     }
-                    if (!bounded.error && call.name in STABLE_READ_TOOLS) {
+                    if (!bounded.error && call.name == "read_file" && hasFileFingerprint(bounded.content)) {
                         val hash = MessageDigest.getInstance("SHA-256")
                             .digest(bounded.content.toByteArray(Charsets.UTF_8))
                             .joinToString("") { "%02x".format(it.toInt() and 255) }
@@ -317,7 +317,7 @@ class AgentLoop(
                         val count = (unchangedReads[key] ?: 0) + 1
                         unchangedReads[key] = count
                         if (unchangedReads.size > 64) unchangedReads.remove(unchangedReads.keys.first())
-                        if (count >= 8) {
+                        if (count >= 16) {
                             results += pending("no_progress")
                             stopReason = AgentStopReason.NoProgress
                             break
@@ -363,8 +363,12 @@ class AgentLoop(
         const val MAX_TOOL_RESULT_BYTES = 24 * 1024
         const val OUTPUT_LIMIT_CONTENT =
             "{\"error\":\"output_limit\",\"scope\":\"result\",\"limit_bytes\":24576}"
-        private val STABLE_READ_TOOLS = setOf("read_file", "list_directory", "search_files", "git_status", "git_diff")
     }
+
+    private fun hasFileFingerprint(content: String): Boolean = try {
+        Json.parseToJsonElement(content).jsonObject["sha256"]?.jsonPrimitive?.content?.isNotBlank() == true
+    } catch (_: SerializationException) { false
+    } catch (_: IllegalArgumentException) { false }
 
     private fun stopped(call: AgentToolCall, code: String) = AgentToolResult(
         call.id, call.name, AgentToolError.content(code), error = true,

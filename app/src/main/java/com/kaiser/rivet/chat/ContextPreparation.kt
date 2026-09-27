@@ -10,6 +10,7 @@ import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.storage.ContextEstimate
+import com.kaiser.rivet.storage.ContextAttempt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -38,10 +39,28 @@ internal class ContextPreparation(
         } else ContextEstimate(ContextBudget.estimateRequestTokens(actual), "estimated")
     }
 
-    suspend fun prepare(messages: List<AgentMessage>, force: Boolean = false): List<AgentMessage> {
+    suspend fun prepare(messages: List<AgentMessage>, force: Boolean = false,
+                        reason: String = if (force) "overflow" else "automatic"): List<AgentMessage> {
         val durableStore = store ?: return messages
         val id = sessionId ?: return messages
         val before = estimate(messages)
+        val attempt = ContextAttempt(reason, before.source, before.tokens ?: 0,
+            null, config.id, config.model)
+        try {
+            return prepareChecked(durableStore, id, messages, force, attempt)
+        } catch (e: CancellationException) { throw e
+        } catch (e: Exception) {
+            recordFailure(durableStore, id, attempt, e.message?.takeIf {
+                it in setOf("context_summary_invalid", "context_summary_limit", "context_headroom_unavailable")
+            } ?: e.javaClass.simpleName)
+            throw e
+        }
+    }
+
+    private suspend fun prepareChecked(durableStore: CodingSessions, id: String,
+                                       messages: List<AgentMessage>, force: Boolean,
+                                       attempt: ContextAttempt): List<AgentMessage> {
+        val before = ContextEstimate(attempt.beforeTokens, attempt.estimateSource)
         val source = when (before.source) {
             "reported" -> TokenEstimateSource.Reported
             "estimated" -> TokenEstimateSource.Estimated
@@ -60,21 +79,25 @@ internal class ContextPreparation(
         // Old successful tool bodies can be removed without asking a model or changing history.
         val pruned = AgentContext.pruneOldResults(messages, protectedTailBytes = 48 * 1024)
         if (pruned != null && fits(pruned, targetTokens, baseline, force)) {
-            commit(durableStore, messages, pruned, summary)
+            commit(durableStore, messages, pruned, summary,
+                attempt.copy(afterTokens = footprint(pruned)))
             return pruned
         }
 
         val basis = pruned ?: messages
         val plan = AgentContext.plan(basis, targetBytes)
-            ?: return noHeadroom(messages, force)
+            ?: return noHeadroom(durableStore, id, attempt, messages, force)
         val next = taskState(plan.summaryInput, id,
             minOf(96 * 1024L, budget.allowedInputTokens.toLong() * 2).toInt())
         val encoded = next.encode()
         val after = ContextBudget.estimateRequestTokens(request(plan.retained, encoded))
         if (after > budget.allowedInputTokens ||
             (force && after >= baseline * 9 / 10) ||
-            after >= baseline || plan.retained == messages) return noHeadroom(messages, force)
-        commit(durableStore, messages, plan.retained, encoded)
+            after >= baseline || plan.retained == messages) {
+            return noHeadroom(durableStore, id, attempt, messages, force)
+        }
+        commit(durableStore, messages, plan.retained, encoded,
+            attempt.copy(afterTokens = after))
         return plan.retained
     }
 
@@ -83,15 +106,25 @@ internal class ContextPreparation(
         return after <= target && (!force || after < baseline * 9 / 10)
     }
 
-    private fun noHeadroom(messages: List<AgentMessage>, force: Boolean): List<AgentMessage> {
+    private suspend fun noHeadroom(store: CodingSessions, id: String, attempt: ContextAttempt,
+                                   messages: List<AgentMessage>, force: Boolean): List<AgentMessage> {
         if (!force) throw IllegalStateException("context_headroom_unavailable")
+        recordFailure(store, id, attempt, "context_headroom_unavailable")
         return messages
     }
 
+    private suspend fun recordFailure(store: CodingSessions, id: String,
+                                      attempt: ContextAttempt, code: String) {
+        try { store.recordContextFailure(id, attempt.copy(failure = code)) }
+        catch (e: CancellationException) { throw e
+        } catch (_: Exception) { /* Diagnostics must not replace the original failure. */ }
+    }
+
     private suspend fun commit(store: CodingSessions, expected: List<AgentMessage>,
-                               retained: List<AgentMessage>, nextSummary: String) {
+                               retained: List<AgentMessage>, nextSummary: String,
+                               attempt: ContextAttempt) {
         withContext(NonCancellable) {
-            store.compact(expected, retained, nextSummary)
+            store.compact(expected, retained, nextSummary, attempt)
             summary = nextSummary
         }
     }
