@@ -231,13 +231,16 @@ checkpoints within 2 GiB. Undo requires an explicit UI confirmation and an
 unchanged post-turn worktree. Restoration passes through the mirror's SAF
 conflict checks. A checkpoint that cannot be created prevents the mutation.
 
-SQLite keeps full events independently of the active transcript. Context
-pressure first removes older complete call/result groups from active context,
-then stores a bounded task-state summary; full rows remain. Recent complete
-groups stay verbatim. A clear provider context-overflow response may trigger
-one smaller model request, never a replay of completed tools. Rivet policy and
-workspace/tool contracts are reconstructed for each request. Applicable
-`AGENTS.md` instructions are re-read as untrusted user context; neither they nor
-a stored task summary supply policy. Usage is recorded as reported,
-estimated from a compatible reported anchor, or unknown; model context-window
-size is not inferred from an unverified model-name table.
+SQLite keeps full events independently of the active transcript. Before a
+provider request, Rivet accounts for the assembled messages, system text, and
+tool schemas. A listed provider model may supply a scoped input limit; unknown
+models use a conservative planning threshold and reactive overflow handling.
+Compatible reported input usage anchors later estimates. Context pressure
+first prunes old successful tool bodies, then replaces older complete groups
+with a bounded structured task state while retaining a recent verbatim tail.
+Compaction stores the canonical event-prefix and active-projection hashes in
+the same transaction as the new summary. Local bounded attempt records explain
+reductions and failures. One clear provider overflow may retry a materially
+smaller request without replaying completed tools. Rivet policy, tools, and
+applicable `AGENTS.md` instructions are rebuilt outside the task state, which
+cannot authorize actions or assert current workspace truth.

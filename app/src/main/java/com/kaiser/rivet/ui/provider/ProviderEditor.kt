@@ -37,6 +37,7 @@ import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.selectListedModel
 
 private val MAX_WIDTH = 640.dp
 
@@ -145,7 +146,7 @@ fun ProviderEditor(
 
         OutlinedTextField(
             value = config.model,
-            onValueChange = { v -> viewModel.updateConfig { it.copy(model = v) } },
+            onValueChange = { v -> viewModel.updateConfig { it.copy(model = v, modelContextLimit = null) } },
             label = { Text(stringResource(R.string.provider_model_label)) },
             placeholder = { Text(stringResource(R.string.provider_model_hint)) },
             singleLine = true,
@@ -161,7 +162,7 @@ fun ProviderEditor(
             )
             state.models.forEach { model ->
                 TextButton(
-                    onClick = { viewModel.updateConfig { it.copy(model = model.id) } },
+                    onClick = { viewModel.updateConfig { it.selectListedModel(model) } },
                     modifier = Modifier.fillMaxWidth(),
                 ) {
                     Column {

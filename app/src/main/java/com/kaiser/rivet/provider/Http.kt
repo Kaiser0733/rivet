@@ -1,7 +1,6 @@
 package com.kaiser.rivet.provider
 
 import kotlinx.coroutines.suspendCancellableCoroutine
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.Call
@@ -81,20 +80,20 @@ internal fun Response.errorText(): String? {
 // Best-effort extraction of a human-readable message from any of the error
 // body shapes in use ({"error":{"message"}}, {"message"}).
 private fun errorBodyText(body: String?): String? = try {
-    val obj = Json.parseToJsonElement(body ?: return null).jsonObject
+    val obj = parseJsonObject(body ?: return null) ?: return null
     when {
         "error" in obj -> obj["error"]!!.jsonObject["message"]?.jsonPrimitive?.content
         "message" in obj -> obj["message"]?.jsonPrimitive?.content
         else -> null
     }
-} catch (e: Exception) {
+} catch (e: IllegalArgumentException) {
     null
 }
 
 private fun errorBodyCode(body: String?): String? = try {
-    val error = Json.parseToJsonElement(body ?: return null).jsonObject["error"]?.jsonObject
+    val error = parseJsonObject(body ?: return null)?.get("error")?.jsonObject
     error?.get("code")?.jsonPrimitive?.content ?: error?.get("type")?.jsonPrimitive?.content
-} catch (e: Exception) {
+} catch (e: IllegalArgumentException) {
     null
 }
 
@@ -136,8 +135,10 @@ private fun isUsageLimit(text: String): Boolean {
 private fun isContextOverflow(text: String): Boolean {
     val value = text.lowercase(java.util.Locale.ROOT)
     return listOf("context_length_exceeded", "model_context_window_exceeded", "context window exceeded",
-        "maximum context length", "prompt is too long", "input token count exceeds", "request too large for context")
-        .any { it in value }
+        "context_window_exceeded", "maximum context length", "prompt is too long",
+        "input token count exceeds", "request too large for context").any { it in value } ||
+        (("context window" in value || "context length" in value) &&
+            ("exceed" in value || "too long" in value || "full" in value))
 }
 
 private fun isResourceExhausted(text: String): Boolean {

@@ -73,6 +73,7 @@ data class AgentUsage(
     val cacheReadTokens: Long? = null,
     val reasoningTokens: Long? = null,
     val totalTokens: Long? = null,
+    val cacheCreationTokens: Long? = null,
 )
 
 data class AgentApprovalRequest(

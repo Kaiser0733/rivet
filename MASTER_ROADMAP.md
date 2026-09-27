@@ -56,3 +56,11 @@ partial-failure recovery, and Undo. Version 0.8.2 retires unreachable
 presentation and obsolete API residue and prepares for independent verification
 and a short physical regression test. Production signing remains gated by the
 permanent certificate pin; no public release has been published.
+
+## Phase 9 — Harness Core (0.9.0 candidate)
+
+Provider request budgeting, old tool-output pruning, bounded task state,
+validated active-context reconstruction, local compaction diagnostics, and
+narrow no-progress detection strengthen long coding turns. Full session events,
+approval, workspace, and runtime boundaries remain in place. The debug
+candidate still requires CI and device verification.
