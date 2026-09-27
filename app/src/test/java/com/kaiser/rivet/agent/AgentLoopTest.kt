@@ -340,7 +340,7 @@ class AgentLoopTest {
     }
 
     @Test fun overNestedToolArgumentsStopBeforeMutation() = runTest {
-        val nested = "[".repeat(34) + "0" + "]".repeat(34)
+        val nested = "[".repeat(10_000) + "0" + "]".repeat(10_000)
         val call = AgentToolCall("deep", "delete_path", nested)
         var approvals = 0
         var executions = 0
@@ -359,6 +359,20 @@ class AgentLoopTest {
             assertEquals(0, approvals)
             assertEquals(0, executions)
         }
+    }
+
+    @Test fun bracketCharactersInsideJsonStringDoNotCountAsNesting() = runTest {
+        val path = "{".repeat(100) + "A.kt"
+        val call = AgentToolCall("read", "read_file", """{"path":"$path"}""")
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)),
+            AgentResponse(text = "Done")))
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = { PreparedAgentTool(call, null) { AgentToolResult(call.id, call.name, "{}") } },
+            requestApproval = { error("No approval") },
+        ).run(listOf(AgentMessage.user("Inspect")), emptyList())
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
     }
 
     @Test fun repeatedReadDoesNotSkipLaterMutationInSameToolBatch() = runTest {
