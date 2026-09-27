@@ -28,11 +28,13 @@ internal class ContextPreparation(
     var summary: String = initialSummary
         private set
 
+    fun requestFor(messages: List<AgentMessage>): AgentRequest = request(messages, summary)
+
     fun footprint(messages: List<AgentMessage>): Long =
-        ContextBudget.estimateRequestTokens(request(messages, summary))
+        ContextBudget.estimateRequestTokens(requestFor(messages))
 
     suspend fun estimate(messages: List<AgentMessage>): ContextEstimate {
-        val actual = request(messages, summary)
+        val actual = requestFor(messages)
         return if (store != null && sessionId != null) {
             store.contextEstimate(sessionId, config.id, config.model, actual.messages,
                 actual.system, actual.tools, config.baseUrl)
@@ -60,15 +62,14 @@ internal class ContextPreparation(
     private suspend fun prepareChecked(durableStore: CodingSessions, id: String,
                                        messages: List<AgentMessage>, force: Boolean,
                                        attempt: ContextAttempt): List<AgentMessage> {
-        val before = ContextEstimate(attempt.beforeTokens, attempt.estimateSource)
-        val source = when (before.source) {
+        val source = when (attempt.estimateSource) {
             "reported" -> TokenEstimateSource.Reported
             "estimated" -> TokenEstimateSource.Estimated
             else -> TokenEstimateSource.Unknown
         }
-        val budget = ContextBudget.assess(config, before.tokens, source)
+        val budget = ContextBudget.assess(config, attempt.beforeTokens, source)
         if (!force && !budget.needsReduction) return messages
-        val baseline = before.tokens ?: footprint(messages)
+        val baseline = attempt.beforeTokens
         val targetTokens = if (force) minOf(budget.allowedInputTokens.toLong(), baseline / 2)
             else budget.allowedInputTokens.toLong()
         val fixedTokens = (footprint(messages) - AgentContext.serializedBytes(messages) / 3L)
