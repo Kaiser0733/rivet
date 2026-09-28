@@ -10,6 +10,9 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.SafAgentWorkspace
+import com.kaiser.rivet.storage.CodingSessions
+import kotlinx.coroutines.CoroutineStart
+import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
@@ -62,6 +65,49 @@ class SafWorkspaceTest {
 
     @Test fun selectedProjectUsesProviderDisplayName() = runBlocking {
         assertEquals("project", workspace.displayName())
+    }
+
+    @Test fun cancellationAtSafCreateCommitPersistsUnknownOutcomeWithoutReplay() = runBlocking {
+        val app = RuntimeEnvironment.getApplication()
+        app.deleteDatabase("coding-sessions.db")
+        val sessions = CodingSessions(app)
+        val initial = listOf(AgentMessage.user("Create a disposable file"))
+        sessions.load()
+        sessions.save(initial, interrupted = true)
+        val calls = listOf(AgentToolCall("create", "create_file", """{"path":"disposable.kt"}"""),
+            AgentToolCall("later", "list_directory", """{"path":""}"""))
+        val executor = AgentToolExecutor(SafAgentWorkspace(workspace))
+        var modelRequests = 0
+        var approvals = 0
+        val durable = initial.toMutableList()
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> modelRequests++; AgentResponse(toolCalls = calls) },
+            prepareTool = executor::prepare,
+            requestApproval = { approvals++; true },
+        )
+        val running = async(start = CoroutineStart.LAZY) {
+            loop.run(initial, AgentToolExecutor.definitions, onMessage = { message ->
+                sessions.save(durable + message, interrupted = true)
+                durable += message
+            })
+        }
+        provider.afterCreate = { running.cancel() }
+        running.start()
+        running.join()
+        provider.afterCreate = null
+
+        assertTrue(running.isCancelled)
+        assertEquals(1, modelRequests)
+        assertEquals(1, approvals)
+        assertEquals(1, provider.createCalls)
+        assertEquals(1, workspace.listDirectory(WorkspacePath.ROOT).count { it.path.value == "disposable.kt" })
+        val restored = CodingSessions(app).load()
+        val results = restored.messages.last().toolResults
+        assertEquals(calls.map { it.id }, results.map { it.callId })
+        assertTrue(results[0].content.contains("outcome is unknown"))
+        assertTrue(results[1].content.contains("cancelled"))
+        assertEquals(restored.messages, CodingSessions(app).load().messages)
+        assertEquals(1, provider.createCalls)
     }
 
     @Test fun providerContractSupportsFrameworkQueryAndCreation() {
