@@ -661,7 +661,7 @@ class ChatViewModelTest {
             AgentResponse(text = "Done"))))
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val viewModel = ChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
@@ -754,7 +754,7 @@ class ChatViewModelTest {
         }
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val viewModel = ChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
@@ -789,7 +789,7 @@ class ChatViewModelTest {
         )))
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val preparation = ContextPreparation(sessions, id, provider, config, "turn", "") {
             messages, summary -> AgentRequest(config.model,
                 addUntrustedTaskContext(messages, "", summary), "System", config.reasoning, emptyList())
@@ -842,7 +842,7 @@ class ChatViewModelTest {
         assertEquals("", sessions.load().summary)
 
         val smallConfig = largeConfig.copy(model = "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val secondProvider = QueueProvider(ArrayDeque(listOf(
             AgentResponse(text = """{"objective":"Finish task","completed":["Inspected code"],"pending":["Verify"]}"""),
             AgentResponse(text = "Second"),
@@ -874,7 +874,7 @@ class ChatViewModelTest {
         sessions.save(history, interrupted = false)
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text =
             """{"objective":"Keep coding","pending":["Verify"]}"""))))
         val preparation = ContextPreparation(sessions, id, provider, config, "turn", "") {

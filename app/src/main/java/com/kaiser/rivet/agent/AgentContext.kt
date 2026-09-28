@@ -210,11 +210,11 @@ internal object AgentContext {
 
     private fun commandSummary(result: AgentToolResult): String {
         val value = parseObject(result.content)
-        val exitCode = (value?.get("exit_code") as? JsonPrimitive)?.intOrNull
-        val timedOut = (value?.get("timed_out") as? JsonPrimitive)?.booleanOrNull
+        val exitCode = (value?.get("exit_code") as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
+        val timedOut = (value?.get("timed_out") as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
         val sync = (value?.get("sync") as? JsonPrimitive)?.takeIf { it.isString }?.content
-        val stdoutTruncated = (value?.get("stdout_truncated") as? JsonPrimitive)?.booleanOrNull
-        val stderrTruncated = (value?.get("stderr_truncated") as? JsonPrimitive)?.booleanOrNull
+        val stdoutTruncated = (value?.get("stdout_truncated") as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
+        val stderrTruncated = (value?.get("stderr_truncated") as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
         val healthy = !result.error && value != null && "error" !in value && "sync_path" !in value &&
             exitCode == 0 && timedOut == false && sync in setOf("ok", "no_changes") &&
             stdoutTruncated != null && stderrTruncated != null
@@ -236,11 +236,11 @@ internal object AgentContext {
     private fun runCommandCanPrune(result: AgentToolResult): Boolean {
         if (result.error) return false
         val value = parseObject(result.content) ?: return false
-        val exitCode = (value["exit_code"] as? JsonPrimitive)?.intOrNull
-        val timedOut = (value["timed_out"] as? JsonPrimitive)?.booleanOrNull
+        val exitCode = (value["exit_code"] as? JsonPrimitive)?.takeUnless { it.isString }?.intOrNull
+        val timedOut = (value["timed_out"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
         val sync = (value["sync"] as? JsonPrimitive)?.takeIf { it.isString }?.content
-        val stdoutTruncated = (value["stdout_truncated"] as? JsonPrimitive)?.booleanOrNull
-        val stderrTruncated = (value["stderr_truncated"] as? JsonPrimitive)?.booleanOrNull
+        val stdoutTruncated = (value["stdout_truncated"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
+        val stderrTruncated = (value["stderr_truncated"] as? JsonPrimitive)?.takeUnless { it.isString }?.booleanOrNull
         return "error" !in value && "sync_path" !in value && exitCode == 0 && timedOut == false &&
             sync in setOf("ok", "no_changes") && stdoutTruncated != null && stderrTruncated != null
     }

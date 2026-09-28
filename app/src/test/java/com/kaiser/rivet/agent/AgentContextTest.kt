@@ -202,8 +202,12 @@ class AgentContextTest {
             "timeout" to commandContent(timedOut = true),
             "sync conflict" to commandContent(sync = "conflict", syncPath = "src/A.kt"),
             "sync failed" to commandContent(sync = "failed"),
+            "sync interrupted" to commandContent(sync = "interrupted"),
             "sync pending" to commandContent(sync = "pending"),
+            "sync not started" to commandContent(sync = "not_started"),
             "malformed status" to commandContent().replace("\"exit_code\":0", "\"exit_code\":\"0\""),
+            "quoted timeout" to commandContent().replace("\"timed_out\":false", "\"timed_out\":\"false\""),
+            "quoted truncation" to commandContent().replace("\"stdout_truncated\":false", "\"stdout_truncated\":\"false\""),
             "missing status" to commandContent(exitCode = null),
             "malformed JSON" to "x".repeat(9_000),
         )
@@ -212,6 +216,16 @@ class AgentContextTest {
             val history = commandHistory(content)
             assertNull(label, AgentContext.pruneOldResults(history, protectedTailBytes = 0))
         }
+    }
+
+    @Test fun quotedRunCommandExitCodeIsUnresolvedRatherThanSuccessful() {
+        val content = commandContent().replace("\"exit_code\":0", "\"exit_code\":\"0\"")
+        val history = commandHistory(content)
+
+        assertNull(AgentContext.pruneOldResults(history, protectedTailBytes = 0))
+        val summary = AgentContext.summarizeInput(history.take(3), maxBytes = 256)
+        assertTrue(summary.contains("run_command unresolved"))
+        assertTrue(summary.contains("exit_code=unknown"))
     }
 
     @Test fun healthyRunCommandCanPruneWhileRetainingAuthoritativeStatus() {
