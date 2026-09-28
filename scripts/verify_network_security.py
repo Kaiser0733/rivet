@@ -9,7 +9,6 @@ from xml.etree import ElementTree
 from zipfile import ZipFile
 
 ANDROID = "{http://schemas.android.com/apk/res/android}"
-LOOPBACK_HOSTS = {"localhost", "127.0.0.1"}
 
 
 def _elements(xmltree: str, tag: str) -> list[str]:
@@ -42,11 +41,6 @@ def _boolean_attribute(section: str, attribute: str) -> bool:
     raise AssertionError(f"unrecognized {attribute} value: {value}")
 
 
-def _attribute_line_is_true(line: str) -> bool:
-    value = line.rsplit("=", 1)[-1].strip().lower()
-    return value.endswith("0xffffffff") or value.endswith("true")
-
-
 def verify_debug_network_security(manifest_tree: str, config_tree: str,
                                   resource_paths: set[str], resources_dump: str) -> None:
     references = [line for line in manifest_tree.splitlines()
@@ -63,24 +57,23 @@ def verify_debug_network_security(manifest_tree: str, config_tree: str,
     assert "res/xml/network_security_config.xml" in resource_paths, "debug APK lacks network security resource"
     assert len(_elements(config_tree, "network-security-config")) == 1, "invalid debug network security resource"
 
+    element_names = [match.group(1) for line in config_tree.splitlines()
+                     if (match := re.match(r"^\s*E: ([\w-]+)(?:\s|\(|$)", line))]
+    assert element_names == ["network-security-config", "base-config"], (
+        "debug network policy must contain only one base-config"
+    )
     bases = _elements(config_tree, "base-config")
-    domains = _elements(config_tree, "domain-config")
-    assert len(bases) == 1 and not _boolean_attribute(
+    assert len(bases) == 1 and _boolean_attribute(
         bases[0], "cleartextTrafficPermitted"
-    ), "debug base-config must deny cleartext"
-    assert len(domains) == 1 and _boolean_attribute(
-        domains[0], "cleartextTrafficPermitted"
-    ), "debug domain-config must allow cleartext only for loopback"
+    ), "debug base-config must allow cleartext for physical mock-provider testing"
 
     cleartext_attributes = [line for line in config_tree.splitlines()
                             if "cleartextTrafficPermitted" in line and line.lstrip().startswith("A:")]
-    assert len(cleartext_attributes) == 2, "unexpected cleartext policy scope"
-    assert not any("includeSubdomains" in line and _attribute_line_is_true(line)
-                   for line in config_tree.splitlines()), "debug loopback exception includes subdomains"
-    host_names = [value for section in _elements(config_tree, "domain")
-                  for value in re.findall(r'^\s*C:\s*"([^"\n]+)"', section, re.MULTILINE)]
-    assert len(host_names) == 2 and set(host_names) == LOOPBACK_HOSTS, (
-        "debug cleartext domains must be exactly localhost and 127.0.0.1"
+    assert len(cleartext_attributes) == 1, "unexpected cleartext policy scope"
+    config_attributes = [line for line in config_tree.splitlines()
+                         if line.lstrip().startswith("A:")]
+    assert config_attributes == cleartext_attributes, (
+        "debug network policy must not add certificate trust or unrelated attributes"
     )
 
 
