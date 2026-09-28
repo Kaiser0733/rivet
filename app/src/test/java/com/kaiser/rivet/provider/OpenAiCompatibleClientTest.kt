@@ -66,6 +66,21 @@ class OpenAiCompatibleClientTest {
         assertEquals(null, custom.inputLimitTokens)
     }
 
+    @Test fun trustedOpenRouterOutputReserveMatchesTheSentCompletionCap() = runTest {
+        for (capacity in listOf(4096, 16384, 100000)) {
+            val base = config(ProviderType.OpenRouter)
+            val selected = base.copy(modelContextLimit = ModelContextLimit(base.model, base.baseUrl, capacity))
+            val reserve = com.kaiser.rivet.agent.ContextBudget.assess(selected, null,
+                com.kaiser.rivet.agent.TokenEstimateSource.Unknown).reservedTokens
+            server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                    "data: [DONE]\n\n"))
+            OpenAiCompatibleClient(selected, "key").streamAgent(
+                AgentRequest(selected.model, emptyList(), "", ReasoningLevel.Default, emptyList())) {}
+            assertTrue(server.takeRequest().body.readUtf8().contains("\"max_completion_tokens\":$reserve"))
+        }
+    }
+
     @Test
     fun listModelsEmptyAndMalformed() = runTest {
         server.enqueue(MockResponse().setBody("""{"data":[]}"""))
