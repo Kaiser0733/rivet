@@ -116,9 +116,10 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun agentStreamAccumulatesDeltas() = runTest {
+    fun customTextStopReasonAllowsAccumulatedDeltas() = runTest {
         val sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n" +
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
             "data: [DONE]\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val out = StringBuilder()
@@ -133,6 +134,55 @@ class OpenAiCompatibleClientTest {
         val body = recorded.body.readUtf8()
         assertTrue(body.contains("\"model\":\"test-model\""))
         assertTrue(body.contains("\"stream\":true"))
+    }
+
+    @Test
+    fun customTextWithoutFinishReasonIsIncomplete() = runTest {
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n" +
+                "data: [DONE]\n\n",
+        ))
+
+        try {
+            OpenAiCompatibleClient(config(), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            fail("[DONE] without finish_reason must not complete custom-provider text")
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("missing finish reason", error.reason)
+        }
+    }
+
+    @Test
+    fun customTextWithUnknownFinishReasonIsIncomplete() = runTest {
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}," +
+                "\"finish_reason\":\"unexpected_reason\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ))
+
+        try {
+            OpenAiCompatibleClient(config(), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            fail("unknown finish_reason must not complete custom-provider text")
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("unexpected_reason", error.reason)
+        }
+    }
+
+    @Test
+    fun doneOnlyCustomStreamIsIncomplete() = runTest {
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody("data: [DONE]\n\n"))
+
+        try {
+            OpenAiCompatibleClient(config(), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            fail("transport completion without a model finish_reason must be incomplete")
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("missing finish reason", error.reason)
+        }
     }
 
     @Test
@@ -165,7 +215,10 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun genericProviderOmitsReasoningEffort() = runTest {
-        server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
+        server.enqueue(MockResponse().setBody(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
         OpenAiCompatibleClient(config(), "key").streamAgent(
             AgentRequest("test-model", emptyList(), "", ReasoningLevel.High, emptyList()),
         ) {}
@@ -207,7 +260,10 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun agentStreamSendsAuthAndCustomHeaders() = runTest {
-        server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
+        server.enqueue(MockResponse().setBody(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
         val cfg = config().copy(
             headers = listOf(
                 ProviderHeader("X-Custom", "yes"),
@@ -251,7 +307,11 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun agentToolsAndResultsUseChatCompletionsFormat() = runTest {
-        server.enqueue(MockResponse().setBody("data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\ndata: [DONE]\n\n"))
+        server.enqueue(MockResponse().setBody(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"done\"}}]}\n\n" +
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ))
         val call = AgentToolCall("call-1", "read_file", "{\"path\":\"A.kt\"}")
         OpenAiCompatibleClient(config(), "key").streamAgent(AgentRequest(
             "test-model",
@@ -269,7 +329,7 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun streamedToolFragmentsAndMultipleCallsAreReconstructed() = runTest {
+    fun customToolCallsRequireToolCallsFinishReasonAndAreReconstructed() = runTest {
         val sse = listOf(
             """{"choices":[{"delta":{"content":"Checking ","tool_calls":[{"index":0,"id":"a","type":"function","function":{"name":"read_","arguments":"{\"pa"}}]}}]}""",
             """{"choices":[{"delta":{"tool_calls":[{"index":1,"id":"b","type":"function","function":{"name":"search_files","arguments":"{\"query\":\"x\"}"}},{"index":0,"function":{"name":"file","arguments":"th\":\"A.kt\"}"}}]}}]}""",
@@ -307,6 +367,42 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun customToolCallWithTextStopReasonIsIncomplete() = runTest {
+        val tool = """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"read_file","arguments":"{\"path\":\"A.kt\"}"}}]}}]}"""
+        server.enqueue(MockResponse().setBody(
+            "data: $tool\n\n" +
+                "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ))
+
+        try {
+            OpenAiCompatibleClient(config(), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            fail("tool deltas with the text stop reason must be incomplete")
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("stop", error.reason)
+        }
+    }
+
+    @Test
+    fun textAtTransportEofWithoutDoneMarkerRemainsIncomplete() = runTest {
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}," +
+                "\"finish_reason\":\"stop\"}]}\n\n",
+        ))
+
+        try {
+            OpenAiCompatibleClient(config(), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}
+            fail("semantic finish reason without SSE [DONE] must remain transport-incomplete")
+        } catch (error: ProviderError.InvalidResponse) {
+            assertTrue(error.detail.contains("incomplete"))
+        }
+    }
+
+    @Test
     fun completeLookingToolCallIsRejectedWhenGenerationHitsLengthLimit() = runTest {
         val tool = """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"delete_path","arguments":"{\"path\":\"Max.txt\"}"}}]}}]}"""
         val limited = """{"choices":[{"delta":{},"finish_reason":"length"}]}"""
@@ -324,7 +420,7 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun lengthLimitedTextIsNotPresentedAsCompleted() = runTest {
+    fun customLengthLimitedTextIsIncomplete() = runTest {
         val text = """{"choices":[{"delta":{"content":"I changed the file"}}]}"""
         val limited = """{"choices":[{"delta":{},"finish_reason":"length"}]}"""
         server.enqueue(MockResponse().setBody("data: $text\n\ndata: $limited\n\ndata: [DONE]\n\n"))
@@ -334,8 +430,8 @@ class OpenAiCompatibleClientTest {
                 AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
             ) {}
             fail("A length-limited answer must not be presented as complete")
-        } catch (_: ProviderError) {
-            // expected
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("length", error.reason)
         }
     }
 
@@ -388,7 +484,10 @@ class OpenAiCompatibleClientTest {
         assertEquals(3L, reported.usage?.reasoningTokens)
         assertTrue(server.takeRequest().body.readUtf8().contains("\"include_usage\":true"))
 
-        server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
+        server.enqueue(MockResponse().setBody(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ))
         OpenAiCompatibleClient(config(), "key").streamAgent(
             AgentRequest("model", emptyList(), "", ReasoningLevel.Default, emptyList())) {}
         val customBody = server.takeRequest().body.readUtf8()
