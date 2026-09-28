@@ -154,7 +154,10 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun openAiReasoningModelSendsReasoningEffort() = runTest {
-        server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
+        server.enqueue(MockResponse().setBody(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
         OpenAiCompatibleClient(
             config(ProviderType.OpenAi, "gpt-5"),
             "key",
@@ -167,7 +170,10 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun openRouterSendsMaxReasoningEffort() = runTest {
-        server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
+        server.enqueue(MockResponse().setBody(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
         OpenAiCompatibleClient(
             config(ProviderType.OpenRouter),
             "key",
@@ -350,6 +356,7 @@ class OpenAiCompatibleClientTest {
             "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":12," +
             "\"total_tokens\":52,\"prompt_tokens_details\":{\"cached_tokens\":10}," +
             "\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n" +
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
             "data: [DONE]\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val reported = OpenAiCompatibleClient(config(ProviderType.OpenAi), "key").streamAgent(

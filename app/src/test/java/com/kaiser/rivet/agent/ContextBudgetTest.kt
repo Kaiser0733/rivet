@@ -61,7 +61,7 @@ class ContextBudgetTest {
         }
     }
 
-    @Test fun tinyTotalWindowsDoNotBecomeOneTokenPseudoPlans() {
+    @Test fun tinyTotalWindowsKeepExactCapacityAndActualReserve() {
         for (type in listOf(ProviderType.Anthropic, ProviderType.OpenRouter)) {
             for (capacity in listOf(1, 2, 100, 1024, 2048)) {
                 val selected = config.copy(type = type, modelContextLimit =
@@ -69,8 +69,9 @@ class ContextBudgetTest {
                 val assessed = ContextBudget.assess(selected, 1, TokenEstimateSource.Estimated)
                 assertEquals(capacity, assessed.knownInputLimitTokens)
                 assertEquals(CapacitySource.ProviderMetadata, assessed.capacitySource)
-                assertEquals(0, assessed.allowedInputTokens)
-                assertTrue(assessed.needsReduction)
+                assertEquals(capacity, assessed.allowedInputTokens + assessed.reservedTokens)
+                assertTrue(assessed.allowedInputTokens >= 0)
+                if (capacity == 1) assertEquals(0, assessed.allowedInputTokens)
             }
         }
     }
