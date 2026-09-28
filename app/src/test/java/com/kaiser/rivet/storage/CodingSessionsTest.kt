@@ -131,6 +131,24 @@ class CodingSessionsTest {
         assertEquals(3, CodingSessions(app).load().messages.size)
     }
 
+    @Test fun pendingToolCallCannotBeBuriedByANewUserEvent() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val call = AgentToolCall("pending", "create_file", "{}")
+        val pending = listOf(AgentMessage.user("create"), AgentMessage.assistant("", listOf(call)))
+        sessions.save(pending, interrupted = true)
+
+        try {
+            sessions.save(pending + AgentMessage.user("continue"), interrupted = false)
+            error("A new event must not bury an unresolved tool call")
+        } catch (_: IllegalArgumentException) { }
+
+        assertEquals(pending, sessions.recent(id))
+        assertTrue(sessions.list().single { it.id == id }.interrupted)
+        assertEquals(2, sessions.fullEventCount(id))
+        assertEquals(call.id, sessions.load().messages.last().toolResults.single().callId)
+    }
+
     @Test fun interruptedRecoveryAtActiveLimitPreservesPriorValidSummary() = runBlocking {
         val sessions = CodingSessions(app)
         val id = sessions.load().id!!

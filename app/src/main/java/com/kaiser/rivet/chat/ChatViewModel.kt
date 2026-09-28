@@ -294,6 +294,28 @@ class ChatViewModel private constructor(
         sendJob = viewModelScope.launch {
             try {
             previous?.join()
+            // A failed result write can leave a committed mutation without durable
+            // outcome evidence. Recover it before a new user event can bury the call.
+            if (activeMessages.lastOrNull()?.let {
+                    it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty()
+                } == true) {
+                val restored = try { sessionStore.load() }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) {
+                        _uiState.update { it.copy(streaming = false, activity = null,
+                            error = "Could not recover the previous task. Check available storage and try again.") }
+                        return@launch
+                    }
+                if (restored.messages.lastOrNull()?.let {
+                        it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty()
+                    } == true) {
+                    _uiState.update { it.copy(streaming = false, activity = null,
+                        error = "Could not recover the previous task. Restart Rivet before continuing.") }
+                    return@launch
+                }
+                activeMessages = restored.messages
+                activeSummary = restored.summary
+            }
             val snapshot = providerSnapshot() ?: return@launch
             val restoredWorkspace = try {
                 workspaceSelection.restore()

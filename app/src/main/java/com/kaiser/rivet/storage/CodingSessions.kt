@@ -98,6 +98,13 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             if (!retractEmpty && (messages.size < count || (count > 0 && messages[count - 1] != last))) {
                 throw IllegalStateException("Session event prefix changed")
             }
+            if (hasPendingToolCall(last) && messages.size > count) {
+                val next = messages[count]
+                require(next.role == AgentRole.Tool &&
+                    next.toolResults.map { it.callId to it.name } == last!!.toolCalls.map { it.id to it.name }) {
+                    "Pending tool call requires its correlated results"
+                }
+            }
             // Only the active model transcript has a size limit; complete event history does not.
             if (!AgentSessionCodec.fits(messages, summary(db, id).toByteArray(Charsets.UTF_8).size)) {
                 throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
