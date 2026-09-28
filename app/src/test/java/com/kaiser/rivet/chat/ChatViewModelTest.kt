@@ -424,7 +424,16 @@ class ChatViewModelTest {
         assertFailedToolResultSaveLeavesUnknownOutcome(AgentSessionLimitException(Int.MAX_VALUE))
     }
 
-    private suspend fun assertFailedToolResultSaveLeavesUnknownOutcome(failure: Exception) {
+    @Test fun failedToolResultStorageRecoversBeforeAnotherSendWithoutRestart() = runBlocking {
+        assertFailedToolResultSaveLeavesUnknownOutcome(IllegalStateException("storage failed"), true)
+    }
+
+    @Test fun failedToolResultSessionLimitRecoversBeforeAnotherSendWithoutRestart() = runBlocking {
+        assertFailedToolResultSaveLeavesUnknownOutcome(AgentSessionLimitException(Int.MAX_VALUE), true)
+    }
+
+    private suspend fun assertFailedToolResultSaveLeavesUnknownOutcome(failure: Exception,
+                                                                     continueWithoutRestart: Boolean = false) {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val authority = "com.kaiser.rivet.result-failure-" +
@@ -453,7 +462,8 @@ class ChatViewModelTest {
             }
         }
         val call = AgentToolCall("create-one", "create_file", """{"path":"A.kt"}""")
-        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)))))
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)),
+            AgentResponse(text = "Continuing"))))
         val config = ProviderConfig("test", ProviderType.OpenAi, "Test",
             "https://example.invalid/v1", "test-model")
         val viewModel = ChatViewModel(app, persistence,
@@ -472,6 +482,22 @@ class ChatViewModelTest {
         val header = sessions.list().single()
         assertTrue(header.interrupted)
         assertEquals(call.id, sessions.recent(header.id).last().toolCalls.single().id)
+
+        if (continueWithoutRestart) {
+            viewModel.send("Continue without creating it again")
+            await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Continuing" }
+            assertEquals(2, provider.requests.size)
+            val unknown = provider.requests.last().messages.flatMap { it.toolResults }.single()
+            assertEquals(call.id, unknown.callId)
+            assertTrue(unknown.error)
+            assertTrue(unknown.content.contains("outcome is unknown"))
+            assertFalse(sessions.list().single().interrupted)
+            val restarted = CodingSessions(app).load()
+            assertEquals("Continuing", restarted.messages.last().text)
+            assertEquals(1, restarted.messages.flatMap { it.toolResults }.size)
+            assertEquals(1, workspace.listDirectory(WorkspacePath.ROOT).count { it.path.value == "A.kt" })
+            return
+        }
 
         val restored = CodingSessions(app).load()
         assertTrue(restored.interrupted)
