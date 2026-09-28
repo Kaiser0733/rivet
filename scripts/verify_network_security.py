@@ -37,7 +37,7 @@ def _boolean_attribute(section: str, attribute: str) -> bool:
     value = values[0]
     if value.endswith("0xffffffff") or value.endswith("true"):
         return True
-    if value.endswith("0x00000000") or value.endswith("false"):
+    if re.search(r"0x0+$", value) or value.endswith("false"):
         return False
     raise AssertionError(f"unrecognized {attribute} value: {value}")
 
