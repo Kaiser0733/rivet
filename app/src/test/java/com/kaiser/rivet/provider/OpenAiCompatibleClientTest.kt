@@ -186,6 +186,53 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun customIncompleteTextIsNotAddedToDurableAgentHistory() = runTest {
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"partial answer\"}}]}\n\n" +
+                "data: [DONE]\n\n",
+        ))
+        val client = OpenAiCompatibleClient(config(), "key")
+        val durableMessages = mutableListOf<AgentMessage>()
+        val streamedText = StringBuilder()
+        var prepared = 0
+        var approvals = 0
+        var executions = 0
+        val loop = AgentLoop(
+            requestModel = { messages, tools, onText ->
+                client.streamAgent(
+                    AgentRequest("test-model", messages, "", ReasoningLevel.Default, tools),
+                ) { onText(it) }
+            },
+            prepareTool = { call ->
+                prepared++
+                PreparedAgentTool(call, AgentApprovalRequest(call, "Write", "A.kt")) {
+                    executions++
+                    AgentToolResult(call.id, call.name, "{}")
+                }
+            },
+            requestApproval = { approvals++; true },
+        )
+
+        try {
+            loop.run(
+                initial = listOf(AgentMessage.user("Change A.kt")),
+                tools = listOf(AgentToolDefinition("write_file", "Write", buildJsonObject { put("type", "object") })),
+                onText = { streamedText.append(it) },
+                onMessage = { durableMessages.add(it) },
+            )
+            fail("incomplete custom text must not return a completed agent turn")
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("missing finish reason", error.reason)
+        }
+
+        assertEquals("partial answer", streamedText.toString())
+        assertTrue(durableMessages.isEmpty())
+        assertEquals(0, prepared)
+        assertEquals(0, approvals)
+        assertEquals(0, executions)
+    }
+
+    @Test
     fun nativeOpenAiAndOpenRouterTextRequireTerminalStopReason() = runTest {
         for (type in listOf(ProviderType.OpenAi, ProviderType.OpenRouter)) {
             server.enqueue(MockResponse().setBody(
@@ -443,6 +490,7 @@ class OpenAiCompatibleClientTest {
         var prepared = 0
         var approvals = 0
         var executions = 0
+        val durableMessages = mutableListOf<AgentMessage>()
         val loop = AgentLoop(
             requestModel = { messages, tools, onText ->
                 client.streamAgent(AgentRequest("test-model", messages, "", ReasoningLevel.Default, tools), onText)
@@ -458,7 +506,11 @@ class OpenAiCompatibleClientTest {
         )
 
         try {
-            loop.run(listOf(AgentMessage.user("Delete Max.txt")), emptyList())
+            loop.run(
+                listOf(AgentMessage.user("Delete Max.txt")),
+                emptyList(),
+                onMessage = { durableMessages.add(it) },
+            )
             fail("An unconfirmed tool decision must not reach the agent loop")
         } catch (_: ProviderError.IncompleteGeneration) {
             // expected
@@ -466,6 +518,7 @@ class OpenAiCompatibleClientTest {
         assertEquals(0, prepared)
         assertEquals(0, approvals)
         assertEquals(0, executions)
+        assertTrue(durableMessages.isEmpty())
     }
 
     @Test fun knownProvidersRequestAndParseFinalUsageButCustomShapeStaysBaseline() = runTest {
