@@ -18,50 +18,40 @@ resource 0x7f0f0000 com.kaiser.rivet:xml/network_security_config:
 DEBUG_NETWORK_CONFIG = """
 E: network-security-config (line=2)
   E: base-config (line=3)
-    A: cleartextTrafficPermitted(0x010104ec)=(type 0x12)0x00000000
-  E: domain-config (line=4)
     A: cleartextTrafficPermitted(0x010104ec)=(type 0x12)0xffffffff
-    E: domain (line=5)
-      C: "localhost"
-    E: domain (line=6)
-      C: "127.0.0.1"
 """
 
 
 class NetworkSecurityTest(unittest.TestCase):
-    def test_debug_apk_allows_only_the_two_loopback_hosts(self):
+    def test_debug_apk_allows_cleartext_for_physical_mock_provider_testing(self):
         verify_debug_network_security(
             DEBUG_MANIFEST,
             DEBUG_NETWORK_CONFIG,
             {"res/xml/network_security_config.xml"},
             DEBUG_RESOURCES,
         )
-        verify_debug_network_security(
-            DEBUG_MANIFEST,
-            DEBUG_NETWORK_CONFIG.replace("0x00000000", "0x0"),
-            {"res/xml/network_security_config.xml"},
-            DEBUG_RESOURCES,
-        )
 
-    def test_debug_apk_rejects_global_cleartext_and_extra_domains(self):
-        globally_cleartext = DEBUG_NETWORK_CONFIG.replace(
-            "0x00000000", "0xffffffff", 1
-        )
-        with self.assertRaisesRegex(AssertionError, "base-config"):
+    def test_debug_apk_rejects_other_network_policy_and_trust_overrides(self):
+        for extra_policy in (
+            "  E: domain-config (line=4)\n",
+            "  E: debug-overrides (line=4)\n",
+            "  E: trust-anchors (line=4)\n",
+            "  E: pin-set (line=4)\n",
+        ):
+            with self.subTest(extra_policy=extra_policy.strip()), self.assertRaisesRegex(
+                AssertionError, "only one base-config"
+            ):
+                verify_debug_network_security(
+                    DEBUG_MANIFEST,
+                    DEBUG_NETWORK_CONFIG + extra_policy,
+                    {"res/xml/network_security_config.xml"},
+                    DEBUG_RESOURCES,
+                )
+
+        with self.assertRaisesRegex(AssertionError, "allow cleartext"):
             verify_debug_network_security(
                 DEBUG_MANIFEST,
-                globally_cleartext,
-                {"res/xml/network_security_config.xml"},
-                DEBUG_RESOURCES,
-            )
-
-        extra_host = DEBUG_NETWORK_CONFIG.replace(
-            "127.0.0.1", "0.0.0.0"
-        )
-        with self.assertRaisesRegex(AssertionError, "domain"):
-            verify_debug_network_security(
-                DEBUG_MANIFEST,
-                extra_host,
+                DEBUG_NETWORK_CONFIG.replace("0xffffffff", "0x00000000"),
                 {"res/xml/network_security_config.xml"},
                 DEBUG_RESOURCES,
             )
@@ -74,15 +64,11 @@ class NetworkSecurityTest(unittest.TestCase):
                 DEBUG_RESOURCES,
             )
 
-        subdomains = DEBUG_NETWORK_CONFIG.replace(
-            'C: "localhost"',
-            'A: includeSubdomains(0x010104ed)=(type 0x12)0xffffffff\n'
-            '      C: "localhost"',
-        )
-        with self.assertRaisesRegex(AssertionError, "subdomains"):
+        with self.assertRaisesRegex(AssertionError, "unrelated attributes"):
             verify_debug_network_security(
                 DEBUG_MANIFEST,
-                subdomains,
+                DEBUG_NETWORK_CONFIG +
+                "    A: overridePins(0x0101053a)=(type 0x12)0xffffffff\n",
                 {"res/xml/network_security_config.xml"},
                 DEBUG_RESOURCES,
             )
