@@ -56,14 +56,35 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun openRouterModelLimitIsScopedToItsProvider() = runTest {
-        val listing = """{"data":[{"id":"m","context_length":32000,"top_provider":{"context_length":16000}}]}"""
+        val listing = """{"data":[{"id":"m","context_length":32000,"top_provider":{"context_length":16000,"max_completion_tokens":1000}}]}"""
         server.enqueue(MockResponse().setBody(listing))
         val routed = OpenAiCompatibleClient(config(ProviderType.OpenRouter), "key").listModels().single()
         assertEquals(16000, routed.inputLimitTokens)
+        assertEquals(1000, routed.outputLimitTokens)
+        val selected = config(ProviderType.OpenRouter).selectListedModel(routed)
+        assertEquals(1000, selected.openRouterOutputCeiling())
+        assertEquals(null, selected.copy(model = "other").openRouterOutputCeiling())
+        assertEquals(null, selected.copy(baseUrl = "https://other.invalid/v1").openRouterOutputCeiling())
 
         server.enqueue(MockResponse().setBody(listing))
         val custom = OpenAiCompatibleClient(config(ProviderType.OpenAiCompatible), "key").listModels().single()
         assertEquals(null, custom.inputLimitTokens)
+        assertEquals(null, custom.outputLimitTokens)
+    }
+
+    @Test fun trustedOpenRouterOutputReserveMatchesTheSentCompletionCap() = runTest {
+        for ((capacity, outputLimit) in listOf(4096 to null, 16384 to null, 100000 to null, 16384 to 500)) {
+            val base = config(ProviderType.OpenRouter)
+            val selected = base.copy(modelContextLimit = ModelContextLimit(base.model, base.baseUrl, capacity, outputLimit))
+            val reserve = com.kaiser.rivet.agent.ContextBudget.assess(selected, null,
+                com.kaiser.rivet.agent.TokenEstimateSource.Unknown).reservedTokens
+            server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                    "data: [DONE]\n\n"))
+            OpenAiCompatibleClient(selected, "key").streamAgent(
+                AgentRequest(selected.model, emptyList(), "", ReasoningLevel.Default, emptyList())) {}
+            assertTrue(server.takeRequest().body.readUtf8().contains("\"max_completion_tokens\":$reserve"))
+        }
     }
 
     @Test
@@ -115,6 +136,34 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun nativeOpenAiAndOpenRouterTextRequireTerminalStopReason() = runTest {
+        for (type in listOf(ProviderType.OpenAi, ProviderType.OpenRouter)) {
+            server.enqueue(MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n" +
+                    "data: [DONE]\n\n",
+            ).setHeader("Content-Type", "text/event-stream"))
+
+            try {
+                OpenAiCompatibleClient(config(type), "key").streamAgent(
+                    AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+                ) {}
+                fail("$type text without finish_reason must be incomplete")
+            } catch (error: ProviderError.IncompleteGeneration) {
+                assertEquals("missing finish reason", error.reason)
+            }
+
+            server.enqueue(MockResponse().setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"answer\"}}]}\n\n" +
+                    "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                    "data: [DONE]\n\n",
+            ).setHeader("Content-Type", "text/event-stream"))
+            assertEquals("answer", OpenAiCompatibleClient(config(type), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+            ) {}.text)
+        }
+    }
+
+    @Test
     fun genericProviderOmitsReasoningEffort() = runTest {
         server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
         OpenAiCompatibleClient(config(), "key").streamAgent(
@@ -126,7 +175,10 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun openAiReasoningModelSendsReasoningEffort() = runTest {
-        server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
+        server.enqueue(MockResponse().setBody(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
         OpenAiCompatibleClient(
             config(ProviderType.OpenAi, "gpt-5"),
             "key",
@@ -139,7 +191,10 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun openRouterSendsMaxReasoningEffort() = runTest {
-        server.enqueue(MockResponse().setBody("data: [DONE]\n\n").setHeader("Content-Type", "text/event-stream"))
+        server.enqueue(MockResponse().setBody(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
         OpenAiCompatibleClient(
             config(ProviderType.OpenRouter),
             "key",
@@ -322,6 +377,7 @@ class OpenAiCompatibleClientTest {
             "data: {\"choices\":[],\"usage\":{\"prompt_tokens\":40,\"completion_tokens\":12," +
             "\"total_tokens\":52,\"prompt_tokens_details\":{\"cached_tokens\":10}," +
             "\"completion_tokens_details\":{\"reasoning_tokens\":3}}}\n\n" +
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
             "data: [DONE]\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
         val reported = OpenAiCompatibleClient(config(ProviderType.OpenAi), "key").streamAgent(
@@ -335,7 +391,9 @@ class OpenAiCompatibleClientTest {
         server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
         OpenAiCompatibleClient(config(), "key").streamAgent(
             AgentRequest("model", emptyList(), "", ReasoningLevel.Default, emptyList())) {}
-        assertTrue(!server.takeRequest().body.readUtf8().contains("stream_options"))
+        val customBody = server.takeRequest().body.readUtf8()
+        assertTrue(!customBody.contains("stream_options"))
+        assertTrue(!customBody.contains("max_completion_tokens"))
     }
 
     @Test

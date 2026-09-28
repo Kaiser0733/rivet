@@ -1,5 +1,7 @@
 package com.kaiser.rivet.agent
 
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -142,4 +144,201 @@ class AgentContextTest {
         assertTrue(plan.summaryInput.contains("[redacted]"))
         assertEquals("Continue with the fix", plan.retained.last().text)
     }
+
+    @Test fun budgetedSummaryKeepsNewestWholeRemovedGroupAndMarksOlderOmission() {
+        val call = AgentToolCall("boundary", "inspect_boundary", """{"path":"src/Boundary.kt"}""")
+        val removed = listOf(
+            AgentMessage.user("ancient objective"),
+            AgentMessage.assistant("ancient answer"),
+            AgentMessage.user("boundary-adjacent request"),
+            AgentMessage.assistant("", listOf(call)),
+            AgentMessage.tools(listOf(AgentToolResult(
+                "boundary", "inspect_boundary", "{}", summary = "Boundary result",
+            ))),
+        )
+
+        val summary = AgentContext.summarizeInput(removed, maxBytes = 192)
+
+        assertTrue(summary.toByteArray(Charsets.UTF_8).size <= 192)
+        assertTrue(summary.contains("Earlier removed events omitted"))
+        assertFalse(summary.contains("ancient objective"))
+        assertTrue(summary.contains("TOOL CALL: inspect_boundary"))
+        assertTrue(summary.contains("TOOL RESULT: inspect_boundary"))
+        assertTrue(summary.indexOf("TOOL CALL: inspect_boundary") <
+            summary.indexOf("TOOL RESULT: inspect_boundary"))
+    }
+
+    @Test fun summaryRequiresTruthfulMarkerWhenNonemptyInputCannotFit() {
+        val error = try {
+            AgentContext.summarizeInput(listOf(AgentMessage.user("removed event")), maxBytes = 1)
+            null
+        } catch (expected: IllegalArgumentException) {
+            expected
+        }
+
+        assertNotNull(error)
+        assertEquals("summary_input_limit", error!!.message)
+    }
+
+    @Test fun summaryOmissionNeverKeepsOnlyHalfOfNewestToolGroup() {
+        val call = AgentToolCall("boundary", "inspect_boundary", "{}")
+        val removed = listOf(
+            AgentMessage.user("older event"),
+            AgentMessage.assistant("", listOf(call)),
+            AgentMessage.tools(listOf(AgentToolResult("boundary", "inspect_boundary", "{}"))),
+        )
+
+        val summary = AgentContext.summarizeInput(removed, maxBytes = 16)
+
+        assertTrue(summary.contains("older omitted"))
+        assertFalse(summary.contains("TOOL CALL: inspect_boundary"))
+        assertFalse(summary.contains("TOOL RESULT: inspect_boundary"))
+        assertTrue(summary.toByteArray(Charsets.UTF_8).size <= 16)
+    }
+
+    @Test fun runCommandWithUnhealthyOrUnknownStatusIsNotPruned() {
+        val cases = listOf(
+            "nonzero exit" to commandContent(exitCode = 7),
+            "timeout" to commandContent(timedOut = true),
+            "sync conflict" to commandContent(sync = "conflict", syncPath = "src/A.kt"),
+            "sync failed" to commandContent(sync = "failed"),
+            "sync interrupted" to commandContent(sync = "interrupted"),
+            "sync pending" to commandContent(sync = "pending"),
+            "sync not started" to commandContent(sync = "not_started"),
+            "malformed status" to commandContent().replace("\"exit_code\":0", "\"exit_code\":\"0\""),
+            "quoted timeout" to commandContent().replace("\"timed_out\":false", "\"timed_out\":\"false\""),
+            "quoted truncation" to commandContent().replace("\"stdout_truncated\":false", "\"stdout_truncated\":\"false\""),
+            "missing status" to commandContent(exitCode = null),
+            "malformed JSON" to "x".repeat(9_000),
+        )
+
+        for ((label, content) in cases) {
+            val history = commandHistory(content)
+            assertNull(label, AgentContext.pruneOldResults(history, protectedTailBytes = 0))
+        }
+    }
+
+    @Test fun quotedRunCommandExitCodeIsUnresolvedRatherThanSuccessful() {
+        val content = commandContent().replace("\"exit_code\":0", "\"exit_code\":\"0\"")
+        val history = commandHistory(content)
+
+        assertNull(AgentContext.pruneOldResults(history, protectedTailBytes = 0))
+        val summary = AgentContext.summarizeInput(history.take(3), maxBytes = 256)
+        assertTrue(summary.contains("run_command unresolved"))
+        assertTrue(summary.contains("exit_code=unknown"))
+    }
+
+    @Test fun healthyRunCommandCanPruneWhileRetainingAuthoritativeStatus() {
+        val history = commandHistory(commandContent(outputSize = 9_000))
+
+        val pruned = AgentContext.pruneOldResults(history, protectedTailBytes = 0)!!
+        val content = pruned[2].toolResults.single().content
+
+        assertTrue(content.contains("\"output_pruned\":true"))
+        assertTrue(content.contains("\"exit_code\":0"))
+        assertTrue(content.contains("\"sync\":\"ok\""))
+        assertTrue(content.contains("\"timed_out\":false"))
+        assertTrue(content.contains("\"stdout_truncated\":false"))
+        assertTrue(content.contains("\"stderr_truncated\":false"))
+        assertTrue(AgentContext.summarizeInput(history.take(3), maxBytes = 256)
+            .contains("run_command ok"))
+    }
+
+    @Test fun healthyRunCommandWithTruncatedOutputPrunesAndRetainsTruncationFacts() {
+        val history = commandHistory(commandContent(stdoutTruncated = true, stderrTruncated = true))
+
+        val pruned = AgentContext.pruneOldResults(history, protectedTailBytes = 0)!!
+        val content = pruned[2].toolResults.single().content
+        val summary = AgentContext.summarizeInput(history.take(3), maxBytes = 256)
+
+        assertTrue(content.contains("\"stdout_truncated\":true"))
+        assertTrue(content.contains("\"stderr_truncated\":true"))
+        assertTrue(summary.contains("run_command ok"))
+        assertTrue(summary.contains("stdout_truncated=true"))
+        assertTrue(summary.contains("stderr_truncated=true"))
+    }
+
+    @Test fun commandSummaryDoesNotCallAConflictSuccessful() {
+        val history = commandHistory(commandContent(sync = "conflict", syncPath = "src/A.kt"))
+
+        val summary = AgentContext.summarizeInput(history.take(3), maxBytes = 512)
+
+        assertTrue(summary.contains("run_command unresolved"))
+        assertTrue(summary.contains("sync=conflict"))
+        assertFalse(summary.contains("run_command ok"))
+    }
+
+    @Test fun minimumProjectionKeepsLatestUserAndNewestCompleteToolGroup() {
+        val latestCall = AgentToolCall("latest", "read_file", "{}")
+        val history = listOf(
+            AgentMessage.user("old request"),
+            AgentMessage.assistant("old answer"),
+            AgentMessage.user("latest objective"),
+            AgentMessage.assistant("latest reasoning"),
+            AgentMessage.assistant("", listOf(latestCall)),
+            AgentMessage.tools(listOf(AgentToolResult("latest", "read_file", "{}"))),
+        )
+
+        val minimum = AgentContext.minimumProjection(history)!!
+
+        assertTrue(AgentContext.validGroups(minimum))
+        assertFalse(minimum.any { it.text == "old request" })
+        assertTrue(minimum.any { it.text == "latest objective" })
+        assertEquals("latest", minimum.last().toolResults.single().callId)
+    }
+
+    @Test fun minimumProjectionWithoutUserKeepsNewestCompleteGroup() {
+        val call = AgentToolCall("latest", "read_file", "{}")
+        val history = listOf(
+            AgentMessage.assistant("older response"),
+            AgentMessage.assistant("", listOf(call)),
+            AgentMessage.tools(listOf(AgentToolResult("latest", "read_file", "{}"))),
+        )
+
+        val minimum = AgentContext.minimumProjection(history)!!
+
+        assertEquals(2, minimum.size)
+        assertEquals("latest", minimum.last().toolResults.single().callId)
+    }
+
+    @Test fun minimumSavingsOverrideAllowsSmallVerifiedReduction() {
+        val history = listOf(
+            AgentMessage.user("old " + "x".repeat(2_300)),
+            AgentMessage.assistant("old response"),
+            AgentMessage.user("current"),
+            AgentMessage.assistant("done"),
+        )
+
+        assertNull(AgentContext.plan(history, targetBytes = 1_000))
+        assertNotNull(AgentContext.plan(history, targetBytes = 1_000, minimumSavingsBytes = 1))
+    }
+
+    private fun commandHistory(content: String) = listOf(
+        AgentMessage.user("Run the project command"),
+        AgentMessage.assistant("", listOf(AgentToolCall("command", "run_command", "{}"))),
+        AgentMessage.tools(listOf(AgentToolResult(
+            "command", "run_command", content, summary = "Command exited 0",
+        ))),
+        AgentMessage.user("Continue"),
+        AgentMessage.assistant("Done"),
+    )
+
+    private fun commandContent(
+        exitCode: Int? = 0,
+        timedOut: Boolean = false,
+        sync: String = "ok",
+        stdoutTruncated: Boolean = false,
+        stderrTruncated: Boolean = false,
+        syncPath: String? = null,
+        outputSize: Int = 9_000,
+    ): String = buildJsonObject {
+        exitCode?.let { put("exit_code", it) }
+        put("stdout", "x".repeat(outputSize))
+        put("stderr", "")
+        put("stdout_truncated", stdoutTruncated)
+        put("stderr_truncated", stderrTruncated)
+        put("timed_out", timedOut)
+        put("sync", sync)
+        syncPath?.let { put("sync_path", it) }
+    }.toString()
 }

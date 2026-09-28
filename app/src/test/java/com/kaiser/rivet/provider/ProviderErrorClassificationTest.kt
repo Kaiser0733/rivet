@@ -29,6 +29,27 @@ class ProviderErrorClassificationTest {
             is ProviderError.ProviderMessage)
     }
 
+    @Test fun geminiInputLimitMessagesAreOverflowBeforeModelNotFoundFallback() {
+        val parenthesized = httpError(
+            400,
+            """{"error":{"status":"INVALID_ARGUMENT","message":"The input token count (12345) exceeds the maximum number of tokens allowed (8192)."}}""",
+        )
+        val modelWording = httpError(
+            400,
+            """{"error":{"status":"INVALID_ARGUMENT","message":"The input token count is 12345 but model only supports up to 8192."}}""",
+        )
+
+        assertTrue(parenthesized is ProviderError.ContextOverflow)
+        assertTrue(modelWording is ProviderError.ContextOverflow)
+    }
+
+    @Test fun invalidArgumentAndUnrelatedModelMentionsKeepTheirOwnClassification() {
+        assertTrue(httpError(400, """{"error":{"status":"INVALID_ARGUMENT","message":"invalid temperature for this model"}}""")
+            is ProviderError.ProviderMessage)
+        assertTrue(httpError(400, """{"error":{"message":"model 'missing' does not exist"}}""")
+            is ProviderError.ModelNotFound)
+    }
+
     @Test fun resourceExhaustionIsDistinctFromRateLimit() {
         assertTrue(httpError(429, """{"error":{"message":"ResourceExhausted: Worker local total request limit reached (16/16)"}}""")
             is ProviderError.ResourceExhausted)

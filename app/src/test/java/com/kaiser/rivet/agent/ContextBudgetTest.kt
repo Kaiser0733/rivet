@@ -38,7 +38,7 @@ class ContextBudgetTest {
         assertFalse(large.needsReduction)
 
         val smaller = config.copy(model = "small", modelContextLimit =
-            ModelContextLimit("small", config.baseUrl, 8000))
+            ModelContextLimit("small", config.baseUrl, 5000))
         assertTrue(ContextBudget.assess(smaller, 7000, TokenEstimateSource.Reported).needsReduction)
 
         val unknown = ContextBudget.assess(config.copy(model = "unlisted"), 7000,
@@ -46,6 +46,34 @@ class ContextBudgetTest {
         assertNull(unknown.knownInputLimitTokens)
         assertEquals(CapacitySource.Unknown, unknown.capacitySource)
         assertEquals(TokenEstimateSource.Estimated, unknown.estimateSource)
+    }
+
+    @Test fun trustedInputOnlyGeminiLimitsRemainKnownAcrossSmallCapacities() {
+        for (capacity in listOf(1, 2, 100, 1024, 2048, 2049, 4096, 8192, 16384, 32768, 65536)) {
+            val selected = config.copy(modelContextLimit =
+                ModelContextLimit(config.model, config.baseUrl, capacity))
+            val assessed = ContextBudget.assess(selected, capacity.toLong(), TokenEstimateSource.Estimated)
+            assertEquals(capacity, assessed.knownInputLimitTokens)
+            assertEquals(CapacitySource.ProviderMetadata, assessed.capacitySource)
+            assertEquals(capacity, assessed.allowedInputTokens)
+            assertEquals(0, assessed.reservedTokens)
+            assertTrue(assessed.needsReduction)
+        }
+    }
+
+    @Test fun tinyTotalWindowsKeepExactCapacityAndActualReserve() {
+        for (type in listOf(ProviderType.Anthropic, ProviderType.OpenRouter)) {
+            for (capacity in listOf(1, 2, 100, 1024, 2048)) {
+                val selected = config.copy(type = type, modelContextLimit =
+                    ModelContextLimit(config.model, config.baseUrl, capacity))
+                val assessed = ContextBudget.assess(selected, 1, TokenEstimateSource.Estimated)
+                assertEquals(capacity, assessed.knownInputLimitTokens)
+                assertEquals(CapacitySource.ProviderMetadata, assessed.capacitySource)
+                assertEquals(capacity, assessed.allowedInputTokens + assessed.reservedTokens)
+                assertTrue(assessed.allowedInputTokens >= 0)
+                if (capacity == 1) assertEquals(0, assessed.allowedInputTokens)
+            }
+        }
     }
 
     @Test fun listedAnthropicHighReasoningReservesItsActualRequestedOutput() {

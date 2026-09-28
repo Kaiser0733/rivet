@@ -61,6 +61,58 @@ class GeminiClientTest {
     }
 
     @Test
+    fun listModelsFollowsNextPageTokenAndDeduplicatesIds() = runTest {
+        server.enqueue(MockResponse().setBody(
+            """{"models":[{"name":"models/gemini-a","displayName":"A first","supportedGenerationMethods":["generateContent"]},{"name":"models/embed","supportedGenerationMethods":["embedContent"]}],"nextPageToken":"page-2"}""",
+        ))
+        server.enqueue(MockResponse().setBody(
+            """{"models":[{"name":"models/gemini-a","displayName":"A duplicate","supportedGenerationMethods":["generateContent"]},{"name":"models/gemini-b","supportedGenerationMethods":["generateContent"]}]}""",
+        ))
+
+        val models = GeminiClient(config(), "key").listModels()
+
+        assertEquals(listOf("gemini-a", "gemini-b"), models.map { it.id })
+        assertEquals("A first", models.first().label)
+        val first = server.takeRequest().requestUrl
+        assertEquals("1000", first?.queryParameter("pageSize"))
+        assertEquals(null, first?.queryParameter("pageToken"))
+        val second = server.takeRequest().requestUrl
+        assertEquals("1000", second?.queryParameter("pageSize"))
+        assertEquals("page-2", second?.queryParameter("pageToken"))
+    }
+
+    @Test
+    fun listModelsRejectsRepeatedPageToken() = runTest {
+        server.enqueue(MockResponse().setBody("""{"models":[],"nextPageToken":"again"}"""))
+        server.enqueue(MockResponse().setBody("""{"models":[],"nextPageToken":"again"}"""))
+
+        try {
+            GeminiClient(config(), "key").listModels()
+            throw AssertionError("expected a repeated pagination token to be rejected")
+        } catch (error: ProviderError.InvalidResponse) {
+            assertTrue(error.detail.contains("repeated"))
+        }
+        assertEquals(2, server.requestCount)
+    }
+
+    @Test
+    fun listModelsRejectsPagesBeyondTheBound() = runTest {
+        repeat(20) { page ->
+            server.enqueue(MockResponse().setBody(
+                """{"models":[],"nextPageToken":"page-${page + 1}"}""",
+            ))
+        }
+
+        try {
+            GeminiClient(config(), "key").listModels()
+            throw AssertionError("expected a runaway model listing to be rejected")
+        } catch (error: ProviderError.InvalidResponse) {
+            assertTrue(error.detail.contains("page limit"))
+        }
+        assertEquals(20, server.requestCount)
+    }
+
+    @Test
     fun listModelsRejectsOversizedResponse() = runTest {
         server.enqueue(MockResponse().setBody("x".repeat(MAX_PROVIDER_JSON_BODY_BYTES + 1)))
         try {

@@ -75,8 +75,10 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         validateProjection(db, id)
         val summary = summary(db, id)
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
-        val messages = recoverInterrupted(db, id, header.interrupted, activeMessages(db, id), summaryBytes)
-        AgentSession(messages, header.interrupted, header.id, header.title, header.workspaceId, summary)
+        val active = activeMessages(db, id)
+        val interrupted = header.interrupted || hasPendingToolCall(active.lastOrNull())
+        val messages = recoverInterrupted(db, id, interrupted, active, summaryBytes)
+        AgentSession(messages, interrupted, header.id, header.title, header.workspaceId, summary)
     }
 
     override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) = onDatabase { db ->
@@ -95,6 +97,13 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 (count == 1 || messages.lastOrNull() == tail.getOrNull(1)?.second)
             if (!retractEmpty && (messages.size < count || (count > 0 && messages[count - 1] != last))) {
                 throw IllegalStateException("Session event prefix changed")
+            }
+            if (hasPendingToolCall(last) && messages.size > count) {
+                val next = messages[count]
+                require(next.role == AgentRole.Tool &&
+                    next.toolResults.map { it.callId to it.name } == last!!.toolCalls.map { it.id to it.name }) {
+                    "Pending tool call requires its correlated results"
+                }
             }
             // Only the active model transcript has a size limit; complete event history does not.
             if (!AgentSessionCodec.fits(messages, summary(db, id).toByteArray(Charsets.UTF_8).size)) {
@@ -115,7 +124,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 })
             }
             db.execSQL("UPDATE sessions SET interrupted=?, updated_at=? WHERE id=?",
-                arrayOf(if (interrupted) 1 else 0, System.currentTimeMillis(), id))
+                arrayOf(if (interrupted || hasPendingToolCall(messages.lastOrNull())) 1 else 0,
+                    System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -124,6 +134,13 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         AgentSessionCodec.fits(messages, reservedEncodedBytes + summaryBytes)
 
     override suspend fun markInterrupted(interrupted: Boolean) = onDatabase { db ->
+        if (!interrupted) {
+            val last = db.rawQuery("SELECT payload FROM active_events WHERE session_id=? ORDER BY id DESC LIMIT 1",
+                arrayOf(activeId(db))).use { cursor ->
+                if (cursor.moveToFirst()) decode(cursor.getString(0)) else null
+            }
+            if (hasPendingToolCall(last)) return@onDatabase
+        }
         db.execSQL("UPDATE sessions SET interrupted=? WHERE id=?",
             arrayOf(if (interrupted) 1 else 0, activeId(db)))
     }
@@ -165,11 +182,13 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val selected = header(db, id)
         validateProjection(db, id)
         val summary = summary(db, id)
-        val messages = recoverInterrupted(db, id, selected.interrupted, activeMessages(db, id),
+        val active = activeMessages(db, id)
+        val interrupted = selected.interrupted || hasPendingToolCall(active.lastOrNull())
+        val messages = recoverInterrupted(db, id, interrupted, active,
             summary.toByteArray(Charsets.UTF_8).size)
         setActive(db, id)
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
-        AgentSession(messages, selected.interrupted, id, selected.title, selected.workspaceId, summary)
+        AgentSession(messages, interrupted, id, selected.title, selected.workspaceId, summary)
     }
 
     suspend fun rename(id: String, title: String) = onDatabase { db ->
@@ -211,7 +230,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                         attempt: ContextAttempt? = null,
                         expectedSessionId: String? = null) = onDatabase { db ->
         require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
-        require(retained != expected)
+        require(retained != expected || summary != this.summary(db, activeId(db)))
         require(validProjection(expected, retained))
         if (!AgentSessionCodec.fits(retained, summary.toByteArray(Charsets.UTF_8).size)) {
             throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
@@ -412,11 +431,12 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             buildList { while (cursor.moveToNext()) add(decode(cursor.getString(0))) }
         }
 
+    private fun hasPendingToolCall(last: AgentMessage?): Boolean =
+        last?.role == AgentRole.Assistant && last.toolCalls.isNotEmpty()
+
     private fun recoverInterrupted(db: SQLiteDatabase, id: String, interrupted: Boolean,
                                    active: List<AgentMessage>, summaryBytes: Int): List<AgentMessage> {
-        val pending = active.lastOrNull()?.takeIf {
-            interrupted && it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty()
-        } ?: return active
+        val pending = active.lastOrNull()?.takeIf { interrupted && hasPendingToolCall(it) } ?: return active
         val result = AgentMessage.tools(pending.toolCalls.map { call ->
             AgentToolResult(call.id, call.name, AgentToolError.content("interrupted"), true,
                 "Interrupted  ${call.name}".take(256))
@@ -444,7 +464,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                     put("summary_hash", hash(currentSummary))
                 })
             }
-            db.execSQL("UPDATE sessions SET active_generation=active_generation+1, updated_at=? WHERE id=?",
+            db.execSQL("UPDATE sessions SET interrupted=1, active_generation=active_generation+1, updated_at=? WHERE id=?",
                 arrayOf(System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }

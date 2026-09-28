@@ -416,6 +416,108 @@ class ChatViewModelTest {
         assertNull(recovered.error)
     }
 
+    @Test fun failedToolResultStorageKeepsCommittedMutationInterrupted() = runBlocking {
+        assertFailedToolResultSaveLeavesUnknownOutcome(IllegalStateException("storage failed"))
+    }
+
+    @Test fun failedToolResultSessionLimitKeepsCommittedMutationInterrupted() = runBlocking {
+        assertFailedToolResultSaveLeavesUnknownOutcome(AgentSessionLimitException(Int.MAX_VALUE))
+    }
+
+    @Test fun failedToolResultStorageRecoversBeforeAnotherSendWithoutRestart() = runBlocking {
+        assertFailedToolResultSaveLeavesUnknownOutcome(IllegalStateException("storage failed"), true)
+    }
+
+    @Test fun failedToolResultSessionLimitRecoversBeforeAnotherSendWithoutRestart() = runBlocking {
+        assertFailedToolResultSaveLeavesUnknownOutcome(AgentSessionLimitException(Int.MAX_VALUE), true)
+    }
+
+    private suspend fun assertFailedToolResultSaveLeavesUnknownOutcome(failure: Exception,
+                                                                     continueWithoutRestart: Boolean = false) {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val authority = "com.kaiser.rivet.result-failure-" +
+            (if (failure is AgentSessionLimitException) "limit" else "storage")
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        val workspace = WorkspaceSelection(app).select(tree, flags)
+        val sessions = CodingSessions(app)
+        var resultSaveFailed = false
+        val persistence = object : AgentSessionPersistence by sessions {
+            override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) {
+                if (!resultSaveFailed && messages.lastOrNull()?.role == com.kaiser.rivet.agent.AgentRole.Tool) {
+                    resultSaveFailed = true
+                    throw failure
+                }
+                sessions.save(messages, interrupted)
+            }
+        }
+        val call = AgentToolCall("create-one", "create_file", """{"path":"A.kt"}""")
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(toolCalls = listOf(call)),
+            AgentResponse(text = "Continuing"))))
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test",
+            "https://example.invalid/v1", "test-model")
+        val viewModel = ChatViewModel(app, persistence,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.send("Create A.kt")
+        val approval = await(viewModel) { it.pendingApproval?.call?.id == call.id }
+        viewModel.approve(approval.pendingApproval!!.approvalToken)
+        await(viewModel) { !it.streaming && it.error != null }
+
+        assertTrue(resultSaveFailed)
+        assertEquals(1, provider.requests.size)
+        assertEquals(1, workspace.listDirectory(WorkspacePath.ROOT).count { it.path.value == "A.kt" })
+        val header = sessions.list().single()
+        assertTrue(header.interrupted)
+        assertEquals(call.id, sessions.recent(header.id).last().toolCalls.single().id)
+
+        if (continueWithoutRestart) {
+            viewModel.send("Continue without creating it again")
+            await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Continuing" }
+            assertEquals(2, provider.requests.size)
+            val unknown = provider.requests.last().messages.flatMap { it.toolResults }.single()
+            assertEquals(call.id, unknown.callId)
+            assertTrue(unknown.error)
+            assertTrue(unknown.content.contains("outcome is unknown"))
+            assertFalse(sessions.list().single().interrupted)
+            val restarted = CodingSessions(app).load()
+            assertEquals("Continuing", restarted.messages.last().text)
+            assertEquals(1, restarted.messages.flatMap { it.toolResults }.size)
+            assertEquals(1, workspace.listDirectory(WorkspacePath.ROOT).count { it.path.value == "A.kt" })
+            return
+        }
+
+        val restored = CodingSessions(app).load()
+        assertTrue(restored.interrupted)
+        val unknown = restored.messages.last().toolResults.single()
+        assertEquals(call.id, unknown.callId)
+        assertTrue(unknown.error)
+        assertTrue(unknown.content.contains("outcome is unknown"))
+        assertEquals(3, CodingSessions(app).fullEventCount(header.id))
+
+        val nextProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Continuing"))))
+        val resumed = ChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> nextProvider })
+        await(resumed) { it.ready && !it.projectLoading }
+        resumed.send("Continue without creating it again")
+        await(resumed) { !it.streaming && it.messages.lastOrNull()?.text == "Continuing" }
+        assertEquals(1, workspace.listDirectory(WorkspacePath.ROOT).count { it.path.value == "A.kt" })
+        assertEquals(1, nextProvider.requests.size)
+    }
+
     @Test
     fun mutationAtSessionLimitNeverRequestsApprovalAndClearAllowsNextTurn() = runBlocking {
         val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.testdocs", "root")
@@ -585,7 +687,7 @@ class ChatViewModelTest {
             AgentResponse(text = "Done"))))
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val viewModel = ChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
@@ -615,7 +717,7 @@ class ChatViewModelTest {
         await(viewModel) { it.ready }
 
         viewModel.send("x".repeat(100_000))
-        val stopped = await(viewModel) { !it.streaming && it.error?.contains("make room") == true }
+        val stopped = await(viewModel) { !it.streaming && it.error?.contains("context capacity") == true }
 
         assertEquals(0, provider.requests.size)
         assertEquals(1, sessions.fullEventCount(id))
@@ -678,7 +780,7 @@ class ChatViewModelTest {
         }
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val viewModel = ChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
@@ -713,7 +815,7 @@ class ChatViewModelTest {
         )))
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val preparation = ContextPreparation(sessions, id, provider, config, "turn", "") {
             messages, summary -> AgentRequest(config.model,
                 addUntrustedTaskContext(messages, "", summary), "System", config.reasoning, emptyList())
@@ -766,7 +868,7 @@ class ChatViewModelTest {
         assertEquals("", sessions.load().summary)
 
         val smallConfig = largeConfig.copy(model = "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val secondProvider = QueueProvider(ArrayDeque(listOf(
             AgentResponse(text = """{"objective":"Finish task","completed":["Inspected code"],"pending":["Verify"]}"""),
             AgentResponse(text = "Second"),
@@ -798,7 +900,7 @@ class ChatViewModelTest {
         sessions.save(history, interrupted = false)
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
-            modelContextLimit = ModelContextLimit("small", endpoint, 32_000))
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text =
             """{"objective":"Keep coding","pending":["Verify"]}"""))))
         val preparation = ContextPreparation(sessions, id, provider, config, "turn", "") {
