@@ -193,6 +193,31 @@ class AgentLoopTest {
         assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("no_progress"))
     }
 
+    @Test fun repeatedDeterministicFailureStopsDependentBatchSuffix() = runTest {
+        val first = AgentToolCall("first", "read_file", """{"path":"A.kt"}""")
+        val repeated = first.copy(id = "again")
+        val later = AgentToolCall("later", "write_file", """{"path":"A.kt"}""")
+        val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(first)),
+            AgentResponse(toolCalls = listOf(repeated, later))))
+        val executed = mutableListOf<String>()
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> responses.removeFirst() },
+            prepareTool = { call -> PreparedAgentTool(call, null) {
+                executed += call.id
+                AgentToolResult(call.id, call.name, AgentToolError.content("invalid_path"), true)
+            } },
+            requestApproval = { error("No approval") },
+            failureState = { "unchanged" },
+        ).run(listOf(AgentMessage.user("Inspect, then edit")), emptyList())
+
+        assertEquals(listOf("first"), executed)
+        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertEquals(listOf("first", "again", "later"),
+            result.messages.flatMap { it.toolResults }.map { it.callId })
+        assertTrue(result.messages.flatMap { it.toolResults }[1].content.contains("no_progress"))
+        assertTrue(result.messages.flatMap { it.toolResults }[2].content.contains("no_progress"))
+    }
+
     @Test fun unchangedSuccessfulRereadsStopBeforeEmergencyWatchdog() = runTest {
         var requested = 0
         var executed = 0
@@ -1136,6 +1161,55 @@ class AgentLoopTest {
         val results = completed.flatMap { it.toolResults }
         assertEquals(listOf("edit", "next"), results.map { it.callId })
         assertTrue(results.all { it.error && "cancelled" in it.content })
+    }
+
+    @Test
+    fun cancellationInsideApprovedExecutionKeepsUnknownOutcomeAndCorrelatesBatch() = runTest {
+        val entered = CompletableDeferred<Unit>()
+        val completed = mutableListOf<AgentMessage>()
+        val calls = listOf(
+            AgentToolCall("read", "read_file", "{}"),
+            AgentToolCall("edit", "write_file", "{}"),
+            AgentToolCall("later", "list_directory", "{}"),
+        )
+        var possibleEffect = false
+        var laterExecutions = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = calls) },
+            prepareTool = { call -> PreparedAgentTool(
+                call,
+                if (call.name == "write_file") AgentApprovalRequest(call, "Edit", "A.kt") else null,
+            ) {
+                when (call.name) {
+                    "write_file" -> {
+                        possibleEffect = true
+                        entered.complete(Unit)
+                        awaitCancellation()
+                    }
+                    "list_directory" -> {
+                        laterExecutions++
+                        AgentToolResult(call.id, call.name, "{}")
+                    }
+                    else -> AgentToolResult(call.id, call.name, "{}")
+                }
+            } },
+            requestApproval = { true },
+        )
+        val running = async {
+            loop.run(listOf(AgentMessage.user("Edit")), emptyList(), onMessage = { completed += it })
+        }
+        entered.await()
+
+        running.cancelAndJoin()
+
+        val results = completed.flatMap { it.toolResults }
+        assertTrue(possibleEffect)
+        assertEquals(0, laterExecutions)
+        assertEquals(calls.map { it.id }, results.map { it.callId })
+        assertFalse(results[0].error)
+        assertTrue(results[1].content.contains("interrupted"))
+        assertTrue(results[1].content.contains("outcome is unknown"))
+        assertTrue(results[2].content.contains("cancelled"))
     }
 
     @Test

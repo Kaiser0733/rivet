@@ -4,7 +4,13 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentToolDefinition
 
-data class ModelInfo(val id: String, val label: String, val inputLimitTokens: Int? = null)
+data class ModelInfo(
+    val id: String,
+    val label: String,
+    val inputLimitTokens: Int? = null,
+    val anthropicMetadata: AnthropicModelMetadata? = null,
+    val outputLimitTokens: Int? = null,
+)
 
 data class TestResult(val ok: Boolean, val message: String)
 

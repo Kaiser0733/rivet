@@ -26,6 +26,7 @@ class TestDocumentsProvider : DocumentsProvider() {
     var childQueries = 0
     var afterChildQuery: ((Int) -> Unit)? = null
     var createCalls = 0
+    var afterCreate: (() -> Unit)? = null
     var normalizeTextFileNames = false
     var videoMimeForTs = false
     var binaryMimeByExtension = false
@@ -118,6 +119,7 @@ class TestDocumentsProvider : DocumentsProvider() {
         }
         nodes[id] = Node(actualName, parentDocumentId, mimeType == Document.MIME_TYPE_DIR,
             File.createTempFile("workspace-document", ".test", context!!.cacheDir))
+        afterCreate?.invoke()
         return id
     }
     override fun deleteDocument(documentId: String) {

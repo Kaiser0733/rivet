@@ -36,7 +36,10 @@ internal class OpenAiCompatibleClient(
                     listOfNotNull(model["context_length"].positiveInt(),
                         model["top_provider"]?.obj()?.get("context_length").positiveInt()).minOrNull()
                 } else null
-                ModelInfo(id, id, inputLimit)
+                val outputLimit = if (config.type == ProviderType.OpenRouter) {
+                    model["top_provider"]?.obj()?.get("max_completion_tokens").positiveInt()
+                } else null
+                ModelInfo(id, id, inputLimit, outputLimitTokens = outputLimit)
             }.sortedBy { it.id.lowercase() }
         }
     }
@@ -60,6 +63,7 @@ internal class OpenAiCompatibleClient(
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)
+            config.openRouterOutputCeiling()?.let { put("max_completion_tokens", it) }
             if (config.type == ProviderType.OpenAi || config.type == ProviderType.OpenRouter) {
                 put("stream_options", buildJsonObject { put("include_usage", true) })
             }
@@ -86,7 +90,10 @@ internal class OpenAiCompatibleClient(
         val httpRequest = base(Endpoints.openAiChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val stream = OpenAiAgentStream(onDelta)
+        val stream = OpenAiAgentStream(
+            onDelta,
+            strictTextFinishReason = config.type in setOf(ProviderType.OpenAi, ProviderType.OpenRouter),
+        )
         val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
@@ -118,7 +125,10 @@ private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (mess
     } }
 }
 
-private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
+private class OpenAiAgentStream(
+    private val onDelta: (String) -> Unit,
+    private val strictTextFinishReason: Boolean,
+) {
     private data class Pending(
         var id: String? = null,
         val name: StringBuilder = StringBuilder(),
@@ -159,7 +169,7 @@ private class OpenAiAgentStream(private val onDelta: (String) -> Unit) {
     fun response(): AgentResponse {
         val reason = finishReason
         if (tools.isNotEmpty() && reason != "tool_calls" ||
-            tools.isEmpty() && reason != null && reason != "stop") {
+            tools.isEmpty() && (if (strictTextFinishReason) reason != "stop" else reason != null && reason != "stop")) {
             throw ProviderError.IncompleteGeneration(reason ?: "missing finish reason")
         }
         return AgentResponse(

@@ -23,20 +23,40 @@ internal class GeminiClient(
 ) : ProviderClient {
 
     override suspend fun listModels(): List<ModelInfo> {
-        val request = base(Endpoints.geminiModels(config.baseUrl) + "?pageSize=1000").get().build()
-        http.quick().await(request).use { r ->
-            if (!r.isSuccessful) throw httpError(r.code, r.errorText())
-            val text = r.readBoundedBody() ?: throw ProviderError.InvalidResponse("no body")
-            val models = parseJsonObject(text)?.get("models")?.arr() ?: throw ProviderError.InvalidResponse("not a JSON object")
-            return models.mapNotNull { el ->
-                val o = el.obj() ?: return@mapNotNull null
-                if ("generateContent" !in (o["supportedGenerationMethods"]?.arr()
-                        ?.mapNotNull { it.str() } ?: emptyList())) return@mapNotNull null
-                val name = o["name"]?.str() ?: return@mapNotNull null
-                ModelInfo(name.removePrefix("models/"), o["displayName"]?.str() ?: name,
-                    o["inputTokenLimit"].positiveInt())
-            }.sortedBy { it.id.lowercase() }
+        val endpoint = requestBuilder(Endpoints.geminiModels(config.baseUrl)).build().url
+        val models = linkedMapOf<String, ModelInfo>()
+        val seenPageTokens = mutableSetOf<String>()
+        var pageToken: String? = null
+        repeat(GEMINI_MODEL_PAGE_LIMIT) {
+            val url = endpoint.newBuilder().addQueryParameter("pageSize", "1000").apply {
+                pageToken?.let { addQueryParameter("pageToken", it) }
+            }.build()
+            val request = base(url.toString()).get().build()
+            http.quick().await(request).use { r ->
+                if (!r.isSuccessful) throw httpError(r.code, r.errorText())
+                val text = r.readBoundedBody() ?: throw ProviderError.InvalidResponse("no body")
+                val page = parseJsonObject(text) ?: throw ProviderError.InvalidResponse("not a JSON object")
+                val entries = page["models"]?.arr() ?: throw ProviderError.InvalidResponse("missing models")
+                entries.forEach { element ->
+                    val model = element.obj() ?: return@forEach
+                    if ("generateContent" !in (model["supportedGenerationMethods"]?.arr()
+                            ?.mapNotNull { it.str() } ?: emptyList())) return@forEach
+                    val name = model["name"]?.str() ?: return@forEach
+                    val id = name.removePrefix("models/")
+                    models.putIfAbsent(id, ModelInfo(
+                        id, model["displayName"]?.str() ?: name, model["inputTokenLimit"].positiveInt(),
+                    ))
+                }
+                val next = page["nextPageToken"] ?: return models.values.sortedBy { it.id.lowercase() }
+                val nextToken = next.str()?.takeIf { it.isNotBlank() }
+                    ?: throw ProviderError.InvalidResponse("invalid next page token")
+                if (!seenPageTokens.add(nextToken)) {
+                    throw ProviderError.InvalidResponse("repeated page token")
+                }
+                pageToken = nextToken
+            }
         }
+        throw ProviderError.InvalidResponse("model listing exceeds page limit")
     }
 
     override suspend fun testConnection(): TestResult {
@@ -201,3 +221,4 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
 }
 
 private const val GEMINI_LOCAL_ID_PREFIX = "_rivet_gemini_"
+private const val GEMINI_MODEL_PAGE_LIMIT = 20

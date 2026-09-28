@@ -19,7 +19,18 @@ enum class ReasoningLevel { Default, Low, Medium, High, Max }
 data class ProviderHeader(val name: String, val value: String)
 
 @Serializable
-data class ModelContextLimit(val model: String, val baseUrl: String, val inputLimitTokens: Int)
+data class ModelContextLimit(val model: String, val baseUrl: String, val inputLimitTokens: Int,
+                             val maxOutputTokens: Int? = null)
+
+@Serializable
+data class AnthropicModelMetadata(
+    val model: String,
+    val baseUrl: String,
+    val maxOutputTokens: Int? = null,
+    val thinkingSupported: Boolean? = null,
+    val adaptiveThinkingSupported: Boolean? = null,
+    val manualThinkingSupported: Boolean? = null,
+)
 
 // API keys never live in this structure. ProviderStore encrypts custom
 // header values before persisting this otherwise provider-neutral config.
@@ -33,6 +44,7 @@ data class ProviderConfig(
     val reasoning: ReasoningLevel = ReasoningLevel.Default,
     val headers: List<ProviderHeader> = emptyList(),
     val modelContextLimit: ModelContextLimit? = null,
+    val anthropicModelMetadata: AnthropicModelMetadata? = null,
 )
 
 fun ProviderConfig.trustedInputLimitTokens(): Int? = modelContextLimit?.takeIf {
@@ -40,11 +52,26 @@ fun ProviderConfig.trustedInputLimitTokens(): Int? = modelContextLimit?.takeIf {
         it.model == model && it.baseUrl == baseUrl && it.inputLimitTokens > 0
 }?.inputLimitTokens
 
+internal fun ProviderConfig.openRouterOutputCeiling(): Int? {
+    if (type != ProviderType.OpenRouter) return null
+    val known = trustedInputLimitTokens() ?: return null
+    val planned = minOf(known, maxOf(2048, minOf(12_000, known / 3)))
+    return minOf(planned, modelContextLimit?.maxOutputTokens?.takeIf { it > 0 } ?: planned)
+}
+
+internal fun ProviderConfig.trustedAnthropicModelMetadata(): AnthropicModelMetadata? = anthropicModelMetadata?.takeIf {
+    type == ProviderType.Anthropic && it.model == model && it.baseUrl == baseUrl
+}
+
 fun ProviderConfig.selectListedModel(info: ModelInfo): ProviderConfig = copy(
     model = info.id,
     modelContextLimit = info.inputLimitTokens?.takeIf {
         it > 0 && type in setOf(ProviderType.Anthropic, ProviderType.Gemini, ProviderType.OpenRouter)
-    }?.let { ModelContextLimit(info.id, baseUrl, it) },
+    }?.let { ModelContextLimit(info.id, baseUrl, it,
+        info.outputLimitTokens?.takeIf { limit -> limit > 0 }) },
+    anthropicModelMetadata = info.anthropicMetadata?.takeIf {
+        type == ProviderType.Anthropic && it.model == info.id && it.baseUrl == baseUrl
+    },
 )
 
 private val standardReasoning = listOf(
@@ -65,6 +92,17 @@ fun offeredReasoning(type: ProviderType, model: String): List<ReasoningLevel> = 
         AnthropicThinkingMode.Unsupported -> listOf(ReasoningLevel.Default)
     }
 }
+
+internal fun offeredReasoning(config: ProviderConfig): List<ReasoningLevel> =
+    if (config.type == ProviderType.Anthropic) {
+        when (anthropicThinkingMode(config)) {
+            AnthropicThinkingMode.Manual -> if (
+                anthropicThinkingBudget(config.copy(reasoning = ReasoningLevel.Low)) >= 1024
+            ) standardReasoning else listOf(ReasoningLevel.Default)
+            AnthropicThinkingMode.Adaptive -> standardReasoning
+            AnthropicThinkingMode.Unsupported -> listOf(ReasoningLevel.Default)
+        }
+    } else offeredReasoning(config.type, config.model)
 
 internal fun openAiSupportsReasoning(model: String): Boolean {
     val id = model.lowercase().substringAfterLast('/')
@@ -97,6 +135,26 @@ internal fun anthropicThinkingMode(model: String): AnthropicThinkingMode {
         id in anthropicAdaptiveModels -> AnthropicThinkingMode.Adaptive
         anthropicManualModel.matches(id) -> AnthropicThinkingMode.Manual
         else -> AnthropicThinkingMode.Unsupported
+    }
+}
+
+internal fun anthropicThinkingMode(config: ProviderConfig): AnthropicThinkingMode {
+    val metadata = config.trustedAnthropicModelMetadata()
+    val hasCapabilityMetadata = metadata?.let {
+        it.thinkingSupported != null || it.adaptiveThinkingSupported != null || it.manualThinkingSupported != null
+    } == true
+    if (hasCapabilityMetadata) {
+        if (metadata?.thinkingSupported == false) return AnthropicThinkingMode.Unsupported
+        return when {
+            metadata?.adaptiveThinkingSupported == true -> AnthropicThinkingMode.Adaptive
+            metadata?.manualThinkingSupported == true -> AnthropicThinkingMode.Manual
+            else -> AnthropicThinkingMode.Unsupported
+        }
+    }
+    return if (config.baseUrl.trimEnd('/') == ProviderType.Anthropic.defaultBaseUrl) {
+        anthropicThinkingMode(config.model)
+    } else {
+        AnthropicThinkingMode.Unsupported
     }
 }
 
