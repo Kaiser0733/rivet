@@ -36,6 +36,12 @@ class NetworkSecurityTest(unittest.TestCase):
             {"res/xml/network_security_config.xml"},
             DEBUG_RESOURCES,
         )
+        verify_debug_network_security(
+            DEBUG_MANIFEST,
+            DEBUG_NETWORK_CONFIG.replace("0x00000000", "0x0"),
+            {"res/xml/network_security_config.xml"},
+            DEBUG_RESOURCES,
+        )
 
     def test_debug_apk_rejects_global_cleartext_and_extra_domains(self):
         globally_cleartext = DEBUG_NETWORK_CONFIG.replace(
