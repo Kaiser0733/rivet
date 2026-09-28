@@ -9,6 +9,7 @@ data class ModelInfo(
     val label: String,
     val inputLimitTokens: Int? = null,
     val anthropicMetadata: AnthropicModelMetadata? = null,
+    val outputLimitTokens: Int? = null,
 )
 
 data class TestResult(val ok: Boolean, val message: String)
