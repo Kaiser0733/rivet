@@ -19,7 +19,8 @@ enum class ReasoningLevel { Default, Low, Medium, High, Max }
 data class ProviderHeader(val name: String, val value: String)
 
 @Serializable
-data class ModelContextLimit(val model: String, val baseUrl: String, val inputLimitTokens: Int)
+data class ModelContextLimit(val model: String, val baseUrl: String, val inputLimitTokens: Int,
+                             val maxOutputTokens: Int? = null)
 
 @Serializable
 data class AnthropicModelMetadata(
@@ -51,6 +52,13 @@ fun ProviderConfig.trustedInputLimitTokens(): Int? = modelContextLimit?.takeIf {
         it.model == model && it.baseUrl == baseUrl && it.inputLimitTokens > 0
 }?.inputLimitTokens
 
+internal fun ProviderConfig.openRouterOutputCeiling(): Int? {
+    if (type != ProviderType.OpenRouter) return null
+    val known = trustedInputLimitTokens() ?: return null
+    val planned = minOf(known, maxOf(2048, minOf(12_000, known / 3)))
+    return minOf(planned, modelContextLimit?.maxOutputTokens?.takeIf { it > 0 } ?: planned)
+}
+
 internal fun ProviderConfig.trustedAnthropicModelMetadata(): AnthropicModelMetadata? = anthropicModelMetadata?.takeIf {
     type == ProviderType.Anthropic && it.model == model && it.baseUrl == baseUrl
 }
@@ -59,7 +67,8 @@ fun ProviderConfig.selectListedModel(info: ModelInfo): ProviderConfig = copy(
     model = info.id,
     modelContextLimit = info.inputLimitTokens?.takeIf {
         it > 0 && type in setOf(ProviderType.Anthropic, ProviderType.Gemini, ProviderType.OpenRouter)
-    }?.let { ModelContextLimit(info.id, baseUrl, it) },
+    }?.let { ModelContextLimit(info.id, baseUrl, it,
+        info.outputLimitTokens?.takeIf { limit -> limit > 0 }) },
     anthropicModelMetadata = info.anthropicMetadata?.takeIf {
         type == ProviderType.Anthropic && it.model == info.id && it.baseUrl == baseUrl
     },

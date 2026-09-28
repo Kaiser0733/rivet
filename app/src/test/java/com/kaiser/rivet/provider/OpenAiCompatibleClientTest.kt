@@ -56,20 +56,26 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun openRouterModelLimitIsScopedToItsProvider() = runTest {
-        val listing = """{"data":[{"id":"m","context_length":32000,"top_provider":{"context_length":16000}}]}"""
+        val listing = """{"data":[{"id":"m","context_length":32000,"top_provider":{"context_length":16000,"max_completion_tokens":1000}}]}"""
         server.enqueue(MockResponse().setBody(listing))
         val routed = OpenAiCompatibleClient(config(ProviderType.OpenRouter), "key").listModels().single()
         assertEquals(16000, routed.inputLimitTokens)
+        assertEquals(1000, routed.outputLimitTokens)
+        val selected = config(ProviderType.OpenRouter).selectListedModel(routed)
+        assertEquals(1000, selected.openRouterOutputCeiling())
+        assertEquals(null, selected.copy(model = "other").openRouterOutputCeiling())
+        assertEquals(null, selected.copy(baseUrl = "https://other.invalid/v1").openRouterOutputCeiling())
 
         server.enqueue(MockResponse().setBody(listing))
         val custom = OpenAiCompatibleClient(config(ProviderType.OpenAiCompatible), "key").listModels().single()
         assertEquals(null, custom.inputLimitTokens)
+        assertEquals(null, custom.outputLimitTokens)
     }
 
     @Test fun trustedOpenRouterOutputReserveMatchesTheSentCompletionCap() = runTest {
-        for (capacity in listOf(4096, 16384, 100000)) {
+        for ((capacity, outputLimit) in listOf(4096 to null, 16384 to null, 100000 to null, 16384 to 500)) {
             val base = config(ProviderType.OpenRouter)
-            val selected = base.copy(modelContextLimit = ModelContextLimit(base.model, base.baseUrl, capacity))
+            val selected = base.copy(modelContextLimit = ModelContextLimit(base.model, base.baseUrl, capacity, outputLimit))
             val reserve = com.kaiser.rivet.agent.ContextBudget.assess(selected, null,
                 com.kaiser.rivet.agent.TokenEstimateSource.Unknown).reservedTokens
             server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
@@ -385,7 +391,9 @@ class OpenAiCompatibleClientTest {
         server.enqueue(MockResponse().setBody("data: [DONE]\n\n"))
         OpenAiCompatibleClient(config(), "key").streamAgent(
             AgentRequest("model", emptyList(), "", ReasoningLevel.Default, emptyList())) {}
-        assertTrue(!server.takeRequest().body.readUtf8().contains("stream_options"))
+        val customBody = server.takeRequest().body.readUtf8()
+        assertTrue(!customBody.contains("stream_options"))
+        assertTrue(!customBody.contains("max_completion_tokens"))
     }
 
     @Test
