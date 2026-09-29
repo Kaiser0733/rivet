@@ -47,11 +47,6 @@ class ProjectDownloader internal constructor(
     // Internal transport injection keeps HTTPS behavior deterministic in unit tests.
     client: OkHttpClient? = null,
 ) {
-    private companion object {
-        // Held until the staged bytes have been committed or discarded.
-        val STAGING_MUTEX = Mutex()
-    }
-
     private val client = (client ?: newClient()).newBuilder()
         .followRedirects(false)
         .followSslRedirects(false)
@@ -207,6 +202,8 @@ class ProjectDownloader internal constructor(
     private fun ByteArray.toHex() = joinToString("") { "%02x".format(it.toInt() and 255) }
 
     companion object {
+        // Held until the staged bytes have been committed or discarded.
+        private val STAGING_MUTEX = Mutex()
         const val MAX_DOWNLOAD_BYTES = 64L * 1024 * 1024
         private const val MAX_REDIRECTS = 5
         private const val MAX_URL_CHARS = 4096

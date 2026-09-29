@@ -140,11 +140,15 @@ internal class LocalPreviewServer(
             output.flush()
             if (request.method == "HEAD") return
             try {
-                val body = if (length == null) ChunkedOutputStream(output) else output
                 runBlocking(Dispatchers.IO) {
-                    withTimeout(SAF_REQUEST_TIMEOUT_MS) { copyTo(requested, body, MAX_FILE_BYTES) }
+                    withTimeout(SAF_REQUEST_TIMEOUT_MS) {
+                        if (length == null) {
+                            val chunked = ChunkedOutputStream(output)
+                            copyTo(requested, chunked, MAX_FILE_BYTES)
+                            chunked.finishChunked()
+                        } else copyTo(requested, output, MAX_FILE_BYTES)
+                    }
                 }
-                if (length == null) body.finishChunked()
                 output.flush()
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
