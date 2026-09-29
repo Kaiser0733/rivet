@@ -79,8 +79,9 @@ fun ProviderEditor(
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
         Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().weight(1f)
-            .align(Alignment.CenterHorizontally).verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp, vertical = 12.dp)) {
+            .align(Alignment.CenterHorizontally).padding(bottom = 12.dp)
+            .verticalScroll(rememberScrollState())
+            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp)) {
             OutlinedTextField(
                 value = config.name,
                 onValueChange = { v -> viewModel.updateConfig { it.copy(name = v) } },
@@ -189,8 +190,7 @@ fun ProviderEditor(
                 Text(
                     if (modelSearch.isBlank()) stringResource(R.string.provider_models_showing,
                         filteredModels.models.size, filteredModels.totalCount)
-                    else stringResource(R.string.provider_models_matching,
-                        filteredModels.matchCount, filteredModels.models.size),
+                    else matchingModelCount(filteredModels.matchCount, filteredModels.models.size),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 4.dp, start = 4.dp),
@@ -263,7 +263,7 @@ fun ProviderEditor(
             Spacer(Modifier.size(16.dp))
         }
         Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
-            .background(MaterialTheme.colorScheme.background)) {
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)) {
             HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
