@@ -5,14 +5,13 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
 import java.security.MessageDigest
-import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.TimeUnit
+import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.sync.Mutex
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.Authenticator
@@ -31,14 +30,8 @@ class StagedDownload internal constructor(
     val file: File,
     val size: Long,
     val sha256: String,
-    private val onClose: () -> Unit,
 ) : Closeable {
-    private val closed = AtomicBoolean(false)
-
-    override fun close() {
-        if (!closed.compareAndSet(false, true)) return
-        try { file.delete() } finally { onClose() }
-    }
+    override fun close() { file.delete() }
 }
 
 /** A credential-free, bounded HTTPS client. Redirects are followed only after revalidation. */
@@ -56,7 +49,6 @@ class ProjectDownloader internal constructor(
         .cache(null)
         .build()
     suspend fun download(url: String, expectedContentSha256: String? = null): StagedDownload {
-        STAGING_MUTEX.lock()
         var unclaimed: StagedDownload? = null
         try {
             val staged = withTimeout(OVERALL_TIMEOUT_MS) {
@@ -70,10 +62,12 @@ class ProjectDownloader internal constructor(
                         if (!storage.isDirectory && !storage.mkdirs()) throw DownloadFailure("storage")
                         // AgentLoop executes tools serially; remove a staged body left by a killed app process.
                         val staleFiles = storage.listFiles { file ->
-                            file.name.startsWith(STAGING_PREFIX) && file.name.endsWith(STAGING_SUFFIX)
+                            file.name.startsWith(STAGING_PREFIX) &&
+                                file.name.endsWith(STAGING_SUFFIX) &&
+                                !file.name.startsWith(PROCESS_STAGING_PREFIX)
                         } ?: throw DownloadFailure("storage")
                         if (staleFiles.any { !it.delete() }) throw DownloadFailure("storage")
-                        val staged = try { File.createTempFile(STAGING_PREFIX, STAGING_SUFFIX, storage) }
+                        val staged = try { File.createTempFile(PROCESS_STAGING_PREFIX, STAGING_SUFFIX, storage) }
                             catch (_: Exception) { throw DownloadFailure("storage") }
                         try {
                             when (val result = fetch(target, staged)) {
@@ -94,9 +88,8 @@ class ProjectDownloader internal constructor(
                                         !result.sha256.equals(expectedContentSha256, ignoreCase = true)) {
                                         throw DownloadFailure("download_sha_mismatch")
                                     }
-                                    return@withContext StagedDownload(staged, result.size, result.sha256) {
-                                        STAGING_MUTEX.unlock()
-                                    }.also { unclaimed = it }
+                                    return@withContext StagedDownload(staged, result.size, result.sha256)
+                                        .also { unclaimed = it }
                                 }
                             }
                         } catch (e: CancellationException) {
@@ -120,8 +113,6 @@ class ProjectDownloader internal constructor(
         } catch (e: Exception) {
             unclaimed?.close()
             throw e
-        } finally {
-            if (unclaimed == null) STAGING_MUTEX.unlock()
         }
     }
 
@@ -202,8 +193,6 @@ class ProjectDownloader internal constructor(
     private fun ByteArray.toHex() = joinToString("") { "%02x".format(it.toInt() and 255) }
 
     companion object {
-        // Held until the staged bytes have been committed or discarded.
-        private val STAGING_MUTEX = Mutex()
         const val MAX_DOWNLOAD_BYTES = 64L * 1024 * 1024
         private const val MAX_REDIRECTS = 5
         private const val MAX_URL_CHARS = 4096
@@ -211,6 +200,7 @@ class ProjectDownloader internal constructor(
         private const val OVERALL_TIMEOUT_MS = 120_000L
         private const val STAGING_PREFIX = "rivet-download-"
         private const val STAGING_SUFFIX = ".tmp"
+        private val PROCESS_STAGING_PREFIX = "$STAGING_PREFIX${UUID.randomUUID()}-"
         private val SHA256 = Regex("[0-9a-fA-F]{64}")
         private val REDIRECT_CODES = setOf(300, 301, 302, 303, 307, 308)
 

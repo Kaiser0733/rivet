@@ -108,6 +108,29 @@ class ProjectDownloaderTest {
         }
     }
 
+    @Test fun aSecondDownloaderDoesNotRemoveAnUnconsumedStageFromThisProcess() {
+        val (server, client) = server()
+        val folder = Files.createTempDirectory("rivet-download-concurrent-stage").toFile()
+        try {
+            server.enqueue(MockResponse().setBody("first"))
+            server.enqueue(MockResponse().setBody("second"))
+            val first = kotlinx.coroutines.runBlocking {
+                ProjectDownloader(folder, client).download(server.url("/first").toString())
+            }
+            val second = kotlinx.coroutines.runBlocking {
+                ProjectDownloader(folder, client).download(server.url("/second").toString())
+            }
+            assertTrue(first.file.exists())
+            assertEquals("first", first.file.readText())
+            assertEquals("second", second.file.readText())
+            first.close()
+            second.close()
+        } finally {
+            server.shutdown()
+            folder.deleteRecursively()
+        }
+    }
+
     @Test fun rejectsCleartextCredentialsBadChecksumsAndKnownOversizeBeforeSaving() {
         val (server, client) = server()
         val folder = Files.createTempDirectory("rivet-download-limits").toFile()
