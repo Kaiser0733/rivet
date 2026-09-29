@@ -27,6 +27,7 @@ enum class AgentStopReason {
     ContextTooSmall,
     NoProgress,
     RuntimeBlocked,
+    CapabilityBlocked,
 }
 
 data class AgentRunResult(
@@ -61,6 +62,8 @@ class AgentLoop(
         tools: List<AgentToolDefinition>,
         onText: (String) -> Unit = {},
         onMessage: suspend (AgentMessage) -> Unit = {},
+        autonomyMode: AutonomyMode = AutonomyMode.Ask,
+        onToolLifecycle: (AgentToolLifecycle) -> Unit = {},
     ): AgentRunResult {
         val messages = initial.toMutableList()
         suspend fun append(message: AgentMessage) {
@@ -68,6 +71,11 @@ class AgentLoop(
             // arrives during their persistence callback.
             withContext(NonCancellable) { onMessage(message) }
             messages += message
+        }
+        fun lifecycle(call: AgentToolCall, stage: AgentToolLifecycleStage) {
+            try { onToolLifecycle(AgentToolLifecycle(AgentToolLifecycle.keyFor(call.id), stage)) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* Presentation telemetry never controls execution. */ }
         }
         val deniedMutations = mutableSetOf<String>()
         val createdPaths = mutableSetOf<String>()
@@ -194,8 +202,9 @@ class AgentLoop(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (_: Exception) {
-                        PreparedAgentTool(call, null) { failed(call) }
+                        PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) { failed(call) }
                     }
+                    lifecycle(call, AgentToolLifecycleStage.Queued)
                     val denialKey = operationKeys[callIndex]
                     val previouslyDenied = denialKey in deniedMutations
                     val previous = deterministicFailures.firstOrNull {
@@ -203,6 +212,7 @@ class AgentLoop(
                     }
                     if (previous != null &&
                         (previous.second == "denied" || previous.third == failureState())) {
+                        lifecycle(call, AgentToolLifecycleStage.Blocked)
                         results += AgentToolResult(call.id, call.name,
                             AgentToolError.noProgress(previous.second), true, "Stopped  ${call.name}")
                         results += pending("no_progress")
@@ -210,15 +220,36 @@ class AgentLoop(
                         break
                     }
                     if (previous != null) deterministicFailures.removeAll { it.first == denialKey }
-                    val blocked = if (prepared.approval != null && !previouslyDenied) mutationBlocker(call) else null
-                    if (blocked != null) {
-                        val rejected = stopped(call, blocked)
-                        val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "workspace_changed") }
+                    val decision = ApprovalPolicy.decide(autonomyMode, prepared)
+                    if (decision is ApprovalDecision.Blocked) {
+                        val rejected = stopped(call, decision.reason)
+                        val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "not_executed") }
                         if (!fits(results + rejected + remaining)) {
                             results += pending("session_limit")
                             stopReason = AgentStopReason.SessionLimit
                             break
                         }
+                        lifecycle(call, AgentToolLifecycleStage.Blocked)
+                        results += rejected
+                        results += remaining
+                        stopReason = AgentStopReason.CapabilityBlocked
+                        failureCode = decision.reason
+                        break
+                    }
+                    val blocked = if (prepared.effect.requiresRuntimeBlocker && !previouslyDenied) {
+                        try { mutationBlocker(call) }
+                        catch (e: CancellationException) { throw e }
+                        catch (_: Exception) { "runtime_unavailable" }
+                    } else null
+                    if (blocked != null) {
+                        val rejected = stopped(call, blocked)
+                        val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "not_executed") }
+                        if (!fits(results + rejected + remaining)) {
+                            results += pending("session_limit")
+                            stopReason = AgentStopReason.SessionLimit
+                            break
+                        }
+                        lifecycle(call, AgentToolLifecycleStage.Blocked)
                         results += rejected
                         if (AgentToolError.runtimeStopCode(rejected) != null) {
                             results += response.toolCalls.drop(results.size).map { stopped(it, "not_executed") }
@@ -233,19 +264,20 @@ class AgentLoop(
                         }
                         continue
                     }
-                    // Only mutations need prospective headroom. Include completed results
-                    // and a correlated error for every unstarted call in this batch.
-                    if (prepared.approval != null && !previouslyDenied && !fits(
+                    // Reserve the bounded correlated event before any side effect, whether
+                    // or not this autonomy mode asks a person to approve it.
+                    if (prepared.effect != AgentToolEffect.ReadOnly && !previouslyDenied && !fits(
                             results + pending("workspace_changed"),
                             // Result JSON is escaped once more inside session JSON.
                             // 2048 also covers the bounded summary and fixed fields.
                             prepared.resultContentLimitBytes * 2 + 2048,
                         )) {
+                        lifecycle(call, AgentToolLifecycleStage.Blocked)
                         results += pending("session_limit")
                         stopReason = AgentStopReason.SessionLimit
                         break
                     }
-                    val approval = prepared.approval?.let { request ->
+                    val approval = if (decision == ApprovalDecision.AskUser) prepared.approval?.let { request ->
                         val target = request.destructivePath
                         when {
                             target != null && target in createdDirectories -> request.copy(
@@ -258,11 +290,15 @@ class AgentLoop(
                                 describeDestructive(request)
                             else -> request
                         }
-                    }
-                    val denied = approval != null &&
-                        (previouslyDenied || !requestApproval(approval))
+                    } else null
+                    val denied = decision == ApprovalDecision.AskUser &&
+                        (previouslyDenied || run {
+                            lifecycle(call, AgentToolLifecycleStage.AwaitingApproval)
+                            !requestApproval(requireNotNull(approval))
+                        })
                     if (denied) {
                         deniedMutations += denialKey
+                        lifecycle(call, AgentToolLifecycleStage.Denied)
                         results += stopped(call, "denied")
                         deterministicFailures += Triple(denialKey, "denied", "")
                         if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
@@ -274,35 +310,41 @@ class AgentLoop(
                         stopReason = AgentStopReason.WorkspaceChanged
                         break
                     }
-                    val mutationBlocker = if (prepared.approval != null) {
+                    val mutationBlocker = if (prepared.effect.requiresCheckpoint) {
                         try { beforeMutation(call) }
                         catch (e: CancellationException) { throw e }
                         catch (_: Exception) { "checkpoint_unavailable" }
                     } else null
                     if (mutationBlocker == "checkpoint_unavailable") {
+                        lifecycle(call, AgentToolLifecycleStage.Blocked)
                         results += pending("checkpoint_unavailable")
                         stopReason = AgentStopReason.CheckpointUnavailable
                         break
                     }
                     val result = if (mutationBlocker != null) {
+                        lifecycle(call, AgentToolLifecycleStage.Blocked)
                         stopped(call, mutationBlocker)
                     } else {
-                        if (prepared.approval != null) mutationsAttempted++
+                        if (prepared.effect.changesWorkspace) mutationsAttempted++
+                        lifecycle(call, AgentToolLifecycleStage.Started)
                         try {
                             prepared.execute()
                         } catch (e: CancellationException) {
-                            if (prepared.approval != null) results += stopped(call, "interrupted")
+                            lifecycle(call, AgentToolLifecycleStage.Cancelled)
+                            if (prepared.effect != AgentToolEffect.ReadOnly) results += stopped(call, "interrupted")
                             throw e
                         } catch (_: Exception) {
                             failed(call)
                         }
                     }
-                    if (prepared.approval != null && mutationBlocker == null && !result.error) {
+                    if (mutationBlocker == null) lifecycle(call,
+                        if (result.error) AgentToolLifecycleStage.Failed else AgentToolLifecycleStage.Completed)
+                    if (prepared.effect.changesWorkspace && mutationBlocker == null && !result.error) {
                         mutationsCompleted++
                     }
                     val bounded = boundResult(result, prepared.resultContentLimitBytes)
                     val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "workspace_changed") }
-                    if (prepared.approval == null && !fits(results + bounded + remaining)) {
+                    if (prepared.effect == AgentToolEffect.ReadOnly && !fits(results + bounded + remaining)) {
                         results += pending("session_limit")
                         stopReason = AgentStopReason.SessionLimit
                         break
@@ -323,7 +365,7 @@ class AgentLoop(
                     if (!bounded.error) recordProvenance(
                         call, bounded, createdPaths, createdDirectories, movedExistingPaths,
                     )
-                    if (!bounded.error && prepared.approval != null) {
+                    if (!bounded.error && prepared.effect.changesWorkspace) {
                         deterministicFailures.clear()
                         unchangedReads.clear()
                     }
@@ -443,7 +485,7 @@ class AgentLoop(
         createdDirectories: MutableSet<String>,
         movedExisting: MutableSet<String>,
     ) {
-        if (call.name !in setOf("create_file", "create_directory", "delete_path", "rename_path", "move_path")) return
+        if (call.name !in setOf("create_file", "create_directory", "download_file", "delete_path", "rename_path", "move_path")) return
         val value = try { Json.parseToJsonElement(result.content).jsonObject }
             catch (_: SerializationException) { return }
             catch (_: IllegalArgumentException) { return }
@@ -455,6 +497,7 @@ class AgentLoop(
                 created += path
                 createdDirectories += path
             }
+            "download_file" -> created += path
             "delete_path" -> {
                 created.removeAll { it == path || it.startsWith("$path/") }
                 createdDirectories.removeAll { it == path || it.startsWith("$path/") }

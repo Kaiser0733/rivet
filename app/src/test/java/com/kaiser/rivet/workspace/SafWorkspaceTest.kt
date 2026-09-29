@@ -3,6 +3,7 @@ package com.kaiser.rivet.workspace
 import android.content.Intent
 import android.content.pm.ProviderInfo
 import android.provider.DocumentsContract
+import com.kaiser.rivet.agent.AgentWorkspaceFailure
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolExecutor
 import com.kaiser.rivet.agent.AgentLoop
@@ -14,6 +15,8 @@ import com.kaiser.rivet.storage.CodingSessions
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.async
 import kotlinx.coroutines.runBlocking
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -134,6 +137,34 @@ class SafWorkspaceTest {
         assertEquals(saved.sha256, workspace.readTextFile(moved.path).sha256)
         workspace.delete(moved.path)
         assertTrue(workspace.listDirectory(path("src")).isEmpty())
+    }
+
+    @Test fun downloadedBinaryFileUsesHashGatedCreateAndOverwrite() = runBlocking {
+        val agentWorkspace = SafAgentWorkspace(workspace)
+        workspace.createDirectory(path("assets"))
+        val content = byteArrayOf(0, 1, 2, -1, 4)
+        val created = agentWorkspace.writeDownloaded("assets/icon.bin", ByteArrayInputStream(content), null)
+        assertEquals("assets/icon.bin", created.path)
+        assertEquals(WorkspaceText.sha256(content), created.sha256)
+        val output = ByteArrayOutputStream()
+        workspace.copyFileTo(path(created.path), output)
+        assertArrayEquals(content, output.toByteArray())
+
+        try {
+            agentWorkspace.writeDownloaded("assets/icon.bin", ByteArrayInputStream(byteArrayOf(7)), null)
+            fail("expected destination_exists")
+        } catch (error: AgentWorkspaceFailure) {
+            assertEquals("destination_exists", error.code)
+        }
+        try {
+            agentWorkspace.writeDownloaded("assets/icon.bin", ByteArrayInputStream(byteArrayOf(7)), "0".repeat(64))
+            fail("expected conflict")
+        } catch (error: AgentWorkspaceFailure) {
+            assertEquals("conflict", error.code)
+        }
+        val replaced = agentWorkspace.writeDownloaded("assets/icon.bin", ByteArrayInputStream(byteArrayOf(7)),
+            WorkspaceText.sha256(content))
+        assertEquals(WorkspaceText.sha256(byteArrayOf(7)), replaced.sha256)
     }
     @Test fun uncorrectableCreateReturnsTheActualPathWithoutRetrying() = runBlocking {
         provider.normalizeAllFileNames = true

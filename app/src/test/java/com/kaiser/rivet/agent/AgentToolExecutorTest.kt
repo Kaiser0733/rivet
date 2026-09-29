@@ -2,6 +2,7 @@ package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.runtime.RepositoryDiff
 import com.kaiser.rivet.runtime.RepositoryStatus
+import com.kaiser.rivet.runtime.PreviewLaunch
 import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
@@ -12,6 +13,7 @@ import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AgentToolExecutorTest {
@@ -32,6 +34,7 @@ class AgentToolExecutorTest {
         var searchBytesScanned = 5L
         var searchSkipped = 1
         var createdPath: String? = null
+        var downloadedBytes: ByteArray? = null
         val directories = mutableSetOf<String>()
 
         override suspend fun stat(path: String) = AgentWorkspaceEntry(
@@ -62,6 +65,13 @@ class AgentToolExecutorTest {
             failure?.let { throw AgentWorkspaceFailure(it) }
             writes++
             return AgentFileSnapshot(path, content, "b".repeat(64), content.length.toLong())
+        }
+        override suspend fun writeDownloaded(path: String, input: java.io.InputStream,
+                                             expectedExistingHash: String?): AgentFileSnapshot {
+            downloadedBytes = input.readBytes()
+            val digest = java.security.MessageDigest.getInstance("SHA-256").digest(downloadedBytes!!)
+                .joinToString("") { "%02x".format(it.toInt() and 255) }
+            return AgentFileSnapshot(createdPath ?: path, "", digest, downloadedBytes!!.size.toLong())
         }
         override suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>) =
             write(path, edits.single().newText, expectedHash)
@@ -348,8 +358,38 @@ class AgentToolExecutorTest {
     fun catalogContainsWorkspaceToolsAndApprovedCommand() {
         val names = AgentToolExecutor.definitions.map { it.name }
         assertEquals(listOf("git_status", "git_diff", "list_directory", "read_file", "search_files", "write_file", "apply_patch",
-            "create_file", "create_directory", "rename_path", "move_path", "delete_path", "run_command"), names)
+            "create_file", "create_directory", "rename_path", "move_path", "delete_path", "run_command",
+            "list_processes", "stop_process", "start_preview", "download_file"), names)
         assertTrue(names.none { it in setOf("shell", "terminal", "exec", "bash") })
+    }
+
+    @Test fun previewIsAReadOnlyEffectAndReturnsTheActualLoopbackLaunch() = runTest {
+        val workspace = FakeWorkspace()
+        val executor = AgentToolExecutor(workspace, startPreview = { root, entry ->
+            assertEquals("site", root)
+            assertEquals("site/index.html", entry)
+            PreviewLaunch("a".repeat(36), "http://127.0.0.1:43127/", entry)
+        })
+        val prepared = executor.prepare(AgentToolCall("preview", "start_preview",
+            """{"root":"site","entry":"site/index.html"}"""))
+        assertEquals(AgentToolEffect.Preview, prepared.effect)
+        assertNotNull(prepared.approval)
+        val result = prepared.execute()
+        assertFalse(result.error)
+        assertTrue(result.content.contains("http://127.0.0.1:43127/"))
+        val invalid = executor.prepare(AgentToolCall("bad", "start_preview",
+            """{"root":"site","entry":"other/index.html"}"""))
+        assertNull(invalid.approval)
+        assertTrue(invalid.execute().error)
+    }
+
+    @Test fun processListingDoesNotDependOnWorkspaceSynchronization() = runTest {
+        val executor = AgentToolExecutor(FakeWorkspace(), requireSafCurrent = {
+            throw com.kaiser.rivet.runtime.MirrorFailure("sync_required")
+        })
+        val result = executor.prepare(AgentToolCall("list", "list_processes", "{}")).execute()
+        assertFalse(result.error)
+        assertTrue(result.content.contains("processes"))
     }
 
     @Test

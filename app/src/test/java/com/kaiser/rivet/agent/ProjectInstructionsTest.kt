@@ -76,6 +76,9 @@ class ProjectInstructionsTest {
         val targets = loader.targets(AgentToolCall("1", "move_path",
             """{"path":"src/A.kt","destination":"lib"}"""))
         assertTrue(targets.keys.map { it.value } == listOf("src/A.kt", "lib"))
+        assertTrue(loader.targets(AgentToolCall("3", "download_file",
+            """{"url":"https://example.test/file","path":"assets/file.bin"}"""))
+            .keys.map { it.value } == listOf("assets/file.bin"))
         assertTrue(loader.targets(AgentToolCall("2", "read_file", """{"path":"../outside"}""")).isEmpty())
     }
 }

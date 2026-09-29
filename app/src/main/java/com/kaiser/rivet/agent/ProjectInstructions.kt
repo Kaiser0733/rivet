@@ -77,7 +77,7 @@ class ProjectInstructions(private val workspace: SafWorkspace) {
         private const val MAX_ARGUMENT_CHARS = 1_200_000
         private val PATH_TOOLS = setOf("read_file", "list_directory", "search_files", "write_file",
             "apply_patch", "create_file", "create_directory", "rename_path", "move_path",
-            "delete_path", "run_command", "git_diff")
+            "delete_path", "run_command", "download_file", "git_diff")
         private val DIRECTORY_TOOLS = setOf("list_directory", "search_files", "create_directory")
     }
 }

@@ -67,8 +67,10 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
 
     // Runtime copies use the same SAF resolution and cancellation boundary as
     // editor reads, but never decode or retain the file in memory.
-    suspend fun copyFileTo(path: WorkspacePath, output: OutputStream): BinaryFingerprint = io {
-        stream(resolve(path), output)
+    suspend fun copyFileTo(path: WorkspacePath, output: OutputStream,
+                           maxBytes: Long? = null): BinaryFingerprint = io {
+        require(maxBytes == null || maxBytes >= 0)
+        stream(resolve(path), output, maxBytes)
     }
 
     suspend fun fingerprint(path: WorkspacePath): BinaryFingerprint = io {
