@@ -67,6 +67,7 @@ backend passed the preceding physical acceptance process.
 ## Phase 10 — Rivet UI/UX Redesign (in progress)
 
 Chat remains the home surface, with full-screen History and Settings routes.
-The rose-and-ink presentation adapts the heart reference into native Compose
-linework and low-contrast texture. History pinning is persisted in SQLite;
-provider editing and the accepted agent workflows remain intact.
+The rose-and-ink presentation uses the clean heart source as a Chat-only
+decorative background; other routes stay on the plain rose surface. History
+pinning is persisted in SQLite; provider editing and the accepted agent
+workflows remain intact.

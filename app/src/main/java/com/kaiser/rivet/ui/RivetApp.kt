@@ -2,8 +2,11 @@ package com.kaiser.rivet.ui
 
 import android.app.Activity
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
@@ -71,11 +74,14 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 if (editing) {
                     ProviderEditor(viewModel = providersViewModel, onDone = { editing = false })
                 } else when (destination) {
-                    RivetDestination.Chat -> {
+                    RivetDestination.Chat -> Column(Modifier.fillMaxSize()) {
                         ChatTopBar(onSettings = { destination = RivetDestination.Settings })
-                        ChatScreen(chatViewModel, providersViewModel,
-                            onOpenSettings = { destination = RivetDestination.Settings },
-                            onOpenHistory = { destination = RivetDestination.History })
+                        Box(Modifier.weight(1f).fillMaxWidth()) {
+                            RivetChatBackground()
+                            ChatScreen(chatViewModel, providersViewModel,
+                                onOpenSettings = { destination = RivetDestination.Settings },
+                                onOpenHistory = { destination = RivetDestination.History })
+                        }
                     }
                     RivetDestination.History -> HistoryScreen(
                         viewModel = chatViewModel,

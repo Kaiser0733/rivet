@@ -1,6 +1,8 @@
 package com.kaiser.rivet.ui.provider
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.border
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
@@ -16,13 +18,13 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
@@ -44,6 +46,7 @@ import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.selectListedModel
+import com.kaiser.rivet.ui.RivetOutlinedButton
 
 private val MAX_WIDTH = 640.dp
 
@@ -125,13 +128,13 @@ fun ProviderEditor(
             Modifier.fillMaxWidth().padding(top = 8.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp),
         ) {
-            OutlinedButton(
+            RivetOutlinedButton(
                 onClick = viewModel::testConnection,
                 enabled = !state.busy && !state.fetching,
             ) {
                 Text(stringResource(R.string.provider_test))
             }
-            OutlinedButton(
+            RivetOutlinedButton(
                 onClick = viewModel::fetchModels,
                 enabled = !state.busy && !state.fetching,
             ) {
@@ -181,10 +184,15 @@ fun ProviderEditor(
                 modifier = Modifier.padding(top = 8.dp, start = 4.dp),
             )
             state.models.forEach { model ->
-                Row(Modifier.fillMaxWidth().clickable {
-                    viewModel.updateConfig { it.selectListedModel(model) }
-                }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = config.model == model.id,
+                val selected = config.model == model.id
+                Row(Modifier.fillMaxWidth()
+                    .then(if (selected) Modifier
+                        .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(8.dp))
+                        .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.32f),
+                            RoundedCornerShape(8.dp)) else Modifier)
+                    .clickable { viewModel.updateConfig { it.selectListedModel(model) } }
+                    .padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = selected,
                         onClick = { viewModel.updateConfig { it.selectListedModel(model) } })
                     Column(Modifier.weight(1f)) {
                         Text(model.label, style = MaterialTheme.typography.bodyMedium)
@@ -200,9 +208,19 @@ fun ProviderEditor(
             }
         }
 
-        TextButton(onClick = { advanced = !advanced }) {
-            Text(if (advanced) "Hide advanced options" else "Advanced options")
+        androidx.compose.material3.HorizontalDivider(
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+        TextButton(onClick = { advanced = !advanced }, modifier = Modifier.fillMaxWidth()) {
+            Icon(painterResource(R.drawable.ic_settings), null, Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onBackground)
+            Text(if (advanced) "Hide advanced options" else "Advanced options",
+                color = MaterialTheme.colorScheme.onBackground)
+            Spacer(Modifier.weight(1f))
+            Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp),
+                tint = MaterialTheme.colorScheme.onBackground)
         }
+        androidx.compose.material3.HorizontalDivider(
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
         val reasoningOptions = offeredReasoning(config)
         if (advanced && reasoningOptions.size > 1) {
             Text(
@@ -233,13 +251,13 @@ fun ProviderEditor(
         }
 
         Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            OutlinedButton(
+            RivetOutlinedButton(
                 onClick = { viewModel.save(onSaved = onDone) },
                 enabled = config.name.isNotBlank() && config.baseUrl.isNotBlank() && config.model.isNotBlank(),
             ) {
                 Text(stringResource(R.string.provider_save))
             }
-            TextButton(onClick = viewModel::closeEditor) {
+            RivetOutlinedButton(onClick = viewModel::closeEditor) {
                 Text(stringResource(R.string.provider_cancel))
             }
             if (!state.isNew) {

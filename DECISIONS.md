@@ -272,10 +272,11 @@ unnecessary summary calls. Policy and approvals remain outside task state.
 ## D32 — Rose-and-ink Rivet presentation
 
 What: Chat stays primary, with full-screen History and Settings routes. A muted
-rose field, near-black text, thin rules, and hand-drawn linework adapt the
-original heart reference into native Compose shapes and low-contrast grain;
-photographic UI backgrounds are not used. This supersedes D7's dark-only shell.
-Why: the interface should feel like Rivet while keeping project work readable.
+rose field, near-black text, thin rules, and the clean heart background are
+used only on Chat. Other screens keep the plain rose surface; screenshots with
+mock controls are never packaged as backgrounds. This supersedes D7's dark-only
+shell. Why: the interface should feel like Rivet while keeping project work
+readable.
 
 ## D33 — Pinned conversation state
 

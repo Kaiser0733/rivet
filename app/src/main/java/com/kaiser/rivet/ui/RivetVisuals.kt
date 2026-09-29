@@ -1,35 +1,69 @@
 package com.kaiser.rivet.ui
 
 import androidx.compose.foundation.Canvas
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxScope
+import androidx.compose.foundation.layout.RowScope
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.Alignment
 import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.StrokeJoin
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.unit.dp
-import androidx.compose.material3.MaterialTheme
+import com.kaiser.rivet.R
 
 @Composable
 fun RivetBackdrop(content: @Composable BoxScope.() -> Unit) {
-    val ground = MaterialTheme.colorScheme.background
-    val grain = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.035f)
-    Box(Modifier.fillMaxSize().background(ground)) {
-        Canvas(Modifier.matchParentSize()) {
-            repeat(110) { index ->
-                val x = ((index * 197 + 31) % 997) / 997f * size.width
-                val y = ((index * 379 + 67) % 991) / 991f * size.height
-                drawCircle(grain, radius = (index % 3 + 1) * 0.3.dp.toPx(), center = androidx.compose.ui.geometry.Offset(x, y))
-            }
-        }
-        content()
-    }
+    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), content = content)
+}
+
+@Composable
+fun RivetChatBackground(modifier: Modifier = Modifier) {
+    Image(
+        painter = painterResource(R.drawable.chat_background),
+        contentDescription = null,
+        modifier = modifier.fillMaxSize(),
+        alignment = Alignment.Center,
+        contentScale = ContentScale.Crop,
+        alpha = 0.46f,
+    )
+}
+
+@Composable
+fun RivetOutlinedButton(
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+    enabled: Boolean = true,
+    content: @Composable RowScope.() -> Unit,
+) {
+    OutlinedButton(
+        onClick = onClick,
+        modifier = modifier,
+        enabled = enabled,
+        shape = RoundedCornerShape(8.dp),
+        colors = ButtonDefaults.outlinedButtonColors(
+            containerColor = MaterialTheme.colorScheme.surface,
+            contentColor = MaterialTheme.colorScheme.onBackground,
+            disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
+            disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
+        ),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(
+            alpha = if (enabled) 0.78f else 0.32f)),
+        content = content,
+    )
 }
 
 enum class RivetDoodle { Project, Provider, Ready }
@@ -87,25 +121,9 @@ fun RivetDoodleMark(kind: RivetDoodle, modifier: Modifier = Modifier) {
                 sketchSpark(ink, size.width * 0.87f, size.height * 0.26f, 5.dp.toPx())
             }
             RivetDoodle.Ready -> {
-                val heart = Path().apply {
-                    moveTo(size.width * 0.50f, size.height * 0.79f)
-                    cubicTo(size.width * 0.39f, size.height * 0.69f,
-                        size.width * 0.19f, size.height * 0.55f,
-                        size.width * 0.19f, size.height * 0.37f)
-                    cubicTo(size.width * 0.19f, size.height * 0.18f,
-                        size.width * 0.42f, size.height * 0.14f,
-                        size.width * 0.50f, size.height * 0.35f)
-                    cubicTo(size.width * 0.60f, size.height * 0.13f,
-                        size.width * 0.82f, size.height * 0.19f,
-                        size.width * 0.81f, size.height * 0.38f)
-                    cubicTo(size.width * 0.80f, size.height * 0.56f,
-                        size.width * 0.61f, size.height * 0.70f,
-                        size.width * 0.50f, size.height * 0.79f)
-                }
-                drawPath(heart, ink, style = pen)
-                sketchSpark(ink, size.width * 0.18f, size.height * 0.21f, 5.dp.toPx())
-                sketchSpark(ink, size.width * 0.82f, size.height * 0.19f, 6.dp.toPx())
-                drawCircle(accent, 2.dp.toPx(), androidx.compose.ui.geometry.Offset(size.width * 0.5f, size.height * 0.52f))
+                sketchSpark(ink, size.width * 0.50f, size.height * 0.34f, 8.dp.toPx())
+                sketchSpark(ink, size.width * 0.37f, size.height * 0.55f, 4.dp.toPx())
+                sketchSpark(accent, size.width * 0.64f, size.height * 0.56f, 5.dp.toPx())
             }
         }
     }
