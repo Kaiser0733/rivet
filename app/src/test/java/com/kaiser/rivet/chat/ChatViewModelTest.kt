@@ -178,6 +178,7 @@ class ChatViewModelTest {
         val original = sessions.create(tree.toString())
         sessions.save(listOf(AgentMessage.user("Keep this conversation")), interrupted = false)
         sessions.setPinned(original.id!!, true)
+        val sessionIdsBeforeReselection = sessions.list().map { it.id }.toSet()
         app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
@@ -188,12 +189,12 @@ class ChatViewModelTest {
         viewModel.selectProject(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or
             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         val restored = await(viewModel) { !it.projectLoading && it.projectIdentity == tree.toString() }
-        val projectSessions = sessions.list().filter { it.workspaceId == tree.toString() }
+        val sessionsAfterReselection = sessions.list()
 
         assertEquals(original.id, restored.currentSessionId)
-        assertEquals(1, projectSessions.size)
+        assertEquals(sessionIdsBeforeReselection, sessionsAfterReselection.map { it.id }.toSet())
         assertEquals("Keep this conversation", restored.messages.single().text)
-        assertTrue(projectSessions.single().pinned)
+        assertTrue(sessionsAfterReselection.single { it.id == original.id }.pinned)
         assertEquals(tree.toString(), restored.currentSessionWorkspaceId)
     }
 

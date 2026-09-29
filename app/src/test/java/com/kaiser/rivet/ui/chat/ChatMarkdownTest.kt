@@ -64,4 +64,19 @@ class ChatMarkdownTest {
         assertEquals(listOf(ChatMarkdownBlock.Paragraph(source)), parseAssistantMarkdown(source))
         assertEquals(source, parseInlineMarkdown(source).joinToString("") { it.text })
     }
+
+    @Test fun everyStreamingPrefixParsesWithoutCrashingOnOpenMarkdown() {
+        val streaming = "## **Update**\n\n- `first`\n1. *second*\n\n```kotlin\nprintln(\"done\")"
+        for (end in 0..streaming.length) {
+            parseAssistantMarkdown(streaming.take(end)).forEach { block ->
+                when (block) {
+                    is ChatMarkdownBlock.Paragraph -> parseInlineMarkdown(block.text)
+                    is ChatMarkdownBlock.Heading -> parseInlineMarkdown(block.text)
+                    is ChatMarkdownBlock.Quote -> parseInlineMarkdown(block.text)
+                    is ChatMarkdownBlock.ListItems -> block.items.forEach(::parseInlineMarkdown)
+                    is ChatMarkdownBlock.Code -> Unit
+                }
+            }
+        }
+    }
 }
