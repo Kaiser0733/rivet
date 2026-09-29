@@ -9,7 +9,8 @@ class RivetDestinationTest {
     fun ordinarySurfacesAreChatAndSettings() {
         assertEquals(
             listOf("Chat", "Settings"),
-            RivetDestination.entries.map { it.name },
+            RivetDestination.entries.filter { it.isPrimary }.map { it.name },
         )
+        assertEquals(false, RivetDestination.History.isPrimary)
     }
 }

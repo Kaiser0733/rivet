@@ -834,6 +834,21 @@ class ChatViewModel private constructor(
         }
     }
 
+    fun setSessionPinned(id: String, pinned: Boolean) {
+        val store = sessions ?: return
+        if (_uiState.value.streaming || _uiState.value.undoing ||
+            _uiState.value.recoveringProjectChanges || sendJob?.isActive == true) return
+        viewModelScope.launch {
+            try {
+                store.setPinned(id, pinned)
+                _uiState.update { it.copy(sessions = store.list()) }
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                _uiState.update { it.copy(error = "Could not update this conversation.") }
+            }
+        }
+    }
+
     private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
         val store = sessions ?: return
         if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges || sendJob?.isActive == true) return
