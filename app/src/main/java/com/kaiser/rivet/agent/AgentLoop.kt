@@ -232,8 +232,10 @@ class AgentLoop(
                         lifecycle(call, AgentToolLifecycleStage.Blocked)
                         results += rejected
                         results += remaining
-                        stopReason = AgentStopReason.CapabilityBlocked
-                        failureCode = decision.reason
+                        val runtimeStop = AgentToolError.runtimeStopCode(rejected)
+                        stopReason = if (runtimeStop != null) AgentStopReason.RuntimeBlocked
+                            else AgentStopReason.CapabilityBlocked
+                        failureCode = runtimeStop ?: decision.reason
                         break
                     }
                     val blocked = if (prepared.effect.requiresRuntimeBlocker && !previouslyDenied) {
