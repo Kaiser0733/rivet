@@ -145,8 +145,8 @@ class ProjectDownloaderTest {
             assertEquals("invalid_checksum", downloadFailure {
                 kotlinx.coroutines.runBlocking { downloader.download(server.url("/file").toString(), "bad") }
             }.code)
-            server.enqueue(MockResponse().setHeader("Content-Length", ProjectDownloader.MAX_DOWNLOAD_BYTES + 1)
-                .setBody("small"))
+            server.enqueue(MockResponse().setBody("small")
+                .setHeader("Content-Length", ProjectDownloader.MAX_DOWNLOAD_BYTES + 1))
             assertEquals("download_too_large", downloadFailure {
                 kotlinx.coroutines.runBlocking { downloader.download(server.url("/large").toString()) }
             }.code)

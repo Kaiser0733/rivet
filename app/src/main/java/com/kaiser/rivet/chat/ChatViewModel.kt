@@ -471,7 +471,11 @@ class ChatViewModel private constructor(
                     response
                 },
                 prepareTool = { call ->
-                    val prepared = executor?.prepare(call) ?: PreparedAgentTool(call, null) {
+                    val prepared = executor?.prepare(call) ?: PreparedAgentTool(
+                        call,
+                        null,
+                        blockedReason = "workspace_unavailable",
+                    ) {
                         AgentToolResult(
                             call.id,
                             call.name,

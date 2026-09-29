@@ -31,7 +31,7 @@ class ManagedProcessesTest {
         assertTrue(processes.ownsWorkspace(one, "tree-one"))
         assertFalse(processes.ownsWorkspace(one, "tree-two"))
         assertNull(processes.stopDescription(one, "tree-two"))
-        assertTrue(processes.activeForWorkspace("tree-two").isEmpty())
+        assertEquals(listOf(two), processes.activeForWorkspace("tree-two").map { it.id })
         assertTrue(processes.stop(one))
         assertTrue(first.isCancelled)
         assertFalse(second.isCancelled)
