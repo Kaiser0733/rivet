@@ -4,13 +4,12 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
-import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
@@ -22,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -41,12 +41,14 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.ui.RivetOutlinedButton
+import com.kaiser.rivet.ui.chat.displaySafeText
 
 private val MAX_WIDTH = 640.dp
 
@@ -59,216 +61,227 @@ fun ProviderEditor(
     val config = state.config
     var advanced by remember(config.id) { mutableStateOf(state.headersText.isNotEmpty()) }
     var showKey by remember(config.id) { mutableStateOf(false) }
+    var modelSearch by remember(config.id, state.models) { mutableStateOf("") }
+    val filteredModels = remember(state.models, config.model, modelSearch) {
+        filterModels(state.models, config.model, modelSearch)
+    }
 
-    Box(Modifier.fillMaxSize()) {
-      Column(
-          Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().fillMaxHeight()
-              .align(Alignment.TopCenter)
-              .statusBarsPadding()
-              .navigationBarsPadding()
-              .imePadding()
-              .verticalScroll(rememberScrollState())
-              .padding(horizontal = 16.dp),
-      ) {
-        Row(
-            Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+        Row(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
+            .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+            verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = viewModel::closeEditor) {
                 Icon(painterResource(R.drawable.ic_back), stringResource(R.string.close),
                     tint = MaterialTheme.colorScheme.onBackground)
             }
-            Text(
-                if (state.isNew) "Add provider" else "Change model",
-                style = MaterialTheme.typography.titleLarge,
-            )
-            Spacer(Modifier.weight(1f))
+            Text(if (state.isNew) "Add provider" else "Change model",
+                style = MaterialTheme.typography.titleLarge)
         }
-
-        OutlinedTextField(
-            value = config.name,
-            onValueChange = { v -> viewModel.updateConfig { it.copy(name = v) } },
-            label = { Text(stringResource(R.string.provider_name_label)) },
-            modifier = Modifier.fillMaxWidth(),
-            singleLine = true,
-        )
-        if (config.type == ProviderType.OpenAiCompatible || advanced) {
+        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+        Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().weight(1f)
+            .align(Alignment.CenterHorizontally).verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 12.dp)) {
             OutlinedTextField(
-                value = config.baseUrl,
-                onValueChange = { v -> viewModel.updateConfig { it.copy(baseUrl = v) } },
-                label = { Text(stringResource(R.string.provider_base_url_label)) },
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                value = config.name,
+                onValueChange = { v -> viewModel.updateConfig { it.copy(name = v) } },
+                label = { Text(stringResource(R.string.provider_name_label)) },
+                modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
-        }
-        OutlinedTextField(
-            value = state.keyInput,
-            onValueChange = viewModel::setKeyInput,
-            label = { Text(stringResource(R.string.provider_api_key_label)) },
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-            singleLine = true,
-            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-            trailingIcon = if (state.keyInput.isNotEmpty()) {
-                {
-                    IconButton(onClick = { showKey = !showKey }) {
-                        Icon(painterResource(if (showKey) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
-                            if (showKey) "Hide API key" else "Show API key",
-                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            } else null,
-            supportingText = {
-                if (state.keyPresent && state.keyInput.isEmpty()) {
-                    Text(stringResource(R.string.provider_api_key_present))
-                }
-            },
-        )
-
-        Row(
-            Modifier.fillMaxWidth().padding(top = 8.dp),
-            horizontalArrangement = Arrangement.spacedBy(8.dp),
-        ) {
-            RivetOutlinedButton(
-                onClick = viewModel::testConnection,
-                enabled = !state.busy && !state.fetching,
-            ) {
-                Text(stringResource(R.string.provider_test))
-            }
-            RivetOutlinedButton(
-                onClick = viewModel::fetchModels,
-                enabled = !state.busy && !state.fetching,
-            ) {
-                Text(stringResource(R.string.provider_fetch_models))
-            }
-        }
-        if (state.busy || state.fetching) {
-            CircularProgressIndicator(
-                Modifier.padding(top = 8.dp).size(16.dp),
-                strokeWidth = 2.dp,
-            )
-        }
-
-        state.test?.let { test ->
-            Text(
-                test.message,
-                color = if (test.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-        state.fetchError?.let { err ->
-            Text(
-                err,
-                color = MaterialTheme.colorScheme.error,
-                style = MaterialTheme.typography.bodyMedium,
-                modifier = Modifier.padding(top = 4.dp),
-            )
-        }
-
-        OutlinedTextField(
-            value = config.model,
-            onValueChange = { v -> viewModel.updateConfig {
-                it.copy(model = v, modelContextLimit = null, anthropicModelMetadata = null)
-            } },
-            label = { Text(stringResource(R.string.provider_model_label)) },
-            placeholder = { Text(stringResource(R.string.provider_model_hint)) },
-            singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-        )
-
-        if (state.models.isNotEmpty()) {
-            Text(
-                stringResource(R.string.provider_models_loaded, state.models.size),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(top = 8.dp, start = 4.dp),
-            )
-            state.models.forEach { model ->
-                val selected = config.model == model.id
-                Row(Modifier.fillMaxWidth()
-                    .then(if (selected) Modifier
-                        .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(8.dp))
-                        .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.32f),
-                            RoundedCornerShape(8.dp)) else Modifier)
-                    .clickable { viewModel.updateConfig { it.selectListedModel(model) } }
-                    .padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
-                    RadioButton(selected = selected,
-                        onClick = { viewModel.updateConfig { it.selectListedModel(model) } })
-                    Column(Modifier.weight(1f)) {
-                        Text(model.label, style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            model.id,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                }
-                androidx.compose.material3.HorizontalDivider(
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.18f))
-            }
-        }
-
-        androidx.compose.material3.HorizontalDivider(
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
-        TextButton(onClick = { advanced = !advanced }, modifier = Modifier.fillMaxWidth()) {
-            Icon(painterResource(R.drawable.ic_settings), null, Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onBackground)
-            Text(if (advanced) "Hide advanced options" else "Advanced options",
-                color = MaterialTheme.colorScheme.onBackground)
-            Spacer(Modifier.weight(1f))
-            Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp),
-                tint = MaterialTheme.colorScheme.onBackground)
-        }
-        androidx.compose.material3.HorizontalDivider(
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
-        val reasoningOptions = offeredReasoning(config)
-        if (advanced && reasoningOptions.size > 1) {
-            Text(
-                stringResource(R.string.provider_reasoning_label),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 16.dp, bottom = 4.dp),
-            )
-            Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                reasoningOptions.forEach { level ->
-                    FilterChip(
-                        selected = config.reasoning == level,
-                        onClick = { viewModel.updateConfig { it.copy(reasoning = level) } },
-                        label = { Text(level.name) },
-                    )
+            if (config.type == ProviderType.OpenAiCompatible || advanced) {
+                OutlinedTextField(
+                    value = config.baseUrl,
+                    onValueChange = { v -> viewModel.updateConfig { it.copy(baseUrl = v) } },
+                    label = { Text(stringResource(R.string.provider_base_url_label)) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    singleLine = true,
+                    supportingText = if (config.type == ProviderType.OpenAiCompatible) {
+                        { Text(stringResource(R.string.provider_compatible_base_url_hint)) }
+                    } else null,
+                )
+                if (config.type == ProviderType.OpenAiCompatible) {
+                    Text(stringResource(R.string.provider_compatible_hint),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 4.dp, start = 4.dp))
                 }
             }
-        }
-
-        if (advanced) {
             OutlinedTextField(
-                value = state.headersText,
-                onValueChange = viewModel::updateHeadersText,
-                label = { Text(stringResource(R.string.provider_headers_label)) },
-                placeholder = { Text(stringResource(R.string.provider_headers_hint)) },
-                modifier = Modifier.fillMaxWidth().padding(top = 16.dp),
+                value = state.keyInput,
+                onValueChange = viewModel::setKeyInput,
+                label = { Text(stringResource(R.string.provider_api_key_label)) },
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                singleLine = true,
+                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                trailingIcon = if (state.keyInput.isNotEmpty()) {
+                    {
+                        IconButton(onClick = { showKey = !showKey }) {
+                            Icon(painterResource(if (showKey) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
+                                if (showKey) "Hide API key" else "Show API key",
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                } else null,
+                supportingText = {
+                    Column {
+                        if (state.keyPresent && state.keyInput.isEmpty())
+                            Text(stringResource(R.string.provider_api_key_present))
+                        Text(stringResource(R.string.provider_api_key_security_hint))
+                    }
+                },
             )
-        }
 
-        Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            RivetOutlinedButton(
-                onClick = { viewModel.save(onSaved = onDone) },
-                enabled = config.name.isNotBlank() && config.baseUrl.isNotBlank() && config.model.isNotBlank(),
-            ) {
-                Text(stringResource(R.string.provider_save))
+            Row(Modifier.fillMaxWidth().padding(top = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RivetOutlinedButton(onClick = viewModel::testConnection,
+                    enabled = !state.busy && !state.fetching) {
+                    Text(stringResource(R.string.provider_test))
+                }
+                RivetOutlinedButton(onClick = viewModel::fetchModels,
+                    enabled = !state.busy && !state.fetching) {
+                    Text(stringResource(R.string.provider_fetch_models))
+                }
             }
-            RivetOutlinedButton(onClick = viewModel::closeEditor) {
-                Text(stringResource(R.string.provider_cancel))
+            if (state.busy || state.fetching) {
+                CircularProgressIndicator(Modifier.padding(top = 8.dp).size(16.dp), strokeWidth = 2.dp)
+            }
+            state.test?.let { test ->
+                Text(test.message,
+                    color = if (test.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(top = 4.dp))
+            }
+            state.fetchError?.let { err ->
+                Text(err, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
+            }
+
+            OutlinedTextField(
+                value = config.model,
+                onValueChange = { v -> viewModel.updateConfig {
+                    it.copy(model = v, modelContextLimit = null, anthropicModelMetadata = null)
+                } },
+                label = { Text(stringResource(R.string.provider_model_label)) },
+                placeholder = { Text(stringResource(R.string.provider_model_hint)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+
+            if (state.models.isNotEmpty()) {
+                Text(stringResource(R.string.provider_models_loaded, filteredModels.totalCount),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 12.dp))
+                if (!filteredModels.selectedModelVisible && config.model.isNotBlank()) {
+                    Text(stringResource(R.string.provider_model_current, displaySafeModelId(config.model)),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.padding(top = 2.dp))
+                }
+                OutlinedTextField(
+                    value = modelSearch,
+                    onValueChange = { modelSearch = it },
+                    label = { Text(stringResource(R.string.provider_search_models)) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    singleLine = true,
+                )
+                Text(
+                    if (modelSearch.isBlank()) stringResource(R.string.provider_models_showing,
+                        filteredModels.models.size, filteredModels.totalCount)
+                    else stringResource(R.string.provider_models_matching,
+                        filteredModels.matchCount, filteredModels.models.size),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(top = 4.dp, start = 4.dp),
+                )
+                if (filteredModels.models.isEmpty()) {
+                    Text(stringResource(R.string.provider_models_no_match),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 12.dp))
+                } else filteredModels.models.forEach { model ->
+                    val selected = config.model == model.id
+                    Row(Modifier.fillMaxWidth().heightIn(min = 52.dp)
+                        .then(if (selected) Modifier
+                            .background(MaterialTheme.colorScheme.surfaceContainer, RoundedCornerShape(8.dp))
+                            .border(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.32f),
+                                RoundedCornerShape(8.dp)) else Modifier)
+                        .clickable { viewModel.updateConfig { it.selectListedModel(model) } }
+                        .padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = selected,
+                            onClick = { viewModel.updateConfig { it.selectListedModel(model) } })
+                        Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                            Text(displaySafeText(model.label), style = MaterialTheme.typography.bodyMedium,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            Text(displaySafeText(model.id), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+                    HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.18f))
+                }
+            }
+
+            HorizontalDivider(Modifier.padding(top = 8.dp),
+                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+            TextButton(onClick = { advanced = !advanced }, modifier = Modifier.fillMaxWidth()) {
+                Icon(painterResource(R.drawable.ic_settings), null, Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onBackground)
+                Text(if (advanced) "Hide advanced options" else "Advanced options",
+                    color = MaterialTheme.colorScheme.onBackground)
+                Spacer(Modifier.weight(1f))
+                Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+            val reasoningOptions = offeredReasoning(config)
+            if (advanced && reasoningOptions.size > 1) {
+                Text(stringResource(R.string.provider_reasoning_label),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    reasoningOptions.forEach { level ->
+                        FilterChip(selected = config.reasoning == level,
+                            onClick = { viewModel.updateConfig { it.copy(reasoning = level) } },
+                            label = { Text(level.name) })
+                    }
+                }
+            }
+            if (advanced) {
+                OutlinedTextField(value = state.headersText, onValueChange = viewModel::updateHeadersText,
+                    label = { Text(stringResource(R.string.provider_headers_label)) },
+                    placeholder = { Text(stringResource(R.string.provider_headers_hint)) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 16.dp))
             }
             if (!state.isNew) {
-                Spacer(Modifier.weight(1f))
-                TextButton(onClick = viewModel::deleteAndClose) {
+                TextButton(onClick = viewModel::deleteAndClose, modifier = Modifier.fillMaxWidth()) {
                     Text(stringResource(R.string.provider_delete))
                 }
             }
+            Spacer(Modifier.size(16.dp))
         }
-
-        Spacer(Modifier.size(24.dp))
-      }
+        Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
+            .background(MaterialTheme.colorScheme.background)) {
+            HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                RivetOutlinedButton(onClick = { viewModel.save(onSaved = onDone) },
+                    modifier = Modifier.weight(1f),
+                    enabled = config.name.isNotBlank() && config.baseUrl.isNotBlank() && config.model.isNotBlank()) {
+                    Text(stringResource(R.string.provider_save))
+                }
+                RivetOutlinedButton(onClick = viewModel::closeEditor, modifier = Modifier.weight(1f)) {
+                    Text(stringResource(R.string.provider_cancel))
+                }
+            }
+        }
     }
+}
+
+private fun displaySafeModelId(value: String): String {
+    val visible = if (value.length <= 90) value else "${value.take(87)}…"
+    return displaySafeText(visible)
 }

@@ -34,7 +34,7 @@ sealed class ProviderError(message: String) : Exception(message) {
         is UnsupportedConfiguration -> "This model's output limit is too small for manual thinking. Select a model with a larger output limit or set reasoning to Default."
         is MalformedUrl -> "The base URL is not a valid URL."
         is Network -> when (reason) {
-            "dns" -> "Could not resolve the host. Check the base URL and connection."
+            "dns" -> "Couldn't resolve the provider host. This can be temporary. Check your connection and try again. If it keeps happening, check the base URL."
             "connect" -> "Could not connect to the provider."
             "tls" -> "The TLS connection to the provider failed."
             "permission" -> "Android blocked network access for Rivet."
