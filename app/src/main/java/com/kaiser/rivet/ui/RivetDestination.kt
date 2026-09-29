@@ -1,3 +1,7 @@
 package com.kaiser.rivet.ui
 
-enum class RivetDestination { Chat, Settings }
+enum class RivetDestination(val isPrimary: Boolean) {
+    Chat(true),
+    History(false),
+    Settings(true),
+}

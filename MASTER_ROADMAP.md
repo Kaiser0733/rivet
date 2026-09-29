@@ -1,7 +1,7 @@
 # Rivet Master Roadmap
 
-Eight phases. Each phase lands working, buildable software; none leaves
-the repository in a state that does not compile.
+Ten phases. Each phase lands working, buildable software; none leaves the
+repository in a state that does not compile.
 
 ## Phase 1 — Foundation (complete)
 
@@ -47,20 +47,30 @@ Chat and Settings are the only normal surfaces. Project choice, approvals,
 activity, results, and Undo are contextual in Chat. Runtime, files, Git, and
 checkpoint systems remain agent infrastructure rather than user destinations.
 
-## Phase 8 — Release Candidate Engineering (in progress)
+## Phase 8 — Release Candidate Engineering (complete)
 
-Source and CI review found and fixed concrete 0.8.1 release risks. The 0.8.1
-debug RC then passed physical Android acceptance, including in-place upgrade,
-project and session persistence, approved and denied mutations, commands,
-partial-failure recovery, and Undo. Version 0.8.2 retires unreachable
-presentation and obsolete API residue and prepares for independent verification
-and a short physical regression test. Production signing remains gated by the
-permanent certificate pin; no public release has been published.
+Source and CI review fixed concrete release risks. The 0.8.1 debug RC passed
+physical Android acceptance, including in-place upgrade, project and session
+persistence, approved and denied mutations, commands, partial-failure recovery,
+and Undo. Version 0.8.2 retired unreachable presentation and obsolete API
+residue. Production signing remains gated by the permanent certificate pin;
+no public release has been published.
 
-## Phase 9 — Harness Core (0.9.0 candidate)
+## Phase 9 — Harness Core (complete)
 
 Provider request budgeting, old tool-output pruning, bounded task state,
-validated active-context reconstruction, local compaction diagnostics, and
-narrow no-progress detection strengthen long coding turns. Full session events,
-approval, workspace, and runtime boundaries remain in place. The debug
-candidate still requires CI and device verification.
+validated active-context reconstruction, compaction diagnostics, and
+no-progress detection strengthen long coding turns. Full session events,
+approval, workspace, and runtime boundaries remain in place. The 0.9.1
+backend passed the preceding physical acceptance process.
+
+## Phase 10 — Rivet UI/UX Redesign (in progress)
+
+The 0.10.0 (19) candidate keeps Chat as the home surface with full-screen
+History and Settings routes. It adds bounded model search, local assistant
+Markdown rendering, persisted Rose/Dark appearance, and distinct project
+access-loss messaging while preserving exact SAF identity checks. Prior session
+migration and pinning behavior remain covered. Portrait Chat uses available
+width; phone and tablet landscape show shared History beside Chat. The prior
+phone regression passed; final responsive/theme physical regression is pending.
+This phase is not accepted until that retest passes.

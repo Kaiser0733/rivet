@@ -4,10 +4,11 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: 0.9.0 debug candidate.** The 0.8.1 debug RC passed on-device
-acceptance, including an in-place upgrade, agent file and command work, Undo,
-denial, and restart persistence. The 0.9.0 context update still needs device
-verification. Rivet is not publicly released.
+**Status: 0.10.0 (19) responsive/theme candidate; final physical regression pending.**
+The backend, session migration, and pinning behavior passed the prior
+acceptance process. The preceding candidate passed phone regression; this
+responsive/theme update still needs tablet, landscape, and theme testing and
+is not publicly released.
 
 ## What works today
 
@@ -18,11 +19,12 @@ verification. Rivet is not publicly released.
   plaintext.
 - Model discovery where the provider supports listing, manual model entry
   everywhere else.
-- Provider transport streams internally with stop control; Chat renders
-  completed assistant messages rather than token-by-token text. Provider and
-  model can be switched between messages.
+- Provider responses stream with stop control; Chat shows a temporary text
+  preview and renders completed assistant Markdown locally. Provider and model
+  can be switched between messages.
 - Multiple persistent conversations; completed history, provider
-  configuration, and selected project restore after a restart.
+  configuration, selected project, and pinned conversations restore after a
+  restart.
 
 - Project-folder selection from Chat, with contained file reads, search, edits,
   and exact-context patches.
@@ -32,6 +34,11 @@ verification. Rivet is not publicly released.
   and diffs are read-only; completed agent changes can be undone when safe.
 - Bounded project instructions from `AGENTS.md`, durable conversation history,
   model switching, usage records, and automatic context reduction.
+- Chat uses available portrait width; phone and tablet landscape show History
+  beside the active conversation.
+- Rose is the default theme; Dark is a persistent alternative. Rose intensity
+  can be muted in Settings without changing Android's screen brightness and
+  is retained independently when using Dark.
 
 Rivet's native file tools are confined to the selected project folder. Approved
 project commands run with Rivet's Android application UID; they are not a
@@ -59,7 +66,7 @@ is in [RELEASE_PROCESS.md](RELEASE_PROCESS.md).
 
 - [PROJECT_CONSTITUTION.md](PROJECT_CONSTITUTION.md) — durable project rules
 - [ARCHITECTURE.md](ARCHITECTURE.md) — what exists today
-- [MASTER_ROADMAP.md](MASTER_ROADMAP.md) — the eight phases
+- [MASTER_ROADMAP.md](MASTER_ROADMAP.md) — the product phases
 - [DECISIONS.md](DECISIONS.md) — architecture decision records
 - [RELEASE_PROCESS.md](RELEASE_PROCESS.md) — versioning, signing, releases
 
