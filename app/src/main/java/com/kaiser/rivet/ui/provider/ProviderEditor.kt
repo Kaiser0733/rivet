@@ -1,16 +1,20 @@
 package com.kaiser.rivet.ui.provider
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
@@ -20,6 +24,7 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -33,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
+import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.offeredReasoning
@@ -49,28 +55,31 @@ fun ProviderEditor(
     val state by viewModel.editorState.collectAsState()
     val config = state.config
     var advanced by remember(config.id) { mutableStateOf(state.headersText.isNotEmpty()) }
+    var showKey by remember(config.id) { mutableStateOf(false) }
 
-    Column(
-        Modifier
-            .fillMaxSize()
-            .statusBarsPadding()
-            .navigationBarsPadding()
-            .imePadding()
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp),
-    ) {
+    Box(Modifier.fillMaxSize()) {
+      Column(
+          Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().fillMaxHeight()
+              .align(Alignment.TopCenter)
+              .statusBarsPadding()
+              .navigationBarsPadding()
+              .imePadding()
+              .verticalScroll(rememberScrollState())
+              .padding(horizontal = 16.dp),
+      ) {
         Row(
             Modifier.fillMaxWidth().padding(top = 12.dp, bottom = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            IconButton(onClick = viewModel::closeEditor) {
+                Icon(painterResource(R.drawable.ic_back), stringResource(R.string.close),
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
             Text(
-                stringResource(if (state.isNew) R.string.provider_new else R.string.provider_edit),
+                if (state.isNew) "Add provider" else "Change model",
                 style = MaterialTheme.typography.titleLarge,
             )
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = viewModel::closeEditor) {
-                Icon(painterResource(R.drawable.ic_close), stringResource(R.string.close))
-            }
         }
 
         OutlinedTextField(
@@ -95,7 +104,16 @@ fun ProviderEditor(
             label = { Text(stringResource(R.string.provider_api_key_label)) },
             modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             singleLine = true,
-            visualTransformation = PasswordVisualTransformation(),
+            visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+            trailingIcon = if (state.keyInput.isNotEmpty()) {
+                {
+                    IconButton(onClick = { showKey = !showKey }) {
+                        Icon(painterResource(if (showKey) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
+                            if (showKey) "Hide API key" else "Show API key",
+                            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                }
+            } else null,
             supportingText = {
                 if (state.keyPresent && state.keyInput.isEmpty()) {
                     Text(stringResource(R.string.provider_api_key_present))
@@ -163,11 +181,12 @@ fun ProviderEditor(
                 modifier = Modifier.padding(top = 8.dp, start = 4.dp),
             )
             state.models.forEach { model ->
-                TextButton(
-                    onClick = { viewModel.updateConfig { it.selectListedModel(model) } },
-                    modifier = Modifier.fillMaxWidth(),
-                ) {
-                    Column {
+                Row(Modifier.fillMaxWidth().clickable {
+                    viewModel.updateConfig { it.selectListedModel(model) }
+                }.padding(vertical = 3.dp), verticalAlignment = Alignment.CenterVertically) {
+                    RadioButton(selected = config.model == model.id,
+                        onClick = { viewModel.updateConfig { it.selectListedModel(model) } })
+                    Column(Modifier.weight(1f)) {
                         Text(model.label, style = MaterialTheme.typography.bodyMedium)
                         Text(
                             model.id,
@@ -176,6 +195,8 @@ fun ProviderEditor(
                         )
                     }
                 }
+                androidx.compose.material3.HorizontalDivider(
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.18f))
             }
         }
 
@@ -212,7 +233,7 @@ fun ProviderEditor(
         }
 
         Row(Modifier.padding(top = 16.dp), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            TextButton(
+            OutlinedButton(
                 onClick = { viewModel.save(onSaved = onDone) },
                 enabled = config.name.isNotBlank() && config.baseUrl.isNotBlank() && config.model.isNotBlank(),
             ) {
@@ -230,5 +251,6 @@ fun ProviderEditor(
         }
 
         Spacer(Modifier.size(24.dp))
+      }
     }
 }

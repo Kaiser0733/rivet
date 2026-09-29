@@ -1,12 +1,14 @@
 package com.kaiser.rivet.ui.provider
 
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -31,12 +33,11 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
+import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 
-private val MAX_WIDTH = 640.dp
+private val MAX_WIDTH = 680.dp
 
-// AlertDialog is the only experimental Material3 API in this file.
-@OptIn(androidx.compose.material3.ExperimentalMaterial3Api::class)
 @Composable
 fun SettingsScreen(
     viewModel: ProvidersViewModel,
@@ -46,129 +47,135 @@ fun SettingsScreen(
     onNewProvider: (ProviderType) -> Unit,
 ) {
     val state by viewModel.listState.collectAsState()
+    var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
+    deleteTarget?.let { provider ->
+        AlertDialog(
+            onDismissRequest = { deleteTarget = null },
+            title = { Text("Remove ${provider.name}?") },
+            text = { Text(stringResource(R.string.provider_delete_confirm)) },
+            confirmButton = { TextButton(onClick = {
+                deleteTarget = null
+                viewModel.delete(provider.id)
+            }) { Text(stringResource(R.string.provider_delete)) } },
+            dismissButton = { TextButton(onClick = { deleteTarget = null }) {
+                Text(stringResource(R.string.provider_cancel))
+            } },
+        )
+    }
+
+    val active = state.configs.firstOrNull { it.id == state.activeId }
+    val saved = state.configs.filterNot { it.id == active?.id }
+    val presets = listOf(
+        ProviderType.OpenAiCompatible,
+        ProviderType.OpenAi,
+        ProviderType.Anthropic,
+        ProviderType.Gemini,
+        ProviderType.OpenRouter,
+    )
 
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        Row(
-            Modifier.fillMaxWidth().padding(start = 20.dp, end = 4.dp, top = 12.dp, bottom = 8.dp),
-            verticalAlignment = Alignment.CenterVertically,
-        ) {
+        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onClose) {
+                Icon(painterResource(R.drawable.ic_back), stringResource(R.string.close),
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
             Text(stringResource(R.string.settings), style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.weight(1f))
-            Text(
-                stringResource(R.string.provider_hint_version, versionName),
+            Text(stringResource(R.string.provider_hint_version, versionName),
                 style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(end = 12.dp),
-            )
-            IconButton(onClick = onClose) {
-                Icon(painterResource(R.drawable.ic_close), stringResource(R.string.close))
-            }
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f))
 
         LazyColumn(
-            Modifier.fillMaxSize().widthIn(max = MAX_WIDTH),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 4.dp),
+            Modifier.widthIn(max = MAX_WIDTH).fillMaxSize().align(Alignment.CenterHorizontally),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 20.dp, end = 16.dp, top = 14.dp, bottom = 24.dp),
         ) {
             state.loadError?.let { message ->
+                item { Text(message, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodyMedium,
+                    modifier = Modifier.padding(vertical = 8.dp)) }
+            }
+            item { SectionHeading("Current provider") }
+            if (active == null) {
                 item {
-                    Text(
-                        message,
-                        color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodyMedium,
-                        modifier = Modifier.padding(vertical = 8.dp),
-                    )
+                    Text("Choose a provider below to connect Rivet to a model.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(vertical = 8.dp))
                 }
-            }
-            item {
-                Text(
-                    stringResource(R.string.provider_section),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp),
-                )
-            }
-
-            if (state.configs.isEmpty()) {
+            } else {
                 item {
-                    Text(
-                        stringResource(R.string.provider_none),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
-                    Text(
-                        stringResource(R.string.provider_none_hint),
-                        style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    )
+                    ProviderRow(active, isActive = true, onSelect = {},
+                        onEdit = { onEditProvider(active.id) }, onDelete = { deleteTarget = active })
                 }
             }
 
-            items(state.configs, key = { it.id }) { config ->
-                val isActive = config.id == state.activeId
-                Row(
-                    Modifier.fillMaxWidth().padding(vertical = 6.dp),
-                    verticalAlignment = Alignment.CenterVertically,
-                ) {
-                    RadioButton(selected = isActive, onClick = { viewModel.setActive(config.id) })
-                    Column(Modifier.weight(1f)) {
-                        Text(config.name, style = MaterialTheme.typography.bodyLarge)
-                        Text(
-                            typeDisplayName(config.type) + " · " + config.model,
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        )
-                    }
-                    IconButton(onClick = { onEditProvider(config.id) }) {
-                        Icon(painterResource(R.drawable.ic_edit), stringResource(R.string.provider_edit_action))
-                    }
-                    var confirmDelete by remember { mutableStateOf(false) }
-                    IconButton(onClick = { confirmDelete = true }) {
-                        Icon(painterResource(R.drawable.ic_delete), stringResource(R.string.provider_delete_action))
-                    }
-                    if (confirmDelete) {
-                        AlertDialog(
-                            onDismissRequest = { confirmDelete = false },
-                            title = { Text(config.name) },
-                            text = { Text(stringResource(R.string.provider_delete_confirm)) },
-                            confirmButton = {
-                                TextButton(onClick = {
-                                    confirmDelete = false
-                                    viewModel.delete(config.id)
-                                }) { Text(stringResource(R.string.provider_delete)) }
-                            },
-                            dismissButton = {
-                                TextButton(onClick = { confirmDelete = false }) {
-                                    Text(stringResource(R.string.provider_cancel))
-                                }
-                            },
-                        )
-                    }
+            if (saved.isNotEmpty()) {
+                item { SectionHeading("Other saved providers", Modifier.padding(top = 22.dp)) }
+                items(saved, key = { it.id }) { provider ->
+                    ProviderRow(provider, isActive = false,
+                        onSelect = { viewModel.setActive(provider.id) },
+                        onEdit = { onEditProvider(provider.id) },
+                        onDelete = { deleteTarget = provider })
                 }
             }
-
-            item { HorizontalDivider(Modifier.padding(vertical = 12.dp)) }
 
             item {
-                Text(
-                    stringResource(R.string.provider_add),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(bottom = 8.dp),
-                )
+                SectionHeading("Add a provider", Modifier.padding(top = 24.dp, bottom = 4.dp))
             }
-            val presets = listOf(
-                ProviderType.OpenAiCompatible,
-                ProviderType.OpenAi,
-                ProviderType.Anthropic,
-                ProviderType.Gemini,
-                ProviderType.OpenRouter,
-            )
             items(presets, key = { it.name }) { type ->
-                TextButton(onClick = { onNewProvider(type) }) {
-                    Text(typeDisplayName(type))
+                Row(Modifier.fillMaxWidth().clickable { onNewProvider(type) }
+                    .padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Text(typeDisplayName(type), Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyLarge)
+                    Icon(painterResource(R.drawable.ic_chevron_right), null,
+                        Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
                 }
+                HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f))
             }
         }
+    }
+}
+
+@Composable
+private fun SectionHeading(text: String, modifier: Modifier = Modifier) {
+    Text(text, modifier = modifier.padding(bottom = 6.dp),
+        style = MaterialTheme.typography.titleMedium,
+        color = MaterialTheme.colorScheme.primary)
+}
+
+@Composable
+private fun ProviderRow(
+    provider: ProviderConfig,
+    isActive: Boolean,
+    onSelect: () -> Unit,
+    onEdit: () -> Unit,
+    onDelete: () -> Unit,
+) {
+    Column {
+        Row(Modifier.fillMaxWidth()
+            .then(if (isActive) Modifier else Modifier.clickable(onClick = onSelect))
+            .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically) {
+            RadioButton(selected = isActive, onClick = if (isActive) null else onSelect)
+            Column(Modifier.weight(1f).padding(start = 4.dp, end = 4.dp)) {
+                Text(provider.name, style = MaterialTheme.typography.titleMedium)
+                Text("${typeDisplayName(provider.type)} · ${provider.model}",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            IconButton(onClick = onEdit) {
+                Icon(painterResource(R.drawable.ic_edit), stringResource(R.string.provider_edit_action),
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
+            IconButton(onClick = onDelete) {
+                Icon(painterResource(R.drawable.ic_delete), stringResource(R.string.provider_delete_action),
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))
     }
 }
 
