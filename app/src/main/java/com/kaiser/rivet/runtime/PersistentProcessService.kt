@@ -1,13 +1,11 @@
 package com.kaiser.rivet.runtime
 
-import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
-import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -46,10 +44,7 @@ class PersistentProcessService : Service() {
         if (intent?.action != ACTION_START) return START_NOT_STICKY
         idleStopJob?.cancel()
         try {
-            val notification = notification(processes.activePersistentCount())
-            if (Build.VERSION.SDK_INT >= 34) {
-                startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
-            } else startForeground(NOTIFICATION_ID, notification)
+            updateForegroundNotification(processes.activePersistentCount())
             processes.onForegroundServiceStarted(true)
         } catch (e: Exception) {
             processes.onForegroundServiceStarted(false)
@@ -62,12 +57,7 @@ class PersistentProcessService : Service() {
                 if (count == 0) scheduleStopIfIdle()
                 else {
                     idleStopJob?.cancel()
-                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
-                        checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
-                    ) {
-                        getSystemService(NotificationManager::class.java)
-                            .notify(NOTIFICATION_ID, notification(count))
-                    }
+                    updateForegroundNotification(count)
                 }
             }
         }
@@ -107,6 +97,13 @@ class PersistentProcessService : Service() {
                 setShowBadge(false)
             })
         }
+    }
+
+    private fun updateForegroundNotification(count: Int) {
+        val notification = notification(count)
+        if (Build.VERSION.SDK_INT >= 34) {
+            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+        } else startForeground(NOTIFICATION_ID, notification)
     }
 
     private fun notification(count: Int): Notification {
