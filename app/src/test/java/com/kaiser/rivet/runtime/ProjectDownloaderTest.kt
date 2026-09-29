@@ -22,7 +22,7 @@ import okio.Buffer
 import okio.BufferedSource
 import okio.Source
 import okio.Timeout
-import okio.Okio
+import okio.buffer
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -171,7 +171,7 @@ class ProjectDownloaderTest {
         try {
             val client = OkHttpClient.Builder().addInterceptor { chain ->
                 val body = object : ResponseBody() {
-                    private val source: BufferedSource = Okio.buffer(object : Source {
+                    private val source: BufferedSource = object : Source {
                         private var remaining = ProjectDownloader.MAX_DOWNLOAD_BYTES + 1
                         override fun read(sink: Buffer, byteCount: Long): Long {
                             if (remaining == 0L) return -1
@@ -182,7 +182,7 @@ class ProjectDownloaderTest {
                         }
                         override fun timeout(): Timeout = Timeout.NONE
                         override fun close() = Unit
-                    })
+                    }.buffer()
                     override fun contentType(): okhttp3.MediaType? = null
                     override fun contentLength(): Long = -1
                     override fun source(): BufferedSource = source
