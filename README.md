@@ -4,9 +4,10 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: 0.10.0 Phase 10 candidate; final UI physical regression pending.**
+**Status: 0.10.0 (19) responsive/theme candidate; final physical regression pending.**
 The backend, session migration, and pinning behavior passed the prior
-acceptance process. This candidate still needs post-fix physical testing and
+acceptance process. The preceding candidate passed phone regression; this
+responsive/theme update still needs tablet, landscape, and theme testing and
 is not publicly released.
 
 ## What works today
@@ -33,8 +34,11 @@ is not publicly released.
   and diffs are read-only; completed agent changes can be undone when safe.
 - Bounded project instructions from `AGENTS.md`, durable conversation history,
   model switching, usage records, and automatic context reduction.
-- Rose intensity can be muted in Settings without changing Android's screen
-  brightness.
+- Chat uses available portrait width; phone and tablet landscape show History
+  beside the active conversation.
+- Rose is the default theme; Dark is a persistent alternative. Rose intensity
+  can be muted in Settings without changing Android's screen brightness and
+  is retained independently when using Dark.
 
 Rivet's native file tools are confined to the selected project folder. Approved
 project commands run with Rivet's Android application UID; they are not a

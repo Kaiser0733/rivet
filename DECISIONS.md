@@ -293,3 +293,14 @@ labels an unavailable session project separately from an accessible project
 with a different exact SAF tree identity.
 Why: presentation changes must not alter device brightness, workspace binding,
 tool policy, or approval authority.
+
+
+## D35 — Responsive Chat and persisted appearance
+
+What: portrait Chat uses available width; phone and tablet landscape share
+History content in a persistent left pane. Rose remains the default, with Dark
+as an app-local persisted alternative. Rose intensity is retained independently
+and affects only Rose. Shared typography inherits palette colors. This extends
+D32's presentation without changing conversation or project authority.
+Why: coding conversations need useful tablet width and a readable alternative
+for extended sessions; History behavior stays shared across presentations.
