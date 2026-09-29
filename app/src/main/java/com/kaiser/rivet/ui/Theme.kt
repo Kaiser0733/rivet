@@ -5,6 +5,7 @@ import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
+import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.lerp
@@ -23,7 +24,8 @@ internal fun roseSurfaceColor(base: Color, intensity: Int): Color {
     return lerp(RoseMuteTarget, base, fraction)
 }
 
-internal fun rivetColors(intensity: Int): ColorScheme {
+internal fun rivetColors(intensity: Int, themeMode: RivetThemeMode = RivetThemeMode.Rose): ColorScheme {
+    if (themeMode == RivetThemeMode.Dark) return RivetDarkColors
     fun rose(color: Color) = roseSurfaceColor(color, intensity)
     return lightColorScheme(
         primary = Color(0xFF843B50),
@@ -49,22 +51,58 @@ internal fun rivetColors(intensity: Int): ColorScheme {
     )
 }
 
+private val RivetDarkColors = darkColorScheme(
+    primary = Color(0xFFD08A9B),
+    onPrimary = Color(0xFF321520),
+    primaryContainer = Color(0xFF55313D),
+    onPrimaryContainer = Color(0xFFF3DAE1),
+    secondary = Color(0xFFC3A3AD),
+    onSecondary = Color(0xFF302028),
+    secondaryContainer = Color(0xFF44333C),
+    onSecondaryContainer = Color(0xFFF3EAEC),
+    tertiary = Color(0xFFC4A5B2),
+    onTertiary = Color(0xFF302028),
+    tertiaryContainer = Color(0xFF49313F),
+    onTertiaryContainer = Color(0xFFF3EAEC),
+    background = Color(0xFF171315),
+    onBackground = Color(0xFFF3EAEC),
+    surface = Color(0xFF211B1E),
+    onSurface = Color(0xFFF3EAEC),
+    surfaceVariant = Color(0xFF352A30),
+    onSurfaceVariant = Color(0xFFD1BFC5),
+    surfaceContainerLowest = Color(0xFF151214),
+    surfaceContainerLow = Color(0xFF1E191C),
+    surfaceContainer = Color(0xFF262024),
+    surfaceContainerHigh = Color(0xFF2B2327),
+    surfaceContainerHighest = Color(0xFF352A30),
+    surfaceTint = Color(0xFFD08A9B),
+    outline = Color(0xFF9F8C93),
+    outlineVariant = Color(0xFF55434B),
+    inverseSurface = Color(0xFFF0D7DB),
+    inverseOnSurface = Color(0xFF21171A),
+    inversePrimary = Color(0xFF843B50),
+    error = Color(0xFFFFB1BE),
+    onError = Color(0xFF4A111A),
+    errorContainer = Color(0xFF5A2734),
+    onErrorContainer = Color(0xFFFFD9DF),
+)
+
 private val RivetTypography = Typography().copy(
     displaySmall = TextStyle(fontFamily = FontFamily.Cursive, fontSize = 40.sp,
-        lineHeight = 44.sp, fontWeight = FontWeight.Normal, color = Color(0xFF21171A)),
+        lineHeight = 44.sp, fontWeight = FontWeight.Normal),
     headlineSmall = TextStyle(fontFamily = FontFamily.Cursive, fontSize = 28.sp,
-        lineHeight = 34.sp, fontWeight = FontWeight.Normal, color = Color(0xFF21171A)),
+        lineHeight = 34.sp, fontWeight = FontWeight.Normal),
     titleLarge = TextStyle(fontFamily = FontFamily.Cursive, fontSize = 24.sp,
-        lineHeight = 29.sp, fontWeight = FontWeight.Medium, color = Color(0xFF21171A)),
+        lineHeight = 29.sp, fontWeight = FontWeight.Medium),
     titleMedium = TextStyle(fontSize = 18.sp, lineHeight = 25.sp,
-        fontWeight = FontWeight.Medium, color = Color(0xFF21171A)),
+        fontWeight = FontWeight.Medium),
     titleSmall = TextStyle(fontSize = 15.sp, lineHeight = 21.sp,
-        fontWeight = FontWeight.Medium, color = Color(0xFF21171A)),
-    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 25.sp, color = Color(0xFF21171A)),
-    bodyMedium = TextStyle(fontSize = 15.sp, lineHeight = 23.sp, color = Color(0xFF21171A)),
-    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 19.sp, color = Color(0xFF50373D)),
+        fontWeight = FontWeight.Medium),
+    bodyLarge = TextStyle(fontSize = 16.sp, lineHeight = 25.sp),
+    bodyMedium = TextStyle(fontSize = 15.sp, lineHeight = 23.sp),
+    bodySmall = TextStyle(fontSize = 13.sp, lineHeight = 19.sp),
     labelLarge = TextStyle(fontSize = 14.sp, lineHeight = 20.sp,
-        fontWeight = FontWeight.Medium, color = Color(0xFF21171A)),
+        fontWeight = FontWeight.Medium),
 )
 
 private val RivetShapes = Shapes(
@@ -76,9 +114,10 @@ private val RivetShapes = Shapes(
 )
 
 @Composable
-fun RivetTheme(roseIntensity: Int = DEFAULT_ROSE_INTENSITY, content: @Composable () -> Unit) {
+fun RivetTheme(roseIntensity: Int = DEFAULT_ROSE_INTENSITY,
+               themeMode: RivetThemeMode = RivetThemeMode.Rose, content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = rivetColors(roseIntensity),
+        colorScheme = rivetColors(roseIntensity, themeMode),
         typography = RivetTypography,
         shapes = RivetShapes,
         content = content,

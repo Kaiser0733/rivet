@@ -1,11 +1,13 @@
 package com.kaiser.rivet.ui.provider
 
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -36,6 +38,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
@@ -46,6 +49,7 @@ import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.ui.MAX_ROSE_INTENSITY
 import com.kaiser.rivet.ui.MIN_ROSE_INTENSITY
 import com.kaiser.rivet.ui.RivetOutlinedButton
+import com.kaiser.rivet.ui.RivetThemeMode
 
 private val MAX_WIDTH = 680.dp
 
@@ -57,6 +61,9 @@ fun SettingsScreen(
     onEditProvider: (String) -> Unit,
     onNewProvider: (ProviderType) -> Unit,
     roseIntensity: Int,
+    themeMode: RivetThemeMode,
+    themeSaving: Boolean,
+    onThemeChange: (RivetThemeMode) -> Unit,
     appearanceError: String?,
     onRoseIntensityPreview: (Int) -> Unit,
     onRoseIntensityCommit: (Int) -> Unit,
@@ -93,7 +100,8 @@ fun SettingsScreen(
     )
 
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
+        Row(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
+            .padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onClose) {
                 Icon(painterResource(R.drawable.ic_back), stringResource(R.string.close),
@@ -157,29 +165,41 @@ fun SettingsScreen(
 
             item {
                 SectionHeading("Appearance", Modifier.padding(top = 24.dp))
-                Text("Rose intensity", style = MaterialTheme.typography.titleSmall)
-                Text("Adjust Rivet's colors. Device brightness stays the same.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall)
-                Slider(
-                    value = selectedIntensity.toFloat(),
-                    onValueChange = { value ->
-                        selectedIntensity = value.roundToInt()
-                        onRoseIntensityPreview(selectedIntensity)
-                    },
-                    onValueChangeFinished = { onRoseIntensityCommit(selectedIntensity) },
-                    modifier = Modifier.semantics { contentDescription = "Rose intensity" },
-                    valueRange = MIN_ROSE_INTENSITY.toFloat()..MAX_ROSE_INTENSITY.toFloat(),
-                    steps = 5,
-                )
+                Text("Theme", style = MaterialTheme.typography.titleSmall)
+                RivetThemeMode.entries.forEach { mode ->
+                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(
+                        selected = mode == themeMode, enabled = !themeSaving,
+                        role = Role.RadioButton, onClick = { onThemeChange(mode) }),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = mode == themeMode, onClick = null, enabled = !themeSaving)
+                        Text(mode.name, style = MaterialTheme.typography.bodyLarge)
+                    }
+                }
+                if (themeMode == RivetThemeMode.Rose) {
+                    Text("Rose intensity", style = MaterialTheme.typography.titleSmall)
+                    Text("Adjust Rivet's colors. Device brightness stays the same.",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall)
+                    Slider(
+                        value = selectedIntensity.toFloat(),
+                        onValueChange = { value ->
+                            selectedIntensity = value.roundToInt()
+                            onRoseIntensityPreview(selectedIntensity)
+                        },
+                        onValueChangeFinished = { onRoseIntensityCommit(selectedIntensity) },
+                        modifier = Modifier.semantics { contentDescription = "Rose intensity" },
+                        valueRange = MIN_ROSE_INTENSITY.toFloat()..MAX_ROSE_INTENSITY.toFloat(),
+                        steps = 5,
+                    )
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween) {
+                        Text("Dim", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall)
+                        Text("Original", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
                 appearanceError?.let { error ->
                     Text(error, color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall)
-                }
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween) {
-                    Text("Dim", color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall)
-                    Text("Original", color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
