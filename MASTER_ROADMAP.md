@@ -68,7 +68,9 @@ backend passed the preceding physical acceptance process.
 
 The 0.10.0 (19) candidate keeps Chat as the home surface with full-screen
 History and Settings routes. It adds bounded model search, local assistant
-Markdown rendering, a persistent rose-intensity setting, and distinct project
+Markdown rendering, persisted Rose/Dark appearance, and distinct project
 access-loss messaging while preserving exact SAF identity checks. Prior session
-migration and pinning behavior remain covered. Final post-fix physical UI
-regression is pending; this phase is not accepted until that retest passes.
+migration and pinning behavior remain covered. Portrait Chat uses available
+width; phone and tablet landscape show shared History beside Chat. The prior
+phone regression passed; final responsive/theme physical regression is pending.
+This phase is not accepted until that retest passes.

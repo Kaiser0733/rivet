@@ -80,9 +80,15 @@ conversation text with a temporary streaming preview, contextual project
 changes and Undo, and approval dialogs; provider-neutral tool events remain
 durable but are not rendered as a log. A bounded model picker keeps fetched
 provider lists searchable without burying its Save and Cancel actions. A local
-appearance preference adjusts rose surfaces without changing system brightness.
+appearance preference stores Rose/Dark choice and Rose intensity independently;
+Rose is the default, and intensity applies only to Rose. System bars and
+inherited text colors follow the selected palette.
 History lists SQLite sessions with pinned sessions before recent sessions.
-Content width is capped for tablet layouts. Rotation preserves the composer
+Portrait Chat uses available width with normal gutters. Every landscape
+orientation, including phones, embeds shared History content beside Chat.
+The sidebar uses 36% of available width, bounded to 220–320dp and no more than
+40% on constrained windows. Settings and provider forms keep bounded reading
+widths. Rotation preserves the composer
 draft and ViewModels. System-initiated process death destroys the ViewModels
 and terminates any active stream. A new process reloads completed provider
 configuration and coding sessions from storage. An interrupted marker is
