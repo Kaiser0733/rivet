@@ -36,13 +36,16 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
              providersViewModel: ProvidersViewModel) {
     val context = LocalContext.current.applicationContext
     val appearanceStore = remember(context) { AppearanceStore(context) }
-    val storedIntensity by appearanceStore.roseIntensity.collectAsState(initial = DEFAULT_ROSE_INTENSITY)
-    var roseIntensity by remember { mutableIntStateOf(storedIntensity) }
+    val storedAppearance by appearanceStore.appearance.collectAsState(initial = RivetAppearance())
+    var roseIntensity by remember { mutableIntStateOf(storedAppearance.roseIntensity) }
     var appearanceSaveError by remember { mutableStateOf<String?>(null) }
-    LaunchedEffect(storedIntensity) { roseIntensity = storedIntensity }
+    var themeMode by remember { mutableStateOf(storedAppearance.themeMode) }
+    var themeSaving by remember { mutableStateOf(false) }
+    LaunchedEffect(storedAppearance.roseIntensity) { roseIntensity = storedAppearance.roseIntensity }
+    LaunchedEffect(storedAppearance.themeMode) { themeMode = storedAppearance.themeMode }
     val coroutineScope = rememberCoroutineScope()
 
-    RivetTheme(roseIntensity) {
+    RivetTheme(roseIntensity, themeMode) {
         val view = LocalView.current
         val background = MaterialTheme.colorScheme.background.toArgb()
         SideEffect {
@@ -50,8 +53,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 window.statusBarColor = background
                 window.navigationBarColor = background
                 WindowCompat.getInsetsController(window, view).apply {
-                    isAppearanceLightStatusBars = true
-                    isAppearanceLightNavigationBars = true
+                    isAppearanceLightStatusBars = themeMode == RivetThemeMode.Rose
+                    isAppearanceLightNavigationBars = themeMode == RivetThemeMode.Rose
                 }
             }
         }
@@ -74,7 +77,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     ProviderEditor(viewModel = providersViewModel, onDone = { editing = false })
                 } else when (destination) {
                     RivetDestination.Chat -> Box(Modifier.fillMaxSize()) {
-                        RivetChatBackground(intensity = roseIntensity)
+                        RivetChatBackground(intensity = roseIntensity, themeMode = themeMode)
                         ChatScreen(chatViewModel, providersViewModel,
                             onOpenSettings = { destination = RivetDestination.Settings },
                             onOpenHistory = { destination = RivetDestination.History })
@@ -96,6 +99,27 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             editing = true
                         },
                         roseIntensity = roseIntensity,
+                        themeMode = themeMode,
+                        themeSaving = themeSaving,
+                        onThemeChange = { value ->
+                            if (!themeSaving) {
+                                themeMode = value
+                                themeSaving = true
+                                appearanceSaveError = null
+                                coroutineScope.launch {
+                                    try {
+                                        appearanceStore.setThemeMode(value)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        themeMode = storedAppearance.themeMode
+                                        appearanceSaveError = "Rivet couldn't save this setting. Try again."
+                                    } finally {
+                                        themeSaving = false
+                                    }
+                                }
+                            }
+                        },
                         appearanceError = appearanceSaveError,
                         onRoseIntensityPreview = { roseIntensity = it },
                         onRoseIntensityCommit = { value ->
@@ -106,7 +130,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (_: Exception) {
-                                    roseIntensity = storedIntensity
+                                    roseIntensity = storedAppearance.roseIntensity
                                     appearanceSaveError = "Rivet couldn't save this setting. Try again."
                                 }
                             }

@@ -12,6 +12,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.ButtonDefaults
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedButton
 import androidx.compose.ui.Modifier
@@ -27,13 +29,16 @@ import com.kaiser.rivet.R
 
 @Composable
 fun RivetBackdrop(content: @Composable BoxScope.() -> Unit) {
-    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), content = content)
+    CompositionLocalProvider(LocalContentColor provides MaterialTheme.colorScheme.onBackground) {
+        Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background), content = content)
+    }
 }
 
 @Composable
 fun RivetChatBackground(
     modifier: Modifier = Modifier,
     intensity: Int = DEFAULT_ROSE_INTENSITY,
+    themeMode: RivetThemeMode = RivetThemeMode.Rose,
 ) {
     Image(
         painter = painterResource(R.drawable.chat_background),
@@ -41,7 +46,8 @@ fun RivetChatBackground(
         modifier = modifier.fillMaxSize(),
         alignment = Alignment.Center,
         contentScale = ContentScale.Crop,
-        alpha = 0.46f * clampRoseIntensity(intensity) / MAX_ROSE_INTENSITY,
+        alpha = if (themeMode == RivetThemeMode.Dark) 0.045f
+            else 0.46f * clampRoseIntensity(intensity) / MAX_ROSE_INTENSITY,
     )
 }
 
