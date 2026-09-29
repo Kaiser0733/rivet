@@ -1,39 +1,53 @@
 package com.kaiser.rivet.ui
 
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.ColorScheme
 import androidx.compose.material3.Shapes
 import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-private val RivetColors = lightColorScheme(
-    primary = Color(0xFF843B50),
-    onPrimary = Color(0xFFFFF7F8),
-    primaryContainer = Color(0xFFD79AA6),
-    onPrimaryContainer = Color(0xFF28161B),
-    secondary = Color(0xFF67474D),
-    onSecondary = Color(0xFFFFF8F8),
-    background = Color(0xFFE6BBC3),
-    onBackground = Color(0xFF21171A),
-    surface = Color(0xFFF0D7DB),
-    onSurface = Color(0xFF21171A),
-    surfaceVariant = Color(0xFFE1BCC3),
-    onSurfaceVariant = Color(0xFF50373D),
-    surfaceContainer = Color(0xFFEBD0D5),
-    surfaceContainerLow = Color(0xFFEDD2D7),
-    surfaceContainerHigh = Color(0xFFF0D7DB),
-    outline = Color(0x99502D36),
-    error = Color(0xFF8A2937),
-    onError = Color(0xFFFFF7F7),
-    errorContainer = Color(0xFFF0C6CC),
-    onErrorContainer = Color(0xFF4A111A),
-)
+private val RoseMuteTarget = Color(0xFFD2C2C5)
+
+internal fun roseSurfaceColor(base: Color, intensity: Int): Color {
+    val value = clampRoseIntensity(intensity)
+    val fraction = (value - MIN_ROSE_INTENSITY).toFloat() /
+        (MAX_ROSE_INTENSITY - MIN_ROSE_INTENSITY).toFloat()
+    return lerp(RoseMuteTarget, base, fraction)
+}
+
+internal fun rivetColors(intensity: Int): ColorScheme {
+    fun rose(color: Color) = roseSurfaceColor(color, intensity)
+    return lightColorScheme(
+        primary = Color(0xFF843B50),
+        onPrimary = Color(0xFFFFF7F8),
+        primaryContainer = rose(Color(0xFFD79AA6)),
+        onPrimaryContainer = Color(0xFF28161B),
+        secondary = Color(0xFF67474D),
+        onSecondary = Color(0xFFFFF8F8),
+        background = rose(Color(0xFFE6BBC3)),
+        onBackground = Color(0xFF21171A),
+        surface = rose(Color(0xFFF0D7DB)),
+        onSurface = Color(0xFF21171A),
+        surfaceVariant = rose(Color(0xFFE1BCC3)),
+        onSurfaceVariant = Color(0xFF50373D),
+        surfaceContainer = rose(Color(0xFFEBD0D5)),
+        surfaceContainerLow = rose(Color(0xFFEDD2D7)),
+        surfaceContainerHigh = rose(Color(0xFFF0D7DB)),
+        outline = Color(0x99502D36),
+        error = Color(0xFF8A2937),
+        onError = Color(0xFFFFF7F7),
+        errorContainer = rose(Color(0xFFF0C6CC)),
+        onErrorContainer = Color(0xFF4A111A),
+    )
+}
 
 private val RivetTypography = Typography().copy(
     displaySmall = TextStyle(fontFamily = FontFamily.Cursive, fontSize = 40.sp,
@@ -62,9 +76,9 @@ private val RivetShapes = Shapes(
 )
 
 @Composable
-fun RivetTheme(content: @Composable () -> Unit) {
+fun RivetTheme(roseIntensity: Int = DEFAULT_ROSE_INTENSITY, content: @Composable () -> Unit) {
     MaterialTheme(
-        colorScheme = RivetColors,
+        colorScheme = rivetColors(roseIntensity),
         typography = RivetTypography,
         shapes = RivetShapes,
         content = content,

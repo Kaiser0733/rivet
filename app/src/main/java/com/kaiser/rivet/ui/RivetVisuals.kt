@@ -31,14 +31,17 @@ fun RivetBackdrop(content: @Composable BoxScope.() -> Unit) {
 }
 
 @Composable
-fun RivetChatBackground(modifier: Modifier = Modifier) {
+fun RivetChatBackground(
+    modifier: Modifier = Modifier,
+    intensity: Int = DEFAULT_ROSE_INTENSITY,
+) {
     Image(
         painter = painterResource(R.drawable.chat_background),
         contentDescription = null,
         modifier = modifier.fillMaxSize(),
         alignment = Alignment.Center,
         contentScale = ContentScale.Crop,
-        alpha = 0.46f,
+        alpha = 0.46f * clampRoseIntensity(intensity) / MAX_ROSE_INTENSITY,
     )
 }
 
