@@ -3,6 +3,8 @@ package com.kaiser.rivet.ui.history
 import android.text.format.DateUtils
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -28,7 +30,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
-import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
@@ -46,16 +47,27 @@ import com.kaiser.rivet.ui.RivetOutlinedButton
 
 @Composable
 fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
+    HistoryContent(viewModel, Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(), onBack)
+}
+
+@Composable
+fun HistoryPane(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
+    HistoryContent(viewModel, modifier.background(MaterialTheme.colorScheme.surfaceContainerLow))
+}
+
+@Composable
+private fun HistoryContent(viewModel: ChatViewModel, modifier: Modifier, onClose: (() -> Unit)? = null) {
+    val embedded = onClose == null
     val state by viewModel.uiState.collectAsState()
     val actionsEnabled = state.ready && !state.projectLoading && !state.streaming &&
         !state.undoing && !state.recoveringProjectChanges
-    var renameTarget by remember { mutableStateOf<CodingSessionHeader?>(null) }
-    var deleteTarget by remember { mutableStateOf<CodingSessionHeader?>(null) }
+    var renameId by rememberSaveable { mutableStateOf<String?>(null) }
+    var deleteId by rememberSaveable { mutableStateOf<String?>(null) }
     var title by rememberSaveable { mutableStateOf("") }
 
-    renameTarget?.let { target ->
+    state.sessions.firstOrNull { it.id == renameId }?.let { target ->
         AlertDialog(
-            onDismissRequest = { renameTarget = null },
+            onDismissRequest = { renameId = null },
             title = { Text("Rename conversation", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
             text = {
                 OutlinedTextField(value = title, onValueChange = { title = it },
@@ -63,34 +75,34 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
             },
             confirmButton = { RivetOutlinedButton(onClick = {
                 viewModel.renameSession(target.id, title)
-                renameTarget = null
+                renameId = null
             }, enabled = title.isNotBlank() && actionsEnabled) { Text("Save") } },
-            dismissButton = { TextButton(onClick = { renameTarget = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { renameId = null }) { Text("Cancel") } },
         )
     }
-    deleteTarget?.let { target ->
+    state.sessions.firstOrNull { it.id == deleteId }?.let { target ->
         AlertDialog(
-            onDismissRequest = { deleteTarget = null },
+            onDismissRequest = { deleteId = null },
             title = { Text("Delete conversation?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
             text = { Text("This removes it from Rivet. Project files are not changed.",
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
             confirmButton = { RivetOutlinedButton(onClick = {
                 viewModel.deleteSession(target.id)
-                deleteTarget = null
+                deleteId = null
             }, enabled = actionsEnabled) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { deleteTarget = null }) { Text("Cancel") } },
+            dismissButton = { TextButton(onClick = { deleteId = null }) { Text("Cancel") } },
         )
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+    Column(modifier) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack) {
+            if (onClose != null) IconButton(onClick = onClose) {
                 Icon(painterResource(R.drawable.ic_back), "Back", tint = MaterialTheme.colorScheme.onBackground)
-            }
+            } else Spacer(Modifier.size(12.dp))
             Text("History", style = MaterialTheme.typography.titleLarge)
             Spacer(Modifier.weight(1f))
-            IconButton(onClick = { viewModel.newSession(); onBack() }, enabled = actionsEnabled) {
+            IconButton(onClick = { viewModel.newSession(); onClose?.invoke() }, enabled = actionsEnabled) {
                 Icon(painterResource(R.drawable.ic_add), "New conversation",
                     tint = MaterialTheme.colorScheme.onBackground)
             }
@@ -98,7 +110,7 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f))
 
         if (state.sessions.isEmpty()) {
-            Column(Modifier.fillMaxSize().padding(28.dp),
+            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
                 horizontalAlignment = Alignment.CenterHorizontally,
                 verticalArrangement = Arrangement.Center) {
                 RivetDoodleMark(RivetDoodle.Ready)
@@ -108,26 +120,27 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                 Text("Start a new conversation whenever you want to work on something else.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp))
-                RivetOutlinedButton(onClick = { viewModel.newSession(); onBack() }, enabled = actionsEnabled) {
+                RivetOutlinedButton(onClick = { viewModel.newSession(); onClose?.invoke() }, enabled = actionsEnabled) {
                     Text("New conversation")
                 }
             }
         } else {
             LazyColumn(Modifier.widthIn(max = 820.dp).fillMaxSize().align(Alignment.CenterHorizontally),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = 20.dp, end = 12.dp, top = 4.dp, bottom = 16.dp)) {
+                start = if (embedded) 12.dp else 20.dp, end = 12.dp, top = 4.dp, bottom = 16.dp)) {
                 items(state.sessions, key = { it.id }) { session ->
                     HistoryRow(
                         session = session,
                         current = session.id == state.currentSessionId,
                         enabled = actionsEnabled,
-                        onOpen = { viewModel.resumeSession(session.id); onBack() },
+                        compact = embedded,
+                        onOpen = { viewModel.resumeSession(session.id); onClose?.invoke() },
                         onPin = { viewModel.setSessionPinned(session.id, !session.pinned) },
                         onRename = {
                             title = session.title
-                            renameTarget = session
+                            renameId = session.id
                         },
-                        onDelete = { deleteTarget = session },
+                        onDelete = { deleteId = session.id },
                     )
                     HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))
                 }
@@ -141,40 +154,58 @@ private fun HistoryRow(
     session: CodingSessionHeader,
     current: Boolean,
     enabled: Boolean,
+    compact: Boolean,
     onOpen: () -> Unit,
     onPin: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth()
-        .then(if (session.pinned) Modifier.background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f)) else Modifier)
+    Column(Modifier.fillMaxWidth()
+        .then(if (session.pinned) Modifier.background(
+            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) else Modifier)
         .clickable(enabled = enabled, onClick = onOpen)
-        .padding(start = 2.dp, top = 7.dp, bottom = 7.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f).padding(end = 8.dp)) {
-            Text(session.title.replace("New session", "New conversation"),
-                style = MaterialTheme.typography.titleMedium,
-                maxLines = 2, overflow = TextOverflow.Ellipsis)
-            val context = listOfNotNull(
-                relativeRecency(session.updatedAt),
-                if (current) "Current" else null,
-            ).joinToString(" · ")
-            if (context.isNotEmpty()) Text(context, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        .padding(start = 4.dp, top = 7.dp, bottom = 7.dp)) {
+        if (compact) {
+            HistoryTitle(session, current, Modifier.fillMaxWidth())
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                HistoryActions(session.pinned, enabled, onPin, onRename, onDelete)
+            }
+        } else {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                HistoryTitle(session, current, Modifier.weight(1f))
+                HistoryActions(session.pinned, enabled, onPin, onRename, onDelete)
+            }
         }
-        IconButton(onClick = onPin, enabled = enabled, modifier = Modifier.size(48.dp)) {
-            Icon(painterResource(if (session.pinned) R.drawable.ic_pin_filled else R.drawable.ic_pin),
-                if (session.pinned) "Unpin conversation" else "Pin conversation",
-                tint = if (session.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground)
-        }
-        IconButton(onClick = onRename, enabled = enabled, modifier = Modifier.size(48.dp)) {
-            Icon(painterResource(R.drawable.ic_edit), "Rename conversation",
-                tint = MaterialTheme.colorScheme.onBackground)
-        }
-        IconButton(onClick = onDelete, enabled = enabled, modifier = Modifier.size(48.dp)) {
-            Icon(painterResource(R.drawable.ic_delete), "Delete conversation",
-                tint = MaterialTheme.colorScheme.onBackground)
-        }
+    }
+}
+
+@Composable
+private fun HistoryTitle(session: CodingSessionHeader, current: Boolean, modifier: Modifier) {
+    Column(modifier.padding(end = 8.dp)) {
+        Text(session.title.replace("New session", "New conversation"),
+            style = MaterialTheme.typography.titleMedium,
+            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        Text(listOfNotNull(relativeRecency(session.updatedAt), if (current) "Current" else null)
+            .joinToString(" · "), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun HistoryActions(pinned: Boolean, enabled: Boolean,
+                           onPin: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
+    IconButton(onClick = onPin, enabled = enabled, modifier = Modifier.size(48.dp)) {
+        Icon(painterResource(if (pinned) R.drawable.ic_pin_filled else R.drawable.ic_pin),
+            if (pinned) "Unpin conversation" else "Pin conversation",
+            tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground)
+    }
+    IconButton(onClick = onRename, enabled = enabled, modifier = Modifier.size(48.dp)) {
+        Icon(painterResource(R.drawable.ic_edit), "Rename conversation",
+            tint = MaterialTheme.colorScheme.onBackground)
+    }
+    IconButton(onClick = onDelete, enabled = enabled, modifier = Modifier.size(48.dp)) {
+        Icon(painterResource(R.drawable.ic_delete), "Delete conversation",
+            tint = MaterialTheme.colorScheme.onBackground)
     }
 }
 
