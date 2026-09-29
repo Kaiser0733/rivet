@@ -82,7 +82,7 @@ import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import kotlinx.coroutines.flow.collect
 
-private val MAX_CHAT_LANE_WIDTH = 600.dp
+private val MAX_CHAT_LANE_WIDTH = 520.dp
 
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
