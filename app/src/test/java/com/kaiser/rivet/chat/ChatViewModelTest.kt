@@ -176,6 +176,8 @@ class ChatViewModelTest {
         Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
         val sessions = CodingSessions(app)
         val original = sessions.create(tree.toString())
+        sessions.save(listOf(AgentMessage.user("Keep this conversation")), interrupted = false)
+        sessions.setPinned(original.id!!, true)
         app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
