@@ -4,10 +4,10 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: 0.9.1 accepted backend; Phase 10 UI redesign in progress.** The
-chat-first agent, project safety, Undo, session persistence, and provider
-behavior have passed the prior acceptance process. Rivet is not publicly
-released.
+**Status: 0.10.0 Phase 10 candidate; final UI physical regression pending.**
+The backend, session migration, and pinning behavior passed the prior
+acceptance process. This candidate still needs post-fix physical testing and
+is not publicly released.
 
 ## What works today
 
@@ -18,11 +18,12 @@ released.
   plaintext.
 - Model discovery where the provider supports listing, manual model entry
   everywhere else.
-- Provider transport streams internally with stop control; Chat renders
-  completed assistant messages rather than token-by-token text. Provider and
-  model can be switched between messages.
+- Provider responses stream with stop control; Chat shows a temporary text
+  preview and renders completed assistant Markdown locally. Provider and model
+  can be switched between messages.
 - Multiple persistent conversations; completed history, provider
-  configuration, and selected project restore after a restart.
+  configuration, selected project, and pinned conversations restore after a
+  restart.
 
 - Project-folder selection from Chat, with contained file reads, search, edits,
   and exact-context patches.
@@ -32,6 +33,8 @@ released.
   and diffs are read-only; completed agent changes can be undone when safe.
 - Bounded project instructions from `AGENTS.md`, durable conversation history,
   model switching, usage records, and automatic context reduction.
+- Rose intensity can be muted in Settings without changing Android's screen
+  brightness.
 
 Rivet's native file tools are confined to the selected project folder. Approved
 project commands run with Rivet's Android application UID; they are not a

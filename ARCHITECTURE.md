@@ -27,8 +27,10 @@ custom endpoints share one client class — only Anthropic and Gemini get
 their own request shapes.
 
 Streaming: the client accumulates and returns the full response text while
-receiving deltas per chunk. Chat shows activity during the request and renders
-the completed assistant message, not token-by-token text. The SSE
+receiving deltas per chunk. Chat shows a throttled, temporary plain-text preview
+during the request, then renders completed assistant prose with a small local
+Markdown subset. User messages remain plain text; tool events, HTML, and active
+links are not rendered. The SSE
 loop lives on OkHttp's callback thread; coroutine cancellation cancels the
 underlying call, which unblocks the reader. It requires each provider's native
 completion marker and limits streamed lines to 128 KiB and each response to
@@ -74,8 +76,11 @@ Single-activity Compose. Chat is the home surface; full-screen History and
 Settings are secondary routes, with the provider editor nested in Settings.
 Android's folder picker is launched from Chat. Runtime, file, Git, and
 synchronization controls are not normal destinations. Chat shows completed
-conversation text, contextual project changes and Undo, and approval dialogs;
-provider-neutral tool events remain durable but are not rendered as a log.
+conversation text with a temporary streaming preview, contextual project
+changes and Undo, and approval dialogs; provider-neutral tool events remain
+durable but are not rendered as a log. A bounded model picker keeps fetched
+provider lists searchable without burying its Save and Cancel actions. A local
+appearance preference adjusts rose surfaces without changing system brightness.
 History lists SQLite sessions with pinned sessions before recent sessions.
 Content width is capped for tablet layouts. Rotation preserves the composer
 draft and ViewModels. System-initiated process death destroys the ViewModels
@@ -121,6 +126,11 @@ returned read/write grants are persisted. App-private `workspace` preferences
 store the tree URI and legacy last-browsed directory/open-file paths for
 installed-data compatibility. Canceling the picker changes nothing. Missing grants require
 selection again; unavailable providers produce recoverable errors.
+
+Session binding uses the exact persisted tree identity. Chat distinguishes an
+accessible different tree from a session whose project cannot currently be
+restored; reselecting the exact bound identity keeps the session. Display names
+and URI similarity never substitute for identity.
 
 Every operation starts at the captured tree root and resolves validated names
 through direct-child queries. Empty path means root. Absolute paths, dot
