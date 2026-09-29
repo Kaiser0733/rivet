@@ -3,10 +3,9 @@
     android:height="108dp"
     android:viewportWidth="108"
     android:viewportHeight="108">
-    <!-- Rivet head: solid dome, punched center mark. Same mark on the
-         monochrome tile. -->
+    <!-- Rivet's punched head mark in the new rose-and-ink palette. -->
     <path
-        android:fillColor="#E8A33D"
+        android:fillColor="#843B50"
         android:fillType="evenOdd"
         android:pathData="M54,34 a20,20 0 1 0 0.01,0 z M54,47 a7,7 0 1 0 0.01,0 z M54,51.5 a2.5,2.5 0 1 0 0.01,0 z" />
 </vector>

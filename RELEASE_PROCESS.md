@@ -29,9 +29,12 @@ publishing. The signer is compared with the build keystore and a separately
 committed production certificate fingerprint.
 
 The 0.8.1 debug RC passed physical in-place upgrade and core Chat/agent
-acceptance. The 0.9.0 debug candidate needs CI and on-device regression
-verification. Debug acceptance does not establish
-production-signing readiness or constitute a public release.
+acceptance. The 0.9.0 debug candidate required CI and on-device regression
+verification at that stage. The current 0.10.0 (19) Phase 10 candidate is
+a responsive/theme candidate. The preceding candidate passed phone regression;
+the final tablet, landscape, and theme check remains required before merge.
+Debug acceptance does not establish production-signing readiness or constitute
+a public release.
 
 ## Required GitHub secrets
 

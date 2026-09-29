@@ -56,6 +56,7 @@ data class ChatUiState(
     val messages: List<AgentMessage> = emptyList(),
     val ready: Boolean = false,
     val streaming: Boolean = false,
+    val streamingText: String = "",
     val pendingApproval: AgentApprovalRequest? = null,
     val error: String? = null,
     val errorAction: ChatErrorAction? = null,
@@ -235,7 +236,7 @@ class ChatViewModel private constructor(
         } catch (e: CancellationException) { throw e
         } catch (_: Exception) {
             _uiState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
-                projectError = "Rivet no longer has access to this project. Choose the folder again.") }
+                projectError = "Rivet couldn't open this project. Choose the folder again.") }
         }
     }
 
@@ -288,7 +289,7 @@ class ChatViewModel private constructor(
         if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready ||
             _uiState.value.recoveringProjectChanges) return
         val ticket = ++generation
-        _uiState.update { it.copy(streaming = true, activity = "Getting ready…",
+        _uiState.update { it.copy(streaming = true, streamingText = "", activity = "Getting ready…",
             error = null, errorAction = null, notice = null) }
         val previous = sendJob
         sendJob = viewModelScope.launch {
@@ -325,11 +326,32 @@ class ChatViewModel private constructor(
                 null
             }
             val workspace = restoredWorkspace?.first
-            val workspaceId = workspace?.tree?.toString()
-            if (sessions != null && _uiState.value.currentSessionId != null &&
-                workspaceId != _uiState.value.currentSessionWorkspaceId) {
+            var workspaceId: String? = null
+            var workspaceAccessFailed = false
+            if (workspace != null) {
+                try {
+                    workspace.stat(WorkspacePath.ROOT)
+                    workspaceId = workspace.tree.toString()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    workspaceAccessFailed = true
+                }
+            }
+            val current = _uiState.value
+            val binding = projectBindingState(current.currentSessionId,
+                current.currentSessionWorkspaceId, workspaceId, projectLoading = false)
+            if (workspaceAccessFailed || binding == ProjectBindingState.AccessLost) {
+                _uiState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
+                    projectError = if (current.currentSessionWorkspaceId != null) null
+                    else "Rivet couldn't open this project. Choose the folder again.",
+                    streaming = false, activity = null,
+                    error = if (current.currentSessionWorkspaceId != null) PROJECT_ACCESS_LOST_MESSAGE else null) }
+                return@launch
+            }
+            if (sessions != null && binding == ProjectBindingState.Mismatch) {
                 _uiState.update { it.copy(streaming = false, activity = null,
-                    error = "This conversation belongs to another project. Choose that project or start a new conversation.") }
+                    error = PROJECT_BINDING_MISMATCH_MESSAGE) }
                 return@launch
             }
             val runtime = runtimeController
@@ -399,6 +421,8 @@ class ChatViewModel private constructor(
             }
             activeMessages = durable.toList()
             var lastSystem = ""
+            val streamPreview = StringBuilder()
+            var lastPreviewNanos = 0L
             var checkpointId: String? = null
             var checkpointBroken = false
             var needsPostCheck = false
@@ -503,14 +527,25 @@ class ChatViewModel private constructor(
                     loop.run(
                         initial = durable,
                         tools = tools,
-                        onText = {},
+                        onText = { delta ->
+                            streamPreview.append(delta)
+                            val now = System.nanoTime()
+                            if (ticket == generation && delta.isNotEmpty() &&
+                                (lastPreviewNanos == 0L || now - lastPreviewNanos >= 80_000_000L)) {
+                                lastPreviewNanos = now
+                                val preview = streamPreview.toString()
+                                _uiState.update { it.copy(streamingText = preview) }
+                            }
+                        },
                         onMessage = { message ->
                             if (ticket == generation) {
                                 val candidate = durable + message
                                 sessionStore.save(candidate, interrupted = true)
                                 durable += message
                                 activeMessages = durable.toList()
+                                streamPreview.setLength(0)
                                 _uiState.update { it.copy(messages = (it.messages + message).takeLast(100),
+                                    streamingText = "",
                                     activity = message.toolCalls.firstOrNull()?.let { call -> activityFor(call.name) }
                                         ?: it.activity) }
                                 val id = checkpointId
@@ -559,6 +594,7 @@ class ChatViewModel private constructor(
                             it.copy(
                                 messages = durable.toList(),
                                 streaming = false,
+                                streamingText = "",
                                 pendingApproval = null,
                                 activity = null,
                                 error = CONTEXT_LIMIT_ERROR,
@@ -575,7 +611,7 @@ class ChatViewModel private constructor(
                             catch (error: MirrorFailure) { error.code }
                             catch (_: Exception) { null }
                         val pendingProjectChanges = blocker != null && blocker in SYNC_RECOVERY_CODES
-                        _uiState.update { it.copy(streaming = false, pendingApproval = null, activity = null,
+                        _uiState.update { it.copy(streaming = false, streamingText = "", pendingApproval = null, activity = null,
                             error = if (pendingProjectChanges) "Rivet stopped before it could save the command's project changes." else it.error,
                             errorAction = if (pendingProjectChanges) ChatErrorAction.RetryProjectChanges else it.errorAction,
                             notice = if (pendingProjectChanges) null else "Stopped. Any saved project changes remain.") }
@@ -623,12 +659,12 @@ class ChatViewModel private constructor(
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent setup failed: ${e.javaClass.simpleName}")
-                if (ticket == generation) _uiState.update { it.copy(streaming = false,
+                if (ticket == generation) _uiState.update { it.copy(streaming = false, streamingText = "",
                     activity = null, pendingApproval = null,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
                 if (ticket == generation && _uiState.value.streaming) {
-                    _uiState.update { it.copy(streaming = false, activity = null, pendingApproval = null,
+                    _uiState.update { it.copy(streaming = false, streamingText = "", activity = null, pendingApproval = null,
                         notice = "Stopped. Any completed changes remain in the project.") }
                 }
             }
@@ -667,7 +703,7 @@ class ChatViewModel private constructor(
         val errorAction = if (result.failureCode != null && result.failureCode in SYNC_RECOVERY_CODES)
             ChatErrorAction.RetryProjectChanges else null
         _uiState.update {
-            it.copy(messages = visible, streaming = false, pendingApproval = null,
+            it.copy(messages = visible, streaming = false, streamingText = "", pendingApproval = null,
                 sessions = history ?: it.sessions, usage = usage, error = error,
                 errorAction = errorAction, activity = null)
         }
@@ -720,7 +756,7 @@ class ChatViewModel private constructor(
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { durable.takeLast(100) }
         _uiState.update {
-            it.copy(messages = visible, streaming = false, pendingApproval = null, activity = null,
+            it.copy(messages = visible, streaming = false, streamingText = "", pendingApproval = null, activity = null,
                 error = if (persistenceError) "Could not update conversation storage. Check available space before continuing." else message,
                 errorAction = if (persistenceError) null else action)
         }
@@ -831,6 +867,21 @@ class ChatViewModel private constructor(
                     currentSessionTitle = history.firstOrNull { row -> row.id == it.currentSessionId }?.title) }
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) { _uiState.update { it.copy(error = "Could not rename the session.") } }
+        }
+    }
+
+    fun setSessionPinned(id: String, pinned: Boolean) {
+        val store = sessions ?: return
+        if (_uiState.value.streaming || _uiState.value.undoing ||
+            _uiState.value.recoveringProjectChanges || sendJob?.isActive == true) return
+        viewModelScope.launch {
+            try {
+                store.setPinned(id, pinned)
+                _uiState.update { it.copy(sessions = store.list()) }
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                _uiState.update { it.copy(error = "Could not update this conversation.") }
+            }
         }
     }
 

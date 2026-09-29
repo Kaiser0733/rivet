@@ -66,4 +66,11 @@ class ProviderErrorClassificationTest {
         val error = ProviderError.ProviderMessage("internal_request_id=abc123")
         assertFalse(error.text().contains("internal_request_id"))
     }
+
+    @Test fun dnsFailureAllowsForTransientResolutionAndGivesNextSteps() {
+        val text = ProviderError.Network("dns").text()
+        assertTrue(text.contains("can be temporary"))
+        assertTrue(text.contains("Check your connection and try again"))
+        assertTrue(text.contains("check the base URL"))
+    }
 }

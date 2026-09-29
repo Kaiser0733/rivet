@@ -37,19 +37,20 @@ whole matrix re-validated together — never piecemeal dependency bumps.
 
 ## D5 — Compose, plain single-activity shell, no DI framework
 
-What: one activity hosting a Compose shell; Chat/Settings navigation is state in
-`rememberSaveable`.
+What: one activity hosting a Compose shell; Chat/History/Settings navigation is
+state in `rememberSaveable`, with the provider editor nested in Settings.
 Why: the app is a single-surface tool; framework navigation and DI would
 add machinery the current code does not need.
 
 ## D6 — Hand-drawn vector icons, no icon library
 
-What: UI icons use hand-authored `res/drawable` vectors. The original four
-navigation glyphs were reduced with the Chat-first surface under D30.
+What: UI icons use hand-authored `res/drawable` vectors. Technical destinations
+were removed with the Chat-first surface under D30; History and editor actions
+use small outlined vectors.
 Why: the old `material-icons-core` artifacts publish as empty stubs, and
 an icon dependency for five glyphs is not worth its weight.
 
-## D7 — Dark-only shell
+## D7 — Dark-only shell (superseded by D32)
 
 What: one dark color scheme; no light variant.
 Why: a coding tool with a designed-dark interface; a light theme is only
@@ -249,12 +250,12 @@ Security policy, approvals, and project guidance are rebuilt outside summaries.
 
 ## D30 — Chat-first normal surface
 
-What: Chat and Settings are the only normal destinations. Project selection,
-approvals, activity, changed files, and Undo appear in Chat when relevant.
-SAF tools, the command runtime, read-only Git inspection, checkpoints, and
-synchronization remain available to the agent without technical navigation.
-The former Files, Changes, and interactive Terminal presentation was retired
-for the 0.8.2 cleanup candidate.
+What: Chat is the home surface; project selection, approvals, activity, changed
+files, and Undo appear there when relevant. History and Settings are secondary
+full-screen routes. SAF tools, the command runtime, read-only Git inspection,
+checkpoints, and synchronization remain available to the agent without
+technical navigation. Files, Changes, and the interactive Terminal
+presentation were retired in the 0.8.2 cleanup.
 Why: local coding work should start with a project and a request; users should
 not need to operate the engine's development and recovery screens.
 
@@ -267,3 +268,39 @@ structured task state and validate its event-prefix boundary on restart.
 Why: byte-only transcript thresholds miss system/tool input and smaller model
 windows. Projection-only reduction preserves historical truth and avoids
 unnecessary summary calls. Policy and approvals remain outside task state.
+
+## D32 — Rose-and-ink Rivet presentation
+
+What: Chat stays primary, with full-screen History and Settings routes. A muted
+rose field, near-black text, thin rules, and the clean heart background are
+used only on Chat. Other screens keep the plain rose surface; screenshots with
+mock controls are never packaged as backgrounds. This supersedes D7's dark-only
+shell. Why: the interface should feel like Rivet while keeping project work
+readable.
+
+## D33 — Pinned conversation state
+
+What: SQLite session headers store a pinned flag. Existing rows migrate to
+unpinned; History sorts pinned sessions first and then by recent activity.
+Why: pinning is a durable History action and must not alter conversation events
+or activity recency.
+
+## D34 — Presentation state does not change project authority
+
+What: Rose intensity is a bounded app-local preference; assistant Markdown is
+display-only for completed prose and does not activate HTML or links. Chat
+labels an unavailable session project separately from an accessible project
+with a different exact SAF tree identity.
+Why: presentation changes must not alter device brightness, workspace binding,
+tool policy, or approval authority.
+
+
+## D35 — Responsive Chat and persisted appearance
+
+What: portrait Chat uses available width; phone and tablet landscape share
+History content in a persistent left pane. Rose remains the default, with Dark
+as an app-local persisted alternative. Rose intensity is retained independently
+and affects only Rose. Shared typography inherits palette colors. This extends
+D32's presentation without changing conversation or project authority.
+Why: coding conversations need useful tablet width and a readable alternative
+for extended sessions; History behavior stays shared across presentations.
