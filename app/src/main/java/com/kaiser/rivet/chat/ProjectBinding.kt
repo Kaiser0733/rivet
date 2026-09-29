@@ -10,7 +10,9 @@ internal fun projectBindingState(
 ): ProjectBindingState {
     if (projectLoading) return ProjectBindingState.Loading
     if (sessionId == null) return ProjectBindingState.None
-    if (sessionWorkspaceId != null && accessibleProjectId == null) return ProjectBindingState.AccessLost
+    if (sessionWorkspaceId == null && accessibleProjectId == null) return ProjectBindingState.None
+    if (sessionWorkspaceId == null) return ProjectBindingState.Mismatch
+    if (accessibleProjectId == null) return ProjectBindingState.AccessLost
     if (sessionWorkspaceId == accessibleProjectId) return ProjectBindingState.Matched
     return ProjectBindingState.Mismatch
 }

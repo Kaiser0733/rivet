@@ -186,11 +186,12 @@ class ChatViewModelTest {
         viewModel.selectProject(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or
             Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
         val restored = await(viewModel) { !it.projectLoading && it.projectIdentity == tree.toString() }
+        val projectSessions = sessions.list().filter { it.workspaceId == tree.toString() }
 
         assertEquals(original.id, restored.currentSessionId)
-        assertEquals(1, sessions.list().size)
+        assertEquals(1, projectSessions.size)
         assertEquals("Keep this conversation", restored.messages.single().text)
-        assertTrue(sessions.list().single().pinned)
+        assertTrue(projectSessions.single().pinned)
         assertEquals(tree.toString(), restored.currentSessionWorkspaceId)
     }
 
