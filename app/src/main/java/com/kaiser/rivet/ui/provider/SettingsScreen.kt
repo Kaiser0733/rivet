@@ -19,19 +19,27 @@ import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
+import androidx.compose.material3.Slider
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
+import kotlin.math.roundToInt
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
@@ -46,14 +54,22 @@ fun SettingsScreen(
     onClose: () -> Unit,
     onEditProvider: (String) -> Unit,
     onNewProvider: (ProviderType) -> Unit,
+    roseIntensity: Int,
+    appearanceError: String?,
+    onRoseIntensityPreview: (Int) -> Unit,
+    onRoseIntensityCommit: (Int) -> Unit,
 ) {
     val state by viewModel.listState.collectAsState()
     var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
+    var selectedIntensity by rememberSaveable { mutableIntStateOf(roseIntensity) }
+    LaunchedEffect(roseIntensity) { selectedIntensity = roseIntensity }
     deleteTarget?.let { provider ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text("Remove ${provider.name}?") },
-            text = { Text(stringResource(R.string.provider_delete_confirm)) },
+            title = { Text("Remove ${provider.name}?",
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = { Text(stringResource(R.string.provider_delete_confirm),
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
             confirmButton = { RivetOutlinedButton(onClick = {
                 deleteTarget = null
                 viewModel.delete(provider.id)
@@ -135,6 +151,35 @@ fun SettingsScreen(
                         Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
                 }
                 HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f))
+            }
+
+            item {
+                SectionHeading("Appearance", Modifier.padding(top = 24.dp))
+                Text("Rose intensity", style = MaterialTheme.typography.titleSmall)
+                Text("Adjust Rivet's colors. Device brightness stays the same.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall)
+                Slider(
+                    value = selectedIntensity.toFloat(),
+                    onValueChange = { value ->
+                        selectedIntensity = value.roundToInt()
+                        onRoseIntensityPreview(selectedIntensity)
+                    },
+                    onValueChangeFinished = { onRoseIntensityCommit(selectedIntensity) },
+                    modifier = Modifier.semantics { contentDescription = "Rose intensity" },
+                    valueRange = MIN_ROSE_INTENSITY.toFloat()..MAX_ROSE_INTENSITY.toFloat(),
+                    steps = 5,
+                )
+                appearanceError?.let { error ->
+                    Text(error, color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                }
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween) {
+                    Text("Dim", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall)
+                    Text("Original", color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall)
+                }
             }
         }
     }

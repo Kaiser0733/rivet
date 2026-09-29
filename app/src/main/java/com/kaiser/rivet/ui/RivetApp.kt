@@ -3,37 +3,28 @@ package com.kaiser.rivet.ui
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.Icon
-import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.unit.dp
 import androidx.core.view.WindowCompat
-import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.ChatViewModel
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 import com.kaiser.rivet.ui.chat.ChatScreen
 import com.kaiser.rivet.ui.history.HistoryScreen
 import com.kaiser.rivet.ui.provider.ProviderEditor
@@ -43,7 +34,15 @@ import com.kaiser.rivet.ui.provider.SettingsScreen
 @Composable
 fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
              providersViewModel: ProvidersViewModel) {
-    RivetTheme {
+    val context = LocalContext.current.applicationContext
+    val appearanceStore = remember(context) { AppearanceStore(context) }
+    val storedIntensity by appearanceStore.roseIntensity.collectAsState(initial = DEFAULT_ROSE_INTENSITY)
+    var roseIntensity by remember { mutableIntStateOf(storedIntensity) }
+    var appearanceSaveError by remember { mutableStateOf<String?>(null) }
+    LaunchedEffect(storedIntensity) { roseIntensity = storedIntensity }
+    val coroutineScope = rememberCoroutineScope()
+
+    RivetTheme(roseIntensity) {
         val view = LocalView.current
         val background = MaterialTheme.colorScheme.background.toArgb()
         SideEffect {
@@ -74,14 +73,11 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 if (editing) {
                     ProviderEditor(viewModel = providersViewModel, onDone = { editing = false })
                 } else when (destination) {
-                    RivetDestination.Chat -> Column(Modifier.fillMaxSize()) {
-                        ChatTopBar(onSettings = { destination = RivetDestination.Settings })
-                        Box(Modifier.weight(1f).fillMaxWidth()) {
-                            RivetChatBackground()
-                            ChatScreen(chatViewModel, providersViewModel,
-                                onOpenSettings = { destination = RivetDestination.Settings },
-                                onOpenHistory = { destination = RivetDestination.History })
-                        }
+                    RivetDestination.Chat -> Box(Modifier.fillMaxSize()) {
+                        RivetChatBackground(intensity = roseIntensity)
+                        ChatScreen(chatViewModel, providersViewModel,
+                            onOpenSettings = { destination = RivetDestination.Settings },
+                            onOpenHistory = { destination = RivetDestination.History })
                     }
                     RivetDestination.History -> HistoryScreen(
                         viewModel = chatViewModel,
@@ -99,26 +95,25 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             providersViewModel.startNewProvider(it)
                             editing = true
                         },
+                        roseIntensity = roseIntensity,
+                        appearanceError = appearanceSaveError,
+                        onRoseIntensityPreview = { roseIntensity = it },
+                        onRoseIntensityCommit = { value ->
+                            appearanceSaveError = null
+                            coroutineScope.launch {
+                                try {
+                                    appearanceStore.setRoseIntensity(value)
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (_: Exception) {
+                                    roseIntensity = storedIntensity
+                                    appearanceSaveError = "Rivet couldn't save this setting. Try again."
+                                }
+                            }
+                        },
                     )
                 }
             }
         }
     }
-}
-
-@Composable
-private fun ChatTopBar(onSettings: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth().statusBarsPadding().heightIn(min = 58.dp)
-            .padding(start = 20.dp, end = 8.dp, top = 4.dp, bottom = 2.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Text(stringResource(R.string.app_name), style = MaterialTheme.typography.titleLarge)
-        Spacer(Modifier.weight(1f))
-        IconButton(onClick = onSettings) {
-            Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
-                tint = MaterialTheme.colorScheme.onBackground)
-        }
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f), thickness = 1.dp)
 }
