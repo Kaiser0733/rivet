@@ -4,10 +4,10 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: 0.9.0 debug candidate.** The 0.8.1 debug RC passed on-device
-acceptance, including an in-place upgrade, agent file and command work, Undo,
-denial, and restart persistence. The 0.9.0 context update still needs device
-verification. Rivet is not publicly released.
+**Status: 0.9.1 accepted backend; Phase 10 UI redesign in progress.** The
+chat-first agent, project safety, Undo, session persistence, and provider
+behavior have passed the prior acceptance process. Rivet is not publicly
+released.
 
 ## What works today
 
@@ -59,7 +59,7 @@ is in [RELEASE_PROCESS.md](RELEASE_PROCESS.md).
 
 - [PROJECT_CONSTITUTION.md](PROJECT_CONSTITUTION.md) — durable project rules
 - [ARCHITECTURE.md](ARCHITECTURE.md) — what exists today
-- [MASTER_ROADMAP.md](MASTER_ROADMAP.md) — the eight phases
+- [MASTER_ROADMAP.md](MASTER_ROADMAP.md) — the product phases
 - [DECISIONS.md](DECISIONS.md) — architecture decision records
 - [RELEASE_PROCESS.md](RELEASE_PROCESS.md) — versioning, signing, releases
 
