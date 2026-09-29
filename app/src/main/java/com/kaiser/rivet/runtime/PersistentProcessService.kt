@@ -1,11 +1,13 @@
 package com.kaiser.rivet.runtime
 
+import android.Manifest
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
 import android.app.Service
 import android.content.Intent
+import android.content.pm.PackageManager
 import android.content.pm.ServiceInfo
 import android.os.Build
 import android.os.IBinder
@@ -60,8 +62,12 @@ class PersistentProcessService : Service() {
                 if (count == 0) scheduleStopIfIdle()
                 else {
                     idleStopJob?.cancel()
-                    getSystemService(NotificationManager::class.java)
-                        .notify(NOTIFICATION_ID, notification(count))
+                    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU ||
+                        checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED
+                    ) {
+                        getSystemService(NotificationManager::class.java)
+                            .notify(NOTIFICATION_ID, notification(count))
+                    }
                 }
             }
         }
