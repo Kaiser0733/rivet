@@ -32,7 +32,6 @@ import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
-import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -61,6 +60,7 @@ import com.kaiser.rivet.chat.ChatErrorAction
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
+import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 
 private val MAX_COLUMN_WIDTH = 640.dp
@@ -96,7 +96,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         AlertDialog(onDismissRequest = { pendingProject = null },
             title = { Text("Start a new conversation?") },
             text = { Text("This conversation is linked to another project. Start a new conversation for the folder you chose?") },
-            confirmButton = { TextButton(onClick = {
+            confirmButton = { RivetOutlinedButton(onClick = {
                 pendingProject = null
                 chatViewModel.selectProject(selected.first, selected.second)
             }) { Text("Start new") } },
@@ -106,7 +106,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         AlertDialog(onDismissRequest = { confirmUndo = false },
             title = { Text("Undo Rivet's last changes?") },
             text = { Text("Rivet will restore the files it changed. If the project changed afterward, Undo will stop before overwriting newer work.") },
-            confirmButton = { TextButton(onClick = {
+            confirmButton = { RivetOutlinedButton(onClick = {
                 confirmUndo = false; chatViewModel.undoLastTurn()
             }) { Text("Undo changes") } },
             dismissButton = { TextButton(onClick = { confirmUndo = false }) { Text("Cancel") } })
@@ -200,7 +200,7 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
             Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 style = MaterialTheme.typography.bodyLarge)
-            if (action != null) OutlinedButton(onClick = onAction) { Text(action) }
+            if (action != null) RivetOutlinedButton(onClick = onAction) { Text(action) }
         }
     }
 }
@@ -312,7 +312,7 @@ private fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> U
             Text(displaySafeText(request.detail))
             if (command) Text(COMMAND_APPROVAL_WARNING)
         } },
-        confirmButton = { TextButton(onClick = { onApprove(request.approvalToken) }) {
+        confirmButton = { RivetOutlinedButton(onClick = { onApprove(request.approvalToken) }) {
             Text(if (delete) "Delete" else "Allow")
         } },
         dismissButton = { TextButton(onClick = { onDeny(request.approvalToken) }) {

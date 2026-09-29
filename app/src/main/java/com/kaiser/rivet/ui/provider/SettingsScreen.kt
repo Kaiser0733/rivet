@@ -35,6 +35,7 @@ import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.ui.RivetOutlinedButton
 
 private val MAX_WIDTH = 680.dp
 
@@ -53,7 +54,7 @@ fun SettingsScreen(
             onDismissRequest = { deleteTarget = null },
             title = { Text("Remove ${provider.name}?") },
             text = { Text(stringResource(R.string.provider_delete_confirm)) },
-            confirmButton = { TextButton(onClick = {
+            confirmButton = { RivetOutlinedButton(onClick = {
                 deleteTarget = null
                 viewModel.delete(provider.id)
             }) { Text(stringResource(R.string.provider_delete)) } },

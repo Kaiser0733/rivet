@@ -27,7 +27,8 @@ private val RivetColors = lightColorScheme(
     onSurfaceVariant = Color(0xFF50373D),
     surfaceContainer = Color(0xFFEBD0D5),
     surfaceContainerLow = Color(0xFFEDD2D7),
-    outline = Color(0x80502D36),
+    surfaceContainerHigh = Color(0xFFF0D7DB),
+    outline = Color(0x99502D36),
     error = Color(0xFF8A2937),
     onError = Color(0xFFFFF7F7),
     errorContainer = Color(0xFFF0C6CC),
@@ -53,9 +54,11 @@ private val RivetTypography = Typography().copy(
 )
 
 private val RivetShapes = Shapes(
+    extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
     small = androidx.compose.foundation.shape.RoundedCornerShape(4.dp),
     medium = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
     large = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
+    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
 )
 
 @Composable

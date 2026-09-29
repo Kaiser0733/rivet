@@ -40,6 +40,7 @@ import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.storage.CodingSessionHeader
 import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
+import com.kaiser.rivet.ui.RivetOutlinedButton
 
 @Composable
 fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
@@ -58,7 +59,7 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                 OutlinedTextField(value = title, onValueChange = { title = it },
                     label = { Text("Name") }, singleLine = true)
             },
-            confirmButton = { TextButton(onClick = {
+            confirmButton = { RivetOutlinedButton(onClick = {
                 viewModel.renameSession(target.id, title)
                 renameTarget = null
             }, enabled = title.isNotBlank() && actionsEnabled) { Text("Save") } },
@@ -70,7 +71,7 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
             onDismissRequest = { deleteTarget = null },
             title = { Text("Delete conversation?") },
             text = { Text("This removes it from Rivet. Project files are not changed.") },
-            confirmButton = { TextButton(onClick = {
+            confirmButton = { RivetOutlinedButton(onClick = {
                 viewModel.deleteSession(target.id)
                 deleteTarget = null
             }, enabled = actionsEnabled) { Text("Delete") } },
@@ -104,7 +105,7 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                 Text("Start a new conversation whenever you want to work on something else.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp))
-                TextButton(onClick = { viewModel.newSession(); onBack() }, enabled = actionsEnabled) {
+                RivetOutlinedButton(onClick = { viewModel.newSession(); onBack() }, enabled = actionsEnabled) {
                     Text("New conversation")
                 }
             }
