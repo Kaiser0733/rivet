@@ -4,11 +4,10 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: 0.10.0 (19) responsive/theme candidate; final physical regression pending.**
-The backend, session migration, and pinning behavior passed the prior
-acceptance process. The preceding candidate passed phone regression; this
-responsive/theme update still needs tablet, landscape, and theme testing and
-is not publicly released.
+**Status: 0.11.0 (20) candidate; physical testing pending.**
+Phase 11 adds app-owned autonomy modes, a correlated activity timeline, direct
+process controls, loopback static previews, and bounded HTTPS downloads. This
+candidate is not publicly released.
 
 ## What works today
 
@@ -29,9 +28,13 @@ is not publicly released.
 - Project-folder selection from Chat, with contained file reads, search, edits,
   and exact-context patches.
 - Structured tools for OpenAI-compatible, OpenRouter, Anthropic, and Gemini
-  providers. File and command changes require approval.
+  providers. Ask, Basic YOLO, and YOLO are enforced by Rivet; workspace,
+  checkpoint, and runtime integrity checks remain active in every mode.
 - Approved project commands run through Rivet's on-device runtime. Git status
   and diffs are read-only; completed agent changes can be undone when safe.
+- Rivet-owned commands appear in Processes and can be stopped directly. Static
+  previews serve project files on device loopback only. HTTPS downloads are
+  streamed into the selected project with bounded size and hash checks.
 - Bounded project instructions from `AGENTS.md`, durable conversation history,
   model switching, usage records, and automatic context reduction.
 - Chat uses available portrait width; phone and tablet landscape show History

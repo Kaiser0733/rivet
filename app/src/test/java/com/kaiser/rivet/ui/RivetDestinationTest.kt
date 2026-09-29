@@ -12,5 +12,6 @@ class RivetDestinationTest {
             RivetDestination.entries.filter { it.isPrimary }.map { it.name },
         )
         assertEquals(false, RivetDestination.History.isPrimary)
+        assertEquals(false, RivetDestination.Processes.isPrimary)
     }
 }

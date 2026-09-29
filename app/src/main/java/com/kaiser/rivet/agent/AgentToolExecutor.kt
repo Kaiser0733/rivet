@@ -4,7 +4,15 @@ import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.RuntimeCommandResult
 import com.kaiser.rivet.runtime.RepositoryDiff
 import com.kaiser.rivet.runtime.RepositoryStatus
+import com.kaiser.rivet.runtime.ManagedProcessStatus
+import com.kaiser.rivet.runtime.ManagedProcessKind
+import com.kaiser.rivet.runtime.ManagedProcesses
+import com.kaiser.rivet.runtime.PreviewLaunch
+import com.kaiser.rivet.runtime.ProjectDownloader
+import com.kaiser.rivet.runtime.DownloadFailure
 import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
+import java.io.InputStream
+import java.io.FileInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -40,6 +48,8 @@ interface AgentWorkspace {
     suspend fun read(path: String): AgentFileSnapshot
     suspend fun search(path: String, query: String): AgentSearchReport
     suspend fun write(path: String, content: String, expectedHash: String): AgentFileSnapshot
+    suspend fun writeDownloaded(path: String, input: InputStream, expectedExistingHash: String?): AgentFileSnapshot =
+        throw AgentWorkspaceFailure("unsupported")
     suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>): AgentFileSnapshot
     suspend fun createFile(path: String): AgentCreatedFile
     suspend fun createDirectory(path: String): AgentWorkspaceEntry
@@ -55,6 +65,10 @@ class AgentToolExecutor(
     private val requireSafCurrent: suspend () -> Unit = {},
     private val gitStatus: (suspend () -> RepositoryStatus)? = null,
     private val gitDiff: (suspend (String) -> RepositoryDiff)? = null,
+    private val managedProcesses: ManagedProcesses? = null,
+    private val startPreview: (suspend (String, String) -> PreviewLaunch)? = null,
+    private val downloader: ProjectDownloader? = null,
+    private val currentWorkspaceIdentity: suspend () -> String? = { null },
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
@@ -135,7 +149,7 @@ class AgentToolExecutor(
                 "write_file" -> {
                     val args = json.decodeFromString<WriteArgs>(call.arguments)
                     val path = path(args.path); hash(args.expectedSha256)
-                    mutation(call, "Edit", path, path.length) {
+                    mutation(call, "Edit", path, path.length, modelRequestsApproval = args.askUser) {
                         snapshot(call, workspace.write(path, args.content, args.expectedSha256), "Edited  $path")
                     }
                 }
@@ -144,13 +158,15 @@ class AgentToolExecutor(
                     val path = path(args.path); hash(args.expectedSha256)
                     require(args.edits.isNotEmpty() && args.edits.size <= 100)
                     val edits = args.edits.map { require(it.oldText.isNotEmpty()); AgentTextEdit(it.oldText, it.newText) }
-                    mutation(call, "Edit", "$path\n${edits.size} change${if (edits.size == 1) "" else "s"}", path.length) {
+                    mutation(call, "Edit", "$path\n${edits.size} change${if (edits.size == 1) "" else "s"}",
+                        path.length, modelRequestsApproval = args.askUser) {
                         snapshot(call, workspace.patch(path, args.expectedSha256, edits), "Edited  $path")
                     }
                 }
                 "create_file" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
-                    mutation(call, "Create file", path, path.length * 2 + 255) {
+                    mutation(call, "Create file", path, path.length * 2 + 255,
+                        modelRequestsApproval = args.askUser) {
                         val created = workspace.createFile(path)
                         success(call, buildJsonObject {
                             put("path", created.path)
@@ -163,7 +179,8 @@ class AgentToolExecutor(
                 }
                 "create_directory" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
-                    mutation(call, "Create folder", path, path.length * 2 + 255) {
+                    mutation(call, "Create folder", path, path.length * 2 + 255,
+                        modelRequestsApproval = args.askUser) {
                         val created = workspace.createDirectory(path)
                         success(call, entryValue(created, requestedPath = path), "Created  ${created.path}")
                     }
@@ -172,7 +189,8 @@ class AgentToolExecutor(
                     val args = json.decodeFromString<RenameArgs>(call.arguments)
                     val path = path(args.path); name(args.newName)
                     val approved = workspace.observeStructural(path, recursive = true)
-                    mutation(call, "Rename", "$path\n→ ${args.newName}", path.length * 2 + 765, path) {
+                    mutation(call, "Rename", "$path\n→ ${args.newName}", path.length * 2 + 765,
+                        path, modelRequestsApproval = args.askUser) {
                         val renamed = workspace.rename(path, args.newName, approved)
                         val actualName = renamed.path.substringAfterLast('/')
                         success(call, buildJsonObject {
@@ -189,7 +207,9 @@ class AgentToolExecutor(
                     val path = path(args.path); val destination = path(args.destination, root = true)
                     val approvedSource = workspace.observeStructural(path, recursive = true)
                     val approvedDestination = workspace.observeStructural(destination, recursive = false)
-                    mutation(call, "Move", "$path\n→ ${destination.ifEmpty { "." }}", path.length + destination.length * 2 + 256, path) {
+                    mutation(call, "Move", "$path\n→ ${destination.ifEmpty { "." }}",
+                        path.length + destination.length * 2 + 256, path,
+                        modelRequestsApproval = args.askUser) {
                         val moved = workspace.move(path, destination, approvedSource, approvedDestination)
                         success(call, buildJsonObject {
                             put("source_path", path)
@@ -202,7 +222,8 @@ class AgentToolExecutor(
                 "delete_path" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
                     val approved = workspace.observeStructural(path, recursive = true)
-                    mutation(call, "Delete", path, path.length, path) {
+                    mutation(call, "Delete", path, path.length, path,
+                        modelRequestsApproval = args.askUser) {
                         workspace.delete(path, approved)
                         success(call, buildJsonObject { put("path", path); put("deleted", true) }, "Deleted  $path")
                     }
@@ -218,11 +239,116 @@ class AgentToolExecutor(
                         AgentApprovalRequest(call, "Run command",
                             "${args.command}${if (cwd.isEmpty()) "" else "\nIn folder: $cwd"}",
                             dangerous = true),
+                        effect = AgentToolEffect.ForegroundCommand,
+                        basicAutonomyRisk = ApprovalPolicy.basicCommandRisk(args.command),
+                        modelRequestsApproval = args.askUser,
+                        blockedReason = ApprovalPolicy.blockedCommandReason(args.command),
                     ) {
                         execute(call) {
                             val result = runCommand?.invoke(args.command, cwd, args.timeoutMs.toLong())
                                 ?: throw AgentWorkspaceFailure("runtime_unavailable")
                             commandResult(call, result)
+                        }
+                    }
+                }
+                "list_processes" -> {
+                    json.decodeFromString<NoArgs>(call.arguments)
+                    PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
+                        execute(call) {
+                        val identity = currentWorkspaceIdentity()
+                        val active = managedProcesses?.activeForWorkspace(identity).orEmpty()
+                        success(call, buildJsonObject {
+                            put("processes", buildJsonArray {
+                                active.forEach { process -> add(buildJsonObject {
+                                    put("process_id", process.id)
+                                    put("type", if (process.kind == ManagedProcessKind.Preview) "preview" else "command")
+                                    put("project", process.projectName.take(100))
+                                    put("status", process.status.name.lowercase())
+                                    process.url?.let { put("url", it) }
+                                }) }
+                            })
+                        }, "Listed active project operations")
+                        }
+                    }
+                }
+                "stop_process" -> {
+                    val args = json.decodeFromString<StopProcessArgs>(call.arguments)
+                    require(PROCESS_ID.matches(args.processId))
+                    val identity = currentWorkspaceIdentity()
+                        ?: throw AgentWorkspaceFailure("process_unavailable")
+                    val description = managedProcesses?.stopDescription(args.processId, identity)
+                        ?: throw AgentWorkspaceFailure("process_unavailable")
+                    PreparedAgentTool(call,
+                        AgentApprovalRequest(call, "Stop project operation", description),
+                        effect = AgentToolEffect.PersistentProcess,
+                        modelRequestsApproval = args.askUser,
+                    ) {
+                        execute(call) {
+                            val selected = currentWorkspaceIdentity()
+                            val stopped = selected == identity && managedProcesses?.stop(args.processId, identity) == true
+                            if (!stopped) throw AgentWorkspaceFailure("process_unavailable")
+                            success(call, buildJsonObject {
+                                put("process_id", args.processId)
+                                put("stopping", true)
+                            }, "Stopped project operation")
+                        }
+                    }
+                }
+                "start_preview" -> {
+                    val args = json.decodeFromString<PreviewArgs>(call.arguments)
+                    val root = path(args.root, root = true)
+                    val entry = path(args.entry)
+                    if (root.isNotEmpty() && entry != root && !entry.startsWith("$root/")) throw InvalidPath()
+                    PreparedAgentTool(call,
+                        AgentApprovalRequest(call, "Start local preview",
+                            "$entry\nOnly this device can access it at 127.0.0.1."),
+                        effect = AgentToolEffect.Preview,
+                        basicAutonomyRisk = BasicAutonomyRisk.Routine,
+                        modelRequestsApproval = args.askUser,
+                    ) {
+                        execute(call) {
+                            val started = startPreview?.invoke(root, entry)
+                                ?: throw AgentWorkspaceFailure("runtime_unavailable")
+                            success(call, buildJsonObject {
+                                put("process_id", started.processId)
+                                put("url", started.url)
+                                put("entry", started.entry)
+                                put("state", "running")
+                            }, "Started preview  ${started.entry}")
+                        }
+                    }
+                }
+                "download_file" -> {
+                    val args = json.decodeFromString<DownloadArgs>(call.arguments)
+                    val target = path(args.path)
+                    val overwriteHash = args.expectedSha256?.also(::hash)
+                    val contentHash = args.contentSha256?.also {
+                        if (!CONTENT_SHA.matches(it)) throw AgentWorkspaceFailure("invalid_checksum")
+                    }
+                    val client = downloader ?: throw AgentWorkspaceFailure("runtime_unavailable")
+                    val host = client.hostForDisplay(args.url)
+                    PreparedAgentTool(call,
+                        AgentApprovalRequest(call, "Download project file", "$target\nFrom $host over HTTPS"),
+                        resultContentLimitBytes = DOWNLOAD_RESULT_BYTES,
+                        effect = AgentToolEffect.Download,
+                        modelRequestsApproval = args.askUser,
+                    ) {
+                        execute(call) {
+                            requireSafCurrent()
+                            client.download(args.url, contentHash).use { staged ->
+                                requireSafCurrent()
+                                val saved = FileInputStream(staged.file).use { input ->
+                                    workspace.writeDownloaded(target, input, overwriteHash)
+                                }
+                                if (saved.sha256 != staged.sha256 || saved.size != staged.size) {
+                                    throw AgentWorkspaceFailure("conflict")
+                                }
+                                success(call, buildJsonObject {
+                                    put("path", saved.path)
+                                    put("sha256", saved.sha256)
+                                    put("size", saved.size)
+                                }, "Downloaded  ${saved.path}")
+                            }
                         }
                     }
                 }
@@ -236,11 +362,15 @@ class AgentToolExecutor(
             invalid(call, "invalid_path")
         } catch (e: AgentWorkspaceFailure) {
             invalid(call, e.code)
+        } catch (e: DownloadFailure) {
+            invalid(call, e.code)
         }
     }
 
     private fun readOnly(call: AgentToolCall, action: suspend () -> AgentToolResult) =
-        PreparedAgentTool(call, null) { execute(call) { requireSafCurrent(); action() } }
+        PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
+            execute(call) { requireSafCurrent(); action() }
+        }
 
     private fun mutation(
         call: AgentToolCall,
@@ -248,12 +378,18 @@ class AgentToolExecutor(
         detail: String,
         resultPathChars: Int,
         destructivePath: String? = null,
+        modelRequestsApproval: Boolean = false,
         action: suspend () -> AgentToolResult,
     ) = PreparedAgentTool(
         call, AgentApprovalRequest(call, title, detail, destructivePath),
         // Paths contain no controls: three UTF-8 bytes per UTF-16 unit covers
         // their JSON representation. Fixed fields, hashes and numbers fit in 512.
         resultContentLimitBytes = minOf(AgentLoop.MAX_TOOL_RESULT_BYTES, 512 + resultPathChars * 3),
+        effect = if (destructivePath == null) AgentToolEffect.WorkspaceMutation
+            else AgentToolEffect.DestructiveWorkspaceMutation,
+        basicAutonomyRisk = if (destructivePath == null) BasicAutonomyRisk.Routine
+            else BasicAutonomyRisk.Elevated,
+        modelRequestsApproval = modelRequestsApproval,
     ) { execute(call) { requireSafCurrent(); action() } }
 
     suspend fun describeDestructive(request: AgentApprovalRequest): AgentApprovalRequest {
@@ -282,16 +418,18 @@ class AgentToolExecutor(
         failure(call, e.code)
     } catch (e: MirrorFailure) {
         failure(call, e.code)
+    } catch (e: DownloadFailure) {
+        failure(call, e.code, e.statusCode)
     } catch (_: Exception) {
         failure(call, "workspace_error")
     }
 
     private fun invalid(call: AgentToolCall, code: String) =
-        PreparedAgentTool(call, null) { failure(call, code) }
+        PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) { failure(call, code) }
 
-    private fun failure(call: AgentToolCall, code: String) = AgentToolResult(
+    private fun failure(call: AgentToolCall, code: String, statusCode: Int? = null) = AgentToolResult(
         call.id, call.name, if (code == "output_limit") AgentLoop.OUTPUT_LIMIT_CONTENT
-        else AgentToolError.content(code), true, "Failed  ${call.name}",
+        else AgentToolError.content(code, statusCode), true, "Failed  ${call.name}",
     )
 
     private fun success(call: AgentToolCall, value: JsonObject, summary: String) =
@@ -448,13 +586,14 @@ class AgentToolExecutor(
     private class InvalidPath : Exception()
 
     @Serializable private data class ListArgs(val path: String = "")
-    @Serializable private data class PathArgs(val path: String)
+    @Serializable private data class PathArgs(val path: String, @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false)
     @Serializable private data class ReadArgs(val path: String, val offset: Int = 0)
     @Serializable private data class SearchArgs(val query: String, val path: String = "")
     @Serializable private data class WriteArgs(
         val path: String,
         val content: String,
         @kotlinx.serialization.SerialName("expected_sha256") val expectedSha256: String,
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
     )
     @Serializable private data class PatchEdit(
         @kotlinx.serialization.SerialName("old_text") val oldText: String,
@@ -464,27 +603,52 @@ class AgentToolExecutor(
         val path: String,
         @kotlinx.serialization.SerialName("expected_sha256") val expectedSha256: String,
         val edits: List<PatchEdit>,
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
     )
     @Serializable private data class RenameArgs(
         val path: String,
         @kotlinx.serialization.SerialName("new_name") val newName: String,
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
     )
-    @Serializable private data class MoveArgs(val path: String, val destination: String)
+    @Serializable private data class MoveArgs(val path: String, val destination: String,
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false)
     @Serializable private class GitStatusArgs
+    @Serializable private class NoArgs
+    @Serializable private data class StopProcessArgs(
+        @kotlinx.serialization.SerialName("process_id") val processId: String,
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
+    )
+    @Serializable private data class PreviewArgs(
+        val entry: String,
+        val root: String = "",
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
+    )
+    @Serializable private data class DownloadArgs(
+        val url: String,
+        val path: String,
+        @kotlinx.serialization.SerialName("expected_sha256") val expectedSha256: String? = null,
+        @kotlinx.serialization.SerialName("content_sha256") val contentSha256: String? = null,
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
+    )
     @Serializable private data class GitDiffArgs(val path: String = "")
     @Serializable private data class CommandArgs(
         val command: String,
         val cwd: String = "",
         @kotlinx.serialization.SerialName("timeout_ms") val timeoutMs: Int = 300_000,
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
     )
 
     companion object {
         private val json = Json { ignoreUnknownKeys = false; isLenient = false }
         private val HASH = Regex("[0-9a-f]{64}")
+        private val CONTENT_SHA = Regex("[0-9a-fA-F]{64}")
+        private val PROCESS_ID = Regex("[0-9a-fA-F-]{36}")
         private const val MAX_ARGUMENT_BYTES = 1_200_000
         private const val MAX_LIST_ENTRIES = 200
         private const val MAX_READ_CHUNK_BYTES = 8 * 1024
         private const val MAX_COMMAND_TIMEOUT_MS = 30 * 60 * 1000
+        // One confirmed path (up to WorkspacePath's 4096 UTF-16 units), hash, size, and JSON framing.
+        private const val DOWNLOAD_RESULT_BYTES = 16 * 1024
 
         private fun schema(required: List<String>, vararg fields: Pair<String, JsonObject>) = buildJsonObject {
             put("type", "object")
@@ -494,6 +658,17 @@ class AgentToolExecutor(
         }
         private val string = buildJsonObject { put("type", "string") }
         private val nonNegativeInteger = buildJsonObject { put("type", "integer"); put("minimum", 0) }
+        private val boolean = buildJsonObject {
+            put("type", "boolean")
+            put("description", "Request user confirmation in Basic YOLO; this cannot bypass Rivet policy.")
+        }
+        private val askUser = "ask_user" to boolean
+        private val processId = "process_id" to string
+        private val entry = "entry" to string
+        private val root = "root" to string
+        private val url = "url" to string
+        private val expectedSha = "expected_sha256" to string
+        private val contentSha = "content_sha256" to string
         private val path = "path" to string
 
         val definitions = listOf(
@@ -510,19 +685,26 @@ class AgentToolExecutor(
                 "Search one file or a directory recursively; empty path means workspace root. Searches are literal and case-sensitive. Broad searches may be limited; inspect limited, files_scanned, entries_visited, bytes_scanned, and skipped for completeness.",
                 schema(listOf("query"), path, "query" to string),
             ),
-            AgentToolDefinition("write_file", "Replace an existing text file when its hash still matches.",
-                schema(listOf("path", "content", "expected_sha256"), path, "content" to string, "expected_sha256" to string)),
-            AgentToolDefinition("apply_patch", "Apply exact unique replacements sequentially in supplied order; each later edit sees earlier edits. All edits validate in memory before the final write, which requires the file hash to still match.",
+            AgentToolDefinition("write_file", "Replace an existing text file when its hash still matches. In Basic YOLO, set ask_user=true if this edit should still be confirmed.",
+                schema(listOf("path", "content", "expected_sha256"), path, "content" to string, "expected_sha256" to string, askUser)),
+            AgentToolDefinition("apply_patch", "Apply exact unique replacements sequentially in supplied order; each later edit sees earlier edits. All edits validate in memory before the final write, which requires the file hash to still match. In Basic YOLO, set ask_user=true to request confirmation.",
                 schema(listOf("path", "expected_sha256", "edits"), path, "expected_sha256" to string,
-                    "edits" to buildJsonObject { put("type", "array"); put("items", schema(listOf("old_text", "new_text"), "old_text" to string, "new_text" to string)) })),
-            AgentToolDefinition("create_file", "Create a file; use the returned actual path and sha256 for write_file. If provider inspection fails after creation, inspection_error is returned without a hash; inspect that path before editing.", schema(listOf("path"), path)),
-            AgentToolDefinition("create_directory", "Create a new directory.", schema(listOf("path"), path)),
-            AgentToolDefinition("rename_path", "Rename an existing file or directory. Use the returned actual path afterward.", schema(listOf("path", "new_name"), path, "new_name" to string)),
-            AgentToolDefinition("move_path", "Move a path into an existing directory; empty destination means root. Use the returned actual path afterward.", schema(listOf("path", "destination"), path, "destination" to string)),
-            AgentToolDefinition("delete_path", "Permanently delete a non-root path after approval. Inspect first; never delete an uncertain or pre-existing path just for testing.", schema(listOf("path"), path)),
-            AgentToolDefinition("run_command", "Run one foreground project command after explicit user approval. It may modify project files. A returned exit_code describes the executed command; sync separately confirms whether changes reached the project. If command access or synchronization fails, stop and report that state rather than retrying unchanged. Use a project-relative cwd; empty means root. Output is bounded and marks truncation. Commands may time out or be stopped.",
+                    "edits" to buildJsonObject { put("type", "array"); put("items", schema(listOf("old_text", "new_text"), "old_text" to string, "new_text" to string)) }, askUser)),
+            AgentToolDefinition("create_file", "Create a file; use the returned actual path and sha256 for write_file. If provider inspection fails after creation, inspection_error is returned without a hash; inspect that path before editing. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path"), path, askUser)),
+            AgentToolDefinition("create_directory", "Create a new directory. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path"), path, askUser)),
+            AgentToolDefinition("rename_path", "Rename an existing file or directory. Use the returned actual path afterward. In Basic YOLO, set ask_user=true to request confirmation; destructive actions still follow Rivet policy.", schema(listOf("path", "new_name"), path, "new_name" to string, askUser)),
+            AgentToolDefinition("move_path", "Move a path into an existing directory; empty destination means root. Use the returned actual path afterward. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path", "destination"), path, "destination" to string, askUser)),
+            AgentToolDefinition("delete_path", "Permanently delete a non-root path. Inspect first; never delete an uncertain or pre-existing path just for testing. Set ask_user=true to request confirmation in Basic YOLO.", schema(listOf("path"), path, askUser)),
+            AgentToolDefinition("run_command", "Run one foreground project command. Ask mode requires approval; Basic YOLO only auto-runs Rivet-classified routine inspection commands; YOLO runs allowed commands without prompts. Set ask_user=true to request confirmation in Basic YOLO. Rivet's capability and workspace checks always apply. A returned exit_code describes the executed command; sync separately confirms whether changes reached the project. If command access or synchronization fails, stop and report that state rather than retrying unchanged. Use a project-relative cwd; empty means root. Output is bounded and marks truncation. Commands may time out or be stopped.",
                 schema(listOf("command"), "command" to string, "cwd" to string,
-                    "timeout_ms" to buildJsonObject { put("type", "integer"); put("minimum", 1000); put("maximum", MAX_COMMAND_TIMEOUT_MS) })),
+                    "timeout_ms" to buildJsonObject { put("type", "integer"); put("minimum", 1000); put("maximum", MAX_COMMAND_TIMEOUT_MS) }, askUser)),
+            AgentToolDefinition("list_processes", "List currently active Rivet commands and local previews. Process IDs are opaque Rivet IDs, not operating-system PIDs.", schema(emptyList())),
+            AgentToolDefinition("stop_process", "Stop one active Rivet-owned command or preview by its opaque process_id. This does not accept operating-system PIDs. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("process_id"), processId, askUser)),
+            AgentToolDefinition("start_preview", "Serve static project files from the selected workspace on this device's 127.0.0.1 loopback address. It stays available after this tool returns; use the returned URL. It is visible and stoppable in Processes. Set root to the static folder (empty means project root) and entry to an HTML file under root; / serves entry and relative assets resolve under root. GET and HEAD only; no execution, directory listing, LAN access, or uploads. Ask mode requires approval. Basic YOLO may start this read-only loopback preview automatically. In Basic YOLO set ask_user=true to request confirmation.", schema(listOf("entry"), entry, root, askUser)),
+            AgentToolDefinition("download_file", "Download one HTTPS file into the selected project. The streamed temporary copy is limited to 64 MiB and at most five revalidated HTTPS redirects; Rivet uses no provider credentials or cookies and never executes or installs the file. For an existing destination, provide expected_sha256 with its current hash before replacing it. content_sha256 optionally verifies the downloaded bytes. Ask mode and Basic YOLO require approval; YOLO skips the prompt but keeps scheme, path, size, hash, and workspace checks. In Basic YOLO, ask_user=true requests confirmation.", schema(listOf("url", "path"), url, path, expectedSha, contentSha, askUser)),
         )
+
+        private val ACTIVE_PROCESS_STATES = setOf(ManagedProcessStatus.Starting,
+            ManagedProcessStatus.Running, ManagedProcessStatus.Stopping)
     }
 }
