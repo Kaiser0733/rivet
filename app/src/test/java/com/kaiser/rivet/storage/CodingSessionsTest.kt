@@ -215,6 +215,36 @@ class CodingSessionsTest {
         assertEquals(1, sessions.list().size)
     }
 
+    @Test fun pinnedSessionsPersistSortFirstAndRemainResumableAndDeletable() = runBlocking {
+        val sessions = CodingSessions(app)
+        val firstId = sessions.load().id!!
+        sessions.rename(firstId, "First")
+        val secondId = sessions.create(null).id!!
+        val thirdId = sessions.create(null).id!!
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("UPDATE sessions SET updated_at=100 WHERE id=?", arrayOf(firstId))
+            db.execSQL("UPDATE sessions SET updated_at=300 WHERE id=?", arrayOf(secondId))
+            db.execSQL("UPDATE sessions SET updated_at=200 WHERE id=?", arrayOf(thirdId))
+        }
+
+        sessions.setPinned(firstId, true)
+        sessions.setPinned(secondId, true)
+
+        val reopened = CodingSessions(app)
+        val rows = reopened.list()
+        assertEquals(listOf(secondId, firstId, thirdId), rows.map { it.id })
+        assertTrue(rows[0].pinned)
+        assertTrue(rows[1].pinned)
+        assertFalse(rows[2].pinned)
+        assertEquals(firstId, reopened.select(firstId).id)
+
+        reopened.rename(firstId, "Renamed")
+        reopened.delete(secondId)
+        assertEquals("Renamed", reopened.list().first { it.id == firstId }.title)
+        assertEquals(listOf(firstId, thirdId), reopened.list().map { it.id })
+        assertTrue(reopened.list().first { it.id == firstId }.pinned)
+    }
+
     @Test fun unreadableSessionCannotReplaceCurrentSelection() = runBlocking {
         val sessions = CodingSessions(app)
         val good = sessions.load().id!!
@@ -262,9 +292,41 @@ class CodingSessionsTest {
         val upgraded = CodingSessions(app)
         assertEquals(listOf(original), upgraded.load().messages)
         assertEquals(1, upgraded.fullEventCount(id))
+        assertFalse(upgraded.list().single().pinned)
         upgraded.recordUsage(id, "after-upgrade", "provider", "model", AgentUsage(3, 2))
         assertEquals(1, CodingSessions(app).usage(id).reportedRequests)
         assertEquals(listOf(original), CodingSessions(app).load().messages)
+    }
+
+    @Test fun versionFiveSessionsGainAnUnpinnedDefaultWithoutLosingHistory() = runBlocking {
+        val id = "before-pinning"
+        val message = AgentMessage.user("keep this conversation")
+        val payload = Json.encodeToString(AgentMessage.serializer(), message)
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, " +
+                "created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0, " +
+                "summary TEXT NOT NULL DEFAULT '', active_generation INTEGER NOT NULL DEFAULT 0)")
+            db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, payload TEXT NOT NULL)")
+            db.execSQL("CREATE TABLE active_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, payload TEXT NOT NULL)")
+            db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            db.execSQL("CREATE TABLE compactions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, " +
+                "through_event_id INTEGER NOT NULL, summary TEXT NOT NULL, before_count INTEGER NOT NULL, " +
+                "after_count INTEGER NOT NULL, created_at INTEGER NOT NULL, prefix_hash TEXT, active_hash TEXT, summary_hash TEXT)")
+            db.execSQL("INSERT INTO sessions(id,title,created_at,updated_at) VALUES(?,?,?,?)",
+                arrayOf(id, "Kept session", 1L, 1L))
+            db.execSQL("INSERT INTO events(session_id,payload) VALUES(?,?)", arrayOf(id, payload))
+            db.execSQL("INSERT INTO active_events(session_id,payload) VALUES(?,?)", arrayOf(id, payload))
+            db.execSQL("INSERT INTO metadata(key,value) VALUES('active_session',?)", arrayOf(id))
+            db.execSQL("INSERT INTO metadata(key,value) VALUES('legacy_migrated','1')")
+            db.version = 5
+        }
+
+        val reopened = CodingSessions(app)
+
+        assertEquals(listOf(message), reopened.load().messages)
+        assertFalse(reopened.list().single().pinned)
+        reopened.setPinned(id, true)
+        assertTrue(CodingSessions(app).list().single().pinned)
     }
 
     @Test fun usageStaysWithSessionAndModelAfterRestart() = runBlocking {

@@ -9,7 +9,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
@@ -20,14 +19,20 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.background
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.OutlinedTextFieldDefaults
+import androidx.compose.material3.OutlinedButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
@@ -42,6 +47,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -53,13 +59,15 @@ import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.chat.ChatUiState
 import com.kaiser.rivet.chat.ChatErrorAction
 import com.kaiser.rivet.chat.ChatViewModel
+import com.kaiser.rivet.ui.RivetDoodle
+import com.kaiser.rivet.ui.RivetDoodleMark
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 
 private val MAX_COLUMN_WIDTH = 640.dp
 
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
-               onOpenSettings: () -> Unit) {
+               onOpenSettings: () -> Unit, onOpenHistory: () -> Unit) {
     val state by chatViewModel.uiState.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
     val wrongProject = state.currentSessionId != null &&
@@ -108,21 +116,26 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     }
 
     Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
-        Row(Modifier.widthIn(max = MAX_COLUMN_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally),
-            verticalAlignment = Alignment.CenterVertically) {
-            if (state.projectName != null || state.messages.isNotEmpty()) {
-                TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
-                    enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
-                    Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
-                    Text(displaySafeText(state.projectName ?: "Choose project"), maxLines = 1,
-                        overflow = TextOverflow.Ellipsis)
-                }
-            } else Spacer(Modifier.weight(1f))
-            SessionPicker(chatViewModel, state)
+        Row(Modifier.widthIn(max = MAX_COLUMN_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
+            .padding(start = 8.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onOpenHistory,
+                enabled = state.ready && !state.projectLoading && !state.streaming &&
+                    !state.undoing && !state.recoveringProjectChanges) {
+                Icon(painterResource(R.drawable.ic_history), "Conversation history",
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
+            TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
+                enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
+                Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
+                Text(displaySafeText(state.projectName ?: "Choose project"), maxLines = 1,
+                    overflow = TextOverflow.Ellipsis)
+                Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp))
+            }
         }
         if (providers.configs.isNotEmpty()) {
             ModelSelector(Modifier.widthIn(max = MAX_COLUMN_WIDTH).align(Alignment.CenterHorizontally), providersViewModel)
         }
+        HorizontalDivider(Modifier.padding(top = 2.dp), color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.23f))
         if (state.projectError != null) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically) {
@@ -142,14 +155,21 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             }
         }
         if (providers.configs.isEmpty()) {
-            EmptyState("Choose a model to get started.", "Add a provider in Settings, then tell Rivet what you want to change.",
+            EmptyState(RivetDoodle.Provider, "Choose a model to get started.",
+                "Add a provider in Settings, then tell Rivet what you want to change.",
                 "Open Settings", onOpenSettings, Modifier.weight(1f))
         } else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading) {
-            EmptyState("What do you want to work on?", "Choose the folder containing your project, then tell Rivet what you want changed.",
+            EmptyState(RivetDoodle.Project, "What do you want to work on?",
+                "Choose the folder that contains your project, then tell Rivet what you want changed.",
                 "Choose project", ::chooseProject, Modifier.weight(1f))
+        } else if (state.projectLoading) {
+            EmptyState(RivetDoodle.Project, "Opening your project…",
+                "Rivet is restoring access to the folder you selected.",
+                null, {}, Modifier.weight(1f))
         } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null) {
-            EmptyState("Tell Rivet what you want to change.", "Rivet can inspect this project and will ask before changing files.",
-                "", {}, Modifier.weight(1f))
+            EmptyState(RivetDoodle.Ready, "Tell Rivet what you want to change.",
+                "Rivet can inspect this project and will ask before changing files.",
+                null, {}, Modifier.weight(1f))
         } else {
             MessageList(state, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
                 Modifier.weight(1f).align(Alignment.CenterHorizontally))
@@ -168,59 +188,19 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
 }
 
 @Composable
-private fun EmptyState(title: String, detail: String, action: String, onAction: () -> Unit,
-                       modifier: Modifier = Modifier) {
+private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action: String?,
+                       onAction: () -> Unit, modifier: Modifier = Modifier) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Column(Modifier.padding(24.dp), horizontalAlignment = Alignment.CenterHorizontally,
+        Column(Modifier.padding(horizontal = 28.dp, vertical = 20.dp).widthIn(max = 390.dp),
+            horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Text(title, style = MaterialTheme.typography.titleMedium)
-            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (action.isNotEmpty()) TextButton(onClick = onAction) { Text(action) }
-        }
-    }
-}
-
-@Composable
-private fun SessionPicker(viewModel: ChatViewModel, state: ChatUiState) {
-    var menu by remember { mutableStateOf(false) }
-    var rename by remember { mutableStateOf(false) }
-    var name by remember { mutableStateOf("") }
-    var delete by remember { mutableStateOf(false) }
-    if (rename) AlertDialog(onDismissRequest = { rename = false }, title = { Text("Rename conversation") },
-        text = { OutlinedTextField(value = name, onValueChange = { name = it }, singleLine = true) },
-        confirmButton = { TextButton(onClick = {
-            state.currentSessionId?.let { viewModel.renameSession(it, name) }; rename = false
-        }) { Text("Save") } },
-        dismissButton = { TextButton(onClick = { rename = false }) { Text("Cancel") } })
-    if (delete) AlertDialog(onDismissRequest = { delete = false }, title = { Text("Delete conversation?") },
-        text = { Text("This removes this conversation from Rivet. Project files are not changed.") },
-        confirmButton = { TextButton(onClick = {
-            state.currentSessionId?.let(viewModel::deleteSession); delete = false
-        }) { Text("Delete") } },
-        dismissButton = { TextButton(onClick = { delete = false }) { Text("Cancel") } })
-    Box {
-        TextButton(onClick = { menu = true }, enabled = !state.streaming && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
-            Text((state.currentSessionTitle?.replace("New session", "New conversation") ?: "Conversations").take(18),
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Icon(painterResource(R.drawable.ic_chevron_down), "Conversation history")
-        }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            DropdownMenuItem(text = { Text("New conversation") }, onClick = {
-                menu = false; viewModel.newSession()
-            })
-            state.sessions.forEach { session ->
-                DropdownMenuItem(text = { Text(session.title.replace("New session", "New conversation")) }, onClick = {
-                    menu = false; viewModel.resumeSession(session.id)
-                })
-            }
-            if (state.currentSessionId != null) {
-                DropdownMenuItem(text = { Text("Rename conversation") }, onClick = {
-                    menu = false; name = state.currentSessionTitle.orEmpty(); rename = true
-                })
-                DropdownMenuItem(text = { Text("Delete conversation") }, onClick = {
-                    menu = false; delete = true
-                })
-            }
+            RivetDoodleMark(kind)
+            Text(title, style = MaterialTheme.typography.headlineSmall,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
+                style = MaterialTheme.typography.bodyLarge)
+            if (action != null) OutlinedButton(onClick = onAction) { Text(action) }
         }
     }
 }
@@ -232,7 +212,8 @@ private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewM
     var menu by remember { mutableStateOf(false) }
     Box(modifier) {
         TextButton(onClick = { menu = true }) {
-            Text(active?.model ?: "Choose model", maxLines = 1, overflow = TextOverflow.Ellipsis,
+            Text(active?.let { "${it.name} · ${it.model}" } ?: "Choose model",
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Icon(painterResource(R.drawable.ic_chevron_down), stringResource(R.string.model_switch))
         }
@@ -289,13 +270,24 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
 private fun MessageRow(message: AgentMessage) {
     if (message.role == AgentRole.User) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(6.dp)) {
-                Text(message.text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.bodyMedium)
+            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                Text("You", style = MaterialTheme.typography.labelLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Surface(color = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp,
+                        bottomStart = 16.dp, bottomEnd = 4.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f))) {
+                    Text(message.text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodyMedium)
+                }
             }
         }
     } else {
-        Text(message.text, style = MaterialTheme.typography.bodyMedium)
+        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Text("Rivet", style = MaterialTheme.typography.labelLarge,
+                color = MaterialTheme.colorScheme.primary)
+            Text(message.text, style = MaterialTheme.typography.bodyMedium)
+        }
     }
 }
 
@@ -378,19 +370,45 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             pendingText = null
         }
     }
-    Row(modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.Bottom) {
-        OutlinedTextField(value = draft, onValueChange = { draft = it }, modifier = Modifier.weight(1f),
-            placeholder = { Text("Ask Rivet…") }, minLines = 1, maxLines = 6)
-        IconButton(onClick = {
-            if (streaming) onCancel() else {
-                pendingText = draft
-                submittedAt = acceptedMessageCount
-                onSend(draft)
+    val canSend = ready && draft.isNotBlank() && pendingText == null
+    Surface(
+        modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
+        color = MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(16.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)),
+    ) {
+        Row(Modifier.padding(start = 8.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
+            verticalAlignment = Alignment.Bottom) {
+            OutlinedTextField(
+                value = draft,
+                onValueChange = { draft = it },
+                modifier = Modifier.weight(1f),
+                placeholder = { Text("Ask Rivet…") },
+                minLines = 1,
+                maxLines = 6,
+                shape = RoundedCornerShape(12.dp),
+                colors = OutlinedTextFieldDefaults.colors(
+                    focusedBorderColor = MaterialTheme.colorScheme.surface,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.surface,
+                    focusedContainerColor = MaterialTheme.colorScheme.surface,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                ),
+            )
+            IconButton(onClick = {
+                if (streaming) onCancel() else {
+                    pendingText = draft
+                    submittedAt = acceptedMessageCount
+                    onSend(draft)
+                }
+            }, enabled = streaming || canSend, modifier = Modifier.size(48.dp)
+                .clip(CircleShape)
+                .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.surfaceVariant)) {
+                Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
+                    stringResource(if (streaming) R.string.chat_stop else R.string.chat_send),
+                    tint = if (streaming || canSend) MaterialTheme.colorScheme.onPrimary
+                    else MaterialTheme.colorScheme.onSurfaceVariant)
             }
-        }, enabled = streaming || (ready && draft.isNotBlank() && pendingText == null)) {
-            Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
-                stringResource(if (streaming) R.string.chat_stop else R.string.chat_send))
         }
     }
 }

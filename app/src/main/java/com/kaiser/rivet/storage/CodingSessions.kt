@@ -38,6 +38,7 @@ data class CodingSessionHeader(
     val createdAt: Long,
     val updatedAt: Long,
     val interrupted: Boolean,
+    val pinned: Boolean,
 )
 
 data class SessionUsage(
@@ -162,7 +163,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     suspend fun list(): List<CodingSessionHeader> = onDatabase { db ->
-        db.rawQuery("SELECT id,title,workspace_id,created_at,updated_at,interrupted FROM sessions ORDER BY updated_at DESC", null)
+        db.rawQuery("SELECT id,title,workspace_id,created_at,updated_at,interrupted,pinned " +
+            "FROM sessions ORDER BY pinned DESC, updated_at DESC", null)
             .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.header()) } }
     }
 
@@ -198,12 +200,17 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
     }
 
+    suspend fun setPinned(id: String, pinned: Boolean) = onDatabase { db ->
+        if (db.update("sessions", ContentValues().apply { put("pinned", if (pinned) 1 else 0) },
+                "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
+    }
+
     suspend fun delete(id: String): AgentSession = onDatabase { db ->
         val workspaceId = WorkspaceSelection(context).currentIdentity()
         db.beginTransaction()
         try {
             if (db.delete("sessions", "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
-            val next = db.rawQuery("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1", null).use {
+            val next = db.rawQuery("SELECT id FROM sessions ORDER BY pinned DESC, updated_at DESC LIMIT 1", null).use {
                 if (it.moveToFirst()) it.getString(0) else null
             } ?: UUID.randomUUID().toString().also {
                 insertSession(db, it, "New session", workspaceId, false)
@@ -671,14 +678,15 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     private fun header(db: SQLiteDatabase, id: String): CodingSessionHeader =
-        db.rawQuery("SELECT id,title,workspace_id,created_at,updated_at,interrupted FROM sessions WHERE id=?", arrayOf(id))
+        db.rawQuery("SELECT id,title,workspace_id,created_at,updated_at,interrupted,pinned " +
+            "FROM sessions WHERE id=?", arrayOf(id))
             .use { cursor ->
                 if (!cursor.moveToFirst()) throw IllegalArgumentException("Unknown session")
                 cursor.header()
             }
 
     private fun Cursor.header() = CodingSessionHeader(getString(0), getString(1),
-        if (isNull(2)) null else getString(2), getLong(3), getLong(4), getInt(5) != 0)
+        if (isNull(2)) null else getString(2), getLong(3), getLong(4), getInt(5) != 0, getInt(6) != 0)
 
     private fun insertSession(db: SQLiteDatabase, id: String, title: String, workspaceId: String?, interrupted: Boolean) {
         val now = System.currentTimeMillis()
@@ -704,9 +712,9 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 }
 
-private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 5) {
+private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 6) {
     override fun onCreate(db: SQLiteDatabase) {
-        db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL DEFAULT '', active_generation INTEGER NOT NULL DEFAULT 0)")
+        db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL DEFAULT '', active_generation INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL)")
         db.execSQL("CREATE INDEX events_session_id ON events(session_id,id)")
         db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
@@ -723,7 +731,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 1 || newVersion != 5) throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
+        if (oldVersion < 1 || newVersion != 6) throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
         if (oldVersion == 1) createUsage(db)
         if (oldVersion <= 2) {
             db.execSQL("ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
@@ -744,6 +752,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
             addProjectionHashes(db)
             createContextAttempts(db)
         }
+        if (oldVersion <= 5) db.execSQL("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
     }
 
     private fun createUsage(db: SQLiteDatabase) {
