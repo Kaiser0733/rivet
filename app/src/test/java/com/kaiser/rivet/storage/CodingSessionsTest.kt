@@ -245,6 +245,26 @@ class CodingSessionsTest {
         assertTrue(reopened.list().first { it.id == firstId }.pinned)
     }
 
+    @Test fun deletingActiveSessionFallsBackByActivityRegardlessOfPinState() = runBlocking {
+        val sessions = CodingSessions(app)
+        val olderPinnedId = sessions.load().id!!
+        val newerUnpinnedId = sessions.create(null).id!!
+        val activeId = sessions.create(null).id!!
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("UPDATE sessions SET updated_at=100 WHERE id=?", arrayOf(olderPinnedId))
+            db.execSQL("UPDATE sessions SET updated_at=300 WHERE id=?", arrayOf(newerUnpinnedId))
+            db.execSQL("UPDATE sessions SET updated_at=400 WHERE id=?", arrayOf(activeId))
+        }
+        sessions.setPinned(olderPinnedId, true)
+        assertEquals(100L, sessions.list().first { it.id == olderPinnedId }.updatedAt)
+        assertEquals(300L, sessions.list().first { it.id == newerUnpinnedId }.updatedAt)
+
+        val selected = sessions.delete(activeId)
+
+        assertEquals(newerUnpinnedId, selected.id)
+        assertEquals(listOf(olderPinnedId, newerUnpinnedId), sessions.list().map { it.id })
+    }
+
     @Test fun unreadableSessionCannotReplaceCurrentSelection() = runBlocking {
         val sessions = CodingSessions(app)
         val good = sessions.load().id!!
