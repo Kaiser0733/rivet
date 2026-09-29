@@ -66,8 +66,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             config = ProviderConfig(
                 id = UUID.randomUUID().toString(),
                 type = type,
-                // Default name matches the type; the user renames freely.
-                name = type.name,
+                name = providerDefaultName(type),
                 baseUrl = type.defaultBaseUrl,
                 model = "",
             ),

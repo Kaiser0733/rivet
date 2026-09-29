@@ -16,10 +16,18 @@
     <string name="provider_edit">Edit provider</string>
     <string name="provider_name_label">Name</string>
     <string name="provider_base_url_label">Base URL</string>
+    <string name="provider_compatible_hint">For OpenAI-style APIs with a custom endpoint.</string>
+    <string name="provider_compatible_base_url_hint">Use the endpoint URL supplied by your provider.</string>
     <string name="provider_api_key_label">API key</string>
     <string name="provider_api_key_present">A key is stored. Leave blank to keep it.</string>
+    <string name="provider_api_key_security_hint">Stored encrypted on this device and sent with requests to this provider.</string>
     <string name="provider_model_label">Model</string>
     <string name="provider_model_hint">Model ID</string>
+    <string name="provider_model_current">Selected model: %1$s</string>
+    <string name="provider_search_models">Search models</string>
+    <string name="provider_models_showing">Showing %1$d of %2$d models. Search to see more.</string>
+    <string name="provider_models_matching">%1$d matching models. Showing %2$d.</string>
+    <string name="provider_models_no_match">No models match. You can still enter a Model ID above.</string>
     <string name="provider_fetch_models">Fetch models</string>
     <string name="provider_test">Test connection</string>
     <string name="provider_reasoning_label">Reasoning</string>
@@ -39,4 +47,5 @@
     <string name="chat_send">Send</string>
     <string name="chat_stop">Stop</string>
     <string name="chat_error_dismiss">Dismiss</string>
-    <string name="model_switch">Switch provider</string></resources>
+    <string name="model_switch">Switch provider</string>
+</resources>
