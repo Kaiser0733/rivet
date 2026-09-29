@@ -210,7 +210,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.beginTransaction()
         try {
             if (db.delete("sessions", "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
-            val next = db.rawQuery("SELECT id FROM sessions ORDER BY pinned DESC, updated_at DESC LIMIT 1", null).use {
+            val next = db.rawQuery("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1", null).use {
                 if (it.moveToFirst()) it.getString(0) else null
             } ?: UUID.randomUUID().toString().also {
                 insertSession(db, it, "New session", workspaceId, false)
