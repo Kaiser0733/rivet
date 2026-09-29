@@ -77,7 +77,16 @@ internal class LocalPreviewServer(
         while (active.get()) {
             try {
                 val client = socket.accept()
+                if (!active.get()) {
+                    client.close()
+                    return
+                }
                 activeClients += client
+                if (!active.get()) {
+                    activeClients.remove(client)
+                    client.close()
+                    return
+                }
                 try { clients.execute { handle(client) } }
                 catch (_: java.util.concurrent.RejectedExecutionException) {
                     activeClients.remove(client)
@@ -95,6 +104,7 @@ internal class LocalPreviewServer(
 
     private fun handle(client: Socket) {
         try { client.use { connection ->
+            if (!active.get()) return
             connection.soTimeout = SOCKET_TIMEOUT_MS
             val input = BufferedInputStream(connection.getInputStream())
             val output = BufferedOutputStream(connection.getOutputStream())

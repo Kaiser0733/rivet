@@ -166,7 +166,7 @@ class ManagedProcesses {
     fun stop(id: String): Boolean {
         val stopAndKind = synchronized(lock) {
             val entry = entries[id] ?: return false
-            if (entry.info.status !in ACTIVE) return false
+            if (entry.info.status !in setOf(ManagedProcessStatus.Starting, ManagedProcessStatus.Running)) return false
             entry.info = entry.info.copy(status = ManagedProcessStatus.Stopping)
             publishLocked()
             entry.stop to entry.persistent
@@ -184,7 +184,9 @@ class ManagedProcesses {
 
     fun stopAll() {
         val active = synchronized(lock) {
-            entries.entries.filter { it.value.info.status in ACTIVE }.map { (id, entry) ->
+            entries.entries.filter { it.value.info.status in setOf(
+                ManagedProcessStatus.Starting, ManagedProcessStatus.Running,
+            ) }.map { (id, entry) ->
                 entry.info = entry.info.copy(status = ManagedProcessStatus.Stopping)
                 Triple(id, entry.stop, entry.persistent)
             }.also { publishLocked() }
@@ -201,7 +203,9 @@ class ManagedProcesses {
 
     fun stopPersistent() {
         val active = synchronized(lock) {
-            entries.entries.filter { it.value.persistent && it.value.info.status in ACTIVE }.map { (id, entry) ->
+            entries.entries.filter { it.value.persistent && it.value.info.status in setOf(
+                ManagedProcessStatus.Starting, ManagedProcessStatus.Running,
+            ) }.map { (id, entry) ->
                 entry.info = entry.info.copy(status = ManagedProcessStatus.Stopping)
                 id to entry.stop
             }.also { publishLocked() }
