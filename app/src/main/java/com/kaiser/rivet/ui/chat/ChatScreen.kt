@@ -9,19 +9,23 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.background
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
@@ -40,6 +44,7 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -47,9 +52,18 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
+import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.agent.AgentApprovalRequest
@@ -58,20 +72,26 @@ import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.chat.ChatUiState
 import com.kaiser.rivet.chat.ChatErrorAction
 import com.kaiser.rivet.chat.ChatViewModel
+import com.kaiser.rivet.chat.ProjectBindingState
+import com.kaiser.rivet.chat.PROJECT_ACCESS_LOST_MESSAGE
+import com.kaiser.rivet.chat.PROJECT_BINDING_MISMATCH_MESSAGE
+import com.kaiser.rivet.chat.projectBindingState
 import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
+import kotlinx.coroutines.flow.collect
 
-private val MAX_COLUMN_WIDTH = 640.dp
+private val MAX_CHAT_LANE_WIDTH = 600.dp
 
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenHistory: () -> Unit) {
     val state by chatViewModel.uiState.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
-    val wrongProject = state.currentSessionId != null &&
-        state.currentSessionWorkspaceId != state.projectIdentity
+    val projectBinding = projectBindingState(state.currentSessionId, state.currentSessionWorkspaceId,
+        state.projectIdentity, state.projectLoading)
+    val wrongProject = projectBinding == ProjectBindingState.Mismatch
     var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -94,8 +114,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
 
     pendingProject?.let { selected ->
         AlertDialog(onDismissRequest = { pendingProject = null },
-            title = { Text("Start a new conversation?") },
-            text = { Text("This conversation is linked to another project. Start a new conversation for the folder you chose?") },
+            title = { Text("Start a new conversation?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = { Text("This conversation is linked to another project. Start a new conversation for the folder you chose?",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
             confirmButton = { RivetOutlinedButton(onClick = {
                 pendingProject = null
                 chatViewModel.selectProject(selected.first, selected.second)
@@ -104,8 +125,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     }
     if (confirmUndo) {
         AlertDialog(onDismissRequest = { confirmUndo = false },
-            title = { Text("Undo Rivet's last changes?") },
-            text = { Text("Rivet will restore the files it changed. If the project changed afterward, Undo will stop before overwriting newer work.") },
+            title = { Text("Undo Rivet's last changes?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = { Text("Rivet will restore the files it changed. If the project changed afterward, Undo will stop before overwriting newer work.",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
             confirmButton = { RivetOutlinedButton(onClick = {
                 confirmUndo = false; chatViewModel.undoLastTurn()
             }) { Text("Undo changes") } },
@@ -115,39 +137,59 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
     }
 
-    Column(Modifier.fillMaxSize().navigationBarsPadding().imePadding()) {
-        Row(Modifier.widthIn(max = MAX_COLUMN_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
-            .padding(start = 8.dp, end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onOpenHistory,
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+        Row(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
+            .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+            IconButton(onClick = onOpenHistory, modifier = Modifier.size(48.dp),
                 enabled = state.ready && !state.projectLoading && !state.streaming &&
                     !state.undoing && !state.recoveringProjectChanges) {
                 Icon(painterResource(R.drawable.ic_history), "Conversation history",
                     tint = MaterialTheme.colorScheme.onBackground)
             }
             TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
-                enabled = state.ready && !state.streaming && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
+                enabled = providers.configs.isNotEmpty() && state.ready && !state.streaming &&
+                    !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
                 Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
                 Text(displaySafeText(state.projectName ?: "Choose project"), maxLines = 1,
                     overflow = TextOverflow.Ellipsis)
                 Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp))
             }
+            IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
+                Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
         }
         if (providers.configs.isNotEmpty()) {
-            ModelSelector(Modifier.widthIn(max = MAX_COLUMN_WIDTH).align(Alignment.CenterHorizontally), providersViewModel)
+            Box(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)) {
+                ModelSelector(Modifier.align(Alignment.Center), providersViewModel)
+            }
         }
-        HorizontalDivider(Modifier.padding(top = 2.dp), color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.23f))
-        if (state.projectError != null) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+        HorizontalDivider(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth()
+            .align(Alignment.CenterHorizontally).padding(top = 2.dp),
+            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.23f))
+        if (state.projectError != null && projectBinding != ProjectBindingState.AccessLost &&
+            providers.configs.isNotEmpty() && !(state.projectName == null && state.messages.isEmpty())) {
+            Row(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
+                .padding(horizontal = 16.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 Text(state.projectError.orEmpty(), Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
-                if (state.projectName != null || state.messages.isNotEmpty() || providers.configs.isEmpty())
+                if (providers.configs.isNotEmpty() &&
+                    (state.projectName != null || state.messages.isNotEmpty() || state.projectError != null))
                     TextButton(onClick = ::chooseProject) { Text("Choose again") }
             }
         }
-        if (wrongProject && state.projectName != null) {
-            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp)) {
-                Text("This conversation belongs to another project.",
+        if (projectBinding == ProjectBindingState.AccessLost && providers.configs.isNotEmpty() && state.messages.isNotEmpty()) {
+            Row(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
+                .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(PROJECT_ACCESS_LOST_MESSAGE, Modifier.weight(1f),
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                TextButton(onClick = ::chooseProject) { Text("Choose project again") }
+            }
+        }
+        if (wrongProject && state.projectName != null && providers.configs.isNotEmpty()) {
+            Column(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
+                .padding(horizontal = 16.dp)) {
+                Text(PROJECT_BINDING_MISMATCH_MESSAGE, color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Row {
                     TextButton(onClick = ::chooseProject) { Text("Choose its project") }
                     TextButton(onClick = chatViewModel::newSession) { Text("Start new conversation") }
@@ -156,11 +198,19 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         }
         if (providers.configs.isEmpty()) {
             EmptyState(RivetDoodle.Provider, "Choose a model to get started.",
-                "Add a provider in Settings, then tell Rivet what you want to change.",
+                "Add a provider first. Then choose the project you want Rivet to work on.",
                 "Open Settings", onOpenSettings, Modifier.weight(1f))
+        } else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty()) {
+            EmptyState(RivetDoodle.Project, "Rivet no longer has access to this project.",
+                "Choose the folder again to continue this conversation.",
+                "Choose project again", ::chooseProject, Modifier.weight(1f))
+        } else if (state.projectName == null && state.projectError != null && state.messages.isEmpty()) {
+            EmptyState(RivetDoodle.Project, "Rivet couldn't open that project.",
+                "Choose the folder again to continue.",
+                "Choose project again", ::chooseProject, Modifier.weight(1f))
         } else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading) {
             EmptyState(RivetDoodle.Project, "What do you want to work on?",
-                "Choose the folder that contains your project, then tell Rivet what you want changed.",
+                "Choose the folder that contains your project, then tell Rivet what you want to change.",
                 "Choose project", ::chooseProject, Modifier.weight(1f))
         } else if (state.projectLoading) {
             EmptyState(RivetDoodle.Project, "Opening your project…",
@@ -171,19 +221,24 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 "Rivet can inspect this project and will ask before changing files.",
                 null, {}, Modifier.weight(1f))
         } else {
-            MessageList(state, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
-                Modifier.weight(1f).align(Alignment.CenterHorizontally))
+            val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
+                state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
+            key(state.currentSessionId) {
+                MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
+                    Modifier.weight(1f).align(Alignment.CenterHorizontally))
+            }
         }
         if (state.undoCheckpointId != null || state.undoing) {
             ChangeSummary(state, onUndo = { confirmUndo = true },
-                modifier = Modifier.widthIn(max = MAX_COLUMN_WIDTH).align(Alignment.CenterHorizontally))
+                modifier = Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).align(Alignment.CenterHorizontally))
         }
-        InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null && !wrongProject &&
+        InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null &&
+            projectBinding == ProjectBindingState.Matched &&
             providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges,
             acceptedMessageCount = state.acceptedMessageCount,
             error = state.error, notice = state.notice,
             onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
-            modifier = Modifier.widthIn(max = MAX_COLUMN_WIDTH).align(Alignment.CenterHorizontally))
+            modifier = Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).align(Alignment.CenterHorizontally))
     }
 }
 
@@ -232,20 +287,45 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
                         modifier: Modifier = Modifier) {
     val visible = visibleConversation(state.messages)
+    val streamingText = state.streamingText
+    val totalItems = visible.size +
+        (if (streamingText.isNotBlank()) 1 else 0) +
+        (if (state.activity != null) 1 else 0) +
+        (if (state.notice != null) 1 else 0) +
+        (if (state.error != null) 1 else 0)
     val listState = rememberLazyListState()
-    val atBottom by remember { derivedStateOf {
-        val last = listState.layoutInfo.visibleItemsInfo.lastOrNull()
-        last == null || last.index >= listState.layoutInfo.totalItemsCount - 2
+    var followBottom by remember { mutableStateOf(true) }
+    var programmaticScroll by remember { mutableStateOf(false) }
+    val bottomSlop = with(LocalDensity.current) { 72.dp.toPx() }
+    val nearBottom by remember(bottomSlop) { derivedStateOf {
+        val layout = listState.layoutInfo
+        val last = layout.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
+        if (last.index < layout.totalItemsCount - 1) false
+        else layout.viewportEndOffset - (last.offset + last.size) >= -bottomSlop
     } }
-    LaunchedEffect(visible.size, state.activity, state.error, state.notice) {
-        if (atBottom) listState.animateScrollToItem((visible.size +
-            (if (state.activity != null) 1 else 0) + (if (state.error != null) 1 else 0) +
-            (if (state.notice != null) 1 else 0) - 1).coerceAtLeast(0))
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow { Triple(listState.isScrollInProgress, nearBottom, programmaticScroll) }
+            .collect { (scrolling, near, programmatic) ->
+                if (scrolling && !programmatic) followBottom = near
+            }
     }
-    LazyColumn(state = listState, modifier = modifier.widthIn(max = MAX_COLUMN_WIDTH).fillMaxSize(),
+    LaunchedEffect(visible.size, streamingText.length, state.streaming, state.activity, state.error, state.notice) {
+        if (followBottom && totalItems > 0) {
+            programmaticScroll = true
+            try {
+                scrollToConversationBottom(listState, totalItems - 1)
+            } finally {
+                programmaticScroll = false
+            }
+        }
+    }
+    LazyColumn(state = listState, modifier = modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(visible) { message -> MessageRow(message) }
+        if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
+            AssistantMessage(displaySafeText(streamingText), streaming = true)
+        }
         state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
@@ -266,11 +346,21 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     }
 }
 
+private suspend fun scrollToConversationBottom(state: androidx.compose.foundation.lazy.LazyListState, index: Int) {
+    state.scrollToItem(index)
+    val layout = state.layoutInfo
+    val item = layout.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    val viewport = layout.viewportEndOffset - layout.viewportStartOffset
+    val offset = item.size - viewport
+    if (offset != 0) state.scrollToItem(index, offset)
+}
+
 @Composable
 private fun MessageRow(message: AgentMessage) {
     if (message.role == AgentRole.User) {
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Column(horizontalAlignment = Alignment.End, verticalArrangement = Arrangement.spacedBy(2.dp)) {
+            Column(Modifier.fillMaxWidth(0.86f), horizontalAlignment = Alignment.End,
+                verticalArrangement = Arrangement.spacedBy(2.dp)) {
                 Text("You", style = MaterialTheme.typography.labelLarge,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Surface(color = MaterialTheme.colorScheme.surfaceContainer,
@@ -283,12 +373,98 @@ private fun MessageRow(message: AgentMessage) {
             }
         }
     } else {
-        Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+        AssistantMessage(displaySafeText(message.text), streaming = false)
+    }
+}
+
+@Composable
+private fun AssistantMessage(text: String, streaming: Boolean) {
+    Surface(
+        modifier = Modifier.fillMaxWidth(0.94f),
+        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
+        shape = RoundedCornerShape(8.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.15f)),
+    ) {
+        Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+            verticalArrangement = Arrangement.spacedBy(5.dp)) {
             Text("Rivet", style = MaterialTheme.typography.labelLarge,
                 color = MaterialTheme.colorScheme.primary)
-            Text(message.text, style = MaterialTheme.typography.bodyMedium)
+            if (streaming) {
+                Text(text, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
+            } else AssistantMarkdown(text)
         }
     }
+}
+
+@Composable
+private fun AssistantMarkdown(text: String) {
+    val blocks = remember(text) { parseAssistantMarkdown(text) }
+    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+        blocks.forEach { block ->
+            when (block) {
+                is ChatMarkdownBlock.Paragraph -> InlineMarkdown(block.text)
+                is ChatMarkdownBlock.Heading -> {
+                    val style = when (block.level) {
+                        1 -> MaterialTheme.typography.titleLarge
+                        2 -> MaterialTheme.typography.titleMedium
+                        else -> MaterialTheme.typography.titleSmall
+                    }
+                    InlineMarkdown(block.text, style = style.copy(fontFamily = FontFamily.Default,
+                        fontWeight = FontWeight.SemiBold))
+                }
+                is ChatMarkdownBlock.Quote -> Surface(
+                    color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(4.dp),
+                ) { InlineMarkdown(block.text, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)) }
+                is ChatMarkdownBlock.ListItems -> Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
+                    block.items.forEachIndexed { index, item ->
+                        Row(verticalAlignment = Alignment.Top) {
+                            Text(if (block.ordered) "${block.start + index}." else "•",
+                                modifier = Modifier.widthIn(min = 24.dp),
+                                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
+                            InlineMarkdown(item, modifier = Modifier.weight(1f))
+                        }
+                    }
+                }
+                is ChatMarkdownBlock.Code -> Surface(
+                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                    shape = RoundedCornerShape(4.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+                ) {
+                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                        .padding(horizontal = 10.dp, vertical = 9.dp)) {
+                        Text(displaySafeText(block.text), softWrap = false,
+                            style = MaterialTheme.typography.bodySmall.copy(
+                                fontFamily = FontFamily.Monospace,
+                                color = MaterialTheme.colorScheme.onSurface),
+                        )
+                    }
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun InlineMarkdown(text: String, modifier: Modifier = Modifier, style: TextStyle? = null) {
+    val textStyle = style ?: MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)
+    val runs = remember(text) { parseInlineMarkdown(text) }
+    val color = MaterialTheme.colorScheme.onBackground
+    val codeBackground = MaterialTheme.colorScheme.surfaceContainer
+    val annotated = remember(runs, color, codeBackground, textStyle) {
+        buildAnnotatedString {
+            runs.forEach { run ->
+                withStyle(SpanStyle(
+                    color = color,
+                    fontFamily = if (run.code) FontFamily.Monospace else null,
+                    fontWeight = if (run.bold) FontWeight.SemiBold else textStyle.fontWeight,
+                    fontStyle = if (run.italic) FontStyle.Italic else textStyle.fontStyle,
+                    background = if (run.code) codeBackground else Color.Transparent,
+                )) { append(displaySafeText(run.text)) }
+            }
+        }
+    }
+    Text(annotated, modifier = modifier, style = textStyle.copy(color = color))
 }
 
 internal fun visibleConversation(messages: List<AgentMessage>): List<AgentMessage> =
@@ -307,10 +483,15 @@ private fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> U
     val command = request.call.name == "run_command"
     val delete = request.call.name == "delete_path"
     AlertDialog(onDismissRequest = { onDeny(request.approvalToken) },
-        title = { Text(displaySafeText(approvalTitle(request))) },
+        title = { Text(displaySafeText(approvalTitle(request)),
+            style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-            Text(displaySafeText(request.detail))
-            if (command) Text(COMMAND_APPROVAL_WARNING)
+            Text(displaySafeText(request.detail),
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily =
+                    if (command) FontFamily.Monospace else FontFamily.Default))
+            if (command) Text(COMMAND_APPROVAL_WARNING,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Default),
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         } },
         confirmButton = { RivetOutlinedButton(onClick = { onApprove(request.approvalToken) }) {
             Text(if (delete) "Delete" else "Allow")

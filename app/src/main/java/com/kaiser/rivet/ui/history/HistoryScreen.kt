@@ -1,6 +1,7 @@
 package com.kaiser.rivet.ui.history
 
 import android.text.format.DateUtils
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -33,6 +34,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
@@ -54,10 +56,10 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
     renameTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { renameTarget = null },
-            title = { Text("Rename conversation") },
+            title = { Text("Rename conversation", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
             text = {
                 OutlinedTextField(value = title, onValueChange = { title = it },
-                    label = { Text("Name") }, singleLine = true)
+                    label = { Text("Name", fontFamily = FontFamily.Default) }, singleLine = true)
             },
             confirmButton = { RivetOutlinedButton(onClick = {
                 viewModel.renameSession(target.id, title)
@@ -69,8 +71,9 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
     deleteTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
-            title = { Text("Delete conversation?") },
-            text = { Text("This removes it from Rivet. Project files are not changed.") },
+            title = { Text("Delete conversation?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = { Text("This removes it from Rivet. Project files are not changed.",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
             confirmButton = { RivetOutlinedButton(onClick = {
                 viewModel.deleteSession(target.id)
                 deleteTarget = null
@@ -143,7 +146,9 @@ private fun HistoryRow(
     onRename: () -> Unit,
     onDelete: () -> Unit,
 ) {
-    Row(Modifier.fillMaxWidth().clickable(enabled = enabled, onClick = onOpen)
+    Row(Modifier.fillMaxWidth()
+        .then(if (session.pinned) Modifier.background(MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.72f)) else Modifier)
+        .clickable(enabled = enabled, onClick = onOpen)
         .padding(start = 2.dp, top = 7.dp, bottom = 7.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f).padding(end = 8.dp)) {
@@ -158,7 +163,8 @@ private fun HistoryRow(
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         IconButton(onClick = onPin, enabled = enabled, modifier = Modifier.size(48.dp)) {
-            Icon(painterResource(R.drawable.ic_pin), if (session.pinned) "Unpin conversation" else "Pin conversation",
+            Icon(painterResource(if (session.pinned) R.drawable.ic_pin_filled else R.drawable.ic_pin),
+                if (session.pinned) "Unpin conversation" else "Pin conversation",
                 tint = if (session.pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground)
         }
         IconButton(onClick = onRename, enabled = enabled, modifier = Modifier.size(48.dp)) {
