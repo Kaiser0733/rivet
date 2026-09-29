@@ -7,6 +7,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
@@ -26,11 +29,13 @@ import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
@@ -54,6 +59,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.style.TextOverflow
@@ -80,13 +86,13 @@ import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
+import com.kaiser.rivet.ui.history.HistoryPane
 import kotlinx.coroutines.flow.collect
-
-private val MAX_CHAT_LANE_WIDTH = 520.dp
 
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenHistory: () -> Unit) {
+    val landscape = showsHistoryPane(LocalConfiguration.current.orientation)
     val state by chatViewModel.uiState.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
     val projectBinding = projectBindingState(state.currentSessionId, state.currentSessionWorkspaceId,
@@ -137,108 +143,119 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-        Row(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
-            .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onOpenHistory, modifier = Modifier.size(48.dp),
-                enabled = state.ready && !state.projectLoading && !state.streaming &&
-                    !state.undoing && !state.recoveringProjectChanges) {
-                Icon(painterResource(R.drawable.ic_history), "Conversation history",
-                    tint = MaterialTheme.colorScheme.onBackground)
+    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+        val sidebarWidth = landscapeSidebarWidth(maxWidth.value).dp
+        Row(Modifier.fillMaxSize()) {
+            if (landscape) {
+                HistoryPane(chatViewModel, Modifier.width(sidebarWidth).fillMaxSize())
+                VerticalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f))
             }
-            TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
-                enabled = providers.configs.isNotEmpty() && state.ready && !state.streaming &&
-                    !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
-                Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
-                Text(displaySafeText(state.projectName ?: "Choose project"), maxLines = 1,
-                    overflow = TextOverflow.Ellipsis)
-                Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp))
-            }
-            IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
-                Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
-                    tint = MaterialTheme.colorScheme.onBackground)
-            }
-        }
-        if (providers.configs.isNotEmpty()) {
-            Box(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)) {
-                ModelSelector(Modifier.align(Alignment.Center), providersViewModel)
-            }
-        }
-        HorizontalDivider(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth()
-            .align(Alignment.CenterHorizontally).padding(top = 2.dp),
-            color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.23f))
-        if (state.projectError != null && projectBinding != ProjectBindingState.AccessLost &&
-            providers.configs.isNotEmpty() && !(state.projectName == null && state.messages.isEmpty())) {
-            Row(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
-                .padding(horizontal = 16.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Text(state.projectError.orEmpty(), Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
-                if (providers.configs.isNotEmpty() &&
-                    (state.projectName != null || state.messages.isNotEmpty() || state.projectError != null))
-                    TextButton(onClick = ::chooseProject) { Text("Choose again") }
-            }
-        }
-        if (projectBinding == ProjectBindingState.AccessLost && providers.configs.isNotEmpty() && state.messages.isNotEmpty()) {
-            Row(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
-                .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(PROJECT_ACCESS_LOST_MESSAGE, Modifier.weight(1f),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                TextButton(onClick = ::chooseProject) { Text("Choose project again") }
-            }
-        }
-        if (wrongProject && state.projectName != null && providers.configs.isNotEmpty()) {
-            Column(Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
-                .padding(horizontal = 16.dp)) {
-                Text(PROJECT_BINDING_MISMATCH_MESSAGE, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Row {
-                    TextButton(onClick = ::chooseProject) { Text("Choose its project") }
-                    TextButton(onClick = chatViewModel::newSession) { Text("Start new conversation") }
+            // Keep one Chat subtree so the composer and scroll state survive rotation.
+            Column(Modifier.weight(1f).fillMaxSize()) {
+                Row(Modifier.fillMaxWidth()
+                    .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    if (landscape) Spacer(Modifier.size(48.dp))
+                    else IconButton(onClick = onOpenHistory, modifier = Modifier.size(48.dp),
+                        enabled = state.ready && !state.projectLoading && !state.streaming &&
+                            !state.undoing && !state.recoveringProjectChanges) {
+                        Icon(painterResource(R.drawable.ic_history), "Conversation history",
+                            tint = MaterialTheme.colorScheme.onBackground)
+                    }
+                    TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
+                        enabled = providers.configs.isNotEmpty() && state.ready && !state.streaming &&
+                            !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
+                        Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
+                        Text(displaySafeText(state.projectName ?: "Choose project"), maxLines = 1,
+                            overflow = TextOverflow.Ellipsis)
+                        Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
+                        Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
+                            tint = MaterialTheme.colorScheme.onBackground)
+                    }
                 }
+                if (providers.configs.isNotEmpty()) {
+                    Box(Modifier.fillMaxWidth()) {
+                        ModelSelector(Modifier.align(Alignment.Center), providersViewModel)
+                    }
+                }
+                HorizontalDivider(Modifier.fillMaxWidth()
+                    .align(Alignment.CenterHorizontally).padding(top = 2.dp),
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.23f))
+                if (state.projectError != null && projectBinding != ProjectBindingState.AccessLost &&
+                    providers.configs.isNotEmpty() && !(state.projectName == null && state.messages.isEmpty())) {
+                    Row(Modifier.fillMaxWidth()
+                        .padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text(state.projectError.orEmpty(), Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
+                        if (providers.configs.isNotEmpty() &&
+                            (state.projectName != null || state.messages.isNotEmpty() || state.projectError != null))
+                            TextButton(onClick = ::chooseProject) { Text("Choose again") }
+                    }
+                }
+                if (projectBinding == ProjectBindingState.AccessLost && providers.configs.isNotEmpty() && state.messages.isNotEmpty()) {
+                    Row(Modifier.fillMaxWidth()
+                        .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
+                        Text(PROJECT_ACCESS_LOST_MESSAGE, Modifier.weight(1f),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(onClick = ::chooseProject) { Text("Choose project again") }
+                    }
+                }
+                if (wrongProject && state.projectName != null && providers.configs.isNotEmpty()) {
+                    Column(Modifier.fillMaxWidth()
+                        .padding(horizontal = 16.dp)) {
+                        Text(PROJECT_BINDING_MISMATCH_MESSAGE, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row {
+                            TextButton(onClick = ::chooseProject) { Text("Choose its project") }
+                            TextButton(onClick = chatViewModel::newSession) { Text("Start new conversation") }
+                        }
+                    }
+                }
+                if (providers.configs.isEmpty()) {
+                    EmptyState(RivetDoodle.Provider, "Choose a model to get started.",
+                        "Add a provider first. Then choose the project you want Rivet to work on.",
+                        "Open Settings", onOpenSettings, Modifier.weight(1f))
+                } else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty()) {
+                    EmptyState(RivetDoodle.Project, "Rivet no longer has access to this project.",
+                        "Choose the folder again to continue this conversation.",
+                        "Choose project again", ::chooseProject, Modifier.weight(1f))
+                } else if (state.projectName == null && state.projectError != null && state.messages.isEmpty()) {
+                    EmptyState(RivetDoodle.Project, "Rivet couldn't open that project.",
+                        "Choose the folder again to continue.",
+                        "Choose project again", ::chooseProject, Modifier.weight(1f))
+                } else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading) {
+                    EmptyState(RivetDoodle.Project, "What do you want to work on?",
+                        "Choose the folder that contains your project, then tell Rivet what you want to change.",
+                        "Choose project", ::chooseProject, Modifier.weight(1f))
+                } else if (state.projectLoading) {
+                    EmptyState(RivetDoodle.Project, "Opening your project…",
+                        "Rivet is restoring access to the folder you selected.",
+                        null, {}, Modifier.weight(1f))
+                } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null) {
+                    EmptyState(RivetDoodle.Ready, "Tell Rivet what you want to change.",
+                        "Rivet can inspect this project and will ask before changing files.",
+                        null, {}, Modifier.weight(1f))
+                } else {
+                    val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
+                        state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
+                    key(state.currentSessionId) {
+                        MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
+                            Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                    }
+                }
+                if (state.undoCheckpointId != null || state.undoing) {
+                    ChangeSummary(state, onUndo = { confirmUndo = true },
+                        modifier = Modifier.fillMaxWidth())
+                }
+                InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null &&
+                    projectBinding == ProjectBindingState.Matched &&
+                    providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges,
+                    acceptedMessageCount = state.acceptedMessageCount,
+                    error = state.error, notice = state.notice,
+                    onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
+                    modifier = Modifier.fillMaxWidth())
             }
         }
-        if (providers.configs.isEmpty()) {
-            EmptyState(RivetDoodle.Provider, "Choose a model to get started.",
-                "Add a provider first. Then choose the project you want Rivet to work on.",
-                "Open Settings", onOpenSettings, Modifier.weight(1f))
-        } else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty()) {
-            EmptyState(RivetDoodle.Project, "Rivet no longer has access to this project.",
-                "Choose the folder again to continue this conversation.",
-                "Choose project again", ::chooseProject, Modifier.weight(1f))
-        } else if (state.projectName == null && state.projectError != null && state.messages.isEmpty()) {
-            EmptyState(RivetDoodle.Project, "Rivet couldn't open that project.",
-                "Choose the folder again to continue.",
-                "Choose project again", ::chooseProject, Modifier.weight(1f))
-        } else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading) {
-            EmptyState(RivetDoodle.Project, "What do you want to work on?",
-                "Choose the folder that contains your project, then tell Rivet what you want to change.",
-                "Choose project", ::chooseProject, Modifier.weight(1f))
-        } else if (state.projectLoading) {
-            EmptyState(RivetDoodle.Project, "Opening your project…",
-                "Rivet is restoring access to the folder you selected.",
-                null, {}, Modifier.weight(1f))
-        } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null) {
-            EmptyState(RivetDoodle.Ready, "Tell Rivet what you want to change.",
-                "Rivet can inspect this project and will ask before changing files.",
-                null, {}, Modifier.weight(1f))
-        } else {
-            val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
-                state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
-            key(state.currentSessionId) {
-                MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
-                    Modifier.weight(1f).align(Alignment.CenterHorizontally))
-            }
-        }
-        if (state.undoCheckpointId != null || state.undoing) {
-            ChangeSummary(state, onUndo = { confirmUndo = true },
-                modifier = Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).align(Alignment.CenterHorizontally))
-        }
-        InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null &&
-            projectBinding == ProjectBindingState.Matched &&
-            providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges,
-            acceptedMessageCount = state.acceptedMessageCount,
-            error = state.error, notice = state.notice,
-            onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
-            modifier = Modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).align(Alignment.CenterHorizontally))
     }
 }
 
@@ -246,7 +263,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
 private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action: String?,
                        onAction: () -> Unit, modifier: Modifier = Modifier) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Column(Modifier.padding(horizontal = 28.dp, vertical = 20.dp).widthIn(max = 390.dp),
+        Column(Modifier.widthIn(max = 390.dp).verticalScroll(rememberScrollState())
+            .padding(horizontal = 24.dp, vertical = 20.dp),
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             RivetDoodleMark(kind)
@@ -319,7 +337,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
         }
     }
-    LazyColumn(state = listState, modifier = modifier.widthIn(max = MAX_CHAT_LANE_WIDTH).fillMaxSize(),
+    LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(visible) { message -> MessageRow(message) }
