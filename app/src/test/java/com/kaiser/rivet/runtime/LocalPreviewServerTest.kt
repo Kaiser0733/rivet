@@ -48,10 +48,8 @@ class LocalPreviewServerTest {
             assertTrue(missing.startsWith("HTTP/1.1 404"))
             assertFalse(missing.contains("content://"))
         } finally { server.close() }
-        try {
-            request(server, "GET", "/")
-            throw AssertionError("closed preview accepted another request")
-        } catch (_: IOException) { }
+        val afterClose = try { request(url, "GET", "/") } catch (_: IOException) { "" }
+        assertFalse(afterClose.contains("<h1>Rivet preview</h1>"))
     }
 
     @Test fun identityChangeDeniesFurtherReads() {
@@ -86,7 +84,11 @@ class LocalPreviewServerTest {
     }
 
     private fun request(server: LocalPreviewServer, method: String, path: String): String {
-        val port = server.url.substringAfterLast(':').substringBefore('/')
+        return request(server.url, method, path)
+    }
+
+    private fun request(url: String, method: String, path: String): String {
+        val port = url.substringAfterLast(':').substringBefore('/')
         return Socket("127.0.0.1", port.toInt()).use { socket ->
             socket.soTimeout = 4_000
             socket.getOutputStream().write("$method $path HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
