@@ -66,8 +66,9 @@ backend passed the preceding physical acceptance process.
 
 ## Phase 10 — Rivet UI/UX Redesign (in progress)
 
-Chat remains the home surface, with full-screen History and Settings routes.
-The rose-and-ink presentation uses the clean heart source as a Chat-only
-decorative background; other routes stay on the plain rose surface. History
-pinning is persisted in SQLite; provider editing and the accepted agent
-workflows remain intact.
+The 0.10.0 (19) candidate keeps Chat as the home surface with full-screen
+History and Settings routes. It adds bounded model search, local assistant
+Markdown rendering, a persistent rose-intensity setting, and distinct project
+access-loss messaging while preserving exact SAF identity checks. Prior session
+migration and pinning behavior remain covered. Final post-fix physical UI
+regression is pending; this phase is not accepted until that retest passes.

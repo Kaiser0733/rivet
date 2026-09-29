@@ -284,3 +284,12 @@ What: SQLite session headers store a pinned flag. Existing rows migrate to
 unpinned; History sorts pinned sessions first and then by recent activity.
 Why: pinning is a durable History action and must not alter conversation events
 or activity recency.
+
+## D34 — Presentation state does not change project authority
+
+What: Rose intensity is a bounded app-local preference; assistant Markdown is
+display-only for completed prose and does not activate HTML or links. Chat
+labels an unavailable session project separately from an accessible project
+with a different exact SAF tree identity.
+Why: presentation changes must not alter device brightness, workspace binding,
+tool policy, or approval authority.
