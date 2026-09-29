@@ -43,6 +43,8 @@ import kotlin.math.roundToInt
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.ui.MAX_ROSE_INTENSITY
+import com.kaiser.rivet.ui.MIN_ROSE_INTENSITY
 import com.kaiser.rivet.ui.RivetOutlinedButton
 
 private val MAX_WIDTH = 680.dp
