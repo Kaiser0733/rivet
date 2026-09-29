@@ -26,7 +26,6 @@
     <string name="provider_model_current">Selected model: %1$s</string>
     <string name="provider_search_models">Search models</string>
     <string name="provider_models_showing">Showing %1$d of %2$d models. Search to see more.</string>
-    <string name="provider_models_matching">%1$d matching models. Showing %2$d.</string>
     <string name="provider_models_no_match">No models match. You can still enter a Model ID above.</string>
     <string name="provider_fetch_models">Fetch models</string>
     <string name="provider_test">Test connection</string>
