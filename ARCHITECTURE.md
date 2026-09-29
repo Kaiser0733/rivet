@@ -70,17 +70,18 @@ message only; the active request completes (or is stopped) on its own.
 
 ## UI shell
 
-Single-activity Compose. Chat is the normal working surface; Settings is
-secondary. Android's folder picker is launched from Chat. Runtime, file, Git,
-and synchronization controls are not normal destinations. Chat shows completed
+Single-activity Compose. Chat is the home surface; full-screen History and
+Settings are secondary routes, with the provider editor nested in Settings.
+Android's folder picker is launched from Chat. Runtime, file, Git, and
+synchronization controls are not normal destinations. Chat shows completed
 conversation text, contextual project changes and Undo, and approval dialogs;
 provider-neutral tool events remain durable but are not rendered as a log.
+History lists SQLite sessions with pinned sessions before recent sessions.
 Content width is capped for tablet layouts. Rotation preserves the composer
-draft and ViewModels. System-initiated
-process death destroys the ViewModels and terminates any active stream. A new
-process reloads completed provider configuration and coding sessions from
-storage. An interrupted marker is shown once; streams and approvals are never
-resumed or reconstructed.
+draft and ViewModels. System-initiated process death destroys the ViewModels
+and terminates any active stream. A new process reloads completed provider
+configuration and coding sessions from storage. An interrupted marker is
+shown once; streams and approvals are never resumed or reconstructed.
 
 ## Agent execution boundary
 
