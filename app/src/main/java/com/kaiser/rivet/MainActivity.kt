@@ -39,7 +39,8 @@ class MainActivity : ComponentActivity() {
     private fun consumeProcessRequest(intent: android.content.Intent?) {
         if (intent?.getBooleanExtra(EXTRA_OPEN_PROCESSES, false) == true) {
             processNavigationRequest.value += 1
-            setIntent(android.content.Intent(intent).removeExtra(EXTRA_OPEN_PROCESSES))
+            val clearedIntent = android.content.Intent(intent).apply { removeExtra(EXTRA_OPEN_PROCESSES) }
+            setIntent(clearedIntent)
         }
     }
 
