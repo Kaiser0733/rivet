@@ -71,7 +71,9 @@ def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
     matches = [service for service in services if EXPECTED_SERVICE in service]
     assert len(matches) == 1 and len(services) == 1, "APK must declare only Rivet's process service"
     service = matches[0]
-    assert _is_false(_attribute(service, "android:exported")), "process service must be non-exported"
+    exported = _attribute(service, "android:exported")
+    implicit_private = exported is None and not _elements(service, "intent-filter")
+    assert _is_false(exported) or implicit_private, "process service must be non-exported"
     service_type = _attribute(service, "android:foregroundServiceType") or ""
     assert service_type.endswith("0x40000000") or service_type.endswith("specialUse"), (
         "process service must use only foregroundServiceType= specialUse"
