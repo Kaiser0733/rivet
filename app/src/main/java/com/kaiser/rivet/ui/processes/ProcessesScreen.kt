@@ -82,7 +82,7 @@ fun ProcessesScreen(processes: ManagedProcesses, onBack: () -> Unit) {
                     style = MaterialTheme.typography.bodyMedium)
             }
         } else {
-            LazyColumn(Modifier.fillMaxSize().widthIn(max = 760.dp).align(Alignment.CenterHorizontally),
+            LazyColumn(Modifier.widthIn(max = 760.dp).fillMaxSize().align(Alignment.CenterHorizontally),
                 contentPadding = androidx.compose.foundation.layout.PaddingValues(16.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)) {
                 items(processItems, key = { it.id }) { process ->
@@ -126,8 +126,9 @@ private fun ProcessRow(
                 Text(process.url, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            Text(if (active) "Running for ${duration(now - process.startedAtMillis)}"
-                else "Ran for ${duration((process.startedAtMillis.let { now - it }).coerceAtLeast(0))}" +
+            val elapsed = (process.finishedAtMillis ?: now) - process.startedAtMillis
+            Text(if (active) "Elapsed ${duration(elapsed)}"
+                else "Ran for ${duration(elapsed)}" +
                     (process.exitCode?.let { " · exit $it" } ?: ""),
                 style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
             if (process.output.isNotBlank()) {
@@ -139,12 +140,14 @@ private fun ProcessRow(
                 }
             }
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                if (process.url != null) {
+                if (process.url != null && process.status == ManagedProcessStatus.Running) {
                     TextButton(onClick = onOpen) { Text("Open") }
                     TextButton(onClick = onCopy) { Text("Copy link") }
                 }
                 Spacer(Modifier.weight(1f))
-                if (active) TextButton(onClick = onStop) { Text("Stop") }
+                if (process.status == ManagedProcessStatus.Starting || process.status == ManagedProcessStatus.Running) {
+                    TextButton(onClick = onStop) { Text("Stop") }
+                }
             }
         }
     }

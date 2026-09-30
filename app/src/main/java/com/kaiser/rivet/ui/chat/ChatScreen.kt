@@ -405,7 +405,7 @@ private fun ActivityRow(group: AgentActivityGroup) {
     var expanded by rememberSaveable(group.id) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().clickable(role = Role.Button) { expanded = !expanded }
+            Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { expanded = !expanded }
                 .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
                 .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,

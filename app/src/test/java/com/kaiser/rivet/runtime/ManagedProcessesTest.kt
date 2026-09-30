@@ -79,6 +79,7 @@ class ManagedProcessesTest {
         assertFalse(item.label.contains("user:pass"))
         assertTrue(item.output.length <= ManagedProcesses.MAX_OUTPUT_CHARS)
         assertEquals(ManagedProcessStatus.Completed, item.status)
+        assertTrue(item.finishedAtMillis != null)
     }
 
     @Test fun stopAllStopsOnlyRegisteredOperations() {
@@ -95,6 +96,7 @@ class ManagedProcessesTest {
             processes.processes.value.single { it.id == commandId }.status)
         assertEquals(ManagedProcessStatus.Stopped,
             processes.processes.value.single { it.id == previewId }.status)
+        assertTrue(processes.processes.value.single { it.id == previewId }.finishedAtMillis != null)
     }
 
     @Test fun stoppingActiveCommandCancelsItsAgentTurnWithoutSuccessResult() = runTest {

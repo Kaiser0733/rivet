@@ -27,6 +27,7 @@ data class ManagedProcessInfo(
     val url: String? = null,
     val output: String = "",
     val exitCode: Int? = null,
+    val finishedAtMillis: Long? = null,
 )
 
 /** App-process ownership for live commands and loopback previews. */
@@ -79,7 +80,8 @@ class ManagedProcesses {
             else -> ManagedProcessStatus.Completed
         }
         entry.info = entry.info.copy(status = status, exitCode = result.exitCode,
-            output = boundedOutput(result.stdout, result.stderr))
+            output = boundedOutput(result.stdout, result.stderr),
+            finishedAtMillis = entry.info.finishedAtMillis ?: System.currentTimeMillis())
         trimCompletedLocked()
         publishLocked()
     }
@@ -87,8 +89,10 @@ class ManagedProcesses {
     fun failCommand(id: String) = synchronized(lock) {
         entries[id]?.let { entry ->
             if (entry.info.status == ManagedProcessStatus.Stopping) {
-                entry.info = entry.info.copy(status = ManagedProcessStatus.Stopped)
-            } else entry.info = entry.info.copy(status = ManagedProcessStatus.Failed)
+                entry.info = entry.info.copy(status = ManagedProcessStatus.Stopped,
+                    finishedAtMillis = entry.info.finishedAtMillis ?: System.currentTimeMillis())
+            } else entry.info = entry.info.copy(status = ManagedProcessStatus.Failed,
+                finishedAtMillis = entry.info.finishedAtMillis ?: System.currentTimeMillis())
             trimCompletedLocked()
             publishLocked()
         }
@@ -260,7 +264,7 @@ class ManagedProcesses {
             failed -> ManagedProcessStatus.Failed
             entry.info.status == ManagedProcessStatus.Stopping -> ManagedProcessStatus.Stopped
             else -> ManagedProcessStatus.Stopped
-        })
+        }, finishedAtMillis = entry.info.finishedAtMillis ?: System.currentTimeMillis())
         trimCompletedLocked()
         publishLocked()
     }
