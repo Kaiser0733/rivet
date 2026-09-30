@@ -9,12 +9,14 @@ import okhttp3.Response
 import okhttp3.ResponseBody
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.SocketPolicy
 import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolEffect
 import com.kaiser.rivet.agent.AgentToolExecutor
 import com.kaiser.rivet.agent.AgentToolExecutorTest
+import kotlinx.coroutines.async
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -45,6 +47,67 @@ class ProjectDownloaderTest {
             .sslSocketFactory(clientCertificates.sslSocketFactory(), clientCertificates.trustManager)
             .build()
         return server to client
+    }
+
+    @Test fun serverErrorAndDownloadedChecksumMismatchLeaveNoStagedBody() {
+        val (server, client) = server()
+        val folder = Files.createTempDirectory("rivet-download-failures").toFile()
+        try {
+            val downloader = ProjectDownloader(folder, client)
+            server.enqueue(MockResponse().setResponseCode(503).setBody("unavailable"))
+            val failure = downloadFailure {
+                kotlinx.coroutines.runBlocking { downloader.download(server.url("/error").toString()) }
+            }
+            assertEquals("download_failed", failure.code)
+            assertEquals(503, failure.statusCode)
+            server.enqueue(MockResponse().setBody("different bytes"))
+            assertEquals("download_sha_mismatch", downloadFailure {
+                kotlinx.coroutines.runBlocking {
+                    downloader.download(server.url("/checksum").toString(), "0".repeat(64))
+                }
+            }.code)
+            assertEquals(0, folder.listFiles().orEmpty().size)
+        } finally {
+            server.shutdown()
+            folder.deleteRecursively()
+        }
+    }
+
+    @Test fun timeoutAndCancellationCloseTransportAndRemoveStagedBodies() = kotlinx.coroutines.runBlocking {
+        val (server, client) = server()
+        val folder = Files.createTempDirectory("rivet-download-cancellation").toFile()
+        try {
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            val timedClient = client.newBuilder().callTimeout(2, TimeUnit.SECONDS).build()
+            assertEquals("network_error", downloadFailure {
+                kotlinx.coroutines.runBlocking {
+                    ProjectDownloader(folder, timedClient).download(server.url("/timeout").toString())
+                }
+            }.code)
+            assertEquals("/timeout", server.takeRequest(5, TimeUnit.SECONDS)?.path)
+            assertEquals(0, folder.listFiles().orEmpty().size)
+
+            server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.NO_RESPONSE))
+            val running = async {
+                ProjectDownloader(folder, client).download(server.url("/cancel").toString())
+            }
+            try {
+                val request = kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
+                    server.takeRequest(5, TimeUnit.SECONDS)
+                }
+                assertEquals("/cancel", request?.path)
+                running.cancel()
+                running.join()
+                assertTrue(running.isCancelled)
+                assertEquals(0, folder.listFiles().orEmpty().size)
+            } finally {
+                running.cancel()
+                running.join()
+            }
+        } finally {
+            server.shutdown()
+            folder.deleteRecursively()
+        }
     }
 
     @Test fun streamsHttpsBytesAndDoesNotForwardCredentialsOrCookies() {
@@ -184,6 +247,15 @@ class ProjectDownloaderTest {
             assertEquals(sha256(content), value["sha256"]!!.jsonPrimitive.content)
             assertEquals(content.size.toString(), value["size"]!!.jsonPrimitive.content)
             assertEquals("true", value["created"]!!.jsonPrimitive.content)
+            server.enqueue(MockResponse().setBody("replacement"))
+            val replacement = kotlinx.coroutines.runBlocking {
+                executor.prepare(AgentToolCall("replace", "download_file",
+                    """{"url":"${server.url("/asset.svg")}","path":"assets/asset.svg","expected_sha256":"${sha256(content)}"}"""))
+                    .execute()
+            }
+            assertFalse(replacement.error)
+            assertEquals("false", Json.parseToJsonElement(replacement.content)
+                .jsonObject["created"]!!.jsonPrimitive.content)
         } finally {
             server.shutdown()
             folder.deleteRecursively()
