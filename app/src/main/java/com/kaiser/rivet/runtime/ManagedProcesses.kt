@@ -86,6 +86,14 @@ class ManagedProcesses {
         publishLocked()
     }
 
+    internal fun updateCommandOutput(id: String, stdout: String, stderr: String) = synchronized(lock) {
+        val entry = entries[id]?.takeIf {
+            it.info.kind == ManagedProcessKind.Command && it.info.status == ManagedProcessStatus.Running
+        } ?: return@synchronized
+        entry.info = entry.info.copy(output = boundedOutput(stdout, stderr))
+        publishLocked()
+    }
+
     fun failCommand(id: String) = synchronized(lock) {
         entries[id]?.let { entry ->
             if (entry.info.status == ManagedProcessStatus.Stopping) {

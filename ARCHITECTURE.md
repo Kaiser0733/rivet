@@ -243,8 +243,8 @@ repeated tool calls.
 `run_command` starts `/system/bin/sh -lc` with a workspace-relative cwd and
 an explicit HOME/PATH/TMPDIR/PWD/LANG/TERM environment. HOME is under
 the workspace's `files/runtime` area, not the app's credential/configuration area. Each agent
-command requires the existing one-shot approval; stdout and stderr retain
-bounded head/tail text, exit status remains separate from sync status, and a
+command follows the selected autonomy policy; stdout and stderr retain
+bounded head/tail text, with bounded live snapshots in Processes. Exit status remains separate from sync status, and a
 timeout or Stop terminates the process group. The shell shares Rivet's Android
 UID: cwd checks are not a security sandbox. No API keys are exported.
 
