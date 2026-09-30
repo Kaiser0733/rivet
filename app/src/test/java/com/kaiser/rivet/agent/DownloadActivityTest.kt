@@ -40,6 +40,8 @@ class DownloadActivityTest {
             authority = tree.authority
             exported = true
             grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
         }
         documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
         app.contentResolver.takePersistableUriPermission(tree,
