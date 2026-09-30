@@ -65,13 +65,14 @@ class RuntimeManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "specialUse"):
             verify_apk_runtime_manifest(DEBUG_TREE.replace("0x40000000", "0x00000003"), ALLOWED_PERMISSIONS)
 
-    def test_debug_apk_accepts_implicit_private_service_only_without_filters(self):
+    def test_debug_apk_accepts_unpadded_false_but_requires_explicit_visibility(self):
+        verify_apk_runtime_manifest(DEBUG_TREE.replace("0x00000000", "0x0"), ALLOWED_PERMISSIONS)
         without_exported = DEBUG_TREE.replace(
             "      A: android:exported(0x01010010)=(type 0x12)0x00000000\n", "", 1)
-        verify_apk_runtime_manifest(without_exported, ALLOWED_PERMISSIONS)
-        with_filter = without_exported.replace("      E: property", "      E: intent-filter\n      E: property", 1)
         with self.assertRaisesRegex(AssertionError, "non-exported"):
-            verify_apk_runtime_manifest(with_filter, ALLOWED_PERMISSIONS)
+            verify_apk_runtime_manifest(without_exported, ALLOWED_PERMISSIONS)
+        with self.assertRaisesRegex(AssertionError, "non-exported"):
+            verify_apk_runtime_manifest(DEBUG_TREE.replace("0x00000000", "0x1"), ALLOWED_PERMISSIONS)
 
     def test_debug_apk_requires_subtype_and_no_boot_receiver(self):
         with self.assertRaisesRegex(AssertionError, "subtype"):
