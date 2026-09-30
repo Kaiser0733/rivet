@@ -57,7 +57,10 @@ class RuntimeController(
                 ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "process_limit")
         }
         val result = try {
-            CommandProcess().run(command, directory.absolutePath, environment, timeoutMs)
+            CommandProcess().run(command, directory.absolutePath, environment, timeoutMs,
+                onOutput = processId?.let { id -> { stdout, stderr ->
+                    managedProcesses?.updateCommandOutput(id, stdout, stderr)
+                } })
         } catch (e: CancellationException) {
             processId?.let { managedProcesses?.failCommand(it) }
             throw e

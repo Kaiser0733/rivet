@@ -72,6 +72,11 @@ class ManagedProcessesTest {
             "curl -u alice:secret https://user:pass@example.test/file token=secret",
             "", "tree", "Project", Job())!!
         val output = "x".repeat(20_000)
+        processes.updateCommandOutput(id, output, "live error")
+        val live = processes.processes.value.single()
+        assertEquals(ManagedProcessStatus.Running, live.status)
+        assertTrue(live.output.length <= ManagedProcesses.MAX_OUTPUT_CHARS)
+        assertTrue(live.output.endsWith("live error"))
         processes.finishCommand(id, RuntimeCommandResult(0, output, cwd = "", sync = "no_changes"))
         val item = processes.processes.value.single()
         assertTrue(item.label.contains("[redacted]"))
@@ -80,6 +85,8 @@ class ManagedProcessesTest {
         assertTrue(item.output.length <= ManagedProcesses.MAX_OUTPUT_CHARS)
         assertEquals(ManagedProcessStatus.Completed, item.status)
         assertTrue(item.finishedAtMillis != null)
+        processes.updateCommandOutput(id, "late display update", "")
+        assertEquals(item, processes.processes.value.single())
     }
 
     @Test fun stopAllStopsOnlyRegisteredOperations() {
