@@ -117,6 +117,17 @@ class AgentActivityProjectionTest {
             (restarted.single() as AgentConversationItem.Activity).group.operations.single().outcome)
     }
 
+    @Test fun structuredDownloadFailureCannotBecomeCompletedWhenErrorFlagIsMissing() {
+        val call = AgentToolCall("download", "download_file",
+            """{"url":"https://example.test/file","path":"existing.txt"}""")
+        val result = AgentToolResult(call.id, call.name, """{"error":"destination_exists"}""", error = false)
+        val group = (AgentActivityProjection.conversation(listOf(
+            AgentMessage.assistant("", listOf(call)), AgentMessage.tools(listOf(result))))
+            .single() as AgentConversationItem.Activity).group
+        assertEquals(ActivityOutcome.Failed, group.operations.single().outcome)
+        assertEquals("Download 1 file (Failed)", group.summary)
+    }
+
     @Test fun malformedArgumentAndResultFieldsRemainSafeToDisplay() {
         val calls = listOf(
             AgentToolCall("read", "read_file", """{"path":{"unexpected":"value"}}"""),
