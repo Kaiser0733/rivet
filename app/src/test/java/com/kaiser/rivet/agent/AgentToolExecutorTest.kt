@@ -383,6 +383,48 @@ class AgentToolExecutorTest {
         assertTrue(invalid.execute().error)
     }
 
+    @Test fun previewAcceptsRootRelativeEntryWithoutChangingTheServedRoot() = runTest {
+        val launches = mutableListOf<Pair<String, String>>()
+        val executor = AgentToolExecutor(FakeWorkspace(), startPreview = { root, entry ->
+            launches += root to entry
+            PreviewLaunch("id", "http://127.0.0.1:12345/", entry)
+        })
+        for (entry in listOf("index.html", "site/index.html")) {
+            val prepared = executor.prepare(AgentToolCall(entry, "start_preview",
+                """{"root":"site","entry":"$entry"}"""))
+            assertEquals(AgentToolEffect.Preview, prepared.effect)
+            assertFalse(prepared.execute().error)
+        }
+        assertEquals(listOf("site" to "site/index.html", "site" to "site/index.html"), launches)
+    }
+
+    @Test fun ownedProcessStopIsRoutineButModelCanRequestConfirmation() = runTest {
+        val processes = com.kaiser.rivet.runtime.ManagedProcesses()
+        var stops = 0
+        val id = processes.registerPreview("tree", "Project", "index.html",
+            "http://127.0.0.1:12345/") { stops++ }!!
+        val executor = AgentToolExecutor(FakeWorkspace(), managedProcesses = processes,
+            currentWorkspaceIdentity = { "tree" })
+        val prepared = executor.prepare(AgentToolCall("stop", "stop_process", """{"process_id":"$id"}"""))
+        assertEquals(ApprovalDecision.AskUser, ApprovalPolicy.decide(AutonomyMode.Ask, prepared))
+        assertEquals(ApprovalDecision.AutoAuthorize, ApprovalPolicy.decide(AutonomyMode.BasicYolo, prepared))
+        assertEquals(ApprovalDecision.AutoAuthorize, ApprovalPolicy.decide(AutonomyMode.Yolo, prepared))
+        val escalated = executor.prepare(AgentToolCall("ask", "stop_process",
+            """{"process_id":"$id","ask_user":true}"""))
+        assertEquals(ApprovalDecision.AskUser, ApprovalPolicy.decide(AutonomyMode.BasicYolo, escalated))
+        assertEquals(0, stops)
+        assertFalse(prepared.execute().error)
+        assertEquals(1, stops)
+        assertTrue(prepared.execute().error)
+        assertEquals(1, stops)
+        assertTrue(executor.prepare(AgentToolCall("stale", "stop_process",
+            """{"process_id":"$id"}""")).execute().error)
+        val other = processes.registerPreview("other-tree", "Other", "index.html",
+            "http://127.0.0.1:12346/") {}!!
+        assertTrue(executor.prepare(AgentToolCall("wrong", "stop_process",
+            """{"process_id":"$other"}""")).execute().error)
+    }
+
     @Test fun processListingDoesNotDependOnWorkspaceSynchronization() = runTest {
         val executor = AgentToolExecutor(FakeWorkspace(), requireSafCurrent = {
             throw com.kaiser.rivet.runtime.MirrorFailure("sync_required")
