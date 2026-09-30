@@ -18,6 +18,34 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentLoopTest {
+    @Test fun downloadOverwriteKeepsExistingPathDestructiveApproval() = runTest {
+        for (created in listOf(true, false)) {
+            val download = AgentToolCall("download", "download_file", "{}")
+            val deletion = AgentToolCall("delete", "delete_path", """{"path":"asset.bin"}""")
+            val approvals = mutableListOf<AgentApprovalRequest>()
+            var requests = 0
+            val result = AgentLoop(
+                requestModel = { _, _, _ ->
+                    if (requests++ == 0) AgentResponse(toolCalls = listOf(download, deletion))
+                    else AgentResponse(text = "Finished")
+                },
+                prepareTool = { call ->
+                    val approval = AgentApprovalRequest(call, "Change", "asset.bin",
+                        destructivePath = if (call == deletion) "asset.bin" else null)
+                    PreparedAgentTool(call, approval) {
+                        AgentToolResult(call.id, call.name,
+                            if (call == download) """{"path":"asset.bin","created":$created}"""
+                            else """{"path":"asset.bin"}""")
+                    }
+                },
+                requestApproval = { approvals += it; true },
+                describeDestructive = { it.copy(dangerous = true) },
+            ).run(listOf(AgentMessage.user("Download then delete")), emptyList())
+            assertEquals(AgentStopReason.Completed, result.stopReason)
+            assertEquals(!created, approvals.single { it.call == deletion }.dangerous)
+        }
+    }
+
     @Test fun lifecycleTelemetryTracksAskDenialAutoBlockAndCallbackFailure() = runTest {
         suspend fun run(mode: AutonomyMode, allowed: Boolean = true,
                         blocker: String? = null, telemetryFails: Boolean = false): Pair<AgentRunResult, List<AgentToolLifecycleStage>> {

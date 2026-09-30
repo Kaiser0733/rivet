@@ -347,6 +347,7 @@ class AgentToolExecutor(
                                     put("path", saved.path)
                                     put("sha256", saved.sha256)
                                     put("size", saved.size)
+                                    put("created", overwriteHash == null)
                                 }, "Downloaded  ${saved.path}")
                             }
                         }
