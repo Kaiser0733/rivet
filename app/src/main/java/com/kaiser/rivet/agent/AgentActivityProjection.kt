@@ -79,8 +79,11 @@ object AgentActivityProjection {
         val value = result?.let { objectValue(it.content) }.orEmpty()
         val title = title(call.name)
         val detail = detail(call.name, args, value)
-        val outcome = result?.let { resultOutcome(it, value) } ?: live?.stage?.let(::liveOutcome)
-            ?: ActivityOutcome.Unknown
+        val outcome = result?.let { resultOutcome(it, value) } ?: when {
+            // Completion telemetry can precede the durable correlated receipt.
+            call.name == "download_file" && live?.stage == AgentToolLifecycleStage.Completed -> ActivityOutcome.Running
+            else -> live?.stage?.let(::liveOutcome) ?: ActivityOutcome.Unknown
+        }
         val exit = value["exit_code"].primitiveContent()?.toIntOrNull()
         val outcomeDetail = when {
             call.name == "run_command" && exit != null -> "Exit $exit"

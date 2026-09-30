@@ -128,6 +128,15 @@ class AgentActivityProjectionTest {
         assertEquals("Download 1 file (Failed)", group.summary)
     }
 
+    @Test fun completionTelemetryAloneCannotClaimDownloaded() {
+        val call = AgentToolCall("download", "download_file", """{"path":"target.txt"}""")
+        val group = (AgentActivityProjection.conversation(listOf(AgentMessage.assistant("", listOf(call))),
+            listOf(AgentToolLifecycle(AgentToolLifecycle.keyFor(call.id), AgentToolLifecycleStage.Completed)))
+            .single() as AgentConversationItem.Activity).group
+        assertEquals(ActivityOutcome.Running, group.operations.single().outcome)
+        assertEquals("Download 1 file (Running)", group.summary)
+    }
+
     @Test fun incompleteDownloadReceiptCannotClaimSuccess() {
         val call = AgentToolCall("download", "download_file", """{"path":"target.txt"}""")
         val result = AgentToolResult(call.id, call.name, """{"path":"target.txt"}""")
