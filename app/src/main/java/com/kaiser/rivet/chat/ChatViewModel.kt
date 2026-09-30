@@ -111,7 +111,7 @@ internal fun runtimeFailureMessage(code: String?): String = when (code) {
     "workspace_changed" ->
         "The project changed while Rivet was working, so it stopped before running the command."
     "sync_required", "mirror_dirty" ->
-        "Rivet found pending project changes it couldn't safely reconcile. It kept the pending copy and stopped before another command."
+        "Rivet found pending project changes it couldn't safely reconcile. It kept the pending copy and did not overwrite newer project files."
     "sync_conflict", "conflict" ->
         "The project changed outside Rivet. Rivet kept its pending changes and stopped before overwriting newer work."
     "sync_failed" ->
@@ -248,6 +248,11 @@ class ChatViewModel private constructor(
                     catch (_: Exception) { "Selected project" }
                 _uiState.update { it.copy(projectName = name, projectIdentity = workspace.tree.toString(),
                     projectLoading = false, projectError = null) }
+                val pending = try { runtimeController.commandBlocker() in SYNC_RECOVERY_CODES }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { false }
+                if (pending) _uiState.update { it.copy(error = runtimeFailureMessage("sync_required"),
+                    errorAction = ChatErrorAction.RetryProjectChanges) }
             } else _uiState.update { it.copy(projectName = null, projectIdentity = null,
                 projectLoading = false) }
         } catch (e: CancellationException) { throw e
@@ -801,6 +806,36 @@ class ChatViewModel private constructor(
                 _uiState.update { it.copy(error = "Rivet couldn't check these project changes yet. Try again.",
                     errorAction = ChatErrorAction.RetryProjectChanges, activity = null,
                     recoveringProjectChanges = false) }
+            }
+        }
+    }
+
+    fun discardProjectChanges(expectedWorkspace: String) {
+        val state = _uiState.value
+        if (state.projectIdentity != expectedWorkspace ||
+            state.currentSessionWorkspaceId?.let { it != expectedWorkspace } == true ||
+            state.streaming || state.projectLoading || state.undoing || state.recoveringProjectChanges) return
+        val ticket = generation
+        _uiState.update { it.copy(activity = "Reloading the current project…", recoveringProjectChanges = true) }
+        viewModelScope.launch {
+            try {
+                runtimeController.discardPendingChanges(expectedWorkspace)
+                if (ticket == generation && _uiState.value.projectIdentity == expectedWorkspace) {
+                    _uiState.update { it.copy(error = null, errorAction = null,
+                        notice = "Pending Rivet changes discarded. The current project was reloaded.") }
+                }
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                if (ticket == generation && _uiState.value.projectIdentity == expectedWorkspace) {
+                    _uiState.update { it.copy(error = if (e is MirrorFailure && e.code == "workspace_changed")
+                        "The selected project changed. Rivet didn't reload another project."
+                        else "Rivet couldn't reload the project. Your project files were not changed. Try again.",
+                        errorAction = ChatErrorAction.RetryProjectChanges) }
+                }
+            } finally {
+                if (ticket == generation && _uiState.value.projectIdentity == expectedWorkspace) {
+                    _uiState.update { it.copy(activity = null, recoveringProjectChanges = false) }
+                }
             }
         }
     }

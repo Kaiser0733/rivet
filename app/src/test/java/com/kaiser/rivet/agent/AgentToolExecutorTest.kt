@@ -378,7 +378,7 @@ class AgentToolExecutorTest {
         assertFalse(result.error)
         assertTrue(result.content.contains("http://127.0.0.1:43127/"))
         val invalid = executor.prepare(AgentToolCall("bad", "start_preview",
-            """{"root":"site","entry":"other/index.html"}"""))
+            """{"root":"site","entry":"../index.html"}"""))
         assertNull(invalid.approval)
         assertTrue(invalid.execute().error)
     }

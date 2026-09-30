@@ -22,6 +22,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 
+internal data class PreviewPaths(val root: WorkspacePath, val entry: WorkspacePath) {
+    companion object {
+        fun parse(root: String, entry: String): PreviewPaths {
+            require(!Regex("^[A-Za-z]:").containsMatchIn(root) &&
+                !Regex("^[A-Za-z]:").containsMatchIn(entry))
+            val rootPath = WorkspacePath.parse(root)
+            val requested = WorkspacePath.parse(entry)
+            require(!requested.isRoot)
+            val canonical = if (requested.isWithin(rootPath)) requested
+                else WorkspacePath.parse("${rootPath.value}/${requested.value}")
+            require(canonical.isWithin(rootPath) &&
+                (rootPath.segments + canonical.segments).none { it == ".git" })
+            return PreviewPaths(rootPath, canonical)
+        }
+    }
+}
+
 /** Static, read-only HTTP over SAF; the listener is bound to this device's IPv4 loopback only. */
 internal class LocalPreviewServer(
     root: WorkspacePath,

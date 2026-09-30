@@ -195,12 +195,11 @@ class RuntimeController(
         if (selection.currentIdentity() != expectedWorkspace || workspace.tree.toString() != expectedWorkspace) {
             throw MirrorFailure("workspace_changed")
         }
-        val rootPath = WorkspacePath.parse(root)
-        val entryPath = WorkspacePath.parse(entry)
-        if (entryPath.isRoot || !entryPath.isWithin(rootPath) ||
-            (rootPath.segments + entryPath.segments).any { it == ".git" }) {
-            throw MirrorFailure("invalid_path")
-        }
+        val paths = try { PreviewPaths.parse(root, entry) }
+            catch (_: WorkspaceFailure) { throw MirrorFailure("invalid_path") }
+            catch (_: IllegalArgumentException) { throw MirrorFailure("invalid_path") }
+        val rootPath = paths.root
+        val entryPath = paths.entry
         try {
             if (!workspace.stat(rootPath).directory) throw MirrorFailure("not_directory")
             val item = workspace.stat(entryPath)
@@ -240,6 +239,12 @@ class RuntimeController(
     suspend fun retryPendingChanges(expectedWorkspace: String): MirrorSyncResult? = operations.withLock {
         if (selection.currentIdentity() != expectedWorkspace) return@withLock null
         currentMirror()?.sync()
+    }
+
+    suspend fun discardPendingChanges(expectedWorkspace: String): MirrorReady = operations.withLock {
+        if (selection.currentIdentity() != expectedWorkspace) throw MirrorFailure("workspace_changed")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        active.discardPendingChanges()
     }
 
     suspend fun awaitIdentityChange(identity: String) = selection.awaitIdentityChange(identity)

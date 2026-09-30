@@ -132,7 +132,7 @@ mirror/sync blocker permits a later retry.
 
 Autonomy is stored independently from provider and workspace configuration.
 Ask confirms every mutation and command. Basic YOLO auto-authorizes ordinary
-file edits and narrowly classified inspection commands; elevated commands,
+file edits, Rivet-owned process stops, and narrowly classified inspection commands; elevated commands,
 downloads, destructive paths, and other non-routine actions still ask. YOLO
 removes those prompts only after explicit consent. Tool effects separately
 require the same checkpoint, workspace, result-headroom, and runtime guards in
@@ -141,7 +141,9 @@ capability policy; this is not a shell sandbox.
 
 The activity timeline is projected from provider-neutral call/result events
 and temporary lifecycle signals. It contains no model reasoning and is not a
-second transcript. Rivet's process registry is app-process state: it never
+second transcript. Download completion requires a confirmed file receipt; structured
+error payloads cannot become successful activity even if an envelope flag is absent.
+Rivet's process registry is app-process state: it never
 restores stale running claims after process death. Foreground commands can be
 stopped from Processes; persistent local previews are stopped when the owning
 service/app process ends. The registry caps active operations at four, keeps
@@ -235,6 +237,11 @@ third state returns a conflict without overwriting it. Local creates,
 modifications, and deletions then use the existing SAF path and provider
 confirmation rules. A failed or interrupted sync retains the mirror, and Chat
 offers a contextual retry that rechecks the selected project and SAF state.
+An explicitly confirmed discard instead rebuilds only the exact selected tree's
+private copy from current SAF data without writing to SAF. The fresh copy is
+verified before an atomic swap; an installed discard marker makes interruption
+recovery distinguish authorized abandonment from unapproved dirty data loss.
+Checkpoint history is not changed by discard.
 No recursive file contents are retained in memory. An unresolved conflict keeps
 both the pending mirror data and external project data until the project state
 is resolved. Unsafe mirror entries also stop the turn instead of triggering
@@ -257,7 +264,10 @@ The inspected modern `termux-exec` linker/interception approach is reserved
 for future packaged binaries; direct app-data execution is not assumed.
 
 `start_preview` serves selected SAF files using bounded streaming HTTP bound
-only to `127.0.0.1`, with GET/HEAD, no listing, and no execution. It uses the
+only to `127.0.0.1`, with GET/HEAD, no listing, and no execution. Its `root`
+is project-relative; `entry` accepts either root-relative `index.html` or the
+equivalent project-relative `site/index.html` when root is `site`. Both serve
+`/` from that entry and assets from the same static root. It uses the
 API 34+ `specialUse` foreground-service type with a user-visible notification;
 no boot receiver or process resurrection is used. Each preview response is
 capped at 64 MiB with at most four requests in flight. `download_file` uses a

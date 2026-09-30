@@ -287,6 +287,24 @@ class ChatViewModelTest {
         val saved = await(viewModel) { !it.recoveringProjectChanges && it.notice == "Project changes saved. You can continue." }
         assertNull(saved.error)
         assertEquals("after b", documents.nodes[b.documentId]!!.bytes.readText())
+
+        java.io.File(root, "a.txt").writeText("unsaved local")
+        documents.nodes[a.documentId]!!.bytes.writeText("newer external")
+        viewModel.retryProjectChanges()
+        await(viewModel) { !it.recoveringProjectChanges && it.error?.contains("newer project data") == true }
+        assertEquals("unsaved local", java.io.File(root, "a.txt").readText())
+        viewModel.discardProjectChanges("content://wrong/tree/root")
+        assertEquals("unsaved local", java.io.File(root, "a.txt").readText())
+        viewModel.discardProjectChanges(tree.toString())
+        val recovered = await(viewModel) { !it.recoveringProjectChanges &&
+            it.notice == "Pending Rivet changes discarded. The current project was reloaded." }
+        assertNull(recovered.error)
+        assertNull(recovered.errorAction)
+        assertNull(recovered.undoCheckpointId)
+        assertNull(recovered.pendingApproval)
+        assertEquals("newer external", documents.nodes[a.documentId]!!.bytes.readText())
+        assertEquals("newer external", java.io.File(root, "a.txt").readText())
+        assertNull(RuntimeController(app).commandBlocker())
     }
 
     @Test fun earlierSavedMutationRemainsVisibleWhenLaterCheckpointPostFails() = runBlocking {
