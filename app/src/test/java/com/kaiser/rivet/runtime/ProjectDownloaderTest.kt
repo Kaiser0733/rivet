@@ -183,6 +183,7 @@ class ProjectDownloaderTest {
             assertEquals("assets/asset.svg", value["path"]!!.jsonPrimitive.content)
             assertEquals(sha256(content), value["sha256"]!!.jsonPrimitive.content)
             assertEquals(content.size.toString(), value["size"]!!.jsonPrimitive.content)
+            assertEquals("true", value["created"]!!.jsonPrimitive.content)
         } finally {
             server.shutdown()
             folder.deleteRecursively()

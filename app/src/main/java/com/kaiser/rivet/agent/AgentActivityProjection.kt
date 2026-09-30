@@ -2,9 +2,11 @@ package com.kaiser.rivet.agent
 
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 
 enum class ActivityOutcome { Queued, WaitingApproval, Running, Completed, Failed, Denied, Blocked, Cancelled, Unknown }
 
@@ -79,9 +81,9 @@ object AgentActivityProjection {
         val detail = detail(call.name, args, value)
         val outcome = result?.let { resultOutcome(it, value) } ?: live?.stage?.let(::liveOutcome)
             ?: ActivityOutcome.Unknown
+        val exit = value["exit_code"].primitiveContent()?.toIntOrNull()
         val outcomeDetail = when {
-            call.name == "run_command" && value["exit_code"] != null ->
-                "Exit ${value["exit_code"]?.jsonPrimitive?.contentOrNull().orEmpty()}"
+            call.name == "run_command" && exit != null -> "Exit $exit"
             live?.stage == AgentToolLifecycleStage.AwaitingApproval -> "Waiting for approval"
             result == null && live == null -> "Outcome unknown"
             else -> null
@@ -90,7 +92,7 @@ object AgentActivityProjection {
     }
 
     private fun resultOutcome(result: AgentToolResult, value: Map<String, kotlinx.serialization.json.JsonElement>): ActivityOutcome {
-        val error = value["error"]?.jsonPrimitive?.contentOrNull()
+        val error = value["error"].primitiveContent()
         if (result.error) return when (error) {
             "denied" -> ActivityOutcome.Denied
             "cancelled", "interrupted" -> ActivityOutcome.Cancelled
@@ -101,8 +103,8 @@ object AgentActivityProjection {
             else -> ActivityOutcome.Failed
         }
         if (result.name == "run_command") {
-            val exit = value["exit_code"]?.jsonPrimitive?.contentOrNull()?.toIntOrNull()
-            val sync = value["sync"]?.jsonPrimitive?.contentOrNull()
+            val exit = value["exit_code"].primitiveContent()?.toIntOrNull()
+            val sync = value["sync"].primitiveContent()
             if (exit != null && exit != 0 || sync in setOf("conflict", "failed", "interrupted", "pending")) {
                 return ActivityOutcome.Failed
             }
@@ -126,8 +128,8 @@ object AgentActivityProjection {
         args: Map<String, kotlinx.serialization.json.JsonElement>,
         result: Map<String, kotlinx.serialization.json.JsonElement>,
     ): String {
-        fun arg(key: String) = args[key]?.jsonPrimitive?.contentOrNull()
-        fun output(key: String) = result[key]?.jsonPrimitive?.contentOrNull()
+        fun arg(key: String) = args[key].primitiveContent()
+        fun output(key: String) = result[key].primitiveContent()
         val path = output("path") ?: arg("path")
         val text = when (name) {
             "read_file", "list_directory", "write_file", "apply_patch", "create_file", "create_directory",
@@ -164,9 +166,13 @@ object AgentActivityProjection {
     }
 
     private fun summarize(operations: List<AgentActivityOperation>): String {
-        val counts = linkedMapOf<String, Int>()
-        operations.forEach { operation -> counts[operation.title] = (counts[operation.title] ?: 0) + 1 }
-        val summary = counts.map { (title, count) ->
+        val counts = linkedMapOf<Pair<String, ActivityOutcome>, Int>()
+        operations.forEach { operation ->
+            val key = operation.title to operation.outcome
+            counts[key] = (counts[key] ?: 0) + 1
+        }
+        return counts.map { (key, count) ->
+            val (title, outcome) = key
             val (verb, unit) = when (title) {
                 "Read" -> "Read" to "file"
                 "List" -> "Listed" to "folder"
@@ -196,13 +202,9 @@ object AgentActivityProjection {
                 "process" -> "processes"
                 else -> "operations"
             }
-            "$verb $count $plural"
-        }
-        val active = operations.lastOrNull { it.outcome in setOf(
-            ActivityOutcome.Queued, ActivityOutcome.WaitingApproval, ActivityOutcome.Running,
-        ) }
-        val base = summary.joinToString(" · ")
-        return if (active == null) base else "$base · ${active.outcome.label()} ${active.title.lowercase()}"
+            if (outcome == ActivityOutcome.Completed) "$verb $count $plural"
+            else "$title $count $plural (${outcome.label()})"
+        }.joinToString(" · ")
     }
 
     private fun ActivityOutcome.label() = when (this) {
@@ -222,8 +224,7 @@ object AgentActivityProjection {
     } catch (_: SerializationException) { emptyMap() }
     catch (_: IllegalArgumentException) { emptyMap() }
 
-    private fun kotlinx.serialization.json.JsonPrimitive.contentOrNull(): String? =
-        runCatching { content }.getOrNull()
+    private fun JsonElement?.primitiveContent(): String? = (this as? JsonPrimitive)?.contentOrNull
 
     private fun safeText(value: String, limit: Int): String {
         val sanitized = value

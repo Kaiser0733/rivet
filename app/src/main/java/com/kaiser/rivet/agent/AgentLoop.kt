@@ -499,7 +499,7 @@ class AgentLoop(
                 created += path
                 createdDirectories += path
             }
-            "download_file" -> created += path
+            "download_file" -> if (field("created") == "true") created += path
             "delete_path" -> {
                 created.removeAll { it == path || it.startsWith("$path/") }
                 createdDirectories.removeAll { it == path || it.startsWith("$path/") }

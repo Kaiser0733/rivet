@@ -67,6 +67,10 @@ class AgentActivityProjectionTest {
         assertEquals(ActivityOutcome.Blocked, group.operations[2].outcome)
         assertEquals(ActivityOutcome.Unknown, group.operations[3].outcome)
         assertEquals("Outcome unknown", group.operations[3].outcomeDetail)
+        assertFalse(group.summary.contains("Deleted"))
+        assertFalse(group.summary.contains("Ran"))
+        assertTrue(group.summary.contains("Denied"))
+        assertTrue(group.summary.contains("Failed"))
     }
 
     @Test fun projectsDownloadsAndPreviewsWithoutUrlsTokensOrProviderSyntax() {
@@ -104,10 +108,27 @@ class AgentActivityProjectionTest {
         )
         val group = (items.single() as AgentConversationItem.Activity).group
         assertEquals(ActivityOutcome.Running, group.operations.single().outcome)
-        assertTrue(group.summary.contains("Running run"))
+        assertEquals("Run 1 command (Running)", group.summary)
 
         val restarted = AgentActivityProjection.conversation(listOf(AgentMessage.assistant("", listOf(call))))
         assertEquals(ActivityOutcome.Unknown,
             (restarted.single() as AgentConversationItem.Activity).group.operations.single().outcome)
+    }
+
+    @Test fun malformedArgumentAndResultFieldsRemainSafeToDisplay() {
+        val calls = listOf(
+            AgentToolCall("read", "read_file", """{"path":{"unexpected":"value"}}"""),
+            AgentToolCall("run", "run_command", """{"command":[]}"""),
+        )
+        val results = listOf(
+            AgentToolResult("read", "read_file", """{"error":"invalid_arguments"}""", error = true),
+            AgentToolResult("run", "run_command", """{"error":"invalid_arguments","exit_code":{}}""", error = true),
+        )
+        val group = (AgentActivityProjection.conversation(listOf(
+            AgentMessage.assistant("", calls), AgentMessage.tools(results)))
+            .single() as AgentConversationItem.Activity).group
+        assertTrue(group.operations.all { it.detail.isEmpty() && it.outcome == ActivityOutcome.Failed })
+        assertEquals(null, group.operations.last().outcomeDetail)
+        assertFalse(group.summary.contains("Ran"))
     }
 }
