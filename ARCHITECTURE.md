@@ -273,7 +273,7 @@ JGit inspects only a real `.git` directory at the selected worktree root.
 output is capped at 16 KiB and 20 files. Android's system shell does not supply
 Git; Rivet's inspection works without a separate Git executable.
 
-After approval and before the first workspace mutation in an agent turn,
+After authorization and before the first workspace mutation in an agent turn,
 `TurnCheckpoint` streams a pre-change ZIP into app-private storage. It excludes
 `.git`, tracks a post-change manifest, and retains at most three completed
 checkpoints within 2 GiB. Undo requires an explicit UI confirmation and an

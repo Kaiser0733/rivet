@@ -30,11 +30,13 @@ class AgentActivityProjectionTest {
             AgentToolResult("c1", "run_command", """{"exit_code":0,"stdout":"ok","sync":"ok"}"""),
         )
         val items = AgentActivityProjection.conversation(listOf(
-            AgentMessage.user("Fix and test"), AgentMessage.assistant("I will inspect and edit.", calls),
+            AgentMessage.user("Fix and test"), AgentMessage.assistant("I will inspect and edit.", calls,
+                transportState = "private provider reasoning"),
             AgentMessage.tools(results),
         ))
         assertEquals(3, items.size)
         assertTrue(items[1] is AgentConversationItem.Message)
+        assertEquals(null, (items[1] as AgentConversationItem.Message).message.transportState)
         val group = (items[2] as AgentConversationItem.Activity).group
         assertEquals("Read 2 files · Edited 1 file · Ran 1 command", group.summary)
         assertEquals(listOf(ActivityOutcome.Completed, ActivityOutcome.Completed,
