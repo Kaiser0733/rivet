@@ -434,6 +434,17 @@ class WorkspaceMirrorTest {
         assertEquals("pending", File(mirror.worktree, "file.txt").readText())
         runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
             .putString("tree", tree.toString()).commit()
+        provider.afterChildQuery = {
+            provider.afterChildQuery = null
+            runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+                .putString("tree", otherTree.toString()).commit()
+        }
+        try { runtime.discardPendingChanges(tree.toString()); fail("Expected change during refresh") }
+        catch (error: MirrorFailure) { assertEquals("workspace_changed", error.code) }
+        assertEquals("pending", File(mirror.worktree, "file.txt").readText())
+        assertEquals("keep this private work", File(otherMirror.worktree, "other-pending.txt").readText())
+        runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+            .putString("tree", tree.toString()).commit()
         runtime.discardPendingChanges(tree.toString())
         assertNull(runtime.commandBlocker())
         runtime.requireSafCurrent()
@@ -495,6 +506,8 @@ class WorkspaceMirrorTest {
         File(current, "worktree/file.txt").writeText("base")
         File(base, "previous/baseline.json").copyTo(File(current, "baseline.json"))
         File(current, "discard-previous").writeText(tree.toString())
+        // Simulate process death after cleanup had already removed old metadata.
+        File(base, "previous/baseline.json").delete()
 
         assertFalse(mirror().prepare().dirty)
         assertFalse(File(base, "previous").exists())
