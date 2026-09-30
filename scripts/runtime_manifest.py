@@ -59,7 +59,10 @@ def _attribute(section: str, name: str) -> str | None:
 
 
 def _is_false(value: str | None) -> bool:
-    return value is not None and (value.endswith("0x00000000") or value.endswith("false"))
+    if value == "false":
+        return True
+    encoded = re.fullmatch(r"\(type 0x12\)0x([0-9a-fA-F]+)", value or "")
+    return encoded is not None and int(encoded.group(1), 16) == 0
 
 
 def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
@@ -72,10 +75,8 @@ def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
     assert len(matches) == 1 and len(services) == 1, "APK must declare only Rivet's process service"
     service = matches[0]
     exported = _attribute(service, "android:exported")
-    intent_filters = _elements(service, "intent-filter")
-    implicit_private = exported is None and not intent_filters
-    assert _is_false(exported) or implicit_private, (
-        f"process service must be non-exported (exported={exported!r}, intent_filters={len(intent_filters)})"
+    assert _is_false(exported), (
+        f"process service must be explicitly non-exported (exported={exported!r})"
     )
     service_type = _attribute(service, "android:foregroundServiceType") or ""
     assert service_type.endswith("0x40000000") or service_type.endswith("specialUse"), (
