@@ -7,6 +7,7 @@ import com.kaiser.rivet.runtime.RepositoryStatus
 import com.kaiser.rivet.runtime.ManagedProcessStatus
 import com.kaiser.rivet.runtime.ManagedProcessKind
 import com.kaiser.rivet.runtime.ManagedProcesses
+import com.kaiser.rivet.runtime.PreviewPaths
 import com.kaiser.rivet.runtime.PreviewLaunch
 import com.kaiser.rivet.runtime.ProjectDownloader
 import com.kaiser.rivet.runtime.DownloadFailure
@@ -281,6 +282,7 @@ class AgentToolExecutor(
                     PreparedAgentTool(call,
                         AgentApprovalRequest(call, "Stop project operation", description),
                         effect = AgentToolEffect.PersistentProcess,
+                        basicAutonomyRisk = BasicAutonomyRisk.Routine,
                         modelRequestsApproval = args.askUser,
                     ) {
                         execute(call) {
@@ -296,9 +298,11 @@ class AgentToolExecutor(
                 }
                 "start_preview" -> {
                     val args = json.decodeFromString<PreviewArgs>(call.arguments)
-                    val root = path(args.root, root = true)
-                    val entry = path(args.entry)
-                    if (root.isNotEmpty() && entry != root && !entry.startsWith("$root/")) throw InvalidPath()
+                    val paths = try { PreviewPaths.parse(args.root, args.entry) }
+                        catch (_: com.kaiser.rivet.workspace.WorkspaceFailure) { throw InvalidPath() }
+                        catch (_: IllegalArgumentException) { throw InvalidPath() }
+                    val root = paths.root.value
+                    val entry = paths.entry.value
                     PreparedAgentTool(call,
                         AgentApprovalRequest(call, "Start local preview",
                             "$entry\nOnly this device can access it at 127.0.0.1."),
@@ -701,7 +705,7 @@ class AgentToolExecutor(
                     "timeout_ms" to buildJsonObject { put("type", "integer"); put("minimum", 1000); put("maximum", MAX_COMMAND_TIMEOUT_MS) }, askUser)),
             AgentToolDefinition("list_processes", "List currently active Rivet commands and local previews. Process IDs are opaque Rivet IDs, not operating-system PIDs.", schema(emptyList())),
             AgentToolDefinition("stop_process", "Stop one active Rivet-owned command or preview by its opaque process_id. This does not accept operating-system PIDs. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("process_id"), processId, askUser)),
-            AgentToolDefinition("start_preview", "Serve static project files from the selected workspace on this device's 127.0.0.1 loopback address. It stays available after this tool returns; use the returned URL. It is visible and stoppable in Processes. Set root to the static folder (empty means project root) and entry to an HTML file under root; / serves entry and relative assets resolve under root. GET and HEAD only; no execution, directory listing, LAN access, or uploads. Ask mode requires approval. Basic YOLO may start this read-only loopback preview automatically. In Basic YOLO set ask_user=true to request confirmation.", schema(listOf("entry"), entry, root, askUser)),
+            AgentToolDefinition("start_preview", "Serve static project files from the selected workspace on this device's 127.0.0.1 loopback address. It stays available after this tool returns; use the returned URL. It is visible and stoppable in Processes. root is the static directory relative to the selected project (empty means project root). entry may be relative to root, such as index.html, or equivalent project-relative site/index.html. Example: {\"root\":\"site\",\"entry\":\"index.html\"}. / serves entry and relative assets resolve under root. GET and HEAD only; no execution, directory listing, LAN access, or uploads. Ask mode requires approval. Basic YOLO may start this read-only loopback preview automatically. In Basic YOLO set ask_user=true to request confirmation.", schema(listOf("entry"), entry, root, askUser)),
             AgentToolDefinition("download_file", "Download one HTTPS file into the selected project. The streamed temporary copy is limited to 64 MiB and at most five revalidated HTTPS redirects; Rivet uses no provider credentials or cookies and never executes or installs the file. For an existing destination, provide expected_sha256 with its current hash before replacing it. content_sha256 optionally verifies the downloaded bytes. Ask mode and Basic YOLO require approval; YOLO skips the prompt but keeps scheme, path, size, hash, and workspace checks. In Basic YOLO, ask_user=true requests confirmation.", schema(listOf("url", "path"), url, path, expectedSha, contentSha, askUser)),
         )
 

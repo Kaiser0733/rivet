@@ -83,7 +83,7 @@ class AgentActivityProjectionTest {
             AgentToolCall("long", "run_command", """{"command":"curl -u alice:secret https://user:pass@example.test/file; echo sk-abcdefghijklmnopqrstuvwxyz1234567890 ${"x".repeat(400)}"}"""),
         )
         val results = listOf(
-            AgentToolResult("download", "download_file", """{"path":"assets/icon.svg","sha256":"never-render"}"""),
+            AgentToolResult("download", "download_file", """{"path":"assets/icon.svg","sha256":"${"a".repeat(64)}","size":12}"""),
             AgentToolResult("preview", "start_preview", """{"url":"http://127.0.0.1:43210/","state":"running","entry":"site/index.html"}"""),
             AgentToolResult("long", "run_command", """{"exit_code":0}"""),
         )
@@ -126,6 +126,15 @@ class AgentActivityProjectionTest {
             .single() as AgentConversationItem.Activity).group
         assertEquals(ActivityOutcome.Failed, group.operations.single().outcome)
         assertEquals("Download 1 file (Failed)", group.summary)
+    }
+
+    @Test fun incompleteDownloadReceiptCannotClaimSuccess() {
+        val call = AgentToolCall("download", "download_file", """{"path":"target.txt"}""")
+        val result = AgentToolResult(call.id, call.name, """{"path":"target.txt"}""")
+        val group = (AgentActivityProjection.conversation(listOf(AgentMessage.assistant("", listOf(call)),
+            AgentMessage.tools(listOf(result)))).single() as AgentConversationItem.Activity).group
+        assertEquals(ActivityOutcome.Unknown, group.operations.single().outcome)
+        assertFalse(group.summary.contains("Downloaded"))
     }
 
     @Test fun malformedArgumentAndResultFieldsRemainSafeToDisplay() {

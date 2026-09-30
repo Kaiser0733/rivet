@@ -203,6 +203,17 @@ class WorkspaceMirror(
         }
     }
 
+    /** Explicitly abandon only this tree's unsynchronized private copy; SAF is read-only here. */
+    suspend fun discardPendingChanges(): MirrorReady = withContext(Dispatchers.IO) {
+        mutex.withLock {
+            selected()
+            recover()
+            materialize(discardPending = true)
+            selected()
+            MirrorReady(worktree, dirty = false)
+        }
+    }
+
     suspend fun installCheckpoint(replacement: File) = withContext(Dispatchers.IO) {
         mutex.withLock {
             selected()
@@ -282,7 +293,7 @@ class WorkspaceMirror(
         Files.deleteIfExists(partialCreateFile.toPath())
     }
 
-    private suspend fun materialize() {
+    private suspend fun materialize(discardPending: Boolean = false) {
         selected()
         base.mkdirs()
         removeStaging()
@@ -291,9 +302,20 @@ class WorkspaceMirror(
         try {
             val entries = safSnapshot(target)
             writeBaseline(staging, MirrorBaseline(workspace.tree.toString(), entries))
+            if (discardPending) {
+                if (safSnapshot() != entries) throw MirrorFailure("conflict")
+                // The marker travels with the new baseline. After process death it
+                // authorizes removal of the old dirty copy only after installation.
+                FileOutputStream(File(staging, "discard-previous")).use { output ->
+                    output.write(workspace.tree.toString().toByteArray(Charsets.UTF_8))
+                    output.fd.sync()
+                }
+            }
             selected()
             if (current.exists()) {
-                if (localSnapshot() != baseline().entries) throw MirrorFailure("mirror_dirty")
+                val local = localSnapshot()
+                val before = baseline()
+                if (!discardPending && local != before.entries) throw MirrorFailure("mirror_dirty")
                 Files.move(current.toPath(), previous.toPath(), StandardCopyOption.ATOMIC_MOVE)
             }
             try {
@@ -303,6 +325,7 @@ class WorkspaceMirror(
                 throw e
             }
             if (previous.exists()) removeTree(previous)
+            Files.deleteIfExists(File(current, "discard-previous").toPath())
         } catch (e: CancellationException) { throw e
         } catch (e: MirrorFailure) { throw e
         } catch (_: Exception) { throw MirrorFailure("materialize_failed") }
@@ -338,7 +361,8 @@ class WorkspaceMirror(
     }
 
     private suspend fun localSnapshot(root: File = worktree): Map<String, MirrorEntry> {
-        if (!root.isDirectory) throw MirrorFailure("mirror_missing")
+        if (Files.isSymbolicLink(root.toPath())) throw MirrorFailure("unsafe_entry")
+        if (!Files.isDirectory(root.toPath(), LinkOption.NOFOLLOW_LINKS)) throw MirrorFailure("mirror_missing")
         val entries = linkedMapOf("" to MirrorEntry(directory = true))
         suspend fun visit(parent: Path, relative: WorkspacePath) {
             Files.newDirectoryStream(parent).use { children ->
@@ -377,18 +401,35 @@ class WorkspaceMirror(
     }
 
     private suspend fun recover() {
-        base.mkdirs()
+        selected()
+        // Commands share the app UID; refuse a substituted runtime directory
+        // before opening metadata or removing a private tree.
+        listOf(base.parentFile!!.parentFile!!, base.parentFile!!, base, current,
+            previous, staging, checkpointStaging).forEach { directory ->
+            if (Files.exists(directory.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                (!Files.isDirectory(directory.toPath(), LinkOption.NOFOLLOW_LINKS) ||
+                    Files.isSymbolicLink(directory.toPath()))) throw MirrorFailure("unsafe_entry")
+        }
+        if (!base.isDirectory && !base.mkdirs()) throw MirrorFailure("storage")
         if (!current.exists() && previous.exists()) {
             Files.move(previous.toPath(), current.toPath(), StandardCopyOption.ATOMIC_MOVE)
         }
+        val discardMarker = File(current, "discard-previous")
+        val discardInstalled = Files.exists(discardMarker.toPath(), LinkOption.NOFOLLOW_LINKS)
+        if (discardInstalled) {
+            if (!Files.isRegularFile(discardMarker.toPath(), LinkOption.NOFOLLOW_LINKS) ||
+                discardMarker.length() > 8192 || discardMarker.readText() != workspace.tree.toString() ||
+                localSnapshot() != baseline().entries) throw MirrorFailure("discard_invalid")
+        }
         if (previous.exists()) {
-            // A previous tree is discarded only when its own baseline proves
-            // it had no unsynchronized runtime edits at the swap boundary.
-            if (localSnapshot(File(previous, "worktree")) != baseline(previous).entries) {
+            // Without an installed, verified discard marker, dirty previous work
+            // still blocks recovery instead of being silently thrown away.
+            if (!discardInstalled && localSnapshot(File(previous, "worktree")) != baseline(previous).entries) {
                 throw MirrorFailure("previous_dirty")
             }
             removeTree(previous)
         }
+        if (discardInstalled) Files.delete(discardMarker.toPath())
         removeStaging()
     }
 

@@ -115,6 +115,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val wrongProject = projectBinding == ProjectBindingState.Mismatch
     var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
+    var confirmDiscard by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
         if (result.resultCode == Activity.RESULT_OK && uri != null) {
@@ -153,6 +154,18 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 confirmUndo = false; chatViewModel.undoLastTurn()
             }) { Text("Undo changes") } },
             dismissButton = { TextButton(onClick = { confirmUndo = false }) { Text("Cancel") } })
+    }
+    confirmDiscard?.let { identity ->
+        AlertDialog(onDismissRequest = { confirmDiscard = null },
+            title = { Text("Discard Rivet's pending changes?",
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = { Text("Rivet will permanently abandon the unsaved runtime copy and reload the current project. Files already in your project will not be changed.",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
+            confirmButton = { RivetOutlinedButton(onClick = {
+                confirmDiscard = null
+                chatViewModel.discardProjectChanges(identity)
+            }) { Text("Discard pending changes") } },
+            dismissButton = { TextButton(onClick = { confirmDiscard = null }) { Text("Cancel") } })
     }
     state.pendingApproval?.let { approval ->
         ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
@@ -263,7 +276,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
                     key(state.currentSessionId) {
                         MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
-                            Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                            onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
+                            modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
                     }
                 }
                 if (state.undoCheckpointId != null || state.undoing) {
@@ -326,7 +340,7 @@ private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewM
 @Composable
 private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
-                        modifier: Modifier = Modifier) {
+                        onDiscardProjectChanges: () -> Unit, modifier: Modifier = Modifier) {
     val timeline = remember(state.messages, state.toolLifecycle) {
         AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
     }
@@ -395,6 +409,11 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                     ChatErrorAction.OpenSettings -> onOpenSettings
                     ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
                     null -> null
+                }, onDiscard = onDiscardProjectChanges.takeIf {
+                    state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
+                        !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
+                        state.projectIdentity != null &&
+                        state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
                 })
         } }
     }
@@ -636,11 +655,13 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
 }
 
 @Composable
-private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?, onAction: (() -> Unit)?) {
+private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?, onAction: (() -> Unit)?,
+                     onDiscard: (() -> Unit)? = null) {
     Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(6.dp)) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text(error, color = MaterialTheme.colorScheme.onErrorContainer,
                 style = MaterialTheme.typography.bodyMedium)
+            if (onDiscard != null) TextButton(onClick = onDiscard) { Text("Discard pending changes") }
             Row {
                 if (onAction != null && actionLabel != null) TextButton(onClick = onAction) { Text(actionLabel) }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_error_dismiss)) }

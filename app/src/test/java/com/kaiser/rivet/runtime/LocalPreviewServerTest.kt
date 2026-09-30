@@ -52,6 +52,57 @@ class LocalPreviewServerTest {
         assertFalse(afterClose.contains("<h1>Rivet preview</h1>"))
     }
 
+    @Test fun rootRelativeAndProjectRelativeEntriesServeTheSameMultiFileSite() {
+        val files = mapOf("site/index.html" to "<link href=\"style.css\"><script src=\"app.js\"></script>",
+            "site/style.css" to "body { color: red; }", "site/app.js" to "window.rivet = true;")
+        for (entry in listOf("index.html", "site/index.html")) {
+            val paths = PreviewPaths.parse("site", entry)
+            assertTrue(paths.entry.value == "site/index.html")
+            val requested = mutableListOf<String>()
+            val server = LocalPreviewServer(paths.root, paths.entry, workspaceIsCurrent = { true },
+                stat = { path ->
+                    requested += path.value
+                    val content = files[path.value] ?: throw IllegalArgumentException()
+                    WorkspaceEntry(path, path.value, false, "text/plain", content.toByteArray().size.toLong())
+                },
+                copyTo = { path, output, _ ->
+                    val bytes = files.getValue(path.value).toByteArray()
+                    output.write(bytes)
+                    bytes.size.toLong()
+                })
+            server.start()
+            try {
+                assertTrue(request(server, "GET", "/").contains(files.getValue("site/index.html")))
+                assertTrue(request(server, "GET", "/style.css").contains(files.getValue("site/style.css")))
+                assertTrue(request(server, "GET", "/app.js").contains(files.getValue("site/app.js")))
+                assertTrue(requested == listOf("site/index.html", "site/style.css", "site/app.js"))
+                for (target in listOf("/../secret", "/%2e%2e/secret", "/sub/%2e%2e/secret", "/.git/config",
+                    "/%2egit/config", "/%2f%2e%2e/secret")) {
+                    assertTrue(target, request(server, "GET", target).startsWith("HTTP/1.1 400"))
+                }
+                assertTrue(request(server, "GET", "/sub").startsWith("HTTP/1.1 404"))
+                assertTrue(request(server, "GET", "/outside.txt").startsWith("HTTP/1.1 404"))
+                assertTrue(request(server, "POST", "/").startsWith("HTTP/1.1 405"))
+                assertTrue(request(server, "PUT", "/").startsWith("HTTP/1.1 405"))
+            } finally { server.close() }
+        }
+    }
+
+    @Test fun previewPathsAreCanonicalAndRejectMalformedOrEscapingInputs() {
+        for ((root, entry, expected) in listOf(Triple("", "index.html", "index.html"),
+            Triple("site", "index.html", "site/index.html"), Triple("site", "site/index.html", "site/index.html"),
+            Triple("web/dist", "index.html", "web/dist/index.html"),
+            Triple("web/dist", "web/dist/index.html", "web/dist/index.html"))) {
+            assertTrue(PreviewPaths.parse(root, entry).entry.value == expected)
+        }
+        for ((root, entry) in listOf("site" to "../index.html", "site" to "site/../secret", "site" to "/index.html",
+            "site" to "C:/index.html", "/site" to "index.html", "site" to "index\u0000.html",
+            "site" to "sub//index.html", ".git" to "index.html", "site" to ".git/config", "" to "")) {
+            val rejected = try { PreviewPaths.parse(root, entry); false } catch (_: Exception) { true }
+            assertTrue("$root / $entry must be rejected", rejected)
+        }
+    }
+
     @Test fun identityChangeDeniesFurtherReads() {
         val entry = WorkspaceEntry(WorkspacePath.parse("index.html"), "entry", false,
             "text/html", 4)

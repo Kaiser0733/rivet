@@ -93,7 +93,7 @@ object AgentActivityProjection {
 
     private fun resultOutcome(result: AgentToolResult, value: Map<String, kotlinx.serialization.json.JsonElement>): ActivityOutcome {
         val error = value["error"].primitiveContent()
-        if (result.error) return when (error) {
+        if (result.error || error != null) return when (error) {
             "denied" -> ActivityOutcome.Denied
             "cancelled", "interrupted" -> ActivityOutcome.Cancelled
             "not_executed", "no_progress", "session_limit", "runaway_guard", "workspace_unavailable",
@@ -101,6 +101,15 @@ object AgentActivityProjection {
             "unsafe_entry", "process_limit", "foreground_service_unavailable", "preview_unavailable" ->
                 ActivityOutcome.Blocked
             else -> ActivityOutcome.Failed
+        }
+        if (result.name == "download_file") {
+            // An error payload is authoritative even if a stored envelope lacks
+            // its error flag. Past tense also requires the download receipt.
+            val size = value["size"].primitiveContent()?.toLongOrNull()
+            if (value["path"].primitiveContent().isNullOrBlank() || size == null || size < 0 ||
+                value["sha256"].primitiveContent()?.matches(Regex("[0-9a-fA-F]{64}")) != true) {
+                return ActivityOutcome.Unknown
+            }
         }
         if (result.name == "run_command") {
             val exit = value["exit_code"].primitiveContent()?.toIntOrNull()
