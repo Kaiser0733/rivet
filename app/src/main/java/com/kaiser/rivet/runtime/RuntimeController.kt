@@ -244,6 +244,9 @@ class RuntimeController(
     suspend fun discardPendingChanges(expectedWorkspace: String): MirrorReady = operations.withLock {
         if (selection.currentIdentity() != expectedWorkspace) throw MirrorFailure("workspace_changed")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        if (mirrorIdentity != expectedWorkspace || selection.currentIdentity() != expectedWorkspace) {
+            throw MirrorFailure("workspace_changed")
+        }
         active.discardPendingChanges()
     }
 
