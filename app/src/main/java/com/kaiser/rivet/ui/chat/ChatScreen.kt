@@ -584,10 +584,6 @@ private fun InlineMarkdown(text: String, modifier: Modifier = Modifier, style: T
     Text(annotated, modifier = modifier, style = textStyle.copy(color = color))
 }
 
-internal fun visibleConversation(messages: List<AgentMessage>): List<AgentMessage> =
-    messages.filter { it.role == AgentRole.User ||
-        (it.role == AgentRole.Assistant && it.text.isNotBlank() && it.toolCalls.isEmpty()) }
-
 internal fun approvalTitle(request: AgentApprovalRequest): String = when {
     request.call.name == "run_command" -> "Run a project command?"
     request.dangerous -> request.title

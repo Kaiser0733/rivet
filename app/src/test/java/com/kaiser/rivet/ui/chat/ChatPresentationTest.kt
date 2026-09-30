@@ -1,6 +1,8 @@
 package com.kaiser.rivet.ui.chat
 
 import com.kaiser.rivet.agent.AgentApprovalRequest
+import com.kaiser.rivet.agent.AgentActivityProjection
+import com.kaiser.rivet.agent.AgentConversationItem
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
@@ -10,7 +12,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatPresentationTest {
-    @Test fun conversationHidesToolEventsAndAssistantToolPreambles() {
+    @Test fun conversationProjectsActivityWithoutRawToolState() {
         val user = AgentMessage.user("Fix the login crash")
         val call = AgentToolCall("private-id", "read_file", "{\"path\":\"src/login.kt\"}")
         val messages = listOf(user,
@@ -19,10 +21,13 @@ class ChatPresentationTest {
                 "{\"sha256\":\"secret\"}", summary = "Read src/login.kt"))),
             AgentMessage.assistant("I fixed the login crash."))
 
-        val visible = visibleConversation(messages)
+        val timeline = AgentActivityProjection.conversation(messages)
+        val visible = timeline.filterIsInstance<AgentConversationItem.Message>().map { it.message }
 
-        assertEquals(listOf(user, messages.last()), visible)
+        assertEquals(listOf(user, AgentMessage.assistant("I'll inspect files"), messages.last()), visible)
         assertFalse(visible.any { it.toolResults.isNotEmpty() || it.toolCalls.isNotEmpty() })
+        assertFalse(timeline.toString().contains("private-id"))
+        assertFalse(timeline.toString().contains("secret"))
     }
 
     @Test fun approvalTitleMakesCommandAndDestructionUnderstandable() {

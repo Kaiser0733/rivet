@@ -49,7 +49,7 @@ object AgentActivityProjection {
                 AgentRole.User -> items += AgentConversationItem.Message(message)
                 AgentRole.Assistant -> {
                     if (message.text.isNotBlank()) items += AgentConversationItem.Message(
-                        AgentMessage.assistant(message.text, transportState = message.transportState))
+                        AgentMessage.assistant(message.text))
                     if (message.toolCalls.isNotEmpty()) {
                         val resultIndex = nextToolIndex[index]
                         val correlated = if (resultIndex < 0) emptyMap()
