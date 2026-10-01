@@ -145,9 +145,8 @@ class ContextPreparationTest {
                             provider: SummaryProvider, priorSummary: String = ""): ContextPreparation {
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
             modelContextLimit = ModelContextLimit("small", endpoint, limit))
-        return ContextPreparation(sessions, id, provider, config, "turn-$limit", priorSummary) { messages, summary ->
-            AgentRequest("small", messages +
-                if (summary.isBlank()) emptyList() else listOf(AgentMessage.user(summary)),
+        return ContextPreparation(sessions, id, provider, config, "turn-$limit", priorSummary) { messages, _ ->
+            AgentRequest("small", com.kaiser.rivet.agent.modelMessages(messages),
                 "S".repeat(6000), ReasoningLevel.Default, emptyList())
         }
     }

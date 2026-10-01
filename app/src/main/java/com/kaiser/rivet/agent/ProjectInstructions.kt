@@ -8,6 +8,7 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 
+@kotlinx.serialization.Serializable
 data class ProjectInstructionFile(val path: String, val content: String, val order: Int)
 data class ProjectInstructionSet(val text: String, val files: List<String>, val limited: Boolean,
                                  val entries: List<ProjectInstructionFile> = emptyList(),

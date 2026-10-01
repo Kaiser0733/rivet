@@ -41,6 +41,78 @@ class CodingSessionsTest {
         AgentSessionStore(app).clear()
     }
 
+    @Test fun contextEventsSurviveReloadAndDoNotOccupyVisibleHistory() = runBlocking {
+        val sessions = CodingSessions(app)
+        val selected = sessions.create("tree")
+        val guidance = com.kaiser.rivet.agent.InternalContext(kind = "project", workspaceId = "tree", scope = "AGENTS.md",
+            content = "Use Kotlin", digest = com.kaiser.rivet.agent.InternalContext.digest("Use Kotlin")).event()
+        val user = AgentMessage.user("Inspect")
+        sessions.save(listOf(guidance, user), false)
+        val restored = CodingSessions(app).load()
+        assertEquals(listOf(guidance, user), restored.messages)
+        assertEquals(listOf(user), sessions.recent(selected.id!!))
+        assertEquals(2, sessions.fullEventCount(selected.id))
+    }
+
+    @Test fun compactionStoresStableSummaryAndRequiredProjectSnapshotWithoutChangingHistory() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.create("tree").id!!
+        val guidance = com.kaiser.rivet.agent.InternalContext(kind = "project", workspaceId = "tree", scope = "src/AGENTS.md",
+            content = "Nested rule", digest = com.kaiser.rivet.agent.InternalContext.digest("Nested rule"), order = 1).event()
+        val original = listOf(guidance, AgentMessage.user("Old task"), AgentMessage.assistant("Old answer"),
+            AgentMessage.user("Continue"), AgentMessage.assistant("", listOf(AgentToolCall("read", "read_file", "{}"))),
+            AgentMessage.tools(listOf(AgentToolResult("read", "read_file", "{}"))))
+        sessions.save(original, false)
+        val projected = sessions.compact(original, original.takeLast(3), "{\"objective\":\"Continue\"}")
+        assertEquals(1, projected.count { it.internalContext?.kind == "summary" })
+        assertEquals(1, projected.count { it.internalContext?.kind == "project_snapshot" })
+        assertTrue(AgentContext.validGroups(projected))
+        assertEquals(original.size, sessions.fullEventCount(id))
+        val restored = CodingSessions(app).load()
+        assertEquals(projected, restored.messages)
+        assertEquals("Nested rule", com.kaiser.rivet.agent.ProjectContext.current(restored.messages, "tree")
+            .getValue("src/AGENTS.md").content)
+        val next = projected + AgentMessage.user("Next step")
+        sessions.save(next, false)
+        assertEquals(projected, sessions.load().messages.take(projected.size))
+        assertEquals(original.filter { it.role != com.kaiser.rivet.agent.AgentRole.Context } + AgentMessage.user("Next step"),
+            sessions.recent(id))
+    }
+
+    @Test fun reportedAnchorSurvivesAppendStableUserTurnsButOldWrapperDoesNot() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val context = com.kaiser.rivet.agent.InternalContext.summary("Task notes", null)
+        val first = AgentMessage.user("Inspect")
+        val stable = com.kaiser.rivet.agent.modelMessages(listOf(context, first))
+        sessions.recordUsage(id, "turn1", "provider", "model", AgentUsage(inputTokens = 1000), stable, "system")
+        val next = stable + AgentMessage.assistant("Inspected") + AgentMessage.user("Edit")
+        val anchored = sessions.contextEstimate(id, "provider", "model", next, "system")
+        val baseEstimate = com.kaiser.rivet.agent.ContextBudget.estimateRequestTokens(
+            com.kaiser.rivet.provider.AgentRequest("model", stable, "system", com.kaiser.rivet.provider.ReasoningLevel.Default, emptyList()))
+        val nextEstimate = com.kaiser.rivet.agent.ContextBudget.estimateRequestTokens(
+            com.kaiser.rivet.provider.AgentRequest("model", next, "system", com.kaiser.rivet.provider.ReasoningLevel.Default, emptyList()))
+        assertEquals(1000L + nextEstimate - baseEstimate, anchored.tokens)
+        val rewritten = next.toMutableList().also { it[1] = first.copy(text = "New wrapper around Inspect") }
+        assertNotEquals(anchored.tokens, sessions.contextEstimate(id, "provider", "model", rewritten, "system").tokens)
+    }
+
+    @Test fun contextCannotSplitPendingToolResultsAndInterruptedRecoveryRemainsCorrelated() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.create("tree").id!!
+        val call = AgentMessage.assistant("", listOf(AgentToolCall("pending", "read_file", "{}")))
+        sessions.save(listOf(AgentMessage.user("Inspect"), call), true)
+        try {
+            sessions.save(listOf(AgentMessage.user("Inspect"), call,
+                com.kaiser.rivet.agent.InternalContext.summary("Notes", "tree")), true)
+            throw AssertionError("Context split a pending protocol pair")
+        } catch (_: IllegalArgumentException) { }
+        val recovered = CodingSessions(app).load()
+        assertEquals(listOf("pending"), recovered.messages.last().toolResults.map { it.callId })
+        assertTrue(AgentContext.validGroups(recovered.messages))
+        assertEquals(3, sessions.fullEventCount(id))
+    }
+
     @Test fun oldTranscriptMigratesOnceAndRemainsInDataStore() = runBlocking {
         val original = listOf(
             AgentMessage.user("modify this file"),
