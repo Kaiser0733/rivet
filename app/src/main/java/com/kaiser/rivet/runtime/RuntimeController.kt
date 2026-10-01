@@ -2,10 +2,14 @@ package com.kaiser.rivet.runtime
 
 import android.content.Context
 import com.kaiser.rivet.workspace.WorkspacePath
+import com.kaiser.rivet.workspace.SafWorkspace
+import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
@@ -23,7 +27,14 @@ data class RuntimeCommandResult(
     val error: String? = null,
 )
 
-class RuntimeController(context: Context, private val selection: WorkspaceSelection = WorkspaceSelection(context.applicationContext)) {
+data class PreviewLaunch(val processId: String, val url: String, val entry: String)
+
+class RuntimeController(
+    context: Context,
+    private val selection: WorkspaceSelection = WorkspaceSelection(context.applicationContext),
+    private val managedProcesses: ManagedProcesses? = null,
+    private val projectName: () -> String? = { null },
+) {
     private val app = context.applicationContext
     private val operations = Mutex()
     private var mirrorIdentity: String? = null
@@ -37,7 +48,29 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
         }
         val directory = runtimeDirectory(ready.worktree, cwd)
         val environment = environment(active, directory)
-        val result = CommandProcess().run(command, directory.absolutePath, environment, timeoutMs)
+        val processId = managedProcesses?.let { registry ->
+            val job = currentCoroutineContext()[Job]
+                ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "runtime_unavailable")
+            val identity = mirrorIdentity
+                ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "workspace_unavailable")
+            registry.registerCommand(command, cwd, identity, projectName(), job)
+                ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "process_limit")
+        }
+        val result = try {
+            CommandProcess().run(command, directory.absolutePath, environment, timeoutMs,
+                onOutput = processId?.let { id -> { stdout, stderr ->
+                    managedProcesses?.updateCommandOutput(id, stdout, stderr)
+                } })
+        } catch (e: CancellationException) {
+            processId?.let { managedProcesses?.failCommand(it) }
+            throw e
+        } catch (e: Exception) {
+            processId?.let { managedProcesses?.failCommand(it) }
+            throw e
+        }
+        processId?.let { id -> managedProcesses?.finishCommand(id,
+            RuntimeCommandResult(result.exitCode, result.stdout, result.stderr, result.stdoutTruncated,
+                result.stderrTruncated, result.timedOut, cwd, "not_started")) }
         val sync = try { active.sync() }
             catch (_: CancellationException) {
                 // The command already ran. Return its exit status with an
@@ -146,13 +179,75 @@ class RuntimeController(context: Context, private val selection: WorkspaceSelect
     }
 
     suspend fun commandBlocker(): String? = operations.withLock {
+        if (managedProcesses?.canStartCommand() == false) return@withLock "process_limit"
         val active = currentMirror() ?: return@withLock "workspace_unavailable"
         if (active.hasLocalChanges()) "sync_required" else null
+    }
+
+    suspend fun startPreview(
+        workspace: SafWorkspace,
+        expectedWorkspace: String,
+        projectLabel: String?,
+        root: String,
+        entry: String,
+    ): PreviewLaunch {
+        val registry = managedProcesses ?: throw MirrorFailure("runtime_unavailable")
+        if (selection.currentIdentity() != expectedWorkspace || workspace.tree.toString() != expectedWorkspace) {
+            throw MirrorFailure("workspace_changed")
+        }
+        val paths = try { PreviewPaths.parse(root, entry) }
+            catch (_: WorkspaceFailure) { throw MirrorFailure("invalid_path") }
+            catch (_: IllegalArgumentException) { throw MirrorFailure("invalid_path") }
+        val rootPath = paths.root
+        val entryPath = paths.entry
+        try {
+            if (!workspace.stat(rootPath).directory) throw MirrorFailure("not_directory")
+            val item = workspace.stat(entryPath)
+            if (item.directory) throw MirrorFailure("not_file")
+        } catch (e: CancellationException) { throw e
+        } catch (e: WorkspaceFailure) { throw MirrorFailure(e.reason.name.lowercase()) }
+
+        val server = LocalPreviewServer(
+            rootPath,
+            entryPath,
+            workspaceIsCurrent = { selection.currentIdentity() == expectedWorkspace },
+            stat = workspace::stat,
+            copyTo = { path, output, limit -> workspace.copyFileTo(path, output, limit).size },
+        )
+        val url = try { server.start() }
+            catch (e: CancellationException) { throw e
+            } catch (_: Exception) { throw MirrorFailure("preview_unavailable") }
+        val id = registry.registerPreview(expectedWorkspace, projectLabel, entryPath.value, url, server::close)
+            ?: run { server.close(); throw MirrorFailure("process_limit") }
+        server.onWorkspaceInvalidated { registry.stop(id) }
+        try {
+            if (!registry.ensureForegroundService(app)) throw MirrorFailure("foreground_service_unavailable")
+            registry.markPreviewRunning(id)
+            return PreviewLaunch(id, url, entryPath.value)
+        } catch (e: CancellationException) {
+            registry.stop(id)
+            throw e
+        } catch (e: MirrorFailure) {
+            registry.stop(id)
+            throw e
+        } catch (_: Exception) {
+            registry.stop(id)
+            throw MirrorFailure("foreground_service_unavailable")
+        }
     }
 
     suspend fun retryPendingChanges(expectedWorkspace: String): MirrorSyncResult? = operations.withLock {
         if (selection.currentIdentity() != expectedWorkspace) return@withLock null
         currentMirror()?.sync()
+    }
+
+    suspend fun discardPendingChanges(expectedWorkspace: String): MirrorReady = operations.withLock {
+        if (selection.currentIdentity() != expectedWorkspace) throw MirrorFailure("workspace_changed")
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        if (mirrorIdentity != expectedWorkspace || selection.currentIdentity() != expectedWorkspace) {
+            throw MirrorFailure("workspace_changed")
+        }
+        active.discardPendingChanges()
     }
 
     suspend fun awaitIdentityChange(identity: String) = selection.awaitIdentityChange(identity)

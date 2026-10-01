@@ -11,6 +11,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -33,7 +34,8 @@ internal data class CommandOutput(
 )
 
 internal class CommandProcess {
-    suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long): CommandOutput =
+    suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long,
+                    onOutput: ((String, String) -> Unit)? = null): CommandOutput =
         coroutineScope {
             val started = CommandNative.start(command, cwd, environment)
             check(started.size == 3 && started[0] > 0)
@@ -65,6 +67,14 @@ internal class CommandProcess {
                 try { exited.complete(CommandNative.waitFor(pid)) }
                 catch (e: Exception) { exited.completeExceptionally(e) }
             }, "RivetCommandWait-$pid").apply { isDaemon = true }.start()
+            val outputPublisher = onOutput?.let { publish -> launch(Dispatchers.Default) {
+                while (true) {
+                    delay(250)
+                    try { publish(stdout.text(), stderr.text()) }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { /* Display failures do not interrupt the command. */ }
+                }
+            } }
             var timedOut = false
             try {
                 val completed = withTimeoutOrNull(timeoutMs) { exited.await() }
@@ -92,6 +102,7 @@ internal class CommandProcess {
                 }
                 throw e
             } finally {
+                outputPublisher?.cancel()
                 CommandNative.signalGroup(pid, OsConstants.SIGKILL)
                 stdoutFd.close()
                 stderrFd.close()

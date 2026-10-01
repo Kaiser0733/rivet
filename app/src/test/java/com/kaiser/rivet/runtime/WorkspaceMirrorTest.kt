@@ -331,6 +331,232 @@ class WorkspaceMirrorTest {
         assertEquals("old workspace edit", File(mirror.worktree, "file.txt").readText())
     }
 
+    @Test fun discardReloadsNewerSafWithoutWritingPendingBytesAndPreservesCheckpointHistory() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        val store = TurnCheckpoint(File(files, "checkpoints"), tree.toString())
+        val previousId = store.begin(root)
+        File(root, "file.txt").writeText("previous saved change")
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        assertTrue(store.finish(previousId, mirror.prepare().worktree))
+        val pendingId = store.begin(root)
+        File(root, "file.txt").writeText("pending unsaved change")
+        File(root, "unsaved.txt").writeText("only private")
+        provider.nodes.values.first { it.name == "file.txt" }.bytes.writeText("newer external change")
+        assertEquals(MirrorSync.Conflict, mirror.sync().state)
+        val originalCheckpointFiles = File(files, "checkpoints").walkTopDown().filter { it.isFile }
+            .associate { it.relativeTo(files).path to it.readBytes().toList() }
+
+        val ready = mirror.discardPendingChanges()
+
+        assertFalse(ready.dirty)
+        assertFalse(mirror.hasLocalChanges())
+        assertEquals("newer external change", File(ready.worktree, "file.txt").readText())
+        assertFalse(File(ready.worktree, "unsaved.txt").exists())
+        assertEquals("newer external change", String(bytes("file.txt")))
+        assertEquals(listOf("file.txt"), workspace.listDirectory(WorkspacePath.ROOT).map { it.path.value })
+        assertEquals(originalCheckpointFiles, File(files, "checkpoints").walkTopDown().filter { it.isFile }
+            .associate { it.relativeTo(files).path to it.readBytes().toList() })
+        assertEquals(previousId, store.latest()!!.id)
+        assertFalse(store.latest()!!.undone)
+        assertFalse(java.io.File(files, "checkpoints").walkTopDown().any {
+            it.name == "checkpoint.json" && it.readText().contains("\"id\":\"$pendingId\"") && it.readText().contains("\"complete\":true")
+        })
+        assertEquals(MirrorSync.NoChanges, mirror().sync().state)
+        val snapshot = workspace.readTextFile(path("file.txt"))
+        workspace.writeTextFile(path("file.txt"), "new edit", snapshot.sha256)
+        assertEquals("new edit", File(mirror.prepare().worktree, "file.txt").readText())
+    }
+
+    @Test fun discardAbandonsPartialCreateReceiptButKeepsProviderCreatedFile() = runBlocking {
+        val mirror = mirror()
+        File(mirror.prepare().worktree, "new.txt").writeText("pending target")
+        provider.rejectWriteOnceFor = "new.txt"
+        assertEquals(MirrorSync.Failed, mirror.sync().state)
+        assertTrue(files.walkTopDown().any { it.name == "partial-create.json" })
+        val calls = provider.createCalls
+
+        mirror.discardPendingChanges()
+
+        assertEquals(calls, provider.createCalls)
+        assertArrayEquals(byteArrayOf(), bytes("new.txt"))
+        assertEquals("", File(mirror.worktree, "new.txt").readText())
+        assertFalse(mirror.hasLocalChanges())
+        assertFalse(files.walkTopDown().any { it.name == "partial-create.json" })
+    }
+
+    @Test fun discardProviderFailureKeepsPendingCopyAndExternalBytesForRetry() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val mirror = mirror()
+        File(mirror.prepare().worktree, "file.txt").writeText("pending")
+        provider.nodes.values.first { it.name == "file.txt" }.bytes.writeText("external")
+        provider.rejectRead = true
+        try { mirror.discardPendingChanges(); fail("Expected failure") } catch (_: MirrorFailure) { }
+        assertEquals("pending", File(mirror.worktree, "file.txt").readText())
+        assertEquals("external", provider.nodes.values.first { it.name == "file.txt" }.bytes.readText())
+        provider.rejectRead = false
+        assertTrue(mirror.hasLocalChanges())
+        mirror.discardPendingChanges()
+        assertFalse(mirror.hasLocalChanges())
+        assertEquals("external", String(bytes("file.txt")))
+    }
+
+    @Test fun runtimeDiscardChecksExactSelectionAndUnblocksCommandsAndSafTools() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val runtimeContext = object : ContextWrapper(app) {
+            override fun getApplicationContext(): Context = this
+            override fun getFilesDir(): File = files
+        }
+        val selection = com.kaiser.rivet.workspace.WorkspaceSelection(runtimeContext)
+        runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+            .putString("tree", tree.toString()).commit()
+        val mirror = mirror()
+        File(mirror.prepare().worktree, "file.txt").writeText("pending")
+        val runtime = RuntimeController(runtimeContext, selection)
+        assertEquals("sync_required", runtime.commandBlocker())
+        val newer = "newer external".toByteArray()
+        provider.nodes.values.first { it.name == "file.txt" }.bytes.writeBytes(newer)
+        assertEquals(MirrorSync.Conflict, runtime.retryPendingChanges(tree.toString())!!.state)
+
+        val otherTree = DocumentsContract.buildTreeDocumentUri(tree.authority!!, "other")
+        provider.nodes["other"] = TestDocumentsProvider.Node("other", null, true,
+            File.createTempFile("other-root", ".test", files))
+        runtimeContext.contentResolver.takePersistableUriPermission(otherTree,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        val otherWorkspace = SafWorkspace(runtimeContext.contentResolver, otherTree)
+        val otherMirror = WorkspaceMirror(runtimeContext, otherWorkspace) { true }
+        File(otherMirror.prepare().worktree, "other-pending.txt").writeText("keep this private work")
+        runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+            .putString("tree", otherTree.toString()).commit()
+        try { runtime.discardPendingChanges(tree.toString()); fail("Expected mismatch") }
+        catch (error: MirrorFailure) { assertEquals("workspace_changed", error.code) }
+        assertEquals("pending", File(mirror.worktree, "file.txt").readText())
+        runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+            .putString("tree", tree.toString()).commit()
+        provider.afterChildQuery = {
+            provider.afterChildQuery = null
+            runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+                .putString("tree", otherTree.toString()).commit()
+        }
+        try { runtime.discardPendingChanges(tree.toString()); fail("Expected change during refresh") }
+        catch (error: MirrorFailure) { assertEquals("workspace_changed", error.code) }
+        assertEquals("pending", File(mirror.worktree, "file.txt").readText())
+        assertEquals("keep this private work", File(otherMirror.worktree, "other-pending.txt").readText())
+        runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+            .putString("tree", tree.toString()).commit()
+        runtime.discardPendingChanges(tree.toString())
+        assertNull(runtime.commandBlocker())
+        runtime.requireSafCurrent()
+        assertArrayEquals(newer, bytes("file.txt"))
+        val tools = com.kaiser.rivet.agent.SafAgentWorkspace(workspace)
+        val read = tools.read("file.txt")
+        assertEquals("newer external", read.text)
+        assertEquals(1, tools.search("file.txt", "newer").filesScanned)
+        tools.write("file.txt", "valid edit", read.sha256)
+        assertEquals("valid edit", String(bytes("file.txt")))
+        val checkpoint = runtime.beginCheckpoint(tree.toString())
+        assertFalse(runtime.finishCheckpoint(tree.toString(), checkpoint))
+        assertNull(runtime.latestCheckpoint())
+        assertEquals("keep this private work", File(otherMirror.worktree, "other-pending.txt").readText())
+        assertTrue(otherMirror.hasLocalChanges())
+    }
+
+    @Test fun cancelledDiscardRetainsPendingCopyAndCanRetryAfterReconstruction() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val mirror = mirror()
+        File(mirror.prepare().worktree, "file.txt").writeText("pending")
+        val gate = CountDownLatch(1)
+        val started = CountDownLatch(1)
+        provider.blockNextRead = gate
+        provider.readStarted = started
+        val running = launch { mirror.discardPendingChanges() }
+        assertTrue(withContext(Dispatchers.IO) { started.await(5, TimeUnit.SECONDS) })
+        running.cancelAndJoin()
+        assertEquals("pending", File(mirror.worktree, "file.txt").readText())
+        assertEquals("base", String(bytes("file.txt")))
+        val restored = mirror()
+        assertTrue(restored.prepare().dirty)
+        restored.discardPendingChanges()
+        assertFalse(restored.hasLocalChanges())
+        assertEquals("base", File(restored.worktree, "file.txt").readText())
+    }
+
+    @Test fun deselectedWorkspaceCannotDiscardItsPendingCopy() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        var selected = true
+        val mirror = WorkspaceMirror(app, workspace) { selected }
+        File(mirror.prepare().worktree, "file.txt").writeText("pending")
+        selected = false
+        try { mirror.discardPendingChanges(); fail("Expected workspace change") }
+        catch (error: MirrorFailure) { assertEquals("workspace_changed", error.code) }
+        assertEquals("pending", File(mirror.worktree, "file.txt").readText())
+        assertEquals("base", String(bytes("file.txt")))
+    }
+
+    @Test fun interruptedDiscardSwapRecoversOnlyTheAuthorizedPreviousCopy() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val mirror = mirror()
+        val current = mirror.prepare().worktree.parentFile!!
+        val base = current.parentFile!!
+        Files.move(current.toPath(), File(base, "previous").toPath())
+        File(base, "previous/worktree/file.txt").writeText("abandoned pending")
+        current.mkdir()
+        File(current, "worktree").mkdir()
+        File(current, "worktree/file.txt").writeText("base")
+        File(base, "previous/baseline.json").copyTo(File(current, "baseline.json"))
+        File(current, "discard-previous").writeText(tree.toString())
+        // Simulate process death after cleanup had already removed old metadata.
+        File(base, "previous/baseline.json").delete()
+
+        assertFalse(mirror().prepare().dirty)
+        assertFalse(File(base, "previous").exists())
+        assertFalse(File(current, "discard-previous").exists())
+        assertEquals("base", String(bytes("file.txt")))
+    }
+
+    @Test fun interruptedDiscardBeforeInstallationRestoresThePendingCopy() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val first = mirror()
+        val current = first.prepare().worktree.parentFile!!
+        File(first.worktree, "file.txt").writeText("pending")
+        Files.move(current.toPath(), File(current.parentFile, "previous").toPath())
+        val stage = File(current.parentFile, "staging").apply { mkdir() }
+        File(stage, "discard-previous").writeText(tree.toString())
+        val restored = mirror()
+        assertTrue(restored.prepare().dirty)
+        assertEquals("pending", File(restored.worktree, "file.txt").readText())
+        assertEquals("base", String(bytes("file.txt")))
+        assertFalse(stage.exists())
+    }
+
+    @Test fun dirtyPreviousWithoutInstalledDiscardAuthorityIsPreserved() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val first = mirror()
+        val current = first.prepare().worktree.parentFile!!
+        val previous = File(current.parentFile, "previous")
+        current.copyRecursively(previous)
+        File(previous, "worktree/file.txt").writeText("unapproved pending")
+        try { mirror().prepare(); fail("Expected preservation") }
+        catch (error: MirrorFailure) { assertEquals("previous_dirty", error.code) }
+        assertEquals("unapproved pending", File(previous, "worktree/file.txt").readText())
+        assertEquals("base", String(bytes("file.txt")))
+    }
+
+    @Test fun discardDoesNotFollowSubstitutedPrivateDirectories() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val first = mirror()
+        val root = first.prepare().worktree
+        val outside = File(files, "outside").apply { mkdir() }
+        File(outside, "keep.txt").writeText("must survive")
+        Files.move(root.toPath(), File(root.parentFile, "saved-worktree").toPath())
+        Files.createSymbolicLink(root.toPath(), outside.toPath())
+        try { first.discardPendingChanges(); fail("Expected unsafe entry") }
+        catch (error: MirrorFailure) { assertEquals("unsafe_entry", error.code) }
+        assertEquals("must survive", File(outside, "keep.txt").readText())
+        assertEquals("base", String(bytes("file.txt")))
+    }
+
     @Test fun cancelledMaterializationLeavesNoCommittedWorktreeAndCanRetry() = runBlocking {
         source("file.txt", "base".toByteArray())
         val mirror = mirror()
