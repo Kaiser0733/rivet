@@ -40,7 +40,7 @@ internal class ContextPreparation(
         val actual = requestFor(messages)
         return if (store != null && sessionId != null) {
             store.contextEstimate(sessionId, config.id, config.model, actual.messages,
-                actual.system, actual.tools, config.baseUrl)
+                actual.system, actual.tools, config.baseUrl, actual.reasoning)
         } else ContextEstimate(ContextBudget.estimateRequestTokens(actual), "estimated")
     }
 
@@ -195,7 +195,7 @@ internal class ContextPreparation(
         try {
             store?.recordUsage(id, "compaction-$turnId", config.id, config.model, response.usage,
                 summarization.messages, summarization.system, summarization.tools,
-                config.baseUrl, config.type)
+                config.baseUrl, config.type, summarization.reasoning)
         } catch (e: CancellationException) { throw e
         } catch (_: Exception) { /* Usage storage cannot invalidate a complete model response. */ }
         if (response.toolCalls.isNotEmpty()) throw IllegalStateException("context_summary_invalid")

@@ -91,7 +91,7 @@ internal class OpenAiCompatibleClient(
         val httpRequest = base(Endpoints.openAiChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val stream = OpenAiAgentStream(onDelta)
+        val stream = OpenAiAgentStream(onDelta, documentedCacheWrites = config.type == ProviderType.OpenRouter)
         val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
@@ -126,6 +126,7 @@ private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (mess
 
 private class OpenAiAgentStream(
     private val onDelta: (String) -> Unit,
+    private val documentedCacheWrites: Boolean = false,
 ) {
     private data class Pending(
         var id: String? = null,
@@ -144,7 +145,7 @@ private class OpenAiAgentStream(
                 ?: throw ProviderError.InvalidResponse("invalid stream error")
             throw providerMessage(message, error.obj()?.get("code")?.str())
         }
-        openAiUsage(root)?.let { usage = it }
+        openAiUsage(root, documentedCacheWrites)?.let { usage = it }
         val choice = root["choices"]?.arr()?.firstOrNull()?.obj() ?: return
         choice["finish_reason"]?.str()?.let { finishReason = it }
         val delta = choice["delta"]?.obj() ?: return

@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.provider
 
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.selection.selectable
 import androidx.compose.foundation.layout.Column
@@ -43,6 +45,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
+import com.kaiser.rivet.storage.SessionUsage
+import com.kaiser.rivet.storage.diagnostics
 import com.kaiser.rivet.R
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.provider.ProviderConfig
@@ -72,9 +76,11 @@ fun SettingsScreen(
     onAutonomyChange: (AutonomyMode) -> Unit,
     onRoseIntensityPreview: (Int) -> Unit,
     onRoseIntensityCommit: (Int) -> Unit,
+    conversationUsage: SessionUsage? = null,
 ) {
     val state by viewModel.listState.collectAsState()
     var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
+    var showUsage by rememberSaveable { mutableStateOf(false) }
     var confirmYolo by rememberSaveable { mutableStateOf(false) }
     var selectedIntensity by rememberSaveable { mutableIntStateOf(roseIntensity) }
     LaunchedEffect(roseIntensity) { selectedIntensity = roseIntensity }
@@ -105,6 +111,17 @@ fun SettingsScreen(
                 onAutonomyChange(AutonomyMode.Yolo)
             }) { Text("Enable YOLO") } },
             dismissButton = { TextButton(onClick = { confirmYolo = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (showUsage) {
+        AlertDialog(
+            onDismissRequest = { showUsage = false },
+            title = { Text("Conversation usage") },
+            text = { Text(conversationUsage?.diagnostics() ?: "No usage has been reported for this conversation.",
+                modifier = Modifier.verticalScroll(rememberScrollState()),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Default)) },
+            confirmButton = { TextButton(onClick = { showUsage = false }) { Text("Close") } },
         )
     }
 
@@ -250,6 +267,7 @@ fun SettingsScreen(
                             style = MaterialTheme.typography.bodySmall)
                     }
                 }
+                TextButton(onClick = { showUsage = true }) { Text("Conversation usage") }
                 appearanceError?.let { error ->
                     Text(error, color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall)
