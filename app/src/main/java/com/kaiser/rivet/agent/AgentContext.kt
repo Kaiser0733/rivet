@@ -175,6 +175,7 @@ internal object AgentContext {
     private fun summarizeGroup(group: List<AgentMessage>, detailLimit: Int): String = buildString {
         for (message in group) {
             when (message.role) {
+                AgentRole.Context -> append("INTERNAL CONTEXT: ").append(message.internalContext?.scope.orEmpty()).append('\n')
                 AgentRole.User -> append("USER: ").append(clipped(message.text, detailLimit)).append('\n')
                 AgentRole.Assistant -> {
                     if (message.text.isNotBlank()) {

@@ -64,7 +64,7 @@ object AgentActivityProjection {
                         ))
                     }
                 }
-                AgentRole.Tool -> Unit
+                AgentRole.Tool, AgentRole.Context -> Unit
             }
         }
         return items
