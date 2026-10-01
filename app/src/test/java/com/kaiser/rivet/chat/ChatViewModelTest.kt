@@ -686,6 +686,33 @@ class ChatViewModelTest {
         assertEquals(0, documents.createCalls)
     }
 
+    @Test fun legacySeparateSummaryBecomesStableHiddenContextOnNextSafeTurn() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val original = listOf(AgentMessage.user("Original code-20 request"), AgentMessage.assistant("Original answer"))
+        sessions.save(original, false)
+        app.openOrCreateDatabase("coding-sessions.db", android.content.Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("UPDATE sessions SET summary='Keep the original objective' WHERE id=?", arrayOf(id))
+        }
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "First continuation"), AgentResponse(text = "Second continuation"))))
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "test-model")
+        val viewModel = ChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+        viewModel.send("Continue")
+        await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "First continuation" }
+        viewModel.send("Continue again")
+        await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Second continuation" }
+        assertEquals(original, provider.requests.first().messages.take(original.size))
+        assertEquals(provider.requests.first().messages, provider.requests.last().messages.take(provider.requests.first().messages.size))
+        assertEquals(1, sessions.load().messages.count { it.internalContext?.kind == "summary" })
+        assertTrue(sessions.recent(id).none { it.internalContext != null })
+        assertEquals(original.first(), sessions.recent(id).first())
+        assertEquals(sessions.load().messages, CodingSessions(app).load().messages)
+    }
+
     @Test fun nestedInstructionsAreLoadedBeforeFirstMutationApproval() = runBlocking {
         val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.instructions-chat", "root")
         val info = ProviderInfo().apply {
@@ -718,6 +745,10 @@ class ChatViewModelTest {
         assertNull(complete.pendingApproval)
         assertEquals(createdBefore, documents.createCalls)
         assertEquals(2, provider.requests.size)
+        assertEquals(provider.requests[0].messages, provider.requests[1].messages.take(provider.requests[0].messages.size))
+        val resultIndex = provider.requests[1].messages.indexOfFirst { it.role == com.kaiser.rivet.agent.AgentRole.Tool }
+        assertTrue(resultIndex >= 0)
+        assertTrue(provider.requests[1].messages[resultIndex + 1].text.contains("Use the project naming rule."))
         assertTrue(provider.requests[1].messages.any { message ->
             message.role == com.kaiser.rivet.agent.AgentRole.User &&
                 message.text.contains("Use the project naming rule.")

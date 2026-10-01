@@ -179,12 +179,16 @@ class GeminiClientTest {
         server.enqueue(MockResponse().setBody("data: {\"candidates\":[{\"content\":{\"parts\":[{\"text\":\"done\"}]},\"finishReason\":\"STOP\"}]}\n\n"))
         client.streamAgent(AgentRequest(
             "gemini-x",
-            listOf(AgentMessage.assistant("", response.toolCalls, response.transportState), AgentMessage.tools(listOf(
+            listOf(com.kaiser.rivet.agent.InternalContext.summary("Untrusted task notes", "tree"),
+                AgentMessage.assistant("", response.toolCalls, response.transportState), AgentMessage.tools(listOf(
                 AgentToolResult("g-1", "read_file", "{\"text\":\"x\"}"),
             ))), "", ReasoningLevel.Default, emptyList(),
         )) {}
         val body = server.takeRequest().body.readUtf8()
         assertTrue(body.contains("\"thoughtSignature\":\"sig\""))
+        assertTrue(body.contains("Untrusted task notes"))
+        assertTrue(!body.contains("internalContext") && !body.contains("workspaceId"))
+        assertTrue(!body.contains("cache_control"))
         assertTrue(body.contains("\"functionResponse\":{\"id\":\"g-1\",\"name\":\"read_file\""))
     }
 

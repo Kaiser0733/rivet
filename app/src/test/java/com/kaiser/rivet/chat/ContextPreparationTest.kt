@@ -71,7 +71,7 @@ class ContextPreparationTest {
         val retained = preparation.prepare(history)
 
         assertTrue(retained.contains(history.last()))
-        assertTrue(retained.size < history.size)
+        assertTrue(retained.count { it.internalContext == null } < history.size)
         assertEquals(history, sessions.recent(id))
         assertEquals(1, provider.requests.size)
         assertTrue(preparation.summary.contains("Continue"))
@@ -106,10 +106,13 @@ class ContextPreparationTest {
         sessions.save(latest, interrupted = true)
         val prior = TaskState("Original objective", completed = List(9) { "x".repeat(800) },
             nextStep = "Continue the fix").encode()
+        val active = sessions.compact(latest, latest, prior)
         val provider = SummaryProvider()
         val preparation = preparation(sessions, id, 4096, provider, prior)
 
-        assertEquals(latest, preparation.prepare(latest))
+        val reduced = preparation.prepare(active)
+        assertEquals(latest, reduced.filter { it.internalContext == null })
+        assertEquals(1, reduced.count { it.internalContext?.kind == "summary" })
 
         assertEquals(1, provider.requests.size)
         assertTrue(provider.requests.single().messages.single().text.contains("Original objective"))
@@ -128,10 +131,11 @@ class ContextPreparationTest {
         sessions.save(history, interrupted = true)
         val prior = TaskState("Carry original objective", completed = List(9) { "y".repeat(800) },
             nextStep = "Check the latest boundary").encode()
+        val active = sessions.compact(history, history, prior)
         val provider = SummaryProvider()
         val preparation = preparation(sessions, id, 16384, provider, prior)
 
-        val retained = preparation.prepare(history)
+        val retained = preparation.prepare(active)
 
         val newestRemoved = history.last { it !in retained }.text.substringBefore(' ')
         val input = provider.requests.single().messages.single().text

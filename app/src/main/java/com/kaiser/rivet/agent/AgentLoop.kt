@@ -95,7 +95,10 @@ class AgentLoop(
             val updates = contextUpdates(messages.toList())
             require(updates.all { it.role == AgentRole.Context && it.internalContext?.valid() == true &&
                 it.text.isEmpty() && it.toolCalls.isEmpty() && it.toolResults.isEmpty() && it.transportState == null })
-            if (!canPersistToolOutput(messages + updates, 0)) return AgentRunResult(messages,
+            if (updates.isNotEmpty() && !AgentContext.validGroups(messages)) return AgentRunResult(messages,
+                AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
+                mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
+            if (updates.isNotEmpty() && !canPersistToolOutput(messages + updates, 0)) return AgentRunResult(messages,
                 AgentStopReason.SessionLimit, modelIterations, toolCalls,
                 mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
             for (update in updates) append(update)

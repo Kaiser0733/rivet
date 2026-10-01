@@ -72,6 +72,7 @@ jobs:
           path: |
             app/build/test-results/testDebugUnitTest/*.xml
             app/build/reports/lint-results-debug.*
+            app/build/reports/prefix-efficiency.json
 
       - name: Upload debug APK
         uses: actions/upload-artifact@v7
