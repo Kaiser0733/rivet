@@ -954,8 +954,8 @@ class ChatViewModelTest {
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val preparation = ContextPreparation(sessions, id, provider, config, "turn", "") {
-            messages, summary -> AgentRequest(config.model,
-                addUntrustedTaskContext(messages, "", summary), "System", config.reasoning, emptyList())
+            messages, _ -> AgentRequest(config.model,
+                com.kaiser.rivet.agent.modelMessages(messages), "System", config.reasoning, emptyList())
         }
 
         val first = preparation.prepare(history)
@@ -1041,8 +1041,8 @@ class ChatViewModelTest {
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text =
             """{"objective":"Keep coding","pending":["Verify"]}"""))))
         val preparation = ContextPreparation(sessions, id, provider, config, "turn", "") {
-            messages, summary -> AgentRequest(config.model,
-                addUntrustedTaskContext(messages, "", summary), "System", config.reasoning, emptyList())
+            messages, _ -> AgentRequest(config.model,
+                com.kaiser.rivet.agent.modelMessages(messages), "System", config.reasoning, emptyList())
         }
         app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
             db.execSQL("CREATE TRIGGER fail_compact BEFORE INSERT ON compactions BEGIN " +
