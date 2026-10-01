@@ -8,6 +8,7 @@ import android.database.sqlite.SQLiteOpenHelper
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentToolDefinition
 import com.kaiser.rivet.agent.ContextBudget
+import com.kaiser.rivet.agent.validatedContext
 import com.kaiser.rivet.agent.InternalContext
 import com.kaiser.rivet.agent.ProjectInstructionFile
 import com.kaiser.rivet.agent.ProjectContext
@@ -698,8 +699,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             arrayOf(id, "%\"role\":\"context\"%")).use { cursor ->
             while (cursor.moveToNext()) {
                 val message = decode(cursor.getString(0))
-                val context = message.internalContext?.takeIf { message.role == AgentRole.Context &&
-                    it.valid() && it.workspaceId == workspace } ?: continue
+                val context = message.validatedContext()?.takeIf { it.workspaceId == workspace } ?: continue
                 when (context.kind) {
                     "project_snapshot" -> {
                         files.clear()

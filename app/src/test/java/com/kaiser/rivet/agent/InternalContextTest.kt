@@ -100,6 +100,8 @@ class InternalContextTest {
             valid.copy(internalContext = valid.internalContext!!.copy(digest = "wrong")),
             valid.copy(toolCalls = listOf(AgentToolCall("call", "run_command", "{}"))))
         assertTrue(modelMessages(invalid, workspace, true).isEmpty())
+        assertTrue(ProjectContext.current(invalid, workspace).isEmpty())
+        assertTrue(modelMessages(ProjectContext.projection(invalid, emptyList())).isEmpty())
         assertTrue(AgentActivityProjection.conversation(invalid).isEmpty())
         assertTrue(modelMessages(listOf(valid), "content://provider/tree/other", true).isEmpty())
         assertFalse(ProjectContext.updates(listOf(valid), "content://provider/tree/other",
