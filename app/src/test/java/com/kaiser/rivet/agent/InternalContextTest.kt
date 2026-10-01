@@ -143,4 +143,15 @@ class InternalContextTest {
         assertEquals(0, models)
         assertEquals(pending, result.messages.last())
     }
+    @Test fun changedWorkspaceStopsBeforeLoadingOrSendingContext() = runTest {
+        var models = 0
+        var loads = 0
+        val result = AgentLoop(requestModel = { _, _, _ -> models++; AgentResponse() },
+            prepareTool = { error("Must not prepare") }, requestApproval = { error("Must not approve") },
+            workspaceIsCurrent = { false }, contextUpdates = { loads++; emptyList() })
+            .run(listOf(AgentMessage.user("Inspect")), emptyList())
+        assertEquals(AgentStopReason.WorkspaceChanged, result.stopReason)
+        assertEquals(0, models)
+        assertEquals(0, loads)
+    }
 }

@@ -56,7 +56,7 @@ class PrefixEfficiencyTest {
         if (twoTurns || compact) {
             history += AgentMessage.assistant("Inspected the project")
             if (compact) {
-                history = ProjectContext.projection(history, history.takeLast(1), "{\"objective\":\"Edit A.kt\"}", workspace)
+                history = ProjectContext.projection(history, listOf(history.last { it.role == AgentRole.User }, history.last()), "{\"objective\":\"Edit A.kt\"}", workspace)
             }
             history += AgentMessage.user("Edit A.kt and check the result")
             steps += Step(history, project, if (compact) "{\"objective\":\"Edit A.kt\"}" else "", boundary = compact)
