@@ -356,7 +356,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.insertOrThrow("usage", null, ContentValues().apply {
             put("session_id", sessionId); put("turn_id", turnId)
             put("provider_id", providerId); put("model", model)
-            put("source", if (contextInput != null && contextInput > 0) "reported" else "unknown")
+            put("source", if (contextInput != null) "reported" else "unknown")
             put("input_tokens", usage?.inputTokens); put("output_tokens", usage?.outputTokens)
             put("cache_read_tokens", usage?.cacheReadTokens)
             put("cache_creation_tokens", usage?.cacheCreationTokens)
@@ -386,7 +386,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val estimated = ContextBudget.estimateRequestTokens(request)
         val anchor = db.rawQuery("SELECT context_input_tokens,base_count,base_prefix_hash,system_hash,active_generation " +
             "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' " +
-            "AND context_input_tokens IS NOT NULL AND turn_id NOT LIKE 'compaction-%' " +
+            "AND context_input_tokens > 0 AND turn_id NOT LIKE 'compaction-%' " +
             "ORDER BY id DESC LIMIT 1", arrayOf(sessionId, providerId, model)).use { cursor ->
             if (!cursor.moveToFirst()) null else UsageAnchor(cursor.getLong(0), cursor.getInt(1),
                 if (cursor.isNull(2)) null else cursor.getString(2), cursor.getString(3), cursor.getInt(4))

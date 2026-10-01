@@ -180,6 +180,8 @@ class CodingSessionsTest {
         val usage = sessions.usage(id)
         assertEquals(0L, usage.reportedInputTokens)
         assertEquals(0L, usage.reportedOutputTokens)
+        assertEquals(1, usage.reportedRequests)
+        assertEquals(0, usage.unknownRequests)
         assertTrue(usage.diagnostics().contains("Raw input: 0"))
         assertTrue(usage.diagnostics().contains("Output: 0"))
     }
@@ -756,7 +758,7 @@ class CodingSessionsTest {
         val history = listOf(AgentMessage.user("Original task"), AgentMessage.assistant("Done"),
             AgentMessage.user("Continue"))
         sessions.save(history, interrupted = false)
-        sessions.compact(history, listOf(history.last()), "task state",
+        val compacted = sessions.compact(history, listOf(history.last()), "task state",
             ContextAttempt("automatic", "estimated", 12_000, 4_000, "provider", "model"))
         sessions.recordContextFailure(id,
             ContextAttempt("overflow", "reported", 20_000, null, "provider", "model",
@@ -777,7 +779,7 @@ class CodingSessionsTest {
                 assertFalse(cursor.moveToNext())
             }
         }
-        assertEquals(listOf(history.last()), CodingSessions(app).load().messages)
+        assertEquals(compacted, CodingSessions(app).load().messages)
         assertEquals(history, sessions.recent(id))
         repeat(65) { index ->
             sessions.recordContextFailure(id, ContextAttempt("overflow", "estimated", index.toLong(),
