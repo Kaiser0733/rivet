@@ -31,6 +31,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
+import androidx.compose.foundation.clickable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -54,6 +55,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.stateDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
@@ -75,6 +79,12 @@ import com.kaiser.rivet.R
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.AgentConversationItem
+import com.kaiser.rivet.agent.AgentActivityGroup
+import com.kaiser.rivet.agent.AgentActivityOperation
+import com.kaiser.rivet.agent.ActivityOutcome
+import com.kaiser.rivet.agent.AgentActivityProjection
+import com.kaiser.rivet.agent.AgentToolLifecycleStage
 import com.kaiser.rivet.chat.ChatUiState
 import com.kaiser.rivet.chat.ChatErrorAction
 import com.kaiser.rivet.chat.ChatViewModel
@@ -87,19 +97,25 @@ import com.kaiser.rivet.ui.RivetDoodleMark
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.history.HistoryPane
+import com.kaiser.rivet.runtime.ManagedProcessStatus
 import kotlinx.coroutines.flow.collect
 
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
-               onOpenSettings: () -> Unit, onOpenHistory: () -> Unit) {
+               onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit) {
     val landscape = showsHistoryPane(LocalConfiguration.current.orientation)
     val state by chatViewModel.uiState.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
+    val processItems by chatViewModel.managedProcesses.processes.collectAsState()
+    val hasActiveProcesses = processItems.any { it.status in setOf(
+        ManagedProcessStatus.Starting, ManagedProcessStatus.Running, ManagedProcessStatus.Stopping,
+    ) }
     val projectBinding = projectBindingState(state.currentSessionId, state.currentSessionWorkspaceId,
         state.projectIdentity, state.projectLoading)
     val wrongProject = projectBinding == ProjectBindingState.Mismatch
     var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
+    var confirmDiscard by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
         if (result.resultCode == Activity.RESULT_OK && uri != null) {
@@ -139,6 +155,18 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             }) { Text("Undo changes") } },
             dismissButton = { TextButton(onClick = { confirmUndo = false }) { Text("Cancel") } })
     }
+    confirmDiscard?.let { identity ->
+        AlertDialog(onDismissRequest = { confirmDiscard = null },
+            title = { Text("Discard Rivet's pending changes?",
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = { Text("Rivet will permanently abandon the unsaved runtime copy and reload the current project. Files already in your project will not be changed.",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
+            confirmButton = { RivetOutlinedButton(onClick = {
+                confirmDiscard = null
+                chatViewModel.discardProjectChanges(identity)
+            }) { Text("Discard pending changes") } },
+            dismissButton = { TextButton(onClick = { confirmDiscard = null }) { Text("Cancel") } })
+    }
     state.pendingApproval?.let { approval ->
         ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
     }
@@ -154,12 +182,15 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             Column(Modifier.weight(1f).fillMaxSize()) {
                 Row(Modifier.fillMaxWidth()
                     .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (landscape) Spacer(Modifier.size(48.dp))
-                    else IconButton(onClick = onOpenHistory, modifier = Modifier.size(48.dp),
-                        enabled = state.ready && !state.projectLoading && !state.streaming &&
-                            !state.undoing && !state.recoveringProjectChanges) {
-                        Icon(painterResource(R.drawable.ic_history), "Conversation history",
-                            tint = MaterialTheme.colorScheme.onBackground)
+                    if (landscape) Spacer(Modifier.width(96.dp))
+                    else {
+                        IconButton(onClick = onOpenHistory, modifier = Modifier.size(48.dp),
+                            enabled = state.ready && !state.projectLoading && !state.streaming &&
+                                !state.undoing && !state.recoveringProjectChanges) {
+                            Icon(painterResource(R.drawable.ic_history), "Conversation history",
+                                tint = MaterialTheme.colorScheme.onBackground)
+                        }
+                        Spacer(Modifier.width(48.dp))
                     }
                     TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
                         enabled = providers.configs.isNotEmpty() && state.ready && !state.streaming &&
@@ -168,6 +199,11 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         Text(displaySafeText(state.projectName ?: "Choose project"), maxLines = 1,
                             overflow = TextOverflow.Ellipsis)
                         Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp))
+                    }
+                    IconButton(onClick = onOpenProcesses, modifier = Modifier.size(48.dp)) {
+                        Icon(painterResource(R.drawable.ic_processes), "Processes",
+                            tint = if (hasActiveProcesses) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.onBackground)
                     }
                     IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
@@ -240,7 +276,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
                     key(state.currentSessionId) {
                         MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
-                            Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                            onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
+                            modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
                     }
                 }
                 if (state.undoCheckpointId != null || state.undoing) {
@@ -303,12 +340,19 @@ private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewM
 @Composable
 private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
-                        modifier: Modifier = Modifier) {
-    val visible = visibleConversation(state.messages)
+                        onDiscardProjectChanges: () -> Unit, modifier: Modifier = Modifier) {
+    val timeline = remember(state.messages, state.toolLifecycle) {
+        AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
+    }
+    val liveOperation = state.toolLifecycle.lastOrNull { it.stage in setOf(
+        AgentToolLifecycleStage.Queued, AgentToolLifecycleStage.AwaitingApproval,
+        AgentToolLifecycleStage.Started,
+    ) }
     val streamingText = state.streamingText
-    val totalItems = visible.size +
+    val showActivity = state.activity != null && streamingText.isBlank() && liveOperation == null
+    val totalItems = timeline.size +
         (if (streamingText.isNotBlank()) 1 else 0) +
-        (if (state.activity != null) 1 else 0) +
+        (if (showActivity) 1 else 0) +
         (if (state.notice != null) 1 else 0) +
         (if (state.error != null) 1 else 0)
     val listState = rememberLazyListState()
@@ -327,7 +371,8 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 if (scrolling && !programmatic) followBottom = near
             }
     }
-    LaunchedEffect(visible.size, streamingText.length, state.streaming, state.activity, state.error, state.notice) {
+    LaunchedEffect(timeline.size, streamingText.length, state.streaming, state.activity,
+        state.toolLifecycle, state.error, state.notice) {
         if (followBottom && totalItems > 0) {
             programmaticScroll = true
             try {
@@ -340,11 +385,16 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(visible) { message -> MessageRow(message) }
+        items(timeline) { item ->
+            when (item) {
+                is AgentConversationItem.Message -> MessageRow(item.message)
+                is AgentConversationItem.Activity -> ActivityRow(item.group)
+            }
+        }
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
         }
-        state.activity?.let { activity ->
+        if (showActivity) state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
@@ -359,9 +409,77 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                     ChatErrorAction.OpenSettings -> onOpenSettings
                     ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
                     null -> null
+                }, onDiscard = onDiscardProjectChanges.takeIf {
+                    state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
+                        !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
+                        state.projectIdentity != null &&
+                        state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
                 })
         } }
     }
+}
+
+@Composable
+private fun ActivityRow(group: AgentActivityGroup) {
+    var expanded by rememberSaveable(group.id) { mutableStateOf(false) }
+    Column(Modifier.fillMaxWidth()) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { expanded = !expanded }
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                .padding(horizontal = 8.dp, vertical = 5.dp),
+            verticalAlignment = Alignment.CenterVertically,
+        ) {
+            Text("Activity", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.primary)
+            Text(group.summary, Modifier.weight(1f).padding(start = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = if (expanded) 2 else 1, overflow = TextOverflow.Ellipsis)
+            Text(if (expanded) "Hide" else "Details", Modifier.padding(start = 8.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (expanded) {
+            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, bottom = 6.dp),
+                verticalArrangement = Arrangement.spacedBy(7.dp)) {
+                group.operations.forEach { operation -> ActivityOperationRow(operation) }
+            }
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
+    }
+}
+
+@Composable
+private fun ActivityOperationRow(operation: AgentActivityOperation) {
+    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+        Text(operation.title, Modifier.widthIn(min = 64.dp),
+            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onBackground)
+        Column(Modifier.weight(1f)) {
+            if (operation.detail.isNotBlank()) Text(displaySafeText(operation.detail),
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                maxLines = 3, overflow = TextOverflow.Ellipsis)
+            operation.outcomeDetail?.let { Text(displaySafeText(it),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        Text(activityOutcomeText(operation.outcome), Modifier.padding(start = 8.dp),
+            style = MaterialTheme.typography.labelSmall, color = when (operation.outcome) {
+                ActivityOutcome.Failed, ActivityOutcome.Denied, ActivityOutcome.Blocked -> MaterialTheme.colorScheme.error
+                ActivityOutcome.Running, ActivityOutcome.WaitingApproval -> MaterialTheme.colorScheme.primary
+                else -> MaterialTheme.colorScheme.onSurfaceVariant
+            })
+    }
+}
+
+private fun activityOutcomeText(outcome: ActivityOutcome): String = when (outcome) {
+    ActivityOutcome.Queued -> "Queued"
+    ActivityOutcome.WaitingApproval -> "Waiting for approval"
+    ActivityOutcome.Running -> "Running"
+    ActivityOutcome.Completed -> "Completed"
+    ActivityOutcome.Failed -> "Failed"
+    ActivityOutcome.Denied -> "Denied"
+    ActivityOutcome.Blocked -> "Stopped"
+    ActivityOutcome.Cancelled -> "Cancelled"
+    ActivityOutcome.Unknown -> "Outcome unknown"
 }
 
 private suspend fun scrollToConversationBottom(state: androidx.compose.foundation.lazy.LazyListState, index: Int) {
@@ -485,10 +603,6 @@ private fun InlineMarkdown(text: String, modifier: Modifier = Modifier, style: T
     Text(annotated, modifier = modifier, style = textStyle.copy(color = color))
 }
 
-internal fun visibleConversation(messages: List<AgentMessage>): List<AgentMessage> =
-    messages.filter { it.role == AgentRole.User ||
-        (it.role == AgentRole.Assistant && it.text.isNotBlank() && it.toolCalls.isEmpty()) }
-
 internal fun approvalTitle(request: AgentApprovalRequest): String = when {
     request.call.name == "run_command" -> "Run a project command?"
     request.dangerous -> request.title
@@ -541,11 +655,13 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
 }
 
 @Composable
-private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?, onAction: (() -> Unit)?) {
+private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?, onAction: (() -> Unit)?,
+                     onDiscard: (() -> Unit)? = null) {
     Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(6.dp)) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text(error, color = MaterialTheme.colorScheme.onErrorContainer,
                 style = MaterialTheme.typography.bodyMedium)
+            if (onDiscard != null) TextButton(onClick = onDiscard) { Text("Discard pending changes") }
             Row {
                 if (onAction != null && actionLabel != null) TextButton(onClick = onAction) { Text(actionLabel) }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_error_dismiss)) }

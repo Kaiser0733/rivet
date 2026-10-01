@@ -1,6 +1,6 @@
 # Rivet Master Roadmap
 
-Ten phases. Each phase lands working, buildable software; none leaves the
+Eleven phases. Each phase lands working, buildable software; none leaves the
 repository in a state that does not compile.
 
 ## Phase 1 — Foundation (complete)
@@ -64,13 +64,21 @@ no-progress detection strengthen long coding turns. Full session events,
 approval, workspace, and runtime boundaries remain in place. The 0.9.1
 backend passed the preceding physical acceptance process.
 
-## Phase 10 — Rivet UI/UX Redesign (in progress)
+## Phase 10 — Rivet UI/UX Redesign (merged baseline)
 
-The 0.10.0 (19) candidate keeps Chat as the home surface with full-screen
+The 0.10.0 (19) baseline keeps Chat as the home surface with full-screen
 History and Settings routes. It adds bounded model search, local assistant
 Markdown rendering, persisted Rose/Dark appearance, and distinct project
 access-loss messaging while preserving exact SAF identity checks. Prior session
 migration and pinning behavior remain covered. Portrait Chat uses available
 width; phone and tablet landscape show shared History beside Chat. The prior
-phone regression passed; final responsive/theme physical regression is pending.
-This phase is not accepted until that retest passes.
+phone regression passed. Tablet, landscape, and theme physical checks remain
+separate device acceptance work.
+
+## Phase 11 — Runtime Autonomy and Processes (candidate)
+
+Version 0.11.0 (20) adds Rivet-owned Ask/Basic YOLO/YOLO policy, tool-effect
+integrity checks, a safe activity projection, app-owned process tracking,
+loopback-only static previews, and bounded HTTPS project downloads. Generic
+persistent shell processes remain deferred because they could race mirror
+sync and checkpoints. Physical validation remains pending.

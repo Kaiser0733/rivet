@@ -304,3 +304,36 @@ and affects only Rose. Shared typography inherits palette colors. This extends
 D32's presentation without changing conversation or project authority.
 Why: coding conversations need useful tablet width and a readable alternative
 for extended sessions; History behavior stays shared across presentations.
+
+## D36 — App-owned autonomy policy
+
+What: persist Ask, Basic YOLO, or YOLO separately from provider configuration.
+Approval mode decides whether confirmation is requested; tool effects still
+control checkpoints, workspace checks, runtime blockers, and durable-result
+headroom. Unknown stored values fall back to Ask.
+Why: fewer routine interruptions must not remove mutation integrity controls.
+
+## D37 — Activity is a projection of observed tool events
+
+What: Chat groups correlated tool calls/results and overlays bounded live
+lifecycle signals. It never renders provider JSON or model reasoning and does
+not create a second durable activity log.
+Why: execution status should come from observed app events without becoming
+another transcript or exposing private tool fields.
+
+## D38 — App-owned process lifetime
+
+What: an in-memory registry owns foreground command visibility and direct
+Stop. A non-exported `specialUse` foreground service owns loopback preview
+servers while active, with no boot restart. Generic persistent shell processes
+remain deferred because they could race mirror sync and checkpoints.
+Why: process controls must not treat the live mutable mirror as an isolated
+daemon workspace.
+
+## D39 — Typed bounded project downloads
+
+What: `download_file` uses a dedicated cookie-free HTTPS client, revalidates
+redirects, streams at most 64 MiB to app cache, verifies optional content SHA,
+and commits through SAF hash checks and the normal checkpoint path.
+Why: file retrieval should not require a shell utility or bypass project
+mutation protections.

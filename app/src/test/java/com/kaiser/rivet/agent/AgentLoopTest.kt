@@ -18,6 +18,192 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentLoopTest {
+    @Test fun downloadOverwriteKeepsExistingPathDestructiveApproval() = runTest {
+        for (created in listOf(true, false)) {
+            val download = AgentToolCall("download", "download_file", "{}")
+            val deletion = AgentToolCall("delete", "delete_path", """{"path":"asset.bin"}""")
+            val approvals = mutableListOf<AgentApprovalRequest>()
+            var requests = 0
+            val result = AgentLoop(
+                requestModel = { _, _, _ ->
+                    if (requests++ == 0) AgentResponse(toolCalls = listOf(download, deletion))
+                    else AgentResponse(text = "Finished")
+                },
+                prepareTool = { call ->
+                    val approval = AgentApprovalRequest(call, "Change", "asset.bin",
+                        destructivePath = if (call == deletion) "asset.bin" else null)
+                    PreparedAgentTool(call, approval) {
+                        AgentToolResult(call.id, call.name,
+                            if (call == download) """{"path":"asset.bin","created":$created}"""
+                            else """{"path":"asset.bin"}""")
+                    }
+                },
+                requestApproval = { approvals += it; true },
+                describeDestructive = { it.copy(dangerous = true) },
+            ).run(listOf(AgentMessage.user("Download then delete")), emptyList())
+            assertEquals(AgentStopReason.Completed, result.stopReason)
+            assertEquals(!created, approvals.single { it.call == deletion }.dangerous)
+        }
+    }
+
+    @Test fun lifecycleTelemetryTracksAskDenialAutoBlockAndCallbackFailure() = runTest {
+        suspend fun run(mode: AutonomyMode, allowed: Boolean = true,
+                        blocker: String? = null, telemetryFails: Boolean = false): Pair<AgentRunResult, List<AgentToolLifecycleStage>> {
+            val call = AgentToolCall("edit", "write_file", "{}")
+            var requests = 0
+            val events = mutableListOf<AgentToolLifecycleStage>()
+            val result = AgentLoop(
+                requestModel = { _, _, _ ->
+                    requests++
+                    if (requests == 1) AgentResponse(toolCalls = listOf(call)) else AgentResponse(text = "Finished")
+                },
+                prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "file"),
+                    effect = AgentToolEffect.WorkspaceMutation,
+                    basicAutonomyRisk = BasicAutonomyRisk.Routine,
+                    blockedReason = blocker) { AgentToolResult(call.id, call.name, "{}") } },
+                requestApproval = { allowed },
+                beforeMutation = { null },
+            ).run(listOf(AgentMessage.user("Edit")), emptyList(), autonomyMode = mode,
+                onToolLifecycle = { event ->
+                    events += event.stage
+                    if (telemetryFails) error("presentation callback failed")
+                })
+            return result to events
+        }
+
+        val (asked, askEvents) = run(AutonomyMode.Ask)
+        assertEquals(AgentStopReason.Completed, asked.stopReason)
+        assertEquals(listOf(AgentToolLifecycleStage.Queued, AgentToolLifecycleStage.AwaitingApproval,
+            AgentToolLifecycleStage.Started, AgentToolLifecycleStage.Completed), askEvents)
+
+        val (_, deniedEvents) = run(AutonomyMode.Ask, allowed = false)
+        assertEquals(listOf(AgentToolLifecycleStage.Queued, AgentToolLifecycleStage.AwaitingApproval,
+            AgentToolLifecycleStage.Denied), deniedEvents)
+
+        val (automatic, autoEvents) = run(AutonomyMode.BasicYolo, telemetryFails = true)
+        assertEquals(AgentStopReason.Completed, automatic.stopReason)
+        assertEquals(listOf(AgentToolLifecycleStage.Queued, AgentToolLifecycleStage.Started,
+            AgentToolLifecycleStage.Completed), autoEvents)
+
+        val (blocked, blockedEvents) = run(AutonomyMode.Yolo, blocker = "approval_unavailable")
+        assertEquals(AgentStopReason.CapabilityBlocked, blocked.stopReason)
+        assertEquals(listOf(AgentToolLifecycleStage.Queued, AgentToolLifecycleStage.Blocked), blockedEvents)
+    }
+
+    @Test fun cancellationEmitsCancelledLifecycleAfterStart() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        val events = mutableListOf<AgentToolLifecycleStage>()
+        val running = async {
+            AgentLoop(
+                requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+                prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "file"),
+                    effect = AgentToolEffect.WorkspaceMutation) { kotlinx.coroutines.awaitCancellation() } },
+                requestApproval = { true },
+            ).run(listOf(AgentMessage.user("Edit")), emptyList(), onToolLifecycle = { events += it.stage })
+        }
+        yield()
+        running.cancelAndJoin()
+        assertEquals(listOf(AgentToolLifecycleStage.Queued, AgentToolLifecycleStage.AwaitingApproval,
+            AgentToolLifecycleStage.Started, AgentToolLifecycleStage.Cancelled), events)
+    }
+
+    @Test fun lifecycleCancellationIsNotSwallowed() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        var executed = false
+        val running = async {
+            AgentLoop(
+                requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+                prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "file")) {
+                    executed = true
+                    AgentToolResult(call.id, call.name, "{}")
+                } },
+                requestApproval = { true },
+            ).run(listOf(AgentMessage.user("Edit")), emptyList(),
+                onToolLifecycle = { throw kotlinx.coroutines.CancellationException("observer stopped") })
+        }
+        try {
+            running.await()
+            throw AssertionError("lifecycle cancellation was swallowed")
+        } catch (_: kotlinx.coroutines.CancellationException) { }
+        assertTrue(running.isCancelled)
+        assertFalse(executed)
+    }
+
+    @Test fun basicYoloMutationStillReservesDurabilityAndUsesCheckpoint() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        var approvals = 0
+        var checkpoints = 0
+        var executions = 0
+        var largestReserve = 0
+        var requests = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                requests++
+                if (requests == 1) AgentResponse(toolCalls = listOf(call)) else AgentResponse(text = "Updated the file.")
+            },
+            prepareTool = { PreparedAgentTool(call,
+                AgentApprovalRequest(call, "Edit", "A.kt"),
+                effect = AgentToolEffect.WorkspaceMutation,
+                basicAutonomyRisk = BasicAutonomyRisk.Routine) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; true },
+            canPersistToolOutput = { _, reserve -> largestReserve = maxOf(largestReserve, reserve); true },
+            beforeMutation = { checkpoints++; null },
+        ).run(listOf(AgentMessage.user("Edit it")), emptyList(), autonomyMode = AutonomyMode.BasicYolo)
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(0, approvals)
+        assertEquals(1, checkpoints)
+        assertEquals(1, executions)
+        assertTrue(largestReserve > 0)
+        assertEquals(1, result.mutationsAttempted)
+        assertEquals(1, result.mutationsCompleted)
+    }
+
+    @Test fun yoloMutationCannotRunWithoutSessionResultHeadroom() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        var executions = 0
+        var checkpoints = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "A.kt"),
+                effect = AgentToolEffect.WorkspaceMutation) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { error("YOLO does not request approval") },
+            canPersistToolOutput = { _, reserve -> reserve == 0 },
+            beforeMutation = { checkpoints++; null },
+        ).run(listOf(AgentMessage.user("Edit it")), emptyList(), autonomyMode = AutonomyMode.Yolo)
+
+        assertEquals(AgentStopReason.SessionLimit, result.stopReason)
+        assertEquals(0, executions)
+        assertEquals(0, checkpoints)
+    }
+
+    @Test fun yoloMutationCannotRunWhenCheckpointIsUnavailable() = runTest {
+        val call = AgentToolCall("edit", "write_file", "{}")
+        var executions = 0
+        var checkpoints = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "A.kt"),
+                effect = AgentToolEffect.WorkspaceMutation) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { error("YOLO does not request approval") },
+            canPersistToolOutput = { _, _ -> true },
+            beforeMutation = { checkpoints++; "checkpoint_unavailable" },
+        ).run(listOf(AgentMessage.user("Edit it")), emptyList(), autonomyMode = AutonomyMode.Yolo)
+
+        assertEquals(AgentStopReason.CheckpointUnavailable, result.stopReason)
+        assertEquals(1, checkpoints)
+        assertEquals(0, executions)
+    }
+
     @Test fun unavailableCommandStopsBeforeApprovalExecutionOrFalseSuccess() = runTest {
         val call = AgentToolCall("run-1", "run_command", """{"command":"printf ok"}""")
         var modelRequests = 0

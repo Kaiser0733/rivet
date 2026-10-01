@@ -4,4 +4,5 @@ enum class RivetDestination(val isPrimary: Boolean) {
     Chat(true),
     History(false),
     Settings(true),
+    Processes(false),
 }

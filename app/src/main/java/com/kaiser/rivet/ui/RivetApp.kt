@@ -23,6 +23,8 @@ import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.graphics.toArgb
 import androidx.core.view.WindowCompat
 import com.kaiser.rivet.chat.ChatViewModel
+import com.kaiser.rivet.agent.AutonomyMode
+import com.kaiser.rivet.storage.AutonomyStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 import com.kaiser.rivet.ui.chat.ChatScreen
@@ -30,17 +32,22 @@ import com.kaiser.rivet.ui.history.HistoryScreen
 import com.kaiser.rivet.ui.provider.ProviderEditor
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.provider.SettingsScreen
+import com.kaiser.rivet.ui.processes.ProcessesScreen
 
 @Composable
 fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
-             providersViewModel: ProvidersViewModel) {
+             providersViewModel: ProvidersViewModel, processNavigationRequest: Int = 0) {
     val context = LocalContext.current.applicationContext
     val appearanceStore = remember(context) { AppearanceStore(context) }
+    val autonomyStore = remember(context) { AutonomyStore(context) }
     val storedAppearance by appearanceStore.appearance.collectAsState(initial = RivetAppearance())
+    val autonomyMode by autonomyStore.mode.collectAsState(initial = AutonomyMode.Ask)
     var roseIntensity by remember { mutableIntStateOf(storedAppearance.roseIntensity) }
     var appearanceSaveError by remember { mutableStateOf<String?>(null) }
     var themeMode by remember { mutableStateOf(storedAppearance.themeMode) }
     var themeSaving by remember { mutableStateOf(false) }
+    var autonomySaving by remember { mutableStateOf(false) }
+    var autonomyError by remember { mutableStateOf<String?>(null) }
     LaunchedEffect(storedAppearance.roseIntensity) { roseIntensity = storedAppearance.roseIntensity }
     LaunchedEffect(storedAppearance.themeMode) { themeMode = storedAppearance.themeMode }
     val coroutineScope = rememberCoroutineScope()
@@ -61,6 +68,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         var destination by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
         var editing by rememberSaveable { mutableStateOf(false) }
         val saveableStates = rememberSaveableStateHolder()
+        LaunchedEffect(processNavigationRequest) {
+            if (processNavigationRequest > 0) destination = RivetDestination.Processes
+        }
         val editor by providersViewModel.editorState.collectAsState()
         if (editing && editor.config.id.isEmpty()) editing = false
 
@@ -80,7 +90,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                         RivetChatBackground(intensity = roseIntensity, themeMode = themeMode)
                         ChatScreen(chatViewModel, providersViewModel,
                             onOpenSettings = { destination = RivetDestination.Settings },
-                            onOpenHistory = { destination = RivetDestination.History })
+                            onOpenHistory = { destination = RivetDestination.History },
+                            onOpenProcesses = { destination = RivetDestination.Processes })
                     }
                     RivetDestination.History -> HistoryScreen(
                         viewModel = chatViewModel,
@@ -121,6 +132,26 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             }
                         },
                         appearanceError = appearanceSaveError,
+                        autonomyMode = autonomyMode,
+                        autonomySaving = autonomySaving,
+                        autonomyError = autonomyError,
+                        onAutonomyChange = { value ->
+                            if (!autonomySaving && value != autonomyMode) {
+                                autonomySaving = true
+                                autonomyError = null
+                                coroutineScope.launch {
+                                    try {
+                                        autonomyStore.setMode(value)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        autonomyError = "Rivet couldn't save this setting. Try again."
+                                    } finally {
+                                        autonomySaving = false
+                                    }
+                                }
+                            }
+                        },
                         onRoseIntensityPreview = { roseIntensity = it },
                         onRoseIntensityCommit = { value ->
                             appearanceSaveError = null
@@ -135,6 +166,10 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 }
                             }
                         },
+                    )
+                    RivetDestination.Processes -> ProcessesScreen(
+                        processes = chatViewModel.managedProcesses,
+                        onBack = { destination = RivetDestination.Chat },
                     )
                 }
             }

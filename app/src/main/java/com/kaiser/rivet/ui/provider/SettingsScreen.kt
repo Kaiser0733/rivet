@@ -44,6 +44,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import kotlin.math.roundToInt
 import com.kaiser.rivet.R
+import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.ui.MAX_ROSE_INTENSITY
@@ -65,11 +66,16 @@ fun SettingsScreen(
     themeSaving: Boolean,
     onThemeChange: (RivetThemeMode) -> Unit,
     appearanceError: String?,
+    autonomyMode: AutonomyMode,
+    autonomySaving: Boolean,
+    autonomyError: String?,
+    onAutonomyChange: (AutonomyMode) -> Unit,
     onRoseIntensityPreview: (Int) -> Unit,
     onRoseIntensityCommit: (Int) -> Unit,
 ) {
     val state by viewModel.listState.collectAsState()
     var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
+    var confirmYolo by rememberSaveable { mutableStateOf(false) }
     var selectedIntensity by rememberSaveable { mutableIntStateOf(roseIntensity) }
     LaunchedEffect(roseIntensity) { selectedIntensity = roseIntensity }
     deleteTarget?.let { provider ->
@@ -86,6 +92,19 @@ fun SettingsScreen(
             dismissButton = { TextButton(onClick = { deleteTarget = null }) {
                 Text(stringResource(R.string.provider_cancel))
             } },
+        )
+    }
+    if (confirmYolo) {
+        AlertDialog(
+            onDismissRequest = { confirmYolo = false },
+            title = { Text("Enable YOLO?", style = MaterialTheme.typography.titleMedium) },
+            text = { Text("Rivet can edit or delete project files, run project commands, download files, and start allowed processes without asking. Commands run with Rivet's app privileges. Project checkpoints, workspace checks, and Rivet's capability limits still apply.",
+                style = MaterialTheme.typography.bodyMedium) },
+            confirmButton = { RivetOutlinedButton(onClick = {
+                confirmYolo = false
+                onAutonomyChange(AutonomyMode.Yolo)
+            }) { Text("Enable YOLO") } },
+            dismissButton = { TextButton(onClick = { confirmYolo = false }) { Text("Cancel") } },
         )
     }
 
@@ -147,6 +166,39 @@ fun SettingsScreen(
                         onEdit = { onEditProvider(provider.id) },
                         onDelete = { deleteTarget = provider })
                 }
+            }
+
+            item {
+                SectionHeading("Agent autonomy", Modifier.padding(top = 24.dp))
+                listOf(
+                    AutonomyMode.Ask to "Ask before changes and commands.",
+                    AutonomyMode.BasicYolo to "Routine changes can run automatically. Rivet still asks for higher-risk actions.",
+                    AutonomyMode.Yolo to "Rivet can use its allowed tools without approval prompts.",
+                ).forEach { (mode, detail) ->
+                    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                        .selectable(selected = mode == autonomyMode, enabled = !autonomySaving,
+                            role = Role.RadioButton, onClick = {
+                                when (mode) {
+                                    AutonomyMode.Yolo -> if (autonomyMode != mode) confirmYolo = true
+                                    else -> onAutonomyChange(mode)
+                                }
+                            }),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        RadioButton(selected = mode == autonomyMode, onClick = null,
+                            enabled = !autonomySaving)
+                        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+                            Text(when (mode) {
+                                AutonomyMode.Ask -> "Ask"
+                                AutonomyMode.BasicYolo -> "Basic YOLO"
+                                AutonomyMode.Yolo -> "YOLO"
+                            }, style = MaterialTheme.typography.bodyLarge)
+                            Text(detail, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+                autonomyError?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall) }
             }
 
             item {
