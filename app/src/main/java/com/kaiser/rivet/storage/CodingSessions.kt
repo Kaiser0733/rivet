@@ -45,12 +45,22 @@ data class CodingSessionHeader(
 )
 
 data class SessionUsage(
-    val reportedInputTokens: Long,
-    val reportedOutputTokens: Long,
+    val reportedInputTokens: Long?,
+    val reportedOutputTokens: Long?,
     val reportedRequests: Int,
     val unknownRequests: Int,
     val latestInputTokens: Long?,
     val latestSource: String?,
+    val cacheReadTokens: Long? = null,
+    val cacheCreationTokens: Long? = null,
+    val reasoningTokens: Long? = null,
+    val contextInputTokens: Long? = null,
+    val totalTokens: Long? = null,
+    val compaction: AgentUsage? = null,
+    val compactionRequests: Int = 0,
+    val compactionUnknownRequests: Int = 0,
+    val latestUsage: AgentUsage? = null,
+    val latestIsCompaction: Boolean = false,
 )
 
 data class ContextEstimate(val tokens: Long?, val source: String)
@@ -335,7 +345,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     suspend fun recordUsage(sessionId: String, turnId: String, providerId: String, model: String,
                             usage: AgentUsage?, requestMessages: List<AgentMessage> = emptyList(),
                             system: String = "", tools: List<AgentToolDefinition> = emptyList(),
-                            endpoint: String = "", providerType: ProviderType? = null) = onDatabase { db ->
+                            endpoint: String = "", providerType: ProviderType? = null,
+                            reasoning: ReasoningLevel = ReasoningLevel.Default) = onDatabase { db ->
         val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
             if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
             it.getInt(0)
@@ -353,7 +364,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             put("total_tokens", usage?.totalTokens)
             put("base_count", requestMessages.size)
             put("base_prefix_hash", hashMessages(requestMessages))
-            put("system_hash", requestEnvironmentHash(endpoint, system, tools))
+            put("system_hash", requestEnvironmentHash(endpoint, system, tools, reasoning))
             put("active_generation", generation)
             put("created_at", System.currentTimeMillis())
         })
@@ -365,12 +376,12 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     suspend fun contextEstimate(sessionId: String, providerId: String, model: String,
                                 messages: List<AgentMessage>, system: String,
                                 tools: List<AgentToolDefinition> = emptyList(),
-                                endpoint: String = ""): ContextEstimate = onDatabase { db ->
+                                endpoint: String = "", reasoning: ReasoningLevel = ReasoningLevel.Default): ContextEstimate = onDatabase { db ->
         val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
             if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
             it.getInt(0)
         }
-        val request = AgentRequest(model, messages, system, ReasoningLevel.Default, tools)
+        val request = AgentRequest(model, messages, system, reasoning, tools)
         val estimated = ContextBudget.estimateRequestTokens(request)
         val anchor = db.rawQuery("SELECT context_input_tokens,base_count,base_prefix_hash,system_hash,active_generation " +
             "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' " +
@@ -381,7 +392,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         }
         if (anchor != null) {
             if (anchor.generation == generation &&
-                anchor.environmentHash == requestEnvironmentHash(endpoint, system, tools) &&
+                anchor.environmentHash == requestEnvironmentHash(endpoint, system, tools, reasoning) &&
                 anchor.count in 1..messages.size &&
                 anchor.prefixHash == hashMessages(messages.take(anchor.count))) {
                 if (anchor.count == messages.size) return@onDatabase ContextEstimate(anchor.input, "reported")
@@ -396,19 +407,42 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     suspend fun usage(sessionId: String): SessionUsage = onDatabase { db ->
-        val totals = db.rawQuery("SELECT COALESCE(SUM(input_tokens),0),COALESCE(SUM(output_tokens),0)," +
+        val totals = db.rawQuery("SELECT SUM(input_tokens),SUM(output_tokens)," +
             "SUM(CASE WHEN source='reported' THEN 1 ELSE 0 END)," +
             "SUM(CASE WHEN source='unknown' THEN 1 ELSE 0 END) FROM usage WHERE session_id=?",
             arrayOf(sessionId)).use { cursor ->
             cursor.moveToFirst()
-            listOf(cursor.getLong(0), cursor.getLong(1), cursor.getLong(2), cursor.getLong(3))
+            listOf(if (cursor.isNull(0)) null else cursor.getLong(0),
+                if (cursor.isNull(1)) null else cursor.getLong(1), cursor.getLong(2), cursor.getLong(3))
         }
-        val latest = db.rawQuery("SELECT input_tokens,source FROM usage WHERE session_id=? ORDER BY id DESC LIMIT 1",
+        fun usageFields(cursor: android.database.Cursor, offset: Int = 0) = AgentUsage(
+            inputTokens = if (cursor.isNull(offset)) null else cursor.getLong(offset),
+            outputTokens = if (cursor.isNull(offset + 1)) null else cursor.getLong(offset + 1),
+            cacheReadTokens = if (cursor.isNull(offset + 2)) null else cursor.getLong(offset + 2),
+            cacheCreationTokens = if (cursor.isNull(offset + 3)) null else cursor.getLong(offset + 3),
+            reasoningTokens = if (cursor.isNull(offset + 4)) null else cursor.getLong(offset + 4),
+            totalTokens = if (cursor.isNull(offset + 5)) null else cursor.getLong(offset + 5))
+        val extra = db.rawQuery("SELECT SUM(cache_read_tokens),SUM(cache_creation_tokens),SUM(reasoning_tokens)," +
+            "SUM(context_input_tokens),SUM(total_tokens) FROM usage WHERE session_id=?", arrayOf(sessionId)).use { cursor ->
+            cursor.moveToFirst()
+            (0..4).map { if (cursor.isNull(it)) null else cursor.getLong(it) }
+        }
+        val latest = db.rawQuery("SELECT input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens," +
+            "reasoning_tokens,total_tokens,source,turn_id FROM usage WHERE session_id=? ORDER BY id DESC LIMIT 1",
             arrayOf(sessionId)).use { cursor ->
-            if (cursor.moveToFirst()) (if (cursor.isNull(0)) null else cursor.getLong(0)) to cursor.getString(1)
-            else null to null
+            if (cursor.moveToFirst()) Triple(usageFields(cursor), cursor.getString(6), cursor.getString(7).startsWith("compaction-"))
+            else Triple(null, null, false)
         }
-        SessionUsage(totals[0], totals[1], totals[2].toInt(), totals[3].toInt(), latest.first, latest.second)
+        val compaction = db.rawQuery("SELECT SUM(input_tokens),SUM(output_tokens),SUM(cache_read_tokens)," +
+            "SUM(cache_creation_tokens),SUM(reasoning_tokens),SUM(total_tokens),COUNT(*)," +
+            "SUM(CASE WHEN source='unknown' THEN 1 ELSE 0 END) FROM usage WHERE session_id=? AND turn_id LIKE 'compaction-%'",
+            arrayOf(sessionId)).use { cursor ->
+            cursor.moveToFirst()
+            Triple(usageFields(cursor), cursor.getInt(6), cursor.getInt(7))
+        }
+        SessionUsage(totals[0], totals[1], requireNotNull(totals[2]).toInt(), requireNotNull(totals[3]).toInt(), latest.first?.inputTokens, latest.second,
+            extra[0], extra[1], extra[2], extra[3], extra[4], compaction.first, compaction.second, compaction.third,
+            latest.first, latest.third)
     }
 
     private suspend fun <T> onDatabase(block: suspend (SQLiteDatabase) -> T): T = withContext(Dispatchers.IO) {
@@ -506,9 +540,10 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         json.decodeFromString(AgentMessage.serializer(), payload)
 
     private fun requestEnvironmentHash(endpoint: String, system: String,
-                                       tools: List<AgentToolDefinition>): String = hash(buildString {
+                                       tools: List<AgentToolDefinition>, reasoning: ReasoningLevel): String = hash(buildString {
         fun part(value: String) { append(value.length).append(':').append(value) }
         part(endpoint)
+        part(reasoning.name)
         part(system)
         append(tools.size).append(':')
         tools.forEach { tool ->

@@ -482,7 +482,7 @@ class ChatViewModel private constructor(
                     if (sessionId != null) {
                         try { sessions?.recordUsage(sessionId, turnId, snapshot.config.id, snapshot.config.model,
                             response.usage, request.messages, request.system, request.tools,
-                            snapshot.config.baseUrl, snapshot.config.type) }
+                            snapshot.config.baseUrl, snapshot.config.type, request.reasoning) }
                         catch (e: CancellationException) { throw e
                         } catch (_: Exception) { /* A completed provider response remains usable if usage storage fails. */ }
                     }

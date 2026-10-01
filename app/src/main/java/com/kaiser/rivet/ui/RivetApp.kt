@@ -97,76 +97,80 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                         viewModel = chatViewModel,
                         onBack = { destination = RivetDestination.Chat },
                     )
-                    RivetDestination.Settings -> SettingsScreen(
-                        viewModel = providersViewModel,
-                        versionName = versionName,
-                        onClose = { destination = RivetDestination.Chat },
-                        onEditProvider = {
-                            providersViewModel.startEdit(it)
-                            editing = true
-                        },
-                        onNewProvider = {
-                            providersViewModel.startNewProvider(it)
-                            editing = true
-                        },
-                        roseIntensity = roseIntensity,
-                        themeMode = themeMode,
-                        themeSaving = themeSaving,
-                        onThemeChange = { value ->
-                            if (!themeSaving) {
-                                themeMode = value
-                                themeSaving = true
+                    RivetDestination.Settings -> {
+                        val conversation by chatViewModel.uiState.collectAsState()
+                        SettingsScreen(
+                            conversationUsage = conversation.usage,
+                            viewModel = providersViewModel,
+                            versionName = versionName,
+                            onClose = { destination = RivetDestination.Chat },
+                            onEditProvider = {
+                                providersViewModel.startEdit(it)
+                                editing = true
+                            },
+                            onNewProvider = {
+                                providersViewModel.startNewProvider(it)
+                                editing = true
+                            },
+                            roseIntensity = roseIntensity,
+                            themeMode = themeMode,
+                            themeSaving = themeSaving,
+                            onThemeChange = { value ->
+                                if (!themeSaving) {
+                                    themeMode = value
+                                    themeSaving = true
+                                    appearanceSaveError = null
+                                    coroutineScope.launch {
+                                        try {
+                                            appearanceStore.setThemeMode(value)
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
+                                            themeMode = storedAppearance.themeMode
+                                            appearanceSaveError = "Rivet couldn't save this setting. Try again."
+                                        } finally {
+                                            themeSaving = false
+                                        }
+                                    }
+                                }
+                            },
+                            appearanceError = appearanceSaveError,
+                            autonomyMode = autonomyMode,
+                            autonomySaving = autonomySaving,
+                            autonomyError = autonomyError,
+                            onAutonomyChange = { value ->
+                                if (!autonomySaving && value != autonomyMode) {
+                                    autonomySaving = true
+                                    autonomyError = null
+                                    coroutineScope.launch {
+                                        try {
+                                            autonomyStore.setMode(value)
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
+                                            autonomyError = "Rivet couldn't save this setting. Try again."
+                                        } finally {
+                                            autonomySaving = false
+                                        }
+                                    }
+                                }
+                            },
+                            onRoseIntensityPreview = { roseIntensity = it },
+                            onRoseIntensityCommit = { value ->
                                 appearanceSaveError = null
                                 coroutineScope.launch {
                                     try {
-                                        appearanceStore.setThemeMode(value)
+                                        appearanceStore.setRoseIntensity(value)
                                     } catch (e: CancellationException) {
                                         throw e
                                     } catch (_: Exception) {
-                                        themeMode = storedAppearance.themeMode
+                                        roseIntensity = storedAppearance.roseIntensity
                                         appearanceSaveError = "Rivet couldn't save this setting. Try again."
-                                    } finally {
-                                        themeSaving = false
                                     }
                                 }
-                            }
-                        },
-                        appearanceError = appearanceSaveError,
-                        autonomyMode = autonomyMode,
-                        autonomySaving = autonomySaving,
-                        autonomyError = autonomyError,
-                        onAutonomyChange = { value ->
-                            if (!autonomySaving && value != autonomyMode) {
-                                autonomySaving = true
-                                autonomyError = null
-                                coroutineScope.launch {
-                                    try {
-                                        autonomyStore.setMode(value)
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (_: Exception) {
-                                        autonomyError = "Rivet couldn't save this setting. Try again."
-                                    } finally {
-                                        autonomySaving = false
-                                    }
-                                }
-                            }
-                        },
-                        onRoseIntensityPreview = { roseIntensity = it },
-                        onRoseIntensityCommit = { value ->
-                            appearanceSaveError = null
-                            coroutineScope.launch {
-                                try {
-                                    appearanceStore.setRoseIntensity(value)
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (_: Exception) {
-                                    roseIntensity = storedAppearance.roseIntensity
-                                    appearanceSaveError = "Rivet couldn't save this setting. Try again."
-                                }
-                            }
-                        },
-                    )
+                            },
+                        )
+                    }
                     RivetDestination.Processes -> ProcessesScreen(
                         processes = chatViewModel.managedProcesses,
                         onBack = { destination = RivetDestination.Chat },
