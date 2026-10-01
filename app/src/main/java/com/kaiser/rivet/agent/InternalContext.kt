@@ -86,23 +86,24 @@ data class InternalContext(
     }
 }
 
+internal fun AgentMessage.validatedContext(): InternalContext? = internalContext?.takeIf {
+    role == AgentRole.Context && it.valid() && text.isEmpty() && toolCalls.isEmpty() &&
+        toolResults.isEmpty() && transportState == null
+}
+
 /** Adapters see only native messages. Persistent metadata is never sent as wire fields. */
 fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
                   enforceWorkspace: Boolean = false): List<AgentMessage> = messages.mapNotNull { message ->
     if (message.role != AgentRole.Context) message.takeIf { it.internalContext == null }
-    else message.internalContext?.takeIf { context ->
-        context.valid() && (!enforceWorkspace || context.workspaceId == workspace) &&
-            message.text.isEmpty() && message.toolCalls.isEmpty() && message.toolResults.isEmpty() &&
-            message.transportState == null
-    }?.let { AgentMessage.user(it.modelText()) }
+    else message.validatedContext()?.takeIf { !enforceWorkspace || it.workspaceId == workspace }
+        ?.let { AgentMessage.user(it.modelText()) }
 }
 
 internal object ProjectContext {
     fun current(messages: List<AgentMessage>, workspace: String): Map<String, InternalContext> {
         val current = linkedMapOf<String, InternalContext>()
         for (message in messages) {
-            val data = message.internalContext?.takeIf { message.role == AgentRole.Context &&
-                it.valid() && it.workspaceId == workspace } ?: continue
+            val data = message.validatedContext()?.takeIf { it.workspaceId == workspace } ?: continue
             when (data.kind) {
                 "project_snapshot" -> {
                     current.clear()
@@ -119,10 +120,8 @@ internal object ProjectContext {
     /** Compaction is the only rewrite boundary; a bounded snapshot retires old deltas/tombstones. */
     fun projection(source: List<AgentMessage>, retained: List<AgentMessage>, summary: String? = null,
                    workspaceOverride: String? = null): List<AgentMessage> {
-        val latestProject = source.lastOrNull { it.role == AgentRole.Context &&
-            it.internalContext?.let { data -> data.valid() && data.kind.startsWith("project") } == true }?.internalContext
-        val priorSummary = source.lastOrNull { it.role == AgentRole.Context &&
-            it.internalContext?.let { data -> data.valid() && data.kind == "summary" } == true }?.internalContext
+        val latestProject = source.lastOrNull { it.validatedContext()?.kind?.startsWith("project") == true }?.validatedContext()
+        val priorSummary = source.lastOrNull { it.validatedContext()?.kind == "summary" }?.validatedContext()
         val prefix = mutableListOf<AgentMessage>()
         val workspace = workspaceOverride ?: latestProject?.workspaceId ?: priorSummary?.workspaceId
         if (workspace != null && latestProject != null) {
@@ -130,8 +129,8 @@ internal object ProjectContext {
                 .sortedWith(compareBy<InternalContext> { it.order }.thenBy { it.scope })
                 .map { ProjectInstructionFile(it.scope, it.content, it.order) }
             prefix += InternalContext.snapshot(files, workspace)
-            source.lastOrNull { it.role == AgentRole.Context && it.internalContext?.let { data ->
-                data.valid() && data.workspaceId == workspace && data.kind == "project_notice" } == true }
+            source.lastOrNull { it.validatedContext()?.let { data ->
+                data.workspaceId == workspace && data.kind == "project_notice" } == true }
                 ?.takeIf { it.internalContext!!.content.isNotBlank() }?.let { prefix += it }
         }
         val state = summary ?: priorSummary?.content.orEmpty()
@@ -153,8 +152,8 @@ internal object ProjectContext {
         }
         present.values.forEach { next -> if (before[next.scope] != next) updates += next }
         val notice = instructions.notices.joinToString("\n").take(4096).dropLastWhile { it.isHighSurrogate() }
-        val oldNotice = messages.lastOrNull { it.role == AgentRole.Context &&
-            it.internalContext?.let { data -> data.workspaceId == workspace && data.kind == "project_notice" && data.valid() } == true }
+        val oldNotice = messages.lastOrNull { it.validatedContext()?.let { data ->
+                data.workspaceId == workspace && data.kind == "project_notice" } == true }
             ?.internalContext?.content.orEmpty()
         if (notice != oldNotice) updates += InternalContext(kind = "project_notice", workspaceId = workspace,
             content = notice, digest = InternalContext.digest(notice))
