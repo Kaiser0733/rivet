@@ -82,12 +82,13 @@ internal object AgentContext {
         require(minimumSavingsBytes >= 0)
         val originalBytes = serializedBytes(messages)
         if (originalBytes <= targetBytes) return null
-        val groups = completeGroups(messages) ?: return null
+        val groups = completeGroups(messages)?.filter { it.singleOrNull()?.role != AgentRole.Context } ?: return null
         if (groups.size < 2) return null
+        val contextBytes = serializedBytes(ProjectContext.projection(messages, emptyList(), "")) - 2
         val sizes = groups.map { serializedBytes(it) - 2 }
         val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
         var first = groups.lastIndex
-        var tailBytes = 2 + sizes[first]
+        var tailBytes = 2 + contextBytes + sizes[first]
         while (first > 0 && tailBytes + sizes[first - 1] + 1 <= targetBytes) {
             first--
             tailBytes += sizes[first] + 1
@@ -96,12 +97,12 @@ internal object AgentContext {
             if (latestUser >= 0) setOf(latestUser) else emptySet()
         var selected = selectedIndices()
         var retained = selected.sorted().flatMap(groups::get)
-        while (serializedBytes(retained) > targetBytes && first < groups.lastIndex) {
+        while (serializedBytes(ProjectContext.projection(messages, retained, "")) > targetBytes && first < groups.lastIndex) {
             first++
             selected = selectedIndices()
             retained = selected.sorted().flatMap(groups::get)
         }
-        val retainedBytes = serializedBytes(retained)
+        val retainedBytes = serializedBytes(ProjectContext.projection(messages, retained, ""))
         if (retainedBytes > targetBytes || originalBytes - retainedBytes < minimumSavingsBytes) return null
         val removed = groups.indices.filterNot { it in selected }.flatMap(groups::get)
         if (removed.isEmpty()) return null
@@ -109,11 +110,12 @@ internal object AgentContext {
     }
 
     fun minimumProjection(messages: List<AgentMessage>): List<AgentMessage>? {
-        val groups = completeGroups(messages) ?: return null
-        if (groups.isEmpty()) return emptyList()
+        val groups = completeGroups(messages)?.filter { it.singleOrNull()?.role != AgentRole.Context } ?: return null
+        if (groups.isEmpty()) return ProjectContext.projection(messages, emptyList())
         val newest = groups.lastIndex
         val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
-        return (setOfNotNull(latestUser.takeIf { it >= 0 }, newest).sorted()).flatMap(groups::get)
+        return ProjectContext.projection(messages,
+            (setOfNotNull(latestUser.takeIf { it >= 0 }, newest).sorted()).flatMap(groups::get))
     }
 
     private fun completeGroups(messages: List<AgentMessage>): List<List<AgentMessage>>? {
@@ -122,6 +124,8 @@ internal object AgentContext {
         while (index < messages.size) {
             val message = messages[index]
             if (message.role == AgentRole.Tool) return null
+            if (message.role == AgentRole.Context && (message.toolCalls.isNotEmpty() || message.toolResults.isNotEmpty() ||
+                    message.text.isNotEmpty() || message.transportState != null)) return null
             if (message.role == AgentRole.Assistant && message.toolCalls.isNotEmpty()) {
                 val result = messages.getOrNull(index + 1)?.takeIf { it.role == AgentRole.Tool } ?: return null
                 if (message.toolCalls.any { it.id.isBlank() } ||
@@ -175,7 +179,7 @@ internal object AgentContext {
     private fun summarizeGroup(group: List<AgentMessage>, detailLimit: Int): String = buildString {
         for (message in group) {
             when (message.role) {
-                AgentRole.Context -> append("INTERNAL CONTEXT: ").append(message.internalContext?.scope.orEmpty()).append('\n')
+                AgentRole.Context -> append("INTERNAL CONTEXT: ").append(clipped(message.internalContext?.scope.orEmpty(), 160)).append('\n')
                 AgentRole.User -> append("USER: ").append(clipped(message.text, detailLimit)).append('\n')
                 AgentRole.Assistant -> {
                     if (message.text.isNotBlank()) {

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.chat
 
+import com.kaiser.rivet.agent.ProjectContext
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.ContextCapacityTooSmall
@@ -24,6 +25,7 @@ internal class ContextPreparation(
     private val config: ProviderConfig,
     private val turnId: String,
     initialSummary: String,
+    private val workspaceId: String? = null,
     private val request: (List<AgentMessage>, String) -> AgentRequest,
 ) {
     var summary: String = initialSummary
@@ -70,8 +72,8 @@ internal class ContextPreparation(
             else -> TokenEstimateSource.Unknown
         }
         val budget = ContextBudget.assess(config, attempt.beforeTokens, source)
-        val minimum = AgentContext.minimumProjection(messages)
-            ?: throw IllegalStateException("context_headroom_unavailable")
+        val minimum = (AgentContext.minimumProjection(messages)
+            ?: throw IllegalStateException("context_headroom_unavailable")).filterNot { it.internalContext?.kind == "summary" }
         val minimumTokens = ContextBudget.estimateRequestTokens(request(minimum, ""))
         if (budget.knownInputLimitTokens != null && minimumTokens >= budget.allowedInputTokens) {
             throw ContextCapacityTooSmall()
@@ -82,7 +84,7 @@ internal class ContextPreparation(
             else budget.allowedInputTokens.toLong()
         val fixedTokens = (minimumTokens - AgentContext.serializedBytes(minimum) / 3L)
             .coerceAtLeast(0)
-        val summaryEnvelopeTokens = (ContextBudget.estimateRequestTokens(request(minimum, "{}")) - minimumTokens)
+        val summaryEnvelopeTokens = (ContextBudget.estimateRequestTokens(projectedRequest(messages, minimum, "{}")) - minimumTokens)
             .coerceAtLeast(0)
         val roomAfterMinimum = targetTokens - minimumTokens - summaryEnvelopeTokens - 256L
         val summaryBudgetTokens = minOf(TaskState.MAX_BYTES / 3L, roomAfterMinimum / 2)
@@ -93,9 +95,8 @@ internal class ContextPreparation(
         // Old successful tool bodies can be removed without asking a model or changing history.
         val pruned = AgentContext.pruneOldResults(messages, protectedTailBytes = 48 * 1024)
         if (pruned != null && fits(pruned, targetTokens, baseline, force)) {
-            commit(durableStore, messages, pruned, summary,
-                attempt.copy(afterTokens = footprint(pruned)))
-            return pruned
+            return commit(durableStore, messages, pruned, summary,
+                attempt.copy(afterTokens = ContextBudget.estimateRequestTokens(projectedRequest(messages, pruned, summary))))
         }
 
         val basis = pruned ?: messages
@@ -107,12 +108,11 @@ internal class ContextPreparation(
         if (plan == null) {
             if (summary.isNotBlank() && summaryLimitBytes > 0) {
                 val shortened = taskState(emptyList(), id, inputLimitBytes, summaryLimitBytes).encode()
-                val after = ContextBudget.estimateRequestTokens(request(messages, shortened))
+                val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, messages, shortened))
                 if (shortened != summary && after < targetTokens && after < baseline &&
                     (!force || after < baseline * 9 / 10)) {
-                    commit(durableStore, messages, messages, shortened,
+                    return commit(durableStore, messages, messages, shortened,
                         attempt.copy(afterTokens = after))
-                    return messages
                 }
             }
             return noHeadroom(durableStore, id, attempt, messages, force)
@@ -120,19 +120,18 @@ internal class ContextPreparation(
         val next = taskState(plan.removed, id,
             inputLimitBytes, summaryLimitBytes)
         val encoded = next.encode()
-        val after = ContextBudget.estimateRequestTokens(request(plan.retained, encoded))
+        val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, plan.retained, encoded))
         if (after >= budget.allowedInputTokens ||
             (force && after >= baseline * 9 / 10) ||
             after >= baseline || plan.retained == messages) {
             return noHeadroom(durableStore, id, attempt, messages, force)
         }
-        commit(durableStore, messages, plan.retained, encoded,
+        return commit(durableStore, messages, plan.retained, encoded,
             attempt.copy(afterTokens = after))
-        return plan.retained
     }
 
     private fun fits(candidate: List<AgentMessage>, target: Long, baseline: Long, force: Boolean): Boolean {
-        val after = footprint(candidate)
+        val after = ContextBudget.estimateRequestTokens(projectedRequest(candidate, candidate, summary))
         return after < target && (!force || after < baseline * 9 / 10)
     }
 
@@ -152,12 +151,14 @@ internal class ContextPreparation(
 
     private suspend fun commit(store: CodingSessions, expected: List<AgentMessage>,
                                retained: List<AgentMessage>, nextSummary: String,
-                               attempt: ContextAttempt) {
-        withContext(NonCancellable) {
-            store.compact(expected, retained, nextSummary, attempt, sessionId)
-            summary = nextSummary
-        }
+                               attempt: ContextAttempt): List<AgentMessage> = withContext(NonCancellable) {
+        val projected = store.compact(expected, retained, nextSummary, attempt, sessionId)
+        summary = nextSummary
+        projected
     }
+
+    private fun projectedRequest(source: List<AgentMessage>, retained: List<AgentMessage>, state: String) =
+        request(ProjectContext.projection(source, retained, state, workspaceId), state)
 
     private suspend fun taskState(removed: List<AgentMessage>, id: String,
                                   inputLimitBytes: Int, summaryLimitBytes: Int): TaskState {

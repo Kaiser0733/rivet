@@ -45,6 +45,7 @@ object AgentActivityProjection {
         }
         val items = mutableListOf<AgentConversationItem>()
         messages.forEachIndexed { index, message ->
+            if (message.internalContext != null && message.role != AgentRole.Context) return@forEachIndexed
             when (message.role) {
                 AgentRole.User -> items += AgentConversationItem.Message(message)
                 AgentRole.Assistant -> {
