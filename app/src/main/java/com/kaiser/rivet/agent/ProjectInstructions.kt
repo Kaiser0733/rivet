@@ -8,7 +8,10 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.jsonObject
 
-data class ProjectInstructionSet(val text: String, val files: List<String>, val limited: Boolean)
+data class ProjectInstructionFile(val path: String, val content: String, val order: Int)
+data class ProjectInstructionSet(val text: String, val files: List<String>, val limited: Boolean,
+                                 val entries: List<ProjectInstructionFile> = emptyList(),
+                                 val notices: List<String> = emptyList())
 
 /** Loads only the directory chains the agent has touched, inside the selected SAF tree. */
 class ProjectInstructions(private val workspace: SafWorkspace) {
@@ -27,6 +30,8 @@ class ProjectInstructions(private val workspace: SafWorkspace) {
         }
         val sections = mutableListOf<String>()
         val files = mutableListOf<String>()
+        val entries = mutableListOf<ProjectInstructionFile>()
+        val notices = mutableListOf<String>()
         var bytes = 0
         if (directories.size > MAX_DIRECTORIES) limited = true
         for (directory in directories.take(MAX_DIRECTORIES)) {
@@ -37,22 +42,28 @@ class ProjectInstructions(private val workspace: SafWorkspace) {
                         WorkspaceFailure.Reason.MISSING, WorkspaceFailure.Reason.NOT_DIRECTORY -> continue
                         WorkspaceFailure.Reason.TOO_LARGE -> {
                             limited = true
-                            sections += "[${file.value}: skipped; exceeds $PER_FILE_BYTES bytes]"
+                            notices += "[${file.value}: skipped; exceeds $PER_FILE_BYTES bytes]"
+                            sections += notices.last()
                         }
-                        else -> sections += "[${file.value}: unreadable]"
+                        else -> {
+                            notices += "[${file.value}: unreadable]"
+                            sections += notices.last()
+                        }
                     }
                     continue
                 }
             if (files.size >= MAX_FILES || bytes + content.toByteArray(Charsets.UTF_8).size > TOTAL_BYTES) {
                 limited = true
-                sections += "[${file.value}: skipped; project instruction limit reached]"
+                notices += "[${file.value}: skipped; project instruction limit reached]"
+                sections += notices.last()
                 continue
             }
             files += file.value
+            entries += ProjectInstructionFile(file.value, content, directory.segments.size)
             bytes += content.toByteArray(Charsets.UTF_8).size
             sections += "${file.value}:\n$content"
         }
-        return ProjectInstructionSet(sections.joinToString("\n\n"), files, limited)
+        return ProjectInstructionSet(sections.joinToString("\n\n"), files, limited, entries, notices)
     }
 
     fun targets(call: AgentToolCall): Map<WorkspacePath, Boolean> {

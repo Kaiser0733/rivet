@@ -1,5 +1,6 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
@@ -121,7 +122,7 @@ internal class AnthropicClient(
                 AnthropicThinkingMode.Unsupported -> Unit
             }
             put("messages", buildJsonArray {
-                request.messages.forEach { m ->
+                modelMessages(request.messages).forEach { m ->
                     add(anthropicMessage(m))
                 }
             })
@@ -152,6 +153,7 @@ internal class AnthropicClient(
 }
 
 private fun anthropicMessage(message: AgentMessage): JsonObject = when (message.role) {
+    AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> buildJsonObject { put("role", "user"); put("content", message.text) }
     AgentRole.Assistant -> buildJsonObject {
         put("role", "assistant")

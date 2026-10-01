@@ -10,6 +10,7 @@ enum class AgentRole {
     @SerialName("user") User,
     @SerialName("assistant") Assistant,
     @SerialName("tool") Tool,
+    @SerialName("context") Context,
 }
 
 @Serializable
@@ -35,6 +36,7 @@ data class AgentMessage(
     val toolCalls: List<AgentToolCall> = emptyList(),
     val toolResults: List<AgentToolResult> = emptyList(),
     val transportState: String? = null,
+    val internalContext: InternalContext? = null,
 ) {
     companion object {
         fun user(text: String) = AgentMessage(AgentRole.User, text = text)
