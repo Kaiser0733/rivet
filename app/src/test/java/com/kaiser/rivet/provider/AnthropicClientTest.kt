@@ -7,6 +7,10 @@ import com.kaiser.rivet.agent.AgentToolResult
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
+import org.junit.Assert.assertFalse
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -434,6 +438,50 @@ class AnthropicClientTest {
         } catch (e: ProviderError.ProviderMessage) {
             assertTrue(e.text.contains("Overloaded"))
         }
+    }
+
+    @Test fun officialNativeCacheControlPreservesThinkingToolsAndOrderedContext() {
+        val base = config("claude-sonnet-4-5").copy(baseUrl = "https://api.anthropic.com/v1")
+        val call = AgentToolCall("read", "read_file", "{\"path\":\"A.kt\"}")
+        val tool = AgentToolDefinition("read_file", "Read", buildJsonObject { put("type", "object") })
+        val context = com.kaiser.rivet.agent.InternalContext.summary("Untrusted task notes", "tree")
+        val messages = listOf(context, AgentMessage.user("Inspect"),
+            AgentMessage.assistant("", listOf(call), """{"provider":"anthropic","blocks":[{"type":"thinking","thinking":"private reasoning","signature":"sig"}]}"""),
+            AgentMessage.tools(listOf(AgentToolResult("read", "read_file", "{}"))))
+        for (adaptive in listOf(false, true)) {
+            val selected = withThinking(base, adaptive)
+            val body = AnthropicClient(selected, "not-sent").requestBody(
+                AgentRequest(selected.model, messages, "Policy", ReasoningLevel.High, listOf(tool)))
+            assertEquals("{\"type\":\"ephemeral\"}", body["cache_control"].toString())
+            assertEquals(if (adaptive) "adaptive" else "enabled", body["thinking"]!!.jsonObject["type"]!!.jsonPrimitive.content)
+            assertEquals("Policy", body["system"]!!.jsonPrimitive.content)
+            assertEquals("read_file", body["tools"]!!.jsonArray.single().jsonObject["name"]!!.jsonPrimitive.content)
+            val wire = body["messages"]!!.jsonArray
+            assertEquals(listOf("user", "user", "assistant", "user"), wire.map { it.jsonObject["role"]!!.jsonPrimitive.content })
+            assertEquals("Inspect", wire[1].jsonObject["content"]!!.jsonPrimitive.content)
+            val assistant = wire[2].jsonObject["content"]!!.jsonArray
+            assertEquals("sig", assistant[0].jsonObject["signature"]!!.jsonPrimitive.content)
+            assertEquals("tool_use", assistant[1].jsonObject["type"]!!.jsonPrimitive.content)
+            assertEquals("read", wire[3].jsonObject["content"]!!.jsonArray[0].jsonObject["tool_use_id"]!!.jsonPrimitive.content)
+            assertFalse(body.toString().contains("internalContext"))
+            assertFalse(body.toString().contains("workspaceId"))
+            assertFalse(body.toString().contains("not-sent"))
+        }
+    }
+
+    @Test fun cacheControlIsOmittedForUnknownProxyOrUnsupportedConfiguration() {
+        val native = config().copy(baseUrl = "https://api.anthropic.com")
+        for (candidate in listOf(config(), native.copy(type = ProviderType.OpenAiCompatible),
+                native.copy(baseUrl = "http://api.anthropic.com"), native.copy(baseUrl = "https://proxy.invalid"),
+                native.copy(baseUrl = "https://api.anthropic.com/other"), native.copy(model = "unknown"))) {
+            val body = AnthropicClient(candidate, "key").requestBody(
+                AgentRequest(candidate.model, listOf(AgentMessage.user("Hello")), "Policy", ReasoningLevel.Default, emptyList()))
+            assertFalse(body.containsKey("cache_control"))
+        }
+        val body = AnthropicClient(native, "key").requestBody(
+            AgentRequest(native.model, emptyList(), "", ReasoningLevel.Default, emptyList()))
+        assertFalse(body.containsKey("thinking"))
+        assertEquals("ephemeral", body["cache_control"]!!.jsonObject["type"]!!.jsonPrimitive.content)
     }
 
     private fun finished(reason: String) =
