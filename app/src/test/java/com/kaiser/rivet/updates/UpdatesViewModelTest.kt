@@ -74,11 +74,14 @@ class UpdatesViewModelTest {
     }
 
     @Test fun retainedViewModelCannotDuplicateActiveDownloadOrSavePicker() = runBlocking<Unit> {
-        val vm = model()
         val store = ViewModelStore()
+        var creations = 0
         val factory = object : ViewModelProvider.Factory {
             @Suppress("UNCHECKED_CAST")
-            override fun <T : ViewModel> create(modelClass: Class<T>): T = vm as T
+            override fun <T : ViewModel> create(modelClass: Class<T>): T {
+                creations++
+                return model() as T
+            }
         }
         val first = ViewModelProvider(store, factory)[UpdatesViewModel::class.java]
         server.enqueue(MockResponse().setBody(metadata(64)))
@@ -89,6 +92,7 @@ class UpdatesViewModelTest {
         withTimeout(5000) { first.state.first { it is UpdateUiState.Downloading && it.bytes > 0 } }
         val afterRotation = ViewModelProvider(store, factory)[UpdatesViewModel::class.java]
         assertSame(first, afterRotation)
+        assertEquals(1, creations)
         afterRotation.check(); afterRotation.download()
         withTimeout(5000) { first.state.first { it is UpdateUiState.AwaitingSave } }
         assertEquals(2, server.requestCount)
