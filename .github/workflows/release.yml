@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       release_tag:
-        description: 'Tag for the draft release (e.g. v0.1.0); empty builds the APK artifact only'
+        description: 'Tag for the draft release (e.g. v0.11.0); empty builds the APK artifact only'
         required: false
         default: ''
 
