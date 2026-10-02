@@ -1,11 +1,15 @@
 package com.kaiser.rivet.chat
 
 import android.app.Application
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import android.content.Context
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.provider.*
+import com.kaiser.rivet.storage.AgentSessionPersistence
 import com.kaiser.rivet.storage.AgentSessionStore
 import com.kaiser.rivet.storage.CodingSessions
 import kotlinx.coroutines.Dispatchers
@@ -32,6 +36,12 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class ConversationTitleLifecycleTest {
+    private val models = mutableListOf<ChatViewModel>()
+    private fun newChatViewModel(app: Application, sessionPersistence: AgentSessionPersistence,
+                                 providerSource: ProviderRuntimeSource,
+                                 clientFactory: (ProviderConfig, String) -> ProviderClient) =
+        ChatViewModel(app, sessionPersistence, providerSource, clientFactory).also { models += it }
+
     private val app: Application get() = RuntimeEnvironment.getApplication()
     private val config = ProviderConfig("p", ProviderType.OpenAi, "Provider",
         "https://example.invalid/v1", "model", ReasoningLevel.High)
@@ -42,7 +52,11 @@ class ConversationTitleLifecycleTest {
         app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
         AgentSessionStore(app).clear()
     }
-    @After fun cleanup() { Dispatchers.resetMain() }
+    @After fun cleanup() = runBlocking {
+        models.forEach { it.viewModelScope.coroutineContext[Job]?.cancelAndJoin() }
+        models.clear()
+        Dispatchers.resetMain()
+    }
 
     @Test fun firstSuccessfulTurnTitlesNewConversationWithoutChangingEvents() = runBlocking {
         val requests = mutableListOf<AgentRequest>()
@@ -56,7 +70,7 @@ class ConversationTitleLifecycleTest {
                     else AgentResponse("Fix Login Crash", usage = AgentUsage(12, 3))
             }
         }
-        val vm = ChatViewModel(app, store,
+        val vm = newChatViewModel(app, store,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> client })
         withTimeout(5000) { vm.uiState.first { it.ready && !it.projectLoading } }
         val oldId = vm.uiState.value.currentSessionId
@@ -82,7 +96,7 @@ class ConversationTitleLifecycleTest {
             override suspend fun testConnection() = TestResult(true, "ok")
             override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit) = stream(request)
         }
-        val vm = ChatViewModel(app, store,
+        val vm = newChatViewModel(app, store,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> client })
         withTimeout(5000) { vm.uiState.first { it.ready && !it.projectLoading } }
         val previous = vm.uiState.value.currentSessionId
@@ -181,7 +195,7 @@ class ConversationTitleLifecycleTest {
                 calls++; return AgentResponse("Done")
             }
         }
-        val vm = ChatViewModel(app, store,
+        val vm = newChatViewModel(app, store,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> client })
         withTimeout(5000) { vm.uiState.first { it.ready && !it.projectLoading } }
         assertEquals(0, calls)

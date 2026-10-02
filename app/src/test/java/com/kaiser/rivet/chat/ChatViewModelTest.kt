@@ -1,6 +1,9 @@
 package com.kaiser.rivet.chat
 
 import android.app.Application
+import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.cancelAndJoin
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ProviderInfo
@@ -66,6 +69,12 @@ class ChatViewModelTest {
         assertEquals(com.kaiser.rivet.agent.AgentRole.Context, context.role)
     }
 
+    private val models = mutableListOf<ChatViewModel>()
+    private fun newChatViewModel(app: Application, sessionPersistence: AgentSessionPersistence,
+                                 providerSource: ProviderRuntimeSource,
+                                 clientFactory: (ProviderConfig, String) -> ProviderClient) =
+        ChatViewModel(app, sessionPersistence, providerSource, clientFactory).also { models += it }
+
     private val app: Application get() = RuntimeEnvironment.getApplication()
 
     @Before
@@ -74,8 +83,9 @@ class ChatViewModelTest {
         app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
     }
 
-    @After
-    fun cleanup() {
+    @After fun cleanup() = runBlocking {
+        models.forEach { it.viewModelScope.coroutineContext[Job]?.cancelAndJoin() }
+        models.clear()
         Dispatchers.resetMain()
     }
 
@@ -98,7 +108,7 @@ class ChatViewModelTest {
         val store = CodingSessions(app)
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, store,
+        val viewModel = newChatViewModel(app, store,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready && !it.projectLoading }
@@ -140,7 +150,7 @@ class ChatViewModelTest {
         val provider = QueueProvider(ArrayDeque())
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, sessions,
+        val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == original.id }
 
@@ -177,7 +187,7 @@ class ChatViewModelTest {
         app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, sessions,
+        val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == original.id }
 
@@ -213,7 +223,7 @@ class ChatViewModelTest {
         )), AgentResponse(text = "I didn't run the command"))))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && it.projectIdentity == tree.toString() }
 
@@ -267,7 +277,7 @@ class ChatViewModelTest {
         documents.rejectWriteOnceFor = "b.txt"
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready && !it.projectLoading && it.projectIdentity == tree.toString() }
@@ -323,7 +333,7 @@ class ChatViewModelTest {
         )))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && !it.projectLoading }
 
@@ -359,7 +369,7 @@ class ChatViewModelTest {
         )))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && !it.projectLoading }
 
@@ -392,7 +402,7 @@ class ChatViewModelTest {
         }
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && !it.projectLoading }
 
@@ -424,7 +434,7 @@ class ChatViewModelTest {
                 throw ProviderError.Unauthorized()
             }
         }
-        val viewModel = ChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
         viewModel.send("hello")
@@ -436,7 +446,7 @@ class ChatViewModelTest {
     }
 
     @Test fun missingProviderDoesNotAcceptMessageAndOffersSettings() = runBlocking {
-        val viewModel = ChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Failure("No API key stored.") },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready }
@@ -449,7 +459,7 @@ class ChatViewModelTest {
 
     @Test fun stopWhilePreparingDoesNotAcceptAMessageOrStartASecondTurn() = runBlocking {
         val provider = CompletableDeferred<ProviderRuntimeResult>()
-        val viewModel = ChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { provider.await() },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready }
@@ -476,7 +486,7 @@ class ChatViewModelTest {
             baseUrl = "https://example.invalid/v1",
             model = "test-model",
         )
-        val viewModel = ChatViewModel(
+        val viewModel = newChatViewModel(
             app = app,
             sessionPersistence = persistence,
             providerSource = ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
@@ -507,7 +517,7 @@ class ChatViewModelTest {
             AgentResponse(text = "unstorable"), AgentResponse(text = "recovered"))))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, persistence,
+        val viewModel = newChatViewModel(app, persistence,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
@@ -572,7 +582,7 @@ class ChatViewModelTest {
             AgentResponse(text = "Continuing"))))
         val config = ProviderConfig("test", ProviderType.OpenAi, "Test",
             "https://example.invalid/v1", "test-model")
-        val viewModel = ChatViewModel(app, persistence,
+        val viewModel = newChatViewModel(app, persistence,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> provider })
         await(viewModel) { it.ready && !it.projectLoading }
@@ -614,7 +624,7 @@ class ChatViewModelTest {
         assertEquals(3, CodingSessions(app).fullEventCount(header.id))
 
         val nextProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Continuing"))))
-        val resumed = ChatViewModel(app, CodingSessions(app),
+        val resumed = newChatViewModel(app, CodingSessions(app),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> nextProvider })
         await(resumed) { it.ready && !it.projectLoading }
@@ -654,7 +664,7 @@ class ChatViewModelTest {
         )))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, persistence,
+        val viewModel = newChatViewModel(app, persistence,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
@@ -698,7 +708,7 @@ class ChatViewModelTest {
         }
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "First continuation"), AgentResponse(text = "Second continuation"))))
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "test-model")
-        val viewModel = ChatViewModel(app, sessions,
+        val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
         viewModel.send("Continue")
@@ -735,7 +745,7 @@ class ChatViewModelTest {
         )))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = ChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
@@ -776,7 +786,7 @@ class ChatViewModelTest {
         val config = ProviderConfig(id = "test", type = ProviderType.Gemini, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "model-a",
             modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 40_000))
-        val viewModel = ChatViewModel(app, sessions,
+        val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
@@ -796,7 +806,7 @@ class ChatViewModelTest {
         assertEquals(68, sessions.recent(id, 100).size)
 
         val switchedProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "After switch"))))
-        val switched = ChatViewModel(app, sessions,
+        val switched = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config.copy(id = "provider-b", model = "model-b"), "key") },
             { _, _ -> switchedProvider })
         await(switched) { it.ready }
@@ -825,7 +835,7 @@ class ChatViewModelTest {
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
-        val viewModel = ChatViewModel(app, sessions,
+        val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
@@ -849,7 +859,7 @@ class ChatViewModelTest {
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
-        val viewModel = ChatViewModel(app, sessions,
+        val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
@@ -880,7 +890,7 @@ class ChatViewModelTest {
         val config = ProviderConfig(id = "test", type = ProviderType.Gemini, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "model-a",
             modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 16_000))
-        val viewModel = ChatViewModel(app, sessions,
+        val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
@@ -918,7 +928,7 @@ class ChatViewModelTest {
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
-        val viewModel = ChatViewModel(app, sessions,
+        val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
@@ -995,7 +1005,7 @@ class ChatViewModelTest {
         val largeConfig = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "large",
             modelContextLimit = ModelContextLimit("large", endpoint, 100_000))
         val firstProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "First"))))
-        val first = ChatViewModel(app, sessions,
+        val first = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(largeConfig, "key") },
             { _, _ -> firstProvider })
         await(first) { it.ready }
@@ -1010,7 +1020,7 @@ class ChatViewModelTest {
             AgentResponse(text = """{"objective":"Finish task","completed":["Inspected code"],"pending":["Verify"]}"""),
             AgentResponse(text = "Second"),
         )))
-        val second = ChatViewModel(app, sessions,
+        val second = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(smallConfig, "key") },
             { _, _ -> secondProvider })
         await(second) { it.ready }
