@@ -46,12 +46,15 @@ internal data class ReleaseUpdate(val version: ReleaseVersion, val size: Long, v
 internal class GitHubUpdates(
     private val storage: File,
     client: OkHttpClient = OkHttpClient.Builder().connectTimeout(15, TimeUnit.SECONDS)
-        .readTimeout(30, TimeUnit.SECONDS).build(),
+        .readTimeout(30, TimeUnit.SECONDS).addInterceptor { chain ->
+            try { chain.proceed(chain.request()) }
+            catch (e: SecurityException) { throw IOException("Socket access denied", e) }
+        }.build(),
     private val maxDownloadBytes: Long = MAX_APK_BYTES,
 ) {
     private val client = client.newBuilder().followRedirects(false).followSslRedirects(false)
         .cookieJar(CookieJar.NO_COOKIES).authenticator(Authenticator.NONE)
-        .proxyAuthenticator(Authenticator.NONE).cache(null).build()
+        .proxyAuthenticator(Authenticator.NONE).retryOnConnectionFailure(false).cache(null).build()
 
     init { require(maxDownloadBytes in 1..MAX_APK_BYTES) }
 
@@ -105,48 +108,54 @@ internal class GitHubUpdates(
             ?.forEach { it.delete() }
     }
 
-    suspend fun download(release: ReleaseUpdate, progress: (Long, Long?) -> Unit): File = withContext(Dispatchers.IO) {
-        if (release.url != assetUrl(release.version) || release.size !in 1..MAX_APK_BYTES) throw metadataFailure()
-        if (!storage.isDirectory && !storage.mkdirs()) throw UpdateFailure("Rivet couldn't prepare space for the update.")
-        val target = File.createTempFile("update-", ".tmp", storage)
+    suspend fun download(release: ReleaseUpdate, progress: (Long, Long?) -> Unit): File {
+        var staged: File? = null
         try {
-            withTimeout(10 * 60_000L) {
-                var url = release.url.toHttpUrlOrNull() ?: throw metadataFailure()
-                repeat(6) {
-                    val result = fetch(url, "application/vnd.android.package-archive", target) { response ->
-                        if (!response.isSuccessful) throw UpdateFailure("Rivet couldn't download the update. Try again later.")
-                        val body = response.body ?: throw UpdateFailure("GitHub returned an empty update.")
-                        val length = body.contentLength().takeIf { it >= 0 }
-                        if (length != null && length > maxDownloadBytes) throw tooLarge()
-                        var total = 0L
-                        target.outputStream().use { output ->
-                            body.byteStream().use { input ->
-                                val buffer = ByteArray(64 * 1024)
-                                while (true) {
-                                    val count = input.read(buffer)
-                                    if (count < 0) break
-                                    total += count
-                                    if (total > maxDownloadBytes) throw tooLarge()
-                                    output.write(buffer, 0, count)
-                                    progress(total, length)
+            return withContext(Dispatchers.IO) {
+                if (release.url != assetUrl(release.version) || release.size !in 1..MAX_APK_BYTES) throw metadataFailure()
+                if (!storage.isDirectory && !storage.mkdirs()) throw UpdateFailure("Rivet couldn't prepare space for the update.")
+                val target = File.createTempFile("update-", ".tmp", storage)
+                staged = target
+                try {
+                    withTimeout(10 * 60_000L) {
+                        var url = release.url.toHttpUrlOrNull() ?: throw metadataFailure()
+                        repeat(6) {
+                            val result = fetch(url, "application/vnd.android.package-archive", target) { response ->
+                                if (!response.isSuccessful) throw UpdateFailure("Rivet couldn't download the update. Try again later.")
+                                val body = response.body ?: throw UpdateFailure("GitHub returned an empty update.")
+                                val length = body.contentLength().takeIf { it >= 0 }
+                                if (length != null && length > maxDownloadBytes) throw tooLarge()
+                                var total = 0L
+                                target.outputStream().use { output ->
+                                    body.byteStream().use { input ->
+                                        val buffer = ByteArray(64 * 1024)
+                                        while (true) {
+                                            val count = input.read(buffer)
+                                            if (count < 0) break
+                                            total += count
+                                            if (total > maxDownloadBytes) throw tooLarge()
+                                            output.write(buffer, 0, count)
+                                            progress(total, length)
+                                        }
+                                    }
                                 }
+                                if (total == 0L || total != release.size || (length != null && total != length)) {
+                                    throw UpdateFailure("The update download was incomplete. Try again.")
+                                }
+                                Fetch.Downloaded
+                            }
+                            when (result) {
+                                Fetch.Downloaded -> return@withTimeout target
+                                is Fetch.Redirect -> url = validatedRedirect(url, result.location)
+                                else -> throw metadataFailure()
                             }
                         }
-                        if (total == 0L || total != release.size || (length != null && total != length)) {
-                            throw UpdateFailure("The update download was incomplete. Try again.")
-                        }
-                        Fetch.Downloaded
+                        throw UpdateFailure("GitHub redirected the update too many times. Try again later.")
                     }
-                    when (result) {
-                        Fetch.Downloaded -> return@withTimeout target
-                        is Fetch.Redirect -> url = validatedRedirect(url, result.location)
-                        else -> throw metadataFailure()
-                    }
-                }
-                throw UpdateFailure("GitHub redirected the update too many times. Try again later.")
+                } catch (e: CancellationException) { target.delete(); throw e
+                } catch (e: Exception) { target.delete(); throw e }
             }
-        } catch (e: CancellationException) { target.delete(); throw e
-        } catch (e: Exception) { target.delete(); throw e }
+        } catch (e: Exception) { staged?.delete(); throw e }
     }
 
     private fun validatedRedirect(from: HttpUrl, location: String): HttpUrl {

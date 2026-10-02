@@ -83,6 +83,11 @@ class GitHubUpdatesTest {
         assertNull(download.getHeader("Cookie"))
         assertEquals(4L to 4L, progress.last())
         file.delete()
+        server.enqueue(MockResponse().setChunkedBody("apk!", 1))
+        val unknown = mutableListOf<Pair<Long, Long?>>()
+        val chunked = updates.download(release) { count, total -> unknown += count to total }
+        assertEquals(4L to null, unknown.last())
+        chunked.delete()
     }
 
     @Test fun downloadsAreBoundedEvenWithoutAnHonestLengthAndFailuresCleanTemps() = runTest {
@@ -94,9 +99,23 @@ class GitHubUpdatesTest {
         assertSuspendFailure { updates.download(release) { _, _ -> } }
         server.enqueue(MockResponse().setResponseCode(500))
         assertSuspendFailure { updates.download(release) { _, _ -> } }
+        server.enqueue(MockResponse().setBody("x").setHeader("Content-Length", 4)
+            .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_END))
+        assertSuspendFailure { updates.download(release) { _, _ -> } }
         server.enqueue(MockResponse().setBody(""))
         assertSuspendFailure { updates.download(release) { _, _ -> } }
         assertTrue(directory.listFiles()!!.isEmpty())
+    }
+
+    @Test fun unpublishedMissingOrMalformedMetadataIsControlled() = runTest {
+        server.enqueue(MockResponse().setResponseCode(404))
+        assertNull(updates.check("0.11.0"))
+        for (body in listOf("not JSON", "x".repeat(512 * 1024 + 1))) {
+            server.enqueue(MockResponse().setBody(body))
+            assertSuspendFailure { updates.check("0.11.0") }
+        }
+        server.enqueue(MockResponse().setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_START))
+        assertSuspendFailure { updates.check("0.11.0") }
     }
 
     @Test fun redirectCannotEscapeOfficialHttpsAssetHosts() = runTest {
