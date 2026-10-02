@@ -10,10 +10,11 @@ class ConversationTitleTest {
         val request = ConversationTitle.request("model", "😀".repeat(2000), "é".repeat(2000))
         assertEquals(ReasoningLevel.Default, request.reasoning)
         assertTrue(request.tools.isEmpty())
-        assertEquals(listOf(AgentRole.User, AgentRole.Assistant), request.messages.map { it.role })
-        assertTrue(request.messages[0].text.toByteArray(Charsets.UTF_8).size <= 2048)
-        assertTrue(request.messages[1].text.toByteArray(Charsets.UTF_8).size <= 1024)
-        assertEquals("😀".repeat(512), request.messages[0].text)
+        assertEquals(listOf(AgentRole.User), request.messages.map { it.role })
+        val text = request.messages.single().text
+        assertTrue(text.toByteArray(Charsets.UTF_8).size <= 3072 + 64)
+        assertEquals("First user message:\n" + "😀".repeat(512) +
+            "\n\nCompleted assistant answer:\n" + "é".repeat(512), text)
         assertTrue(request.messages.all { it.internalContext == null && it.transportState == null &&
             it.toolCalls.isEmpty() && it.toolResults.isEmpty() })
         assertFalse(request.system.contains("AGENTS"))

@@ -8,8 +8,8 @@ import com.kaiser.rivet.provider.ReasoningLevel
 internal object ConversationTitle {
     fun request(model: String, firstUser: String, answer: String) = AgentRequest(
         model = model,
-        messages = listOf(AgentMessage.user(prefix(firstUser, 2048)),
-            AgentMessage.assistant(prefix(answer, 1024))),
+        messages = listOf(AgentMessage.user("First user message:\n" + prefix(firstUser, 2048) +
+            "\n\nCompleted assistant answer:\n" + prefix(answer, 1024))),
         system = "Generate a concise title for this coding conversation. Return only the title. " +
             "Use 2 to 6 words. No quotes. No markdown. No trailing punctuation.",
         reasoning = ReasoningLevel.Default,
