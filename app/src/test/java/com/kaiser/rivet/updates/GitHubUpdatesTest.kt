@@ -27,6 +27,8 @@ class GitHubUpdatesTest {
     @Before fun setup() {
         val certificate = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
         server = MockWebServer()
+        // Chunked framing is HTTP/1.1; HTTP/2 carries DATA frames instead.
+        server.protocols = listOf(okhttp3.Protocol.HTTP_1_1)
         server.useHttps(HandshakeCertificates.Builder().heldCertificate(certificate).build().sslSocketFactory(), false)
         server.start()
         val trust = HandshakeCertificates.Builder().addTrustedCertificate(certificate.certificate).build()
@@ -85,8 +87,7 @@ class GitHubUpdatesTest {
         file.delete()
         server.enqueue(MockResponse().setChunkedBody("apk!", 1))
         val unknown = mutableListOf<Pair<Long, Long?>>()
-        val chunked = try { updates.download(release) { count, total -> unknown += count to total } }
-            catch (e: UpdateFailure) { throw AssertionError("Unknown-length transfer progress: $unknown", e) }
+        val chunked = updates.download(release) { count, total -> unknown += count to total }
         assertEquals(4L to null, unknown.last())
         chunked.delete()
     }
