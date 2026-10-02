@@ -62,6 +62,7 @@ data class SessionUsage(
     val compactionUnknownRequests: Int = 0,
     val latestUsage: AgentUsage? = null,
     val latestIsCompaction: Boolean = false,
+    val titleRequests: Int = 0,
 )
 
 data class ContextEstimate(val tokens: Long?, val source: String)
@@ -187,6 +188,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.beginTransaction()
         try {
             insertSession(db, id, "New session", workspaceId, false)
+            putMeta(db, "auto_title-$id", "eligible")
             setActive(db, id)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
@@ -214,6 +216,25 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
     }
 
+    // Only newly created sessions are enrolled. Consuming this marker before
+    // the first user event prevents retries or upgrades from spending title tokens.
+    suspend fun claimAutoTitle(id: String): Boolean = onDatabase { db ->
+        db.beginTransaction()
+        try {
+            val claimed = db.delete("metadata", "key=? AND value=?", arrayOf("auto_title-$id", "eligible")) == 1
+            val eligible = claimed && header(db, id).title == "New session" &&
+                db.rawQuery("SELECT 1 FROM events WHERE session_id=? LIMIT 1", arrayOf(id)).use { !it.moveToFirst() }
+            db.setTransactionSuccessful()
+            eligible
+        } finally { db.endTransaction() }
+    }
+
+    suspend fun renameIfCurrentTitle(id: String, expected: String, title: String): Boolean = onDatabase { db ->
+        require(title.isNotBlank() && title.length <= 80 && title.toByteArray(Charsets.UTF_8).size <= 80)
+        db.update("sessions", ContentValues().apply { put("title", title) },
+            "id=? AND title=?", arrayOf(id, expected)) == 1
+    }
+
     suspend fun setPinned(id: String, pinned: Boolean) = onDatabase { db ->
         if (db.update("sessions", ContentValues().apply { put("pinned", if (pinned) 1 else 0) },
                 "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
@@ -223,6 +244,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val workspaceId = WorkspaceSelection(context).currentIdentity()
         db.beginTransaction()
         try {
+            db.delete("metadata", "key=?", arrayOf("auto_title-$id"))
             if (db.delete("sessions", "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
             val next = db.rawQuery("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1", null).use {
                 if (it.moveToFirst()) it.getString(0) else null
@@ -386,7 +408,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val estimated = ContextBudget.estimateRequestTokens(request)
         val anchor = db.rawQuery("SELECT context_input_tokens,base_count,base_prefix_hash,system_hash,active_generation " +
             "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' " +
-            "AND context_input_tokens > 0 AND turn_id NOT LIKE 'compaction-%' " +
+            "AND context_input_tokens > 0 AND turn_id NOT LIKE 'compaction-%' AND turn_id NOT LIKE 'title-%' " +
             "ORDER BY id DESC LIMIT 1", arrayOf(sessionId, providerId, model)).use { cursor ->
             if (!cursor.moveToFirst()) null else UsageAnchor(cursor.getLong(0), cursor.getInt(1),
                 if (cursor.isNull(2)) null else cursor.getString(2), cursor.getString(3), cursor.getInt(4))
@@ -441,9 +463,11 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             cursor.moveToFirst()
             Triple(usageFields(cursor), cursor.getInt(6), cursor.getInt(7))
         }
+        val titles = db.rawQuery("SELECT COUNT(*) FROM usage WHERE session_id=? AND turn_id LIKE 'title-%'",
+            arrayOf(sessionId)).use { it.moveToFirst(); it.getInt(0) }
         SessionUsage(totals[0], totals[1], requireNotNull(totals[2]).toInt(), requireNotNull(totals[3]).toInt(), latest.first?.inputTokens, latest.second,
             extra[0], extra[1], extra[2], extra[3], extra[4], compaction.first, compaction.second, compaction.third,
-            latest.first, latest.third)
+            latest.first, latest.third, titles)
     }
 
     private suspend fun <T> onDatabase(block: suspend (SQLiteDatabase) -> T): T = withContext(Dispatchers.IO) {
