@@ -183,6 +183,7 @@ class ChatViewModel private constructor(
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
+    @Volatile private var titleRenameRevision = 0L
     private var sendJob: Job? = null
     private var generation = 0L
     private val runtimeController = RuntimeController(app, workspaceSelection, managedProcesses) {
@@ -761,7 +762,8 @@ class ChatViewModel private constructor(
 
     private fun generateTitle(sessionId: String, turnId: String, firstUser: String, answer: String) {
         val store = sessions ?: return
-        viewModelScope.launch {
+        val renameRevision = titleRenameRevision
+        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val snapshot = providerSource.load() as? ProviderRuntimeResult.Ready ?: return@launch
                 // The coding request's reasoning and context never enter this call.
@@ -780,9 +782,13 @@ class ChatViewModel private constructor(
                 val history = store.list()
                 val current = _uiState.value.currentSessionId
                 val usage = current?.let { store.usage(it) }
-                _uiState.update { state -> state.copy(sessions = history,
-                    currentSessionTitle = history.firstOrNull { it.id == state.currentSessionId }?.title,
-                    usage = if (state.currentSessionId == current) usage else state.usage) }
+                _uiState.update { state ->
+                    val unchanged = renameRevision == titleRenameRevision
+                    state.copy(sessions = if (unchanged) history else state.sessions,
+                        currentSessionTitle = if (unchanged) history.firstOrNull {
+                            it.id == state.currentSessionId }?.title else state.currentSessionTitle,
+                        usage = if (state.currentSessionId == current) usage else state.usage)
+                }
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) { /* Auxiliary title failure leaves the coding turn untouched. */ }
         }
@@ -1011,6 +1017,7 @@ class ChatViewModel private constructor(
     fun renameSession(id: String, title: String) {
         val store = sessions ?: return
         if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges || sendJob?.isActive == true) return
+        titleRenameRevision++
         viewModelScope.launch {
             try {
                 store.rename(id, title)
