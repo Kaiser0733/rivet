@@ -85,7 +85,8 @@ class GitHubUpdatesTest {
         file.delete()
         server.enqueue(MockResponse().setChunkedBody("apk!", 1))
         val unknown = mutableListOf<Pair<Long, Long?>>()
-        val chunked = updates.download(release) { count, total -> unknown += count to total }
+        val chunked = try { updates.download(release) { count, total -> unknown += count to total } }
+            catch (e: UpdateFailure) { throw AssertionError("Unknown-length transfer progress: $unknown", e) }
         assertEquals(4L to null, unknown.last())
         chunked.delete()
     }
