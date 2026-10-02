@@ -46,7 +46,7 @@ jobs:
       - name: Build release merge outputs for isolation check
         run: ./gradlew :app:processReleaseMainManifest :app:mergeReleaseResources --stacktrace
 
-      - name: Verify debug loopback policy and release exclusion
+      - name: Verify debug mock-provider policy and release exclusion
         run: >
           python3 scripts/verify_network_security.py
           app/build/outputs/apk/debug/app-debug.apk

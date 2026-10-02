@@ -1,86 +1,90 @@
 # Rivet
 
-An Android-native AI coding harness: pick a provider, point it at a
-project, and work with a coding agent entirely from your phone or
-tablet — no desktop setup required.
+Rivet is an Android-native, chat-first AI coding agent. Choose a project folder
+and a model, describe the work, and let Rivet inspect files, make changes, and
+run project commands on your phone or tablet.
 
-**Status: 0.11.0 (22) final QoL candidate; not publicly released.**
-The Phase 11 and token-hardening baselines passed physical acceptance. This
-candidate adds bounded first-turn conversation titles and a manual verified
-update download in Settings; those additions still need device validation.
+## What it does
 
-## What works today
+- Reads, searches, edits, and patches files in a selected project.
+- Runs on-device commands, shows their progress, and lets you stop them.
+- Keeps recoverable checkpoints for conflict-safe Undo and inspects Git without
+  changing your repository history or staging area.
+- Supports saved conversations, pins, model switching, project instructions
+  from `AGENTS.md`, and automatic context reduction for longer tasks.
+- Offers Ask, Basic YOLO, and YOLO approval modes, local static previews,
+  bounded project downloads, and Rose or Dark appearance.
 
-- Multi-provider chat: OpenAI, OpenRouter, Anthropic (native Messages
-  API), Google Gemini (native generateContent), and any
-  OpenAI-compatible endpoint with a custom base URL.
-- API keys stored in Android-backed encrypted storage, never in
-  plaintext.
-- Model discovery where the provider supports listing, manual model entry
-  everywhere else.
-- Provider responses stream with stop control; Chat shows a temporary text
-  preview and renders completed assistant Markdown locally. Provider and model
-  can be switched between messages.
-- Multiple persistent conversations; completed history, provider
-  configuration, selected project, and pinned conversations restore after a
-  restart. New conversations receive a short AI title after their first
-  successful turn; manual names take precedence. This separate request is
-  included in conversation usage.
-- Settings can check the official GitHub release manually and download an
-  update only after package, version, and installed-certificate verification.
-  Rivet saves the APK; installation remains a system/file-manager action.
+## Why Rivet
 
-- Project-folder selection from Chat, with contained file reads, search, edits,
-  and exact-context patches.
-- Structured tools for OpenAI-compatible, OpenRouter, Anthropic, and Gemini
-  providers. Ask, Basic YOLO, and YOLO are enforced by Rivet; workspace,
-  checkpoint, and runtime integrity checks remain active in every mode.
-- Approved project commands run through Rivet's on-device runtime. Git status
-  and diffs are read-only; completed agent changes can be undone when safe.
-- Rivet-owned commands appear in Processes and can be stopped directly. Static
-  previews serve project files on device loopback only. HTTPS downloads are
-  streamed into the selected project with bounded size and hash checks.
-- Bounded project instructions from `AGENTS.md`, durable conversation history,
-  model switching, usage records, and automatic context reduction.
-- Chat uses available portrait width; phone and tablet landscape show History
-  beside the active conversation.
-- Rose is the default theme; Dark is a persistent alternative. Rose intensity
-  can be muted in Settings without changing Android's screen brightness and
-  is retained independently when using Dark.
+Project work starts with a conversation. File access, command preparation,
+synchronization, and recovery happen underneath it; you do not need to operate
+an IDE or install Termux. You choose the model service and supply its API key.
 
-Rivet's native file tools are confined to the selected project folder. Approved
-project commands run with Rivet's Android application UID; they are not a
-security sandbox and may access app-private files available to that UID. Rivet
-does not include stored API keys in the command environment. No broad storage
-permission is requested. Files above 1 MiB and binary/non-UTF-8 files cannot be
-edited. Some document providers reject writes or rename operations. External
-project changes stop synchronization rather than being overwritten; Rivet may
-need the project state resolved before work can continue. The contextual Undo
-action is not restored after process restart. See [ARCHITECTURE.md](ARCHITECTURE.md)
-for recovery and provider limits.
+## Providers
 
-## Building
+OpenAI, OpenRouter, Anthropic, Gemini, and OpenAI-compatible endpoints with a
+custom base URL. Model listing depends on the provider; manual model entry is
+available when listing is not supported.
 
-GitHub Actions is the primary build environment — push to `main` (or
-open a PR) and CI runs tests, lint, and the debug APK build, uploading
-the APK as an artifact. Local builds work with JDK 17 and Android SDK 35:
+## Requirements
 
-    ./gradlew assembleDebug
+- Android 8.0 or newer (API 26).
+- An internet connection for model requests and downloads.
+- Your own provider API key; provider usage may incur charges.
+- Project access granted through Android's folder picker.
 
-Releases are signed in CI from repository secrets; the full procedure
-is in [RELEASE_PROCESS.md](RELEASE_PROCESS.md).
+## Install
 
-## Documentation
+Production APKs use **`Rivet-v<version>.apk`** and belong on
+[GitHub Releases](https://github.com/Kaiser0733/rivet/releases).
+The first public release is being prepared; no production APK is published yet.
 
-- [PROJECT_CONSTITUTION.md](PROJECT_CONSTITUTION.md) — durable project rules
-- [ARCHITECTURE.md](ARCHITECTURE.md) — what exists today
-- [MASTER_ROADMAP.md](MASTER_ROADMAP.md) — the product phases
-- [DECISIONS.md](DECISIONS.md) — architecture decision records
-- [RELEASE_PROCESS.md](RELEASE_PROCESS.md) — versioning, signing, releases
+Download the APK and open it through Android or your file manager. Android may
+ask you to allow installation from that source, and Play Protect may scan or
+warn about an unfamiliar APK. Rivet does not suppress those checks.
+
+## Updating
+
+Use **Settings → Check for updates**. Rivet checks the official published
+release, downloads its APK, and verifies the package, version, and signing
+certificate before saving it to Downloads. On Android 8–9, a save picker lets
+you choose the destination. Open the saved APK to install it yourself.
+There are no automatic update checks or automatic installations.
+
+## Safety and limitations
+
+- You explicitly select the project folder. Rivet can modify its files;
+  approval requirements depend on the mode you select.
+- Commands run with Rivet's Android app privileges. They are **not an OS
+  sandbox** and can access app-private data available to that app.
+- Undo is guarded against newer changes, but checkpoints are not backups.
+  Use source control or backups for important projects.
+- Provider keys are encrypted on this device and sent to the configured
+  provider with requests. They are not added to the command environment.
+- Native text edits support UTF-8 files up to 1 MiB. Document-provider
+  capabilities and external changes can prevent an operation.
+
+See [ARCHITECTURE.md](ARCHITECTURE.md) for engineering boundaries and recovery
+limitations, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+
+## Building from source
+
+GitHub Actions is the authoritative build environment. It runs Python checks,
+Android unit tests, lint, and APK verification. A local debug build requires
+JDK 17, Android SDK 35, and NDK 27.2.12479018:
+
+```sh
+./gradlew assembleDebug
+```
+
+Signing and public release steps are in [RELEASE_PROCESS.md](RELEASE_PROCESS.md).
+Contributions follow [PROJECT_CONSTITUTION.md](PROJECT_CONSTITUTION.md);
+[DECISIONS.md](DECISIONS.md) records durable choices and
+[MASTER_ROADMAP.md](MASTER_ROADMAP.md) summarizes development history.
 
 ## License
 
-Apache-2.0 for Rivet's own code (see [LICENSE](LICENSE)). Third-party
-components retain their licenses; the incorporated Termux-derived emulator
-source is attributed in [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
+Rivet-authored code is [Apache-2.0](LICENSE). Incorporated components retain
+their licenses; see [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md).
 Rivet is not affiliated with Termux.

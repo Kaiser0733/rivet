@@ -1,120 +1,110 @@
-# Rivet Release Process
+# Release process
 
-How a Rivet APK gets built, signed, and installed over a previous
-version. Version rules first; they are short and absolute.
+The accepted product is **0.11.0 (22)**. Its debug build passed the focused
+physical gates. Production signing is not configured until the real certificate
+pin and signing secrets are supplied; debug acceptance is not a public release.
 
-## Version rules
+## Identity and versions
 
-- `versionCode` is a plain integer, bumped by hand for every release.
-  It must always increase.
-- `versionName` is `MAJOR.MINOR.PATCH` (`0.1.0` at Phase 1 start),
-  bumped by hand when the release version changes. A candidate may retain the
-  same name while increasing `versionCode`.
-- Both live in `app/build.gradle.kts`. Nothing computes them.
+`app/build.gradle.kts` declares `versionName` (`MAJOR.MINOR.PATCH`) and integer
+`versionCode`. Change them by hand. Every new distributed build must increase
+`versionCode`; candidates can keep the same version name.
 
-## Updating an installed copy
+The application ID, **`com.kaiser.rivet`**, is permanent. Android upgrades require
+the same application ID and signer; public updates must also have a higher
+version code. A production key differs from the committed public debug key, so
+**the first production APK cannot upgrade a debug installation**. Test it on a
+clean device or an installation already signed with that production key.
 
-An APK installs over an existing Rivet only when, compared to the
-installed build:
+Verification compares the built package, version, SDK levels, permissions, and
+signer with the declared contract. It does not check version-code progression
+against a previous release; the person publishing must check that separately.
 
-1. `applicationId` is identical: `com.kaiser.rivet`.
-2. The signing certificate is identical (same release keystore).
-3. `versionCode` is higher.
+## One-time production-key setup
 
-Fail any one and Android refuses the install (or requires an uninstall,
-which loses user data). APK verification compares the built package, version,
-and SDK levels with the current Gradle declarations; an optional release tag
-must match the built version name. It does not compare `versionCode` with a
-previous release. Check that increase against the installed build before
-publishing. The signer is compared with the build keystore and a separately
-committed production certificate fingerprint.
+The human owner generates the permanent key **once on a trusted environment**,
+not in CI, the repository, or an agent environment. Use strong unique store and
+key passwords. With keytool's default PKCS12 format, the key password is the
+store password; use that value for both password secrets. Back up the keystore
+offline in a safe recovery location before
+uploading any CI copy. Losing the key prevents future in-place updates.
 
-The 0.11.0 code-20 Phase 11 and code-21 token-hardening baselines passed
-physical acceptance. Code 22 adds final QoL titles and manual update download;
-its device validation is separate. Debug acceptance does not establish
-production-signing readiness or constitute a public release.
+```sh
+keytool -genkeypair -keystore rivet-release.keystore \
+    -alias rivet -keyalg RSA -keysize 4096 -validity 10000
+keytool -exportcert -rfc -keystore rivet-release.keystore \
+    -alias rivet -file rivet-release-cert.pem
+openssl x509 -in rivet-release-cert.pem -noout -fingerprint -sha256
+keytool -list -v -keystore rivet-release.keystore -alias rivet
+```
 
-## Required GitHub secrets
+Check that the two certificate fingerprints agree. Commit **only the verified
+public SHA-256**, as one lowercase 64-digit hexadecimal line without colons,
+in `release/production-signer.sha256`. Create its parent directory when adding
+the real pin; no placeholder is needed. Never substitute the debug fingerprint.
+
+Add these GitHub Actions repository secrets:
 
 | Secret | Contents |
 |---|---|
-| `RIVET_KEYSTORE_BASE64` | The release keystore, base64 of the file |
-| `RIVET_KEYSTORE_PASSWORD` | Keystore store password |
-| `RIVET_KEY_ALIAS` | Key alias inside that keystore |
-| `RIVET_KEY_PASSWORD` | Password of that key |
+| `RIVET_KEYSTORE_BASE64` | Base64-encoded production keystore |
+| `RIVET_KEYSTORE_PASSWORD` | Store password |
+| `RIVET_KEY_ALIAS` | Alias of the production key |
+| `RIVET_KEY_PASSWORD` | Key password |
 
-## One-time keystore setup (documented, never automated)
+Encode the keystore locally, for example with `base64 -w0` where supported.
+Never commit the keystore, encoded copy, passwords, or private key. GitHub
+Secrets contain a CI copy, not the only backup. Retain this exact key for every
+public version; a compromise needs a separately planned migration.
 
-Generate the production key once, on a trusted machine, and keep a safe
-offline recovery backup. Losing it means every future release can no
-longer update installed copies. GitHub Secrets hold an encoded CI copy and
-the signing passwords, not the only permanent copy.
+## Build workflows
 
-    keytool -genkeypair -keystore rivet-release.keystore \
-        -alias rivet -keyalg RSA -keysize 4096 -validity 10000
+- **Android Build** (`.github/workflows/android-build.yml`) runs on main pushes,
+  pull requests, and manual dispatch. It runs Python checks, unit tests, lint,
+  debug assembly, release manifest/resource isolation checks, process-boundary
+  checks, and APK identity/signature verification. Only then does it stage
+  `Rivet-<version>-code<code>-debug.apk` in artifact `rivet-debug-apk`.
+  The current debug filename is `Rivet-0.11.0-code22-debug.apk`.
+- **Release** (`.github/workflows/release.yml`) is manual. It requires all four
+  secrets and `release/production-signer.sha256`, decodes a temporary keystore,
+  builds the signed release, and verifies it against both that keystore and
+  the independent pin. The temporary keystore is removed with `if: always()`.
+  Missing signing configuration never falls back to the debug key.
 
-    # do not commit this file
-    base64 -w0 rivet-release.keystore > rivet-release.keystore.b64
+Verification reads canonical Gradle outputs (`app-debug.apk` / `app-release.apk`)
+before staging friendly filenames. The public artifact is **`rivet-release-apk`**
+containing **`Rivet-v0.11.0.apk`**, following `Rivet-v<version>.apk`.
+An empty `release_tag` builds an artifact only. A nonempty tag must match
+`v<versionName>` and creates a **draft**, never a published release, targeting
+the workflow's commit. Checkout does not retain credentials; only the Release
+workflow has repository write permission for draft creation.
 
-Add the four secrets in GitHub: Settings → Secrets and variables →
-Actions. Store the b64 contents in `RIVET_KEYSTORE_BASE64`.
+## Verify before publishing
 
-Commit the verified production certificate SHA-256 as the sole lowercase
-hexadecimal line in `release/production-signer.sha256`. Establish that
-fingerprint from the permanent certificate independently of the CI secret.
-Until this file exists with the real fingerprint, production releases are
-intentionally unavailable. Do not use the debug certificate as its pin.
+1. Merge reviewed changes with successful exact-commit Android Build CI.
+2. Complete the human key setup and review the committed public pin.
+3. Open Actions → Release → Run workflow on the intended main commit. Leave
+   `release_tag` empty for the first production build; do not publish yet.
+4. Download `rivet-release-apk`. Record the APK SHA-256, package, version name,
+   version code, production certificate SHA-256, and requested permissions.
+   Verify those independently against the pin and Gradle declarations.
+5. Install on a clean device or the same production-signed baseline. Check
+   provider/project setup, a disposable edit, command approval, Undo, and
+   restart. Keep important project data backed up.
+6. When ready, run Release with `release_tag=v0.11.0` to create the draft.
+   Reverify the attached APK; a second build is not assumed byte-identical.
+   Publish the draft only after those checks and the release notes are reviewed.
 
-## Workflows
+## Update contract
 
-`.github/workflows/android-build.yml` — every push to `main` and every
-PR: tests, lint, debug APK (signed with the committed public debug key),
-APK verification, then artifact staging as
-`Rivet-<versionName>-code<versionCode>-debug.apk` inside `rivet-debug-apk`.
-The verified internal path remains `app/build/outputs/apk/debug/app-debug.apk`.
+Settings → Check for updates queries only the official `Kaiser0733/rivet`
+latest published normal release, excluding drafts and prereleases. The asset
+must be named exactly **`Rivet-v<version>.apk`**, and the version name must be
+newer than the installed version.
 
-`.github/workflows/release.yml` — manual trigger. Refuses to run unless
-all four release secrets exist, decodes the keystore, builds and signs
-the release APK, verifies signer against the committed pin and identity,
-stages `dist/Rivet-v<versionName>.apk`, uploads that file as the artifact,
-and optionally attaches it to a draft GitHub Release when a tag input exactly
-matches `v` plus the APK version name. Verification still reads the canonical
-`app/build/outputs/apk/release/app-release.apk` before copying it.
-
-Settings queries only the official latest published normal GitHub release.
-Its exact public asset name must be `Rivet-v<versionName>.apk`. The download
-must match the installed certificate, package, expected version name, and a
-strictly greater version code. A debug-signed installation therefore rejects
-production-signed updates. No APK is installed by Rivet and Android security
-warnings are left intact. Public releases must retain the permanent production
-certificate; do not substitute the debug key.
-
-## Releasing, in order
-
-1. Bump `versionCode` and `versionName` in `app/build.gradle.kts`; commit
-   (e.g. `build: release 0.2.0, versionCode 2`).
-2. In GitHub on any device: Actions → Release → Run workflow. Leave the
-   tag input empty for an APK artifact only, or pass a tag such as
-   `v0.2.0` to also create a draft release.
-3. Download `rivet-release-apk` from the run page; install over the
-   previous build.
-4. Publish the draft release from the Releases page after checking it.
-
-## What must never change between releases
-
-- The application ID.
-- The release certificate and keystore.
-- The four secret names (CI depends on them).
-
-What must change: `versionCode` (and normally `versionName`).
-
-## Signing hygiene
-
-- During CI signing, the secret is decoded only on the runner and the
-  temporary file is deleted in an `if: always()` cleanup. The trusted-machine
-  original and offline recovery backup are separate from that CI file.
-- Passwords travel as env vars read by Gradle at configuration time;
-  they are never written into the repository or logs.
-- With secrets missing, the release workflow fails early and the debug
-  workflow's release-type output stays unsigned — there is no silent
-  fallback to the debug key.
+The credential-free HTTPS download is verified before export: valid APK
+signature, exact package, expected version name, higher version code, and the
+installed signer set. A debug installation rejects production-signed updates.
+Verified files go to Downloads on API 29+, or the user save picker on API 26–28.
+Rivet neither polls for updates nor installs APKs. Android and the file manager
+handle installation; their security checks remain in place.

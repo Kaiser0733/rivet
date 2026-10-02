@@ -15,8 +15,8 @@ class AgentSessionLimitException(val actualBytes: Int) : Exception(
 )
 
 internal object AgentSessionCodec {
-    // Preferences DataStore remains appropriate while its single transcript
-    // value is kept well below a megabyte and rejected before an edit begins.
+    // Bounds the legacy DataStore value and SQLite's active projection,
+    // not the full SQLite event history.
     const val MAX_SERIALIZED_BYTES = 512 * 1024
 
     private val json = Json { ignoreUnknownKeys = true }
