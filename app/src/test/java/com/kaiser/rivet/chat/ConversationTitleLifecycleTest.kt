@@ -5,6 +5,12 @@ import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
 import android.content.Context
+import android.content.Intent
+import android.content.pm.ProviderInfo
+import android.provider.DocumentsContract
+import com.kaiser.rivet.workspace.TestDocumentsProvider
+import com.kaiser.rivet.workspace.WorkspaceSelection
+import org.robolectric.Robolectric
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentUsage
@@ -211,6 +217,54 @@ class ConversationTitleLifecycleTest {
         withTimeout(5000) { vm.uiState.first { !it.streaming && it.acceptedMessageCount == 1L } }
         assertEquals(2, calls)
         assertEquals("Manual Title", store.load().title)
+    }
+
+    private fun selectFixtureProject(): TestDocumentsProvider {
+        val authority = "com.kaiser.rivet.title-project"
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(
+            ProviderInfo().apply { this.authority = authority; exported = true; grantUriPermissions = true }).get()
+        WorkspaceSelection(app).select(DocumentsContract.buildTreeDocumentUri(authority, "root"),
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        return documents
+    }
+
+    @Test fun workspaceGuidanceNeverEntersTheActualTitleRequest() = runBlocking {
+        val documents = selectFixtureProject()
+        val marker = "PRIVATE_PROJECT_INSTRUCTIONS"
+        documents.nodes["instructions"] = TestDocumentsProvider.Node("AGENTS.md", "root", false,
+            java.io.File.createTempFile("title-agents", ".test", app.cacheDir).apply { writeText(marker) })
+        val requests = mutableListOf<AgentRequest>()
+        val (vm, _) = conversation { request ->
+            requests += request
+            if (requests.size == 1) AgentResponse("Done") else AgentResponse("Fix Login Crash")
+        }
+        vm.send("Fix the login crash")
+        withTimeout(5000) { vm.uiState.first { it.currentSessionTitle == "Fix Login Crash" } }
+        assertTrue(requests[0].messages.any { marker in it.text })
+        val title = requests[1]
+        assertTrue(title.tools.isEmpty())
+        assertFalse(title.system.contains(marker))
+        assertFalse(title.messages.any { marker in it.text || "content://" in it.text || "TaskState" in it.text ||
+            it.internalContext != null || it.transportState != null || it.toolResults.isNotEmpty() })
+    }
+
+    @Test fun cancelledPendingToolTurnNeverGeneratesTitleOrExecutesMutation() = runBlocking {
+        val documents = selectFixtureProject()
+        var calls = 0
+        val (vm, store) = conversation {
+            calls++
+            AgentResponse(toolCalls = listOf(com.kaiser.rivet.agent.AgentToolCall(
+                "create", "create_file", "{\"path\":\"disposable.txt\"}")))
+        }
+        vm.send("Create a disposable file")
+        withTimeout(5000) { vm.uiState.first { it.pendingApproval != null } }
+        vm.cancel()
+        withTimeout(5000) { vm.uiState.first { !it.streaming && it.pendingApproval == null } }
+        assertEquals(1, calls)
+        assertEquals("New session", store.load().title)
+        assertEquals(0, documents.createCalls)
+        assertEquals(0, store.usage(vm.uiState.value.currentSessionId!!).titleRequests)
     }
 
 }
