@@ -161,7 +161,11 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(vertical = 8.dp)) }
             }
-            item { SectionHeading("Current provider") }
+            item {
+                SectionHeading("Updates")
+                UpdatesSection(versionName)
+            }
+            item { SectionHeading("Current provider", Modifier.padding(top = 22.dp)) }
             if (active == null) {
                 item {
                     Text("Choose a provider below to connect Rivet to a model.",
