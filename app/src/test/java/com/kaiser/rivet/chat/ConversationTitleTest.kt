@@ -24,12 +24,13 @@ class ConversationTitleTest {
         assertEquals("Fix Login Crash", ConversationTitle.sanitize("\n # \"Fix Login Crash.\"\nextra text"))
         assertEquals("Fix Login Crash", ConversationTitle.sanitize("- `Fix Login Crash!`"))
         assertEquals("Fix Login Crash", ConversationTitle.sanitize("1. Fix Login Crash"))
+        assertEquals("Fix Login Crash", ConversationTitle.sanitize("\"# Fix Login Crash\""))
         assertEquals("These Seven Useful Words Still Make A Title",
             ConversationTitle.sanitize("These Seven Useful Words Still Make A Title"))
     }
 
     @Test fun invalidOrStructuredOutputIsIgnoredAndUnicodeBoundsHold() {
-        listOf("", "   ", "{}", "[\"Title\"]", "```json\n{}", "tool_call: {}", "<tool>name</tool>")
+        listOf("", "   ", "{}", "[\"Title\"]", "```json\n{}", "tool_call: {}", "<tool>name</tool>", "\"title\": \"Bad\"", "arguments: bad")
             .forEach { assertNull(it, ConversationTitle.sanitize(it)) }
         assertEquals(60, ConversationTitle.sanitize("a".repeat(120))!!.length)
         val title = ConversationTitle.sanitize("😀".repeat(120))!!

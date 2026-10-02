@@ -31,7 +31,7 @@ class UpdateApksTest {
     private val valid = installed.copy(versionName = "0.11.1", versionCode = 23)
     private fun fixture() = File.createTempFile("update-test", ".tmp", app.cacheDir).apply { writeText("apk!") }
 
-    @Test fun identityVersionAndSignerFailuresDeletePrivateApk() = runBlocking {
+    @Test fun identityVersionAndSignerFailuresDeletePrivateApk() = runBlocking<Unit> {
         val invalid = listOf(null, valid.copy(packageName = "another.app"),
             valid.copy(versionName = "0.11.2"), valid.copy(versionCode = 22), valid.copy(versionCode = 21),
             valid.copy(signers = setOf("wrong")), valid.copy(signers = emptySet()))
@@ -43,7 +43,7 @@ class UpdateApksTest {
         }
     }
 
-    @Test fun validUpdateIsAcceptedOnlyAfterSignatureVerification() = runBlocking {
+    @Test fun validUpdateIsAcceptedOnlyAfterSignatureVerification() = runBlocking<Unit> {
         val file = fixture()
         var inspected = false
         val apks = UpdateApks(app, { installed }, { valid }, { inspected = true; true })
@@ -59,7 +59,7 @@ class UpdateApksTest {
         assertFalse(corrupt.exists())
     }
 
-    @Test fun legacySavePickerUsesVerifiedReleaseFilenameAndApkMime() = runBlocking {
+    @Test fun legacySavePickerUsesVerifiedReleaseFilenameAndApkMime() = runBlocking<Unit> {
         val verified = UpdateApks(app, { installed }, { valid }, { true }).verify(fixture(), release)
         val intent = UpdateApks.saveIntent(verified)
         assertEquals(android.content.Intent.ACTION_CREATE_DOCUMENT, intent.action)
@@ -70,7 +70,7 @@ class UpdateApksTest {
     }
 
     @Suppress("DEPRECATION")
-    @Test fun archiveIdentityUsesCurrentModernSignersOrLegacySignatures() = runBlocking {
+    @Test fun archiveIdentityUsesCurrentModernSignersOrLegacySignatures() = runBlocking<Unit> {
         val signature = Signature(byteArrayOf(1, 2, 3))
         val digest = java.security.MessageDigest.getInstance("SHA-256").digest(signature.toByteArray())
             .joinToString("") { "%02x".format(it.toInt() and 255) }
@@ -92,7 +92,7 @@ class UpdateApksTest {
         verified.close()
     }
 
-    @Test fun actualSignedApkVerifiesAndTamperingCannotReuseItsCertificate() = runBlocking {
+    @Test fun actualSignedApkVerifiesAndTamperingCannotReuseItsCertificate() = runBlocking<Unit> {
         val unsigned = File.createTempFile("unsigned-update", ".zip", app.cacheDir)
         val payload = "original fixture content".toByteArray()
         ZipOutputStream(unsigned.outputStream()).use { zip ->
@@ -125,7 +125,7 @@ class UpdateApksTest {
         unsigned.delete()
     }
 
-    @Test fun unsignedCorruptArchiveCannotPassProductionVerifier() = runBlocking {
+    @Test fun unsignedCorruptArchiveCannotPassProductionVerifier() = runBlocking<Unit> {
         val file = fixture()
         try { UpdateApks(app).verify(file, release); fail("Expected corrupt archive rejection") }
         catch (_: UpdateFailure) {}

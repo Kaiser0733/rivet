@@ -60,7 +60,7 @@ internal class GitHubUpdates(
 
     suspend fun check(installedVersion: String): ReleaseUpdate? {
         val result = fetch(LATEST.toHttpUrlOrNull()!!, "application/vnd.github+json") { response ->
-            if (response.code == 404) return@fetch Fetch.Body("")
+            if (response.code == 404) return@fetch Fetch.NoRelease
             if (!response.isSuccessful) throw UpdateFailure("Rivet couldn't check GitHub for updates. Try again later.")
             val body = response.body ?: throw metadataFailure()
             if (body.contentLength() > MAX_METADATA_BYTES) throw metadataFailure()
@@ -73,8 +73,11 @@ internal class GitHubUpdates(
             }
             Fetch.Body(buffer.readUtf8())
         }
-        val body = (result as? Fetch.Body)?.text ?: throw metadataFailure()
-        return if (body.isEmpty()) null else parseRelease(body, installedVersion)
+        return when (result) {
+            Fetch.NoRelease -> null
+            is Fetch.Body -> parseRelease(result.text, installedVersion)
+            else -> throw metadataFailure()
+        }
     }
 
     fun parseRelease(body: String, installedVersion: String): ReleaseUpdate? {
@@ -186,7 +189,7 @@ internal class GitHubUpdates(
                     if (continuation.isActive) continuation.resume(result) { staged?.delete() }
                 } catch (e: Exception) {
                     if (continuation.isActive) continuation.resumeWithException(
-                        if (e is UpdateFailure) e else UpdateFailure("Rivet couldn't finish the update download. Try again."))
+                        if (e is UpdateFailure || e is CancellationException) e else UpdateFailure("Rivet couldn't finish the update download. Try again."))
                 } finally {
                     // Cancellation can race a callback write. The callback owns the
                     // final cleanup too, so a late write never leaves a partial APK.
@@ -200,6 +203,7 @@ internal class GitHubUpdates(
         data class Body(val text: String) : Fetch
         data class Redirect(val location: String) : Fetch
         data object Downloaded : Fetch
+        data object NoRelease : Fetch
     }
 
     companion object {

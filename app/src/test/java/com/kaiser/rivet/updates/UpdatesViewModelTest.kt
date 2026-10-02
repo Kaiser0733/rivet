@@ -51,7 +51,7 @@ class UpdatesViewModelTest {
         directory = kotlin.io.path.createTempDirectory("update-viewmodel").toFile()
         source = GitHubUpdates(directory, client)
     }
-    @After fun cleanup() = runBlocking {
+    @After fun cleanup() = runBlocking<Unit> {
         models.forEach { it.cancel(); it.viewModelScope.coroutineContext[Job]?.cancelAndJoin() }
         Dispatchers.resetMain()
         server.shutdown()
@@ -62,7 +62,7 @@ class UpdatesViewModelTest {
         "0.11.0").also { models += it }
     private fun metadata(size: Long = 4) = """{"tag_name":"v0.11.1","draft":false,"prerelease":false,"published_at":"2026-10-02T00:00:00Z","assets":[{"name":"Rivet-v0.11.1.apk","size":$size,"browser_download_url":"https://github.com/Kaiser0733/rivet/releases/download/v0.11.1/Rivet-v0.11.1.apk"}]}"""
 
-    @Test fun checkIsManualAndMissingReleaseLeavesRecoverableCurrentState() = runBlocking {
+    @Test fun checkIsManualAndMissingReleaseLeavesRecoverableCurrentState() = runBlocking<Unit> {
         val vm = model()
         delay(50)
         assertEquals(0, server.requestCount)
@@ -73,7 +73,7 @@ class UpdatesViewModelTest {
         assertEquals(1, server.requestCount)
     }
 
-    @Test fun retainedViewModelCannotDuplicateActiveDownloadOrSavePicker() = runBlocking {
+    @Test fun retainedViewModelCannotDuplicateActiveDownloadOrSavePicker() = runBlocking<Unit> {
         val vm = model()
         val store = ViewModelStore()
         val factory = object : ViewModelProvider.Factory {
@@ -100,7 +100,7 @@ class UpdatesViewModelTest {
         store.clear()
     }
 
-    @Test fun failedVerificationNeverOffersSaveAndRemovesTemporaryDownload() = runBlocking {
+    @Test fun failedVerificationNeverOffersSaveAndRemovesTemporaryDownload() = runBlocking<Unit> {
         val vm = model(false)
         server.enqueue(MockResponse().setBody(metadata()))
         vm.check()
@@ -113,7 +113,7 @@ class UpdatesViewModelTest {
         assertTrue(directory.listFiles()!!.isEmpty())
     }
 
-    @Test fun reconstructedModelDiscardsPrivatePartialAndDoesNotCheckAutomatically() = runBlocking {
+    @Test fun reconstructedModelDiscardsPrivatePartialAndDoesNotCheckAutomatically() = runBlocking<Unit> {
         directory.resolve("update-old.tmp").writeText("partial")
         directory.resolve("unrelated.txt").writeText("keep")
         val vm = model()

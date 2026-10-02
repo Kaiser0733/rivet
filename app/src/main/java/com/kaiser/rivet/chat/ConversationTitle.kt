@@ -21,8 +21,11 @@ internal object ConversationTitle {
         if (line.startsWith("```") && !line.endsWith("```")) return null
         val clean = line.replace(Regex("^(?:#{1,6}\\s+|[-*+]\\s+|\\d+[.)]\\s+)"), "")
             .trim().trim('"', '\'', '`', '“', '”', '‘', '’').trim()
+            .replace(Regex("^(?:#{1,6}\\s+|[-*+]\\s+|\\d+[.)]\\s+)"), "")
             .trimEnd('.', '!', '?', ':', ';', ',').trim()
             .replace(Regex("\\s+"), " ")
+        if (Regex("^[\"'`]?(?:title|name|arguments|function)[\"'`]?\\s*:", RegexOption.IGNORE_CASE)
+                .containsMatchIn(clean)) return null
         if (clean.isBlank() || clean.any { it.isISOControl() || it in "{}[]<>" } ||
             Regex("(?i)^(?:tool[_ ]?(?:call|result)|function[_ ]?call|assistant\\s*:|system\\s*:|json\\s*:)")
                 .containsMatchIn(clean)) return null
