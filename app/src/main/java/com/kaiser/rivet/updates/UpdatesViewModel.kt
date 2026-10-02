@@ -65,10 +65,10 @@ internal class UpdatesViewModel internal constructor(
 
     fun download() {
         val release = (_state.value as? UpdateUiState.Available)?.release ?: return
-        if (job?.isActive == true) return
         _state.value = UpdateUiState.Downloading(release, 0, null)
         job = viewModelScope.launch(Dispatchers.IO) {
             var staged: File? = null
+            var awaitingSave = false
             try {
                 preparation.join()
                 staged = updates.download(release) { bytes, total ->
@@ -81,12 +81,13 @@ internal class UpdatesViewModel internal constructor(
                     apks.saveToDownloads(requireNotNull(verified))
                     _state.value = UpdateUiState.Complete(release, "Saved to Downloads")
                 } else {
+                    awaitingSave = true
                     _state.value = UpdateUiState.AwaitingSave(release)
                 }
             } catch (e: CancellationException) { _state.value = UpdateUiState.Idle; throw e
             } catch (e: Exception) { fail(e, "Rivet couldn't save the update. Try again.")
             } finally {
-                if (_state.value !is UpdateUiState.AwaitingSave) {
+                if (!awaitingSave) {
                     verified?.close(); verified = null; staged?.delete()
                 }
             }
@@ -96,14 +97,14 @@ internal class UpdatesViewModel internal constructor(
     fun beginSavePicker(): Intent? {
         val waiting = _state.value as? UpdateUiState.AwaitingSave ?: return null
         val file = verified ?: return null
-        if (waiting.pickerOpen || job?.isActive == true) return null
+        if (waiting.pickerOpen) return null
         _state.value = waiting.copy(pickerOpen = true)
         return UpdateApks.saveIntent(file)
     }
 
     fun saveDocument(uri: Uri?) {
         val file = verified ?: return // A process restart discards the private download.
-        if (_state.value !is UpdateUiState.AwaitingSave || job?.isActive == true) return
+        if (_state.value !is UpdateUiState.AwaitingSave) return
         if (uri == null) { file.close(); verified = null; _state.value = UpdateUiState.Available(file.release); return }
         _state.value = UpdateUiState.Saving(file.release)
         job = viewModelScope.launch(Dispatchers.IO) {
@@ -117,8 +118,10 @@ internal class UpdatesViewModel internal constructor(
     }
 
     fun cancel() {
-        if (job?.isActive == true) job?.cancel()
-        else { verified?.close(); verified = null; _state.value = UpdateUiState.Idle }
+        if (_state.value is UpdateUiState.AwaitingSave || job?.isActive != true) {
+            verified?.close(); verified = null; _state.value = UpdateUiState.Idle
+        }
+        job?.cancel()
     }
 
     fun pickerUnavailable() {

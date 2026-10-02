@@ -1,6 +1,17 @@
 package com.kaiser.rivet.updates
 
 import android.app.Application
+import android.content.pm.PackageInfo
+import android.content.pm.Signature
+import android.content.pm.SigningInfo
+import android.os.Build
+import com.android.apksig.ApkSigner
+import okhttp3.tls.HeldCertificate
+import org.robolectric.Shadows.shadowOf
+import org.robolectric.shadow.api.Shadow
+import java.util.zip.ZipEntry
+import java.util.zip.ZipOutputStream
+import java.util.zip.CRC32
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
@@ -56,6 +67,62 @@ class UpdateApksTest {
         assertEquals("application/vnd.android.package-archive", intent.type)
         assertTrue(intent.categories.contains(android.content.Intent.CATEGORY_OPENABLE))
         verified.close()
+    }
+
+    @Suppress("DEPRECATION")
+    @Test fun archiveIdentityUsesCurrentModernSignersOrLegacySignatures() = runBlocking {
+        val signature = Signature(byteArrayOf(1, 2, 3))
+        val digest = java.security.MessageDigest.getInstance("SHA-256").digest(signature.toByteArray())
+            .joinToString("") { "%02x".format(it.toInt() and 255) }
+        val packageInfo = PackageInfo().apply {
+            packageName = "com.kaiser.rivet"
+            versionName = "0.11.1"
+            versionCode = 23
+            if (Build.VERSION.SDK_INT >= 28) {
+                signingInfo = Shadow.newInstanceOf(SigningInfo::class.java).also {
+                    shadowOf(it).setSignatures(arrayOf(signature))
+                    shadowOf(it).setPastSigningCertificates(arrayOf(Signature(byteArrayOf(9))))
+                }
+            } else signatures = arrayOf(signature)
+        }
+        val file = fixture()
+        shadowOf(app.packageManager).setPackageArchiveInfo(file.path, packageInfo)
+        val verified = UpdateApks(app, { installed.copy(signers = setOf(digest)) }, signatureValid = { true })
+            .verify(file, release)
+        verified.close()
+    }
+
+    @Test fun actualSignedApkVerifiesAndTamperingCannotReuseItsCertificate() = runBlocking {
+        val unsigned = File.createTempFile("unsigned-update", ".zip", app.cacheDir)
+        val payload = "original fixture content".toByteArray()
+        ZipOutputStream(unsigned.outputStream()).use { zip ->
+            zip.putNextEntry(ZipEntry("AndroidManifest.xml"))
+            zip.write(javaClass.getResourceAsStream("/update-manifest.bin")!!.use { it.readBytes() })
+            zip.closeEntry()
+            zip.putNextEntry(ZipEntry("fixture.txt").apply {
+                method = ZipEntry.STORED; size = payload.size.toLong(); compressedSize = size
+                crc = CRC32().apply { update(payload) }.value
+            })
+            zip.write(payload); zip.closeEntry()
+        }
+        val key = HeldCertificate.Builder().build()
+        val signed = File.createTempFile("signed-update", ".apk", app.cacheDir)
+        val signer = ApkSigner.SignerConfig.Builder("test", key.keyPair.private, listOf(key.certificate)).build()
+        ApkSigner.Builder(listOf(signer)).setInputApk(unsigned).setOutputApk(signed)
+            .setMinSdkVersion(26).setV1SigningEnabled(false).setV2SigningEnabled(true)
+            .setV3SigningEnabled(false).setV4SigningEnabled(false).build().sign()
+        val downloaded = release.copy(size = signed.length())
+        val apks = UpdateApks(app, { installed }, { valid })
+        apks.verify(signed, downloaded)
+        val bytes = signed.readBytes()
+        val index = bytes.indices.first { i -> i + payload.size <= bytes.size &&
+            bytes.copyOfRange(i, i + payload.size).contentEquals(payload) }
+        bytes[index] = 'X'.code.toByte()
+        signed.writeBytes(bytes)
+        try { apks.verify(signed, downloaded); fail("Expected tampered signature rejection") }
+        catch (_: UpdateFailure) {}
+        assertFalse(signed.exists())
+        unsigned.delete()
     }
 
     @Test fun unsignedCorruptArchiveCannotPassProductionVerifier() = runBlocking {

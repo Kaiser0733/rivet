@@ -58,7 +58,8 @@ internal fun UpdatesSection(versionName: String, updates: UpdatesViewModel = vie
                 TextButton(onClick = updates::cancel) { Text("Cancel") }
             }
             is UpdateUiState.Verifying -> Text("Verifying update…", Modifier.padding(vertical = 8.dp))
-            is UpdateUiState.Saving -> Text("Saving update…", Modifier.padding(vertical = 8.dp))
+            is UpdateUiState.Saving -> Text(if (android.os.Build.VERSION.SDK_INT >= 29)
+                "Saving to Downloads…" else "Saving update…", Modifier.padding(vertical = 8.dp))
             is UpdateUiState.AwaitingSave -> {
                 Text("The update is verified. Choose where to save it.", Modifier.padding(vertical = 8.dp))
                 RivetOutlinedButton(enabled = !current.pickerOpen, onClick = {
@@ -72,6 +73,7 @@ internal fun UpdatesSection(versionName: String, updates: UpdatesViewModel = vie
                 Text("Rivet v${current.release.version} downloaded.", Modifier.padding(top = 8.dp))
                 Text(current.location, style = MaterialTheme.typography.bodySmall)
                 TextButton(onClick = updates::openDownloads) { Text("Open Downloads") }
+                TextButton(onClick = updates::check) { Text("Check again") }
                 current.notice?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
             }
             is UpdateUiState.Error -> {
