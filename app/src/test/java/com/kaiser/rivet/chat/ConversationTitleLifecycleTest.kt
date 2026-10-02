@@ -222,7 +222,11 @@ class ConversationTitleLifecycleTest {
     private suspend fun selectFixtureProject(): TestDocumentsProvider {
         val authority = "com.kaiser.rivet.title-project-" + java.util.UUID.randomUUID().toString()
         val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(
-            ProviderInfo().apply { this.authority = authority; exported = true; grantUriPermissions = true }).get()
+            ProviderInfo().apply {
+                this.authority = authority; exported = true; grantUriPermissions = true
+                readPermission = "android.permission.MANAGE_DOCUMENTS"
+                writePermission = "android.permission.MANAGE_DOCUMENTS"
+            }).get()
         WorkspaceSelection(app).select(DocumentsContract.buildTreeDocumentUri(authority, "root"),
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
