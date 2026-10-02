@@ -41,6 +41,45 @@ class CodingSessionsTest {
         AgentSessionStore(app).clear()
     }
 
+    @Test fun automaticTitleEligibilityIsNewSessionOnlyAndConsumedOnceAcrossRestart() = runBlocking {
+        val sessions = CodingSessions(app)
+        val legacy = sessions.load().id!!
+        sessions.rename(legacy, "New session")
+        assertFalse(sessions.claimAutoTitle(legacy))
+        val created = sessions.create(null).id!!
+        val restored = CodingSessions(app)
+        assertTrue(restored.claimAutoTitle(created))
+        assertFalse(sessions.claimAutoTitle(created))
+        assertTrue(restored.renameIfCurrentTitle(created, "New session", "Fix Login Crash"))
+        sessions.rename(created, "My manual title")
+        assertFalse(restored.renameIfCurrentTitle(created, "New session", "AI title"))
+        assertEquals("My manual title", sessions.load().title)
+        val manualDefault = sessions.create(null).id!!
+        assertTrue(sessions.claimAutoTitle(manualDefault))
+        sessions.rename(manualDefault, "New session")
+        assertFalse(restored.renameIfCurrentTitle(manualDefault, "New session", "AI title"))
+        val existing = sessions.create(null).id!!
+        sessions.save(listOf(AgentMessage.user("Previous task")), false)
+        assertFalse(restored.claimAutoTitle(existing))
+        sessions.clear()
+        assertFalse(sessions.claimAutoTitle(existing))
+    }
+
+    @Test fun titleUsageCountsButCannotReplaceCodingContextAnchor() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.create(null).id!!
+        val messages = listOf(AgentMessage.user("Fix it"))
+        sessions.save(messages, false)
+        sessions.recordUsage(id, "turn", "p", "m", AgentUsage(4000, 4), messages, "system")
+        sessions.recordUsage(id, "title-turn", "p", "m", AgentUsage(10, 3), messages, "system")
+        assertEquals(4000L, sessions.contextEstimate(id, "p", "m", messages, "system").tokens)
+        assertEquals(1, sessions.usage(id).titleRequests)
+        assertEquals(4010L, sessions.usage(id).reportedInputTokens)
+        assertTrue(sessions.usage(id).diagnostics().contains("Title-generation requests: 1"))
+        assertEquals(messages, sessions.load().messages)
+        assertEquals(1, sessions.fullEventCount(id))
+    }
+
     @Test fun contextEventsSurviveReloadAndDoNotOccupyVisibleHistory() = runBlocking {
         val sessions = CodingSessions(app)
         val selected = sessions.create("tree")
