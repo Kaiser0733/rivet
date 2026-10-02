@@ -40,7 +40,8 @@ feature that does not serve the on-device coding workflow.
 
 - Comments carry constraints, invariants, platform quirks, or
   security-sensitive reasoning — never narration of obvious code.
-- No prompt text, conversation fragments, or tool narration in the tree.
+- No development-session prompts, conversation fragments, or tool narration
+  in the tree. Product prompts and test fixtures must have a clear purpose.
 - No placeholder systems that look functional.
 - No TODO without a concrete, intentionally-deferred task.
 - Small diffs, honest commit messages, conventional style.

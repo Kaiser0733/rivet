@@ -330,7 +330,7 @@ internal fun anthropicThinkingBudget(config: ProviderConfig): Int {
     )
 }
 
-// Retain the 0.9.0 name-table helper for callers that only have legacy model data.
+// Legacy configs without fetched model metadata retain name-based capability checks.
 internal fun anthropicOutputCeiling(model: String, reasoning: ReasoningLevel): Int =
     DEFAULT_OUTPUT_TOKENS + if (reasoning != ReasoningLevel.Default &&
         anthropicThinkingMode(model) == AnthropicThinkingMode.Manual) reasoning.anthropicBudget else 0

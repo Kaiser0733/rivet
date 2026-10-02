@@ -137,7 +137,7 @@ def main() -> None:
     verify_debug_network_security(manifest_tree, config_tree, resources, resources_dump)
     release_manifest, release_resources = _release_outputs(build)
     verify_release_network_exclusion(release_manifest.read_text(encoding="utf-8"), release_resources)
-    print("debug loopback network policy and release exclusion verified")
+    print("debug mock-provider network policy and release exclusion verified")
 
 
 if __name__ == "__main__":
