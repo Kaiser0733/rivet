@@ -1,5 +1,6 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
@@ -72,7 +73,7 @@ internal class OpenAiCompatibleClient(
                     put("role", "system")
                     put("content", request.system)
                 })
-                request.messages.forEach { message -> openAiMessages(message).forEach(::add) }
+                modelMessages(request.messages).forEach { message -> openAiMessages(message).forEach(::add) }
             })
             if (request.tools.isNotEmpty()) put("tools", buildJsonArray {
                 request.tools.forEach { tool -> add(buildJsonObject {
@@ -90,7 +91,7 @@ internal class OpenAiCompatibleClient(
         val httpRequest = base(Endpoints.openAiChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val stream = OpenAiAgentStream(onDelta)
+        val stream = OpenAiAgentStream(onDelta, documentedCacheWrites = config.type == ProviderType.OpenRouter)
         val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
@@ -107,6 +108,7 @@ internal class OpenAiCompatibleClient(
 }
 
 private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (message.role) {
+    AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> listOf(buildJsonObject { put("role", "user"); put("content", message.text) })
     AgentRole.Assistant -> listOf(buildJsonObject {
         put("role", "assistant"); put("content", message.text)
@@ -124,6 +126,7 @@ private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (mess
 
 private class OpenAiAgentStream(
     private val onDelta: (String) -> Unit,
+    private val documentedCacheWrites: Boolean = false,
 ) {
     private data class Pending(
         var id: String? = null,
@@ -142,7 +145,7 @@ private class OpenAiAgentStream(
                 ?: throw ProviderError.InvalidResponse("invalid stream error")
             throw providerMessage(message, error.obj()?.get("code")?.str())
         }
-        openAiUsage(root)?.let { usage = it }
+        openAiUsage(root, documentedCacheWrites)?.let { usage = it }
         val choice = root["choices"]?.arr()?.firstOrNull()?.obj() ?: return
         choice["finish_reason"]?.str()?.let { finishReason = it }
         val delta = choice["delta"]?.obj() ?: return

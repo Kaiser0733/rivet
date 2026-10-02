@@ -1,5 +1,6 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
@@ -86,52 +87,7 @@ internal class AnthropicClient(
     }
 
     override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
-        val body = buildJsonObject {
-            put("model", request.model)
-            put("stream", true)
-            val modelConfig = if (config.model == request.model) config else config.copy(
-                model = request.model,
-                anthropicModelMetadata = null,
-                modelContextLimit = null,
-            )
-            val turnConfig = modelConfig.copy(reasoning = request.reasoning)
-            val thinkingMode = if (request.reasoning == ReasoningLevel.Default) {
-                AnthropicThinkingMode.Unsupported
-            } else {
-                anthropicThinkingMode(modelConfig)
-            }
-            val budget = if (thinkingMode == AnthropicThinkingMode.Manual)
-                anthropicThinkingBudget(turnConfig) else 0
-            if (thinkingMode == AnthropicThinkingMode.Manual && budget < MIN_MANUAL_THINKING_BUDGET) {
-                throw ProviderError.UnsupportedConfiguration()
-            }
-            put("max_tokens", anthropicOutputCeiling(turnConfig))
-            if (request.system.isNotEmpty()) put("system", request.system)
-            when (thinkingMode) {
-                AnthropicThinkingMode.Manual -> put("thinking", buildJsonObject {
-                    put("type", "enabled")
-                    put("budget_tokens", budget)
-                })
-                AnthropicThinkingMode.Adaptive -> {
-                    put("thinking", buildJsonObject { put("type", "adaptive") })
-                    put("output_config", buildJsonObject {
-                        put("effort", request.reasoning.anthropicEffort)
-                    })
-                }
-                AnthropicThinkingMode.Unsupported -> Unit
-            }
-            put("messages", buildJsonArray {
-                request.messages.forEach { m ->
-                    add(anthropicMessage(m))
-                }
-            })
-            if (request.tools.isNotEmpty()) put("tools", buildJsonArray {
-                request.tools.forEach { tool -> add(buildJsonObject {
-                    put("name", tool.name); put("description", tool.description)
-                    put("input_schema", tool.parameters)
-                }) }
-            })
-        }
+        val body = requestBody(request)
         val httpRequest = base(Endpoints.anthropicChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
@@ -140,6 +96,61 @@ internal class AnthropicClient(
             stream.accept(payload)
         }
         return stream.response()
+    }
+
+    internal fun requestBody(request: AgentRequest): JsonObject = buildJsonObject {
+        put("model", request.model)
+        put("stream", true)
+        // Automatic five-minute caching is documented for the native Claude
+        // endpoint. Unknown proxies retain their existing request contract.
+        val endpoint = requestBuilder(Endpoints.anthropicChat(config.baseUrl)).build().url
+        if (config.type == ProviderType.Anthropic && endpoint.scheme == "https" &&
+            endpoint.host == "api.anthropic.com" && endpoint.port == 443 && endpoint.encodedPath == "/v1/messages" &&
+            request.model.startsWith("claude-")) {
+            put("cache_control", buildJsonObject { put("type", "ephemeral") })
+        }
+        val modelConfig = if (config.model == request.model) config else config.copy(
+            model = request.model,
+            anthropicModelMetadata = null,
+            modelContextLimit = null,
+        )
+        val turnConfig = modelConfig.copy(reasoning = request.reasoning)
+        val thinkingMode = if (request.reasoning == ReasoningLevel.Default) {
+            AnthropicThinkingMode.Unsupported
+        } else {
+            anthropicThinkingMode(modelConfig)
+        }
+        val budget = if (thinkingMode == AnthropicThinkingMode.Manual)
+            anthropicThinkingBudget(turnConfig) else 0
+        if (thinkingMode == AnthropicThinkingMode.Manual && budget < MIN_MANUAL_THINKING_BUDGET) {
+            throw ProviderError.UnsupportedConfiguration()
+        }
+        put("max_tokens", anthropicOutputCeiling(turnConfig))
+        if (request.system.isNotEmpty()) put("system", request.system)
+        when (thinkingMode) {
+            AnthropicThinkingMode.Manual -> put("thinking", buildJsonObject {
+                put("type", "enabled")
+                put("budget_tokens", budget)
+            })
+            AnthropicThinkingMode.Adaptive -> {
+                put("thinking", buildJsonObject { put("type", "adaptive") })
+                put("output_config", buildJsonObject {
+                    put("effort", request.reasoning.anthropicEffort)
+                })
+            }
+            AnthropicThinkingMode.Unsupported -> Unit
+        }
+        put("messages", buildJsonArray {
+            modelMessages(request.messages).forEach { m ->
+                add(anthropicMessage(m))
+            }
+        })
+        if (request.tools.isNotEmpty()) put("tools", buildJsonArray {
+            request.tools.forEach { tool -> add(buildJsonObject {
+                put("name", tool.name); put("description", tool.description)
+                put("input_schema", tool.parameters)
+            }) }
+        })
     }
 
     private fun base(url: String): Request.Builder {
@@ -152,6 +163,7 @@ internal class AnthropicClient(
 }
 
 private fun anthropicMessage(message: AgentMessage): JsonObject = when (message.role) {
+    AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> buildJsonObject { put("role", "user"); put("content", message.text) }
     AgentRole.Assistant -> buildJsonObject {
         put("role", "assistant")

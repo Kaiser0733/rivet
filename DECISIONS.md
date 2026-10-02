@@ -337,3 +337,16 @@ redirects, streams at most 64 MiB to app cache, verifies optional content SHA,
 and commits through SAF hash checks and the normal checkpoint path.
 Why: file retrieval should not require a shell utility or bypass project
 mutation protections.
+
+
+## D40 — Append-stable untrusted model context
+
+What: typed internal events carry bounded project observations in canonical
+order, hidden from conversation rendering. Scope digests deduplicate unchanged
+guidance; updates and removal records append after complete tool groups.
+Compaction alone replaces the active context with current guidance, task notes,
+and a retained tail. Provider adapters never send persistent metadata fields.
+Why: rewriting the latest human message changed previously sent prefixes on
+ordinary turns and nested instruction discovery. Context remains data and
+cannot change approval, tool effects, or workspace authority. No SQL schema
+change is required; code-20 events remain readable.

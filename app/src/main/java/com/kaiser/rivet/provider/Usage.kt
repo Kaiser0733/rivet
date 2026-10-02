@@ -9,15 +9,16 @@ import kotlinx.serialization.json.longOrNull
 private fun JsonElement?.count(): Long? =
     (this as? JsonPrimitive)?.longOrNull?.takeIf { it >= 0 }
 
-internal fun openAiUsage(root: JsonObject): AgentUsage? {
+internal fun openAiUsage(root: JsonObject, documentedCacheWrites: Boolean = false): AgentUsage? {
     val usage = root["usage"]?.obj() ?: return null
     val input = usage["prompt_tokens"].count()
     val output = usage["completion_tokens"].count()
     val total = usage["total_tokens"].count()
-    if (input == null && output == null && total == null) return null
-    return AgentUsage(input, output,
-        usage["prompt_tokens_details"]?.obj()?.get("cached_tokens").count(),
-        usage["completion_tokens_details"]?.obj()?.get("reasoning_tokens").count(), total)
+    val cache = usage["prompt_tokens_details"]?.obj()?.get("cached_tokens").count()
+    val reasoning = usage["completion_tokens_details"]?.obj()?.get("reasoning_tokens").count()
+    val creation = if (documentedCacheWrites) usage["prompt_tokens_details"]?.obj()?.get("cache_write_tokens").count() else null
+    if (listOf(input, output, total, cache, reasoning, creation).all { it == null }) return null
+    return AgentUsage(input, output, cache, reasoning, total, cacheCreationTokens = creation)
 }
 
 internal fun anthropicUsage(root: JsonObject): AgentUsage? {
@@ -43,7 +44,8 @@ internal fun geminiUsage(root: JsonObject): AgentUsage? {
     val input = usage["promptTokenCount"].count()
     val output = usage["candidatesTokenCount"].count()
     val total = usage["totalTokenCount"].count()
-    if (input == null && output == null && total == null) return null
-    return AgentUsage(input, output, usage["cachedContentTokenCount"].count(),
-        usage["thoughtsTokenCount"].count(), total)
+    val cache = usage["cachedContentTokenCount"].count()
+    val reasoning = usage["thoughtsTokenCount"].count()
+    if (listOf(input, output, total, cache, reasoning).all { it == null }) return null
+    return AgentUsage(input, output, cache, reasoning, total)
 }

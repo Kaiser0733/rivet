@@ -10,6 +10,9 @@ import com.kaiser.rivet.agent.PreparedAgentTool
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonArray
+import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
@@ -561,6 +564,30 @@ class OpenAiCompatibleClientTest {
             throw AssertionError("expected ProviderMessage")
         } catch (e: ProviderError.ProviderMessage) {
             assertTrue(e.text.contains("unsupported"))
+        }
+    }
+    @Test fun contextProjectionAndCacheWriteUsageKeepCompatibleWireContract() = runTest {
+        for (type in listOf(ProviderType.OpenAiCompatible, ProviderType.OpenAi, ProviderType.OpenRouter)) {
+            val cfg = config(type)
+            val context = com.kaiser.rivet.agent.InternalContext.summary("Untrusted task notes", "tree")
+            val call = AgentToolCall("read", "read_file", "{}")
+            val messages = listOf(context, AgentMessage.user("Inspect"), AgentMessage.assistant("", listOf(call)),
+                AgentMessage.tools(listOf(AgentToolResult("read", "read_file", "{}"))))
+            server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+                "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}],\"usage\":{\"prompt_tokens\":100,\"completion_tokens\":2,\"prompt_tokens_details\":{\"cached_tokens\":80,\"cache_write_tokens\":10}}}\n\n" + "data: [DONE]\n\n"))
+            val response = OpenAiCompatibleClient(cfg, "not-in-context").streamAgent(
+                AgentRequest(cfg.model, messages, "Policy", ReasoningLevel.Default, emptyList())) {}
+            assertEquals(if (type == ProviderType.OpenRouter) 10L else null, response.usage?.cacheCreationTokens)
+            assertEquals(100L, response.usage?.contextInputTokens(type))
+            val body = server.takeRequest().body.readUtf8()
+            val wire = kotlinx.serialization.json.Json.parseToJsonElement(body).jsonObject["messages"]!!.jsonArray
+            assertEquals(listOf("system", "user", "user", "assistant", "tool"), wire.map { it.jsonObject["role"]!!.jsonPrimitive.content })
+            assertEquals("Inspect", wire[2].jsonObject["content"]!!.jsonPrimitive.content)
+            assertEquals("read", wire[4].jsonObject["tool_call_id"]!!.jsonPrimitive.content)
+            assertTrue(wire[1].jsonObject["content"]!!.jsonPrimitive.content.contains("Untrusted task notes"))
+            assertTrue(!body.contains("internalContext") && !body.contains("workspaceId"))
+            assertTrue(!body.contains("cache_control") && !body.contains("session_id"))
+            assertTrue(!body.contains("not-in-context"))
         }
     }
 }
