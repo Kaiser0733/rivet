@@ -219,8 +219,8 @@ class ConversationTitleLifecycleTest {
         assertEquals("Manual Title", store.load().title)
     }
 
-    private fun selectFixtureProject(): TestDocumentsProvider {
-        val authority = "com.kaiser.rivet.title-project"
+    private suspend fun selectFixtureProject(): TestDocumentsProvider {
+        val authority = "com.kaiser.rivet.title-project-" + java.util.UUID.randomUUID().toString()
         val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(
             ProviderInfo().apply { this.authority = authority; exported = true; grantUriPermissions = true }).get()
         WorkspaceSelection(app).select(DocumentsContract.buildTreeDocumentUri(authority, "root"),
