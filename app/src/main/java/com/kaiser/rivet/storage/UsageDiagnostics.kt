@@ -21,7 +21,7 @@ fun SessionUsage.diagnostics(): String = buildString {
     count("Compaction output", compaction?.outputTokens)
     count("Compaction cache read", compaction?.cacheReadTokens)
     count("Compaction cache creation/write", compaction?.cacheCreationTokens)
-    append("\nLatest request: ").append(if (latestIsCompaction) "Compaction" else "Conversation").append('\n')
+    append("\nLatest request: ").append(if (latestIsCompaction) "Compaction" else if (latestIsTitle) "Title generation" else "Conversation").append('\n')
     count("Latest input", latestUsage?.inputTokens)
     count("Latest output", latestUsage?.outputTokens)
     count("Latest cache read", latestUsage?.cacheReadTokens)

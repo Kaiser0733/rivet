@@ -54,6 +54,10 @@ class CodingSessionsTest {
         sessions.rename(created, "My manual title")
         assertFalse(restored.renameIfCurrentTitle(created, "New session", "AI title"))
         assertEquals("My manual title", sessions.load().title)
+        val manualDefault = sessions.create(null).id!!
+        assertTrue(sessions.claimAutoTitle(manualDefault))
+        sessions.rename(manualDefault, "New session")
+        assertFalse(restored.renameIfCurrentTitle(manualDefault, "New session", "AI title"))
         val existing = sessions.create(null).id!!
         sessions.save(listOf(AgentMessage.user("Previous task")), false)
         assertFalse(restored.claimAutoTitle(existing))

@@ -63,6 +63,7 @@ data class SessionUsage(
     val latestUsage: AgentUsage? = null,
     val latestIsCompaction: Boolean = false,
     val titleRequests: Int = 0,
+    val latestIsTitle: Boolean = false,
 )
 
 data class ContextEstimate(val tokens: Long?, val source: String)
@@ -212,8 +213,13 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     suspend fun rename(id: String, title: String) = onDatabase { db ->
         val clean = title.trim().take(80)
         require(clean.isNotEmpty())
-        if (db.update("sessions", ContentValues().apply { put("title", clean) },
-                "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
+        db.beginTransaction()
+        try {
+            if (db.update("sessions", ContentValues().apply { put("title", clean) },
+                    "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
+            db.delete("metadata", "key=?", arrayOf("auto_title-$id"))
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
     }
 
     // Only newly created sessions are enrolled. Consuming this marker before
@@ -224,6 +230,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             val claimed = db.delete("metadata", "key=? AND value=?", arrayOf("auto_title-$id", "eligible")) == 1
             val eligible = claimed && header(db, id).title == "New session" &&
                 db.rawQuery("SELECT 1 FROM events WHERE session_id=? LIMIT 1", arrayOf(id)).use { !it.moveToFirst() }
+            if (eligible) putMeta(db, "auto_title-$id", "pending")
             db.setTransactionSuccessful()
             eligible
         } finally { db.endTransaction() }
@@ -231,8 +238,15 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     suspend fun renameIfCurrentTitle(id: String, expected: String, title: String): Boolean = onDatabase { db ->
         require(title.isNotBlank() && title.length <= 80 && title.toByteArray(Charsets.UTF_8).size <= 80)
-        db.update("sessions", ContentValues().apply { put("title", title) },
-            "id=? AND title=?", arrayOf(id, expected)) == 1
+        db.beginTransaction()
+        try {
+            val changed = db.update("sessions", ContentValues().apply { put("title", title) },
+                "id=? AND title=? AND EXISTS (SELECT 1 FROM metadata WHERE key=? AND value='pending')",
+                arrayOf(id, expected, "auto_title-$id")) == 1
+            db.delete("metadata", "key=?", arrayOf("auto_title-$id"))
+            db.setTransactionSuccessful()
+            changed
+        } finally { db.endTransaction() }
     }
 
     suspend fun setPinned(id: String, pinned: Boolean) = onDatabase { db ->
@@ -250,6 +264,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 if (it.moveToFirst()) it.getString(0) else null
             } ?: UUID.randomUUID().toString().also {
                 insertSession(db, it, "New session", workspaceId, false)
+                putMeta(db, "auto_title-$it", "eligible")
             }
             if (activeId(db) == id) setActive(db, next)
             db.setTransactionSuccessful()
@@ -453,8 +468,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val latest = db.rawQuery("SELECT input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens," +
             "reasoning_tokens,total_tokens,source,turn_id FROM usage WHERE session_id=? ORDER BY id DESC LIMIT 1",
             arrayOf(sessionId)).use { cursor ->
-            if (cursor.moveToFirst()) Triple(usageFields(cursor), cursor.getString(6), cursor.getString(7).startsWith("compaction-"))
-            else Triple(null, null, false)
+            if (cursor.moveToFirst()) Triple(usageFields(cursor), cursor.getString(6), cursor.getString(7))
+            else Triple(null, null, null)
         }
         val compaction = db.rawQuery("SELECT SUM(input_tokens),SUM(output_tokens),SUM(cache_read_tokens)," +
             "SUM(cache_creation_tokens),SUM(reasoning_tokens),SUM(total_tokens),COUNT(*)," +
@@ -467,7 +482,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             arrayOf(sessionId)).use { it.moveToFirst(); it.getInt(0) }
         SessionUsage(totals[0], totals[1], requireNotNull(totals[2]).toInt(), requireNotNull(totals[3]).toInt(), latest.first?.inputTokens, latest.second,
             extra[0], extra[1], extra[2], extra[3], extra[4], compaction.first, compaction.second, compaction.third,
-            latest.first, latest.third, titles)
+            latest.first, latest.third?.startsWith("compaction-") == true, titles,
+            latest.third?.startsWith("title-") == true)
     }
 
     private suspend fun <T> onDatabase(block: suspend (SQLiteDatabase) -> T): T = withContext(Dispatchers.IO) {
