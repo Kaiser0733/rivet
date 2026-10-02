@@ -273,6 +273,10 @@ fun SettingsScreen(
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
+            item {
+                SectionHeading("Updates", Modifier.padding(top = 24.dp))
+                UpdatesSection(versionName)
+            }
         }
     }
 }

@@ -79,21 +79,26 @@ jobs:
         if: always()
         run: rm -f release.keystore
 
+      - name: Stage verified release APK
+        id: stage
+        run: python3 scripts/stage_apk.py release
+
       - name: Upload signed release APK
         uses: actions/upload-artifact@v7
         with:
           name: rivet-release-apk
-          path: app/build/outputs/apk/release/*.apk
+          path: ${{ steps.stage.outputs.apk_path }}
 
       - name: Create draft GitHub Release
         if: inputs.release_tag != ''
         env:
           GH_TOKEN: ${{ github.token }}
           RELEASE_TAG: ${{ inputs.release_tag }}
+          STAGED_APK: ${{ steps.stage.outputs.apk_path }}
         run: |
           if ! [[ "$RELEASE_TAG" =~ ^v[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
             echo "::error::Release tag must use vMAJOR.MINOR.PATCH"
             exit 1
           fi
           gh release create "$RELEASE_TAG" --draft --target "$GITHUB_SHA" \
-            --title "Rivet $RELEASE_TAG" app/build/outputs/apk/release/app-release.apk
+            --title "Rivet $RELEASE_TAG" "$STAGED_APK"

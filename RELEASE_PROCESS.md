@@ -8,7 +8,8 @@ version. Version rules first; they are short and absolute.
 - `versionCode` is a plain integer, bumped by hand for every release.
   It must always increase.
 - `versionName` is `MAJOR.MINOR.PATCH` (`0.1.0` at Phase 1 start),
-  bumped by hand on the same commit as the `versionCode` bump.
+  bumped by hand when the release version changes. A candidate may retain the
+  same name while increasing `versionCode`.
 - Both live in `app/build.gradle.kts`. Nothing computes them.
 
 ## Updating an installed copy
@@ -28,12 +29,10 @@ previous release. Check that increase against the installed build before
 publishing. The signer is compared with the build keystore and a separately
 committed production certificate fingerprint.
 
-The 0.8.1 debug RC passed physical in-place upgrade and core Chat/agent
-acceptance. The 0.9.1 backend passed device acceptance. The 0.10.0 (19)
-responsive/theme baseline still has tablet, landscape, and theme checks pending.
-The 0.11.0 (20) Phase 11 candidate requires CI and device verification of
-autonomy, process control, preview, and downloads. Debug acceptance does not
-establish production-signing readiness or constitute a public release.
+The 0.11.0 code-20 Phase 11 and code-21 token-hardening baselines passed
+physical acceptance. Code 22 adds final QoL titles and manual update download;
+its device validation is separate. Debug acceptance does not establish
+production-signing readiness or constitute a public release.
 
 ## Required GitHub secrets
 
@@ -70,14 +69,25 @@ intentionally unavailable. Do not use the debug certificate as its pin.
 
 `.github/workflows/android-build.yml` — every push to `main` and every
 PR: tests, lint, debug APK (signed with the committed public debug key),
-APK verification, artifact upload.
+APK verification, then artifact staging as
+`Rivet-<versionName>-code<versionCode>-debug.apk` inside `rivet-debug-apk`.
+The verified internal path remains `app/build/outputs/apk/debug/app-debug.apk`.
 
 `.github/workflows/release.yml` — manual trigger. Refuses to run unless
 all four release secrets exist, decodes the keystore, builds and signs
 the release APK, verifies signer against the committed pin and identity,
-uploads the APK as an
-artifact, and optionally opens a draft GitHub Release with the APK
-attached when a tag input exactly matches `v` plus the APK version name.
+stages `dist/Rivet-v<versionName>.apk`, uploads that file as the artifact,
+and optionally attaches it to a draft GitHub Release when a tag input exactly
+matches `v` plus the APK version name. Verification still reads the canonical
+`app/build/outputs/apk/release/app-release.apk` before copying it.
+
+Settings queries only the official latest published normal GitHub release.
+Its exact public asset name must be `Rivet-v<versionName>.apk`. The download
+must match the installed certificate, package, expected version name, and a
+strictly greater version code. A debug-signed installation therefore rejects
+production-signed updates. No APK is installed by Rivet and Android security
+warnings are left intact. Public releases must retain the permanent production
+certificate; do not substitute the debug key.
 
 ## Releasing, in order
 

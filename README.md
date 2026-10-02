@@ -4,10 +4,10 @@ An Android-native AI coding harness: pick a provider, point it at a
 project, and work with a coding agent entirely from your phone or
 tablet — no desktop setup required.
 
-**Status: 0.11.0 (20) candidate; physical testing pending.**
-Phase 11 adds app-owned autonomy modes, a correlated activity timeline, direct
-process controls, loopback static previews, and bounded HTTPS downloads. This
-candidate is not publicly released.
+**Status: 0.11.0 (22) final QoL candidate; not publicly released.**
+The Phase 11 and token-hardening baselines passed physical acceptance. This
+candidate adds bounded first-turn conversation titles and a manual verified
+update download in Settings; those additions still need device validation.
 
 ## What works today
 
@@ -23,7 +23,12 @@ candidate is not publicly released.
   can be switched between messages.
 - Multiple persistent conversations; completed history, provider
   configuration, selected project, and pinned conversations restore after a
-  restart.
+  restart. New conversations receive a short AI title after their first
+  successful turn; manual names take precedence. This separate request is
+  included in conversation usage.
+- Settings can check the official GitHub release manually and download an
+  update only after package, version, and installed-certificate verification.
+  Rivet saves the APK; installation remains a system/file-manager action.
 
 - Project-folder selection from Chat, with contained file reads, search, edits,
   and exact-context patches.

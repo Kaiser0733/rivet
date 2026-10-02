@@ -1,5 +1,10 @@
 # Third-party runtime components
 
+Rivet uses AOSP `apksig` `8.9.2` to verify downloaded update signatures before
+export. The [published artifact](https://dl.google.com/dl/android/maven2/com/android/tools/build/apksig/8.9.2/apksig-8.9.2.pom)
+is Apache-2.0, copyright The Android Open Source Project. Rivet does not copy
+or modify its source. The Apache-2.0 license text is in Rivet's `LICENSE`.
+
 Rivet uses Eclipse JGit core `6.10.1.202505221210-r` for local repository
 inspection. Its source is [eclipse-jgit/jgit](https://github.com/eclipse-jgit/jgit/tree/v6.10.1.202505221210-r),
 under the Eclipse Distribution License 1.0 (BSD-3-Clause). Rivet does not copy
