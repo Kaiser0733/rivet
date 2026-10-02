@@ -1,339 +1,311 @@
-# Rivet Architecture
+# Architecture
 
-Describes current boundaries and failure semantics. Phase history is in
-MASTER_ROADMAP.md.
+## App shape
 
-## Current shape (Chat-first product)
+Rivet is a single-activity Compose app. Chat is home; History and Settings are
+secondary routes, with the provider editor inside Settings and Processes
+available while Rivet-owned operations exist. Android's folder picker starts
+from Chat. There is no file editor, Git dashboard, or interactive Terminal.
 
-The `:app` module routes Chat and Settings, plus a contextual Processes screen.
-`chat/` owns the turn's UI
-state; `agent/` validates and runs tool calls; `workspace/` owns native SAF
-operations; `runtime/` owns the private mirror, command process, Git inspection,
-and checkpoints. `provider/` adapts three wire protocols; `storage/` owns
-configuration, secrets, and SQLite conversations. Legacy DataStore chat decoding
-remains for installed-history migration, not as another live chat stack.
+`:app` packages separate `agent/`, `chat/`, `provider/`, `storage/`, `workspace/`,
+and `runtime/` responsibilities. Its direct `:terminal-emulator` dependency
+supplies `libtermux`, including Rivet's native `command.c` launcher. Removing
+terminal presentation does not remove that command dependency. The application
+ID is `com.kaiser.rivet`.
 
-`:app` depends directly on the vendored `:terminal-emulator` module because
-`CommandProcess` loads its `libtermux` native library containing Rivet's
-`command.c` launcher. The interactive Terminal and `:terminal-view` were
-retired; the active command runner, mirror, and synchronization remain.
-The application ID is `com.kaiser.rivet`.
+Rose/Dark appearance and Rose intensity are app-local preferences; intensity
+does not change device brightness. Portrait Chat uses available width.
+Landscape embeds the same History content beside Chat: 36% of the width,
+bounded to 220–320dp and at most 40% on constrained windows. Settings and forms
+keep bounded reading widths. Rotation retains the draft and ViewModels.
+Completed assistant prose renders a local Markdown subset; user text is plain,
+and tool events, HTML, and active links are not rendered. Streaming text is a
+throttled temporary preview.
 
 ## Provider boundary
 
-`ProviderClient` has three protocol implementations with `listModels`,
-`testConnection`, and `streamAgent`. All three transports share
-`Http.kt` (OkHttp, SSE reader) and `Endpoints.kt`; OpenAI, OpenRouter, and
-custom endpoints share one client class — only Anthropic and Gemini get
-their own request shapes.
+`ProviderClient` supplies model listing, connection tests, and structured agent
+streaming. OpenAI, OpenRouter, and compatible endpoints share Chat Completions;
+Anthropic and Gemini have native adapters. Provider networking shares OkHttp,
+endpoint assembly, and a bounded SSE reader. It retains IDs, fragmented and
+multiple calls, Anthropic thinking blocks, and Gemini thought signatures.
 
-Streaming: the client accumulates and returns the full response text while
-receiving deltas per chunk. Chat shows a throttled, temporary plain-text preview
-during the request, then renders completed assistant prose with a small local
-Markdown subset. User messages remain plain text; tool events, HTML, and active
-links are not rendered. The SSE
-loop lives on OkHttp's callback thread; coroutine cancellation cancels the
-underlying call, which unblocks the reader. It requires each provider's native
-completion marker and limits streamed lines to 128 KiB and each response to
-1 MiB; error bodies are read only to a bounded prefix.
+Each parser requires its native completion marker. SSE lines are capped at
+128 KiB and a response at 1 MiB; error bodies use a bounded prefix. Cancellation
+cancels the underlying OkHttp call and unblocks the reader. Provider failures
+are classified without displaying wire bodies in ordinary Chat. User requests
+are not automatically retried; one explicit context-overflow recovery is
+described below.
 
-The agent transcript represents user and assistant text, structured tool calls,
-and correlated tool results without provider wire syntax. Adapters translate it
-to Chat Completions tools, Anthropic `tool_use` / `tool_result` blocks, or Gemini
-function calls and responses. Stream parsers retain call IDs, multiple calls,
-fragmented arguments, Anthropic thinking blocks, and Gemini thought signatures.
+Send captures provider, model, reasoning, credential, and exact workspace
+identity. Changing a selection affects the next message, not an active request.
+Unknown provider/model capabilities omit optional reasoning fields rather than
+assuming support. Credentials never enter tool arguments or the command
+environment.
 
-Send-time snapshot: `ChatViewModel.send` captures provider, model, reasoning,
-credential, and workspace before
-the request starts. Switching provider/model mid-stream affects the next
-message only; the active request completes (or is stopped) on its own.
+## Agent and approval boundaries
 
-## Persistence
+Canonical events contain provider-neutral text, calls, correlated results, and
+internal context. Only adapters construct provider wire syntax; assistant prose
+is never parsed as executable tool instructions. Workspace content is untrusted
+data. Tool observations establish state, not higher-priority instructions.
 
-- Provider configs + active selection: DataStore Preferences, keys
-  `configs` / `active_id`, JSON-encoded list. Custom header values are
-  AES-GCM encrypted before persistence and legacy plaintext values migrate on
-  first read; the API key remains in its separate secret store.
-- Coding sessions: SQLite stores provider-neutral full event rows, a bounded
-  active model transcript, compaction summaries, and per-request usage. The
-  previous DataStore `agent_messages` transcript imports once; still older
-  `messages` text-chat records are decoded into agent events first. Their
-  source bytes are retained. Sessions bind to the selected workspace and can be resumed or
-  switched independently of provider/model selection.
-- The stable Rivet security policy stays in the system role. Applicable
-  `AGENTS.md` observations are bounded, ordered internal context events. Native
-  adapters project them as untrusted user data without rewriting human messages.
-  Unchanged scopes deduplicate; changed or removed scopes append updates bound
-  to the exact workspace. Compaction replaces old context deltas with a current
-  snapshot and one bounded task-state event; full canonical history is retained.
-- API keys: app-private preferences contain versioned IV+ciphertext records.
-  A non-exportable AES-256 key in AndroidKeyStore encrypts each value with
-  AES/GCM/NoPadding; the provider id is authenticated as associated data.
-  Missing or corrupt records read as absent and never trigger a store-wide
-  deletion. Keys never enter provider configs, chat storage, logs, or saved
-  state. The earlier development build's EncryptedSharedPreferences data is
-  not migrated; its credentials must be entered once into the new store.
+The loop has emergency ceilings of 200 model responses and 1,000 tools per turn,
+with no cumulative output quota. Individual results are limited to 24 KiB of
+encoded UTF-8 JSON, and active model context to 512 KiB. Before a mutation,
+Rivet reserves room for its bounded correlated result and remaining results.
+Read-only results are measured at their actual size. Exhausted context stops
+before the side effect instead of losing durable outcome evidence.
 
-## UI shell
+App-owned autonomy is independent of provider and project configuration:
 
-Single-activity Compose. Chat is the home surface; full-screen History and
-Settings are secondary routes, with the provider editor nested in Settings.
-Android's folder picker is launched from Chat. Runtime, file, Git, and
-synchronization controls are not normal destinations. Processes is available
-from Chat and the preview notification while Rivet-owned operations exist.
-Chat shows completed
-conversation text with a temporary streaming preview, contextual project
-changes and Undo, and approval dialogs; provider-neutral tool events remain
-durable but are not rendered as a log. A bounded model picker keeps fetched
-provider lists searchable without burying its Save and Cancel actions. A local
-appearance preference stores Rose/Dark choice and Rose intensity independently;
-Rose is the default, and intensity applies only to Rose. System bars and
-inherited text colors follow the selected palette.
-History lists SQLite sessions with pinned sessions before recent sessions.
-Portrait Chat uses available width with normal gutters. Every landscape
-orientation, including phones, embeds shared History content beside Chat.
-The sidebar uses 36% of available width, bounded to 220–320dp and no more than
-40% on constrained windows. Settings and provider forms keep bounded reading
-widths. Rotation preserves the composer
-draft and ViewModels. System-initiated process death destroys the ViewModels
-and terminates any active stream. A new process reloads completed provider
-configuration and coding sessions from storage. An interrupted marker is
-shown once; streams and approvals are never resumed or reconstructed.
+- **Ask** requires fresh one-shot approval for mutations and commands.
+- **Basic YOLO** auto-authorizes routine file edits, owned process stops, and
+  narrowly classified inspection commands; other actions still ask.
+- **YOLO** skips confirmation for allowed tools after explicit consent.
 
-## Agent execution boundary
+All modes retain tool-effect, checkpoint, workspace, runtime, and persistence
+checks. Unknown stored modes fall back to Ask. Repeated identical denials remain
+denied in that turn. A small capability policy blocks obvious app/package
+management commands; it is not a shell sandbox.
 
-`AgentLoop` has emergency runaway ceilings of 200 model responses and 1,000
-requested tools per turn. There is no cumulative tool-output quota. Individual
-results remain capped at 24 KiB of encoded UTF-8 JSON; the active model
-transcript remains capped at 512 KiB. Full event history has no aggregate
-512 KiB limit. Read-only results are checked at their actual size.
-Before approval, mutations reserve space for their bounded result contract and
-all remaining correlated results. Session exhaustion stops the turn without
-executing the mutation. Workspace file text is untrusted project data; tool
-results establish observed state, not higher-priority instructions.
-Read-only `list_directory`, `read_file`, and `search_files` calls run directly
-when the mirror has no unsynchronized changes. Ask requires one-shot approval
-for every mutation and command. Basic YOLO auto-authorizes routine file edits
-and only the app's narrow read-only command classifications; other actions
-still ask. YOLO skips approval only for allowed tools after explicit consent.
-A repeated identical denial within the turn stays denied. Tool validation
-rejects unknown names, extra or missing JSON fields, invalid paths, hashes, and
-oversized input before SAF is called.
-The turn tracks confirmed created paths and carries that state through successful
-renames and moves. Delete, rename, and move of paths not known to be created in
-the turn receive a stronger approval showing the path, type, and known size.
-Delete remains permanent: document providers need not support native moves, and
-a portable recovery record cannot be guaranteed within the current workspace.
+Arguments are checked for known tools, allowed fields, bounds, relative paths,
+and hashes before operations begin. Confirmed created paths are tracked within
+the turn through successful rename/move. Delete, rename, or move of a path not
+known to be turn-created receives stronger approval with type and known size.
+Delete is permanent: SAF providers do not guarantee portable trash/move support.
+Checkpoints provide a separate guarded recovery mechanism.
 
-The workspace identity is checked before every tool and again after approval.
-Changing the selected tree stops the turn instead of redirecting work. Stop
-cancels the provider request, pending approval, future calls, and cancellable
-reads. A SAF commit that already began retains Phase 3 non-cancellable commit
-semantics, and its completed result is persisted. Tool errors remain correlated.
-Repeating an unchanged deterministic blocker stops the turn; resolving a
-mirror/sync blocker permits a later retry.
+Exact workspace identity is checked before tools and again after approval.
+Changing the selected tree stops the turn. An unrecoverable runtime preflight
+failure stops before approval or execution; the model cannot reason around it
+and claim that a command ran. Repeated unchanged deterministic failures stop
+no-progress loops, while resolved state permits a later retry.
 
-Autonomy is stored independently from provider and workspace configuration.
-Ask confirms every mutation and command. Basic YOLO auto-authorizes ordinary
-file edits, Rivet-owned process stops, and narrowly classified inspection commands; elevated commands,
-downloads, destructive paths, and other non-routine actions still ask. YOLO
-removes those prompts only after explicit consent. Tool effects separately
-require the same checkpoint, workspace, result-headroom, and runtime guards in
-all modes. Obvious app/package-management commands are blocked by a small
-capability policy; this is not a shell sandbox.
+Stop cancels model requests, pending approval, later tools, and cancellable
+reads. Once a SAF commit has begun, cancellation does not intentionally interrupt
+it; its completed correlated result is persisted. Completed side effects are
+not described as rolled back.
 
-The activity timeline is projected from provider-neutral call/result events
-and temporary lifecycle signals. It contains no model reasoning and is not a
-second transcript. Download completion requires a confirmed file receipt; structured
-error payloads cannot become successful activity even if an envelope flag is absent.
-Rivet's process registry is app-process state: it never
-restores stale running claims after process death. Foreground commands can be
-stopped from Processes; persistent local previews are stopped when the owning
-service/app process ends. The registry caps active operations at four, keeps
-eight completed records, and retains at most 8 KiB of output per command.
+## Workspace and SAF
 
-## Workspace boundary
+The selected Android document tree is the external authority. Only returned
+read/write grants are persisted; canceling selection changes nothing. Missing
+grants require selection again, and unavailable providers fail recoverably.
+Sessions bind to the exact tree identity, not its display name or URI similarity.
+Reselecting the same accessible identity retains the conversation; switching
+projects cannot silently retarget an old turn.
 
-`ACTION_OPEN_DOCUMENT_TREE` runs through the Activity Result API. Only the
-returned read/write grants are persisted. App-private `workspace` preferences
-store the tree URI and legacy last-browsed directory/open-file paths for
-installed-data compatibility. Canceling the picker changes nothing. Missing grants require
-selection again; unavailable providers produce recoverable errors.
+Paths resolve validated direct-child names from the captured root. Empty path
+means root. Absolute paths, dot segments, empty components, separators in names,
+and controls are rejected. Document IDs and URIs never become filesystem paths.
+Listings query metadata and capabilities together, sort directories first with
+locale-independent names, and stop at 5,000 entries.
 
-Session binding uses the exact persisted tree identity. Chat distinguishes an
-accessible different tree from a session whose project cannot currently be
-restored; reselecting the exact bound identity keeps the session. Display names
-and URI similarity never substitute for identity.
+`SafWorkspace` owns list/stat/read/search and native mutations. Capability and
+collision checks run again at mutation time. Root delete/rename/move is forbidden.
+Moves use only the provider's native operation, with no copy/delete fallback.
+Returned create/rename/move identities are resolved again and their confirmed
+paths are authoritative; unknown sizes/times remain nullable.
 
-Every operation starts at the captured tree root and resolves validated names
-through direct-child queries. Empty path means root. Absolute paths, dot
-segments, empty components, separators in names, and control characters are
-rejected, not repaired. URI/document IDs never become filesystem paths.
-Directory queries project metadata and flags together, avoid per-child queries,
-and sort directories first with locale-independent name ordering.
+Empty file creation uses `application/octet-stream` to avoid MIME-driven suffixes.
+If a provider normalizes a valid name and can rename, Rivet tries one verified
+correction. Creation is never retried. An uncorrectable name is reported with
+both actual and requested paths, plus inspected empty-file SHA and size. If
+follow-up inspection is unavailable, the successful create reports that
+inspection error instead of an ordinary failure. Blank and
+trailing-dot names are rejected before mutation. Newly created files are
+inspected without a MIME veto, so classification cannot turn committed creation
+into an ordinary failure.
 
-`SafWorkspace` exposes list/stat/read/write/create/delete/rename/move/search and
-exact text patches. Mutations recheck current capabilities and duplicate names.
-Root deletion/rename/move is forbidden. Moves use the provider's native API only;
-there is no copy/delete fallback. Returned identities are resolved again after
-creation, rename, and move, and agent tool results report the provider-confirmed
-path. Unknown size/time metadata remains nullable.
+Text operations accept at most 1 MiB of strict UTF-8 bytes. Streams remain
+bounded when size metadata is absent. MIME blocks an early read only with
+matching known binary filename evidence; a provider calling `.ts` video does
+not make valid source text unusable. NUL/control bytes and malformed UTF-8 are
+unsupported. Agent reads use at most 8 KiB of content per chunk, safe UTF-8
+boundaries, full-file SHA, next offset, and explicit EOF.
 
-Empty files are created with `application/octet-stream` to avoid MIME-driven
-suffixes on coding filenames. If a provider normalizes the name and supports
-rename, one correction is attempted and its returned identity is verified.
-Creation is never retried; an uncorrectable name is returned as the actual path
-alongside the requested path, with the empty-file SHA and size preserved.
-Trailing-dot and blank names are rejected before creation or rename. Provider
-MIME guesses only block known binary filename types; other files must pass
-bounded strict UTF-8 validation. A newly created file is inspected without a
-MIME veto so its confirmed contents can supply the hash handoff.
+Writes require the prior original-byte SHA-256, reread before opening a
+truncating descriptor, and verify resulting bytes. Prewrite and verification
+mismatches report conflicts. Exact patches require a nonempty old-text match
+occurring exactly once, including overlaps; sequential edits are validated in
+memory before committing.
 
-## Text and mutation limits
+SAF provides neither atomic replace nor portable compare-and-swap. An external
+writer can race the check/commit boundary, and provider failure or process death
+can leave partial data. Mutations serialize within a workspace, and unsafe
+fallbacks are not attempted. Rivet does not advertise atomic writes.
 
-Text tool mutations support strict UTF-8, up to 1 MiB of bytes. NUL/control-byte or invalid
-UTF-8 content is reported as unsupported. Streams
-are bounded even when providers omit sizes. File snapshots fingerprint original
-bytes with SHA-256. Every save requires the previous fingerprint, rereads current
-bytes before opening a truncating descriptor, and verifies bytes after writing.
-A prewrite mismatch refuses the write; a verification mismatch reports conflict.
-Exact patches require
-a nonempty old-text match occurring exactly once (including overlapping matches);
-edits are evaluated sequentially in memory, then committed only after all pass.
+Literal case-sensitive search targets one file or a bounded recursive directory.
+Defaults are 1,000 files, 5,000 entries, 8 MiB read total, 256 KiB per file,
+200 hits, and 240-character contexts. Binary/inaccessible entries are skipped;
+limits and scan counters are reported. There is no repository index.
 
-SAF has no universal atomic replace or compare-and-swap. An external writer can
-still race between checking and committing; provider failures/process death
-can leave partial data. Rivet does not advertise atomic writes. Mutations are
-serialized within a workspace; after commit begins, coroutine cancellation does
-not intentionally interrupt it. Keep backups of important files. Providers may
-reject truncating writes, moves, or other mutations despite flags. No unsafe
-fallback is attempted.
+## Runtime mirror and commands
 
-## Search and lifecycle
+`WorkspaceMirror` streams regular bytes into an app-private tree-specific
+worktree, with a path/type/size/SHA baseline beside it. Symlinks and special local
+entries are rejected. Before syncing changes, each SAF entry must match the
+baseline or the exact mirror target. The latter permits retry after a partial
+sync; any third state stops without overwriting external work.
 
-Literal case-sensitive search covers paths/names and text lines under the current
-directory, or exactly the requested file. Defaults: 1,000 files, 5,000 entries, 8 MiB total reads, 256 KiB per
-file, 200 hits, and 240-character contexts. Binary/inaccessible entries are
-skipped; limits and bounded scan totals are reported. Directory listings are
-capped at 5,000 entries.
-Physical mutation tests must use a disposable SAF workspace with generated read,
-binary, search, rename, move, delete, and filename fixtures. Never run destructive
-self-tests against an existing user project.
-Provider I/O runs on Dispatchers.IO. Cancellation signals and closing active
-read descriptors support cancellation; providers can delay or ignore requests.
+Failed or interrupted sync preserves pending private and external data. Pending
+private changes block ordinary tools until safely synced or discarded. A
+contextual retry rechecks both. Explicitly confirmed discard instead reads
+current SAF data into a verified replacement and atomically swaps the private
+copy without writing to SAF. An installed discard marker distinguishes
+approved abandonment from unapproved dirty-data loss after process death.
+Discard does not alter checkpoint history. Project contents are streamed, not
+retained as a whole in memory.
 
-Chat retains project selection across rotation and process restart. The old
-directory/file location preferences may still be read for compatibility, but
-there is no routed file editor or draft. Whole project contents are not
-persisted in preferences. Tool results never expose URIs or document IDs.
-There is no repository index.
+`run_command` launches `/system/bin/sh -lc` with a workspace-relative cwd and
+explicit HOME/PATH/TMPDIR/PWD/LANG/TERM. HOME belongs to the runtime area, not the
+credential/configuration area. Output retains bounded head/tail text; exit
+status and sync status are separate. Timeout or Stop terminates the process
+group. Workspace switching cannot retarget an active command. Android utilities
+supply the initial command set; no external Termux, package manager, or app-data
+ELF execution is required.
 
-## Runtime boundary
+The shell shares Rivet's Android UID. Cwd checks are not an OS sandbox, and
+commands can access app-private files available to that UID. No stored API keys
+are exported. Generic persistent shell processes are deferred because they
+could race synchronization and checkpoints.
 
-The selected SAF tree remains the external workspace. `WorkspaceMirror`
-streams regular file bytes into `files/runtime/workspaces/<sha256-tree-id>/current/worktree`
-and keeps a compact path/type/size/SHA-256 baseline beside the worktree.
-It rejects symlinks and special local entries. Before applying mirror changes, each SAF
-entry must still match either the recorded baseline or the mirror's exact target.
-This lets a retry resume completed writes after a partial provider failure; any
-third state returns a conflict without overwriting it. Local creates,
-modifications, and deletions then use the existing SAF path and provider
-confirmation rules. A failed or interrupted sync retains the mirror, and Chat
-offers a contextual retry that rechecks the selected project and SAF state.
-An explicitly confirmed discard instead rebuilds only the exact selected tree's
-private copy from current SAF data without writing to SAF. The fresh copy is
-verified before an atomic swap; an installed discard marker makes interruption
-recovery distinguish authorized abandonment from unapproved dirty data loss.
-Checkpoint history is not changed by discard.
-No recursive file contents are retained in memory. An unresolved conflict keeps
-both the pending mirror data and external project data until the project state
-is resolved. Unsafe mirror entries also stop the turn instead of triggering
-repeated tool calls.
+Processes is an in-memory ownership registry, not a second transcript. It caps
+active operations at four, retains eight completed records, and keeps at most
+8 KiB per command. Activity projects correlated events and bounded lifecycle
+signals, never model reasoning. Download success requires a confirmed file
+receipt; an error payload cannot become success merely because its envelope
+lacks an error flag. Running records do not resurrect after process death.
 
-`run_command` starts `/system/bin/sh -lc` with a workspace-relative cwd and
-an explicit HOME/PATH/TMPDIR/PWD/LANG/TERM environment. HOME is under
-the workspace's `files/runtime` area, not the app's credential/configuration area. Each agent
-command follows the selected autonomy policy; stdout and stderr retain
-bounded head/tail text, with bounded live snapshots in Processes. Exit status remains separate from sync status, and a
-timeout or Stop terminates the process group. The shell shares Rivet's Android
-UID: cwd checks are not a security sandbox. No API keys are exported.
+## Git, checkpoints, and Undo
 
-The interactive PTY UI is no longer compiled. Agent commands use the native
-launcher in `:terminal-emulator`, process-group cancellation, and automatic
-mirror-to-SAF sync. A workspace switch cannot retarget an active command.
-Android system utilities provide the initial command set. No Termux
-installation, package manager, or app-data ELF execution is present.
-The inspected modern `termux-exec` linker/interception approach is reserved
-for future packaged binaries; direct app-data execution is not assumed.
+JGit inspects only a real root `.git` directory in the private worktree; gitfile
+links are rejected because they can escape it. Status and diff never stage,
+commit, reset, or sync Git metadata. Diff output is capped at 16 KiB and 20 files.
+The system shell does not supply Git; inspection needs no Git executable.
 
-`start_preview` serves selected SAF files using bounded streaming HTTP bound
-only to `127.0.0.1`, with GET/HEAD, no listing, and no execution. Its `root`
-is project-relative; `entry` accepts either root-relative `index.html` or the
-equivalent project-relative `site/index.html` when root is `site`. Both serve
-`/` from that entry and assets from the same static root. It uses the
-API 34+ `specialUse` foreground-service type with a user-visible notification;
-no boot receiver or process resurrection is used. Each preview response is
-capped at 64 MiB with at most four requests in flight. `download_file` uses a
-separate cookie-free HTTPS client, at most five revalidated redirects, and a
-64 MiB streaming cap. Downloads are staged in app cache and committed through
-the SAF workspace with hash checks, workspace validation, and the normal
-checkpoint path; downloaded data is never run or installed.
+After authorization and before the first workspace mutation of a turn,
+`TurnCheckpoint` streams one pre-change ZIP into app-private storage, excluding
+`.git`. It records a post-change manifest and retains at most three completed
+checkpoints within 2 GiB. Checkpoint failure prevents a protected mutation.
+Commands participate because they can modify arbitrary project content.
 
-## Repository, checkpoints, and context
+Undo requires explicit confirmation and an unchanged post-turn worktree.
+Restore uses mirror/SAF conflict checks, preserving newer external data.
+The contextual Undo action is not reconstructed after process restart.
+Checkpoints are recovery aids, not a backup system.
 
-JGit inspects only a real `.git` directory at the selected worktree root.
-`git_status` and `git_diff` never stage or alter the user's repository. Diff
-output is capped at 16 KiB and 20 files. Android's system shell does not supply
-Git; Rivet's inspection works without a separate Git executable.
+## Preview and project downloads
 
-After authorization and before the first workspace mutation in an agent turn,
-`TurnCheckpoint` streams a pre-change ZIP into app-private storage. It excludes
-`.git`, tracks a post-change manifest, and retains at most three completed
-checkpoints within 2 GiB. Undo requires an explicit UI confirmation and an
-unchanged post-turn worktree. Restoration passes through the mirror's SAF
-conflict checks. A checkpoint that cannot be created prevents the mutation.
+Static previews stream selected SAF files over GET/HEAD, with no listing or
+execution, bound only to `127.0.0.1`. A preview root is project-relative; its entry
+may be root-relative (`index.html`) or equivalent project-relative
+(`site/index.html` for root `site`). Assets stay under the same root. Each
+response is capped at 64 MiB, with at most four requests in flight.
 
-SQLite keeps full events independently of the active transcript. Before a
-provider request, Rivet accounts for the assembled messages, system text, and
-tool schemas. A listed provider model may supply a scoped input limit; unknown
-models use a conservative planning threshold and reactive overflow handling.
-Compatible reported input usage anchors later estimates. Context pressure
-first prunes old successful tool bodies, then replaces older complete groups
-with a bounded structured task state while retaining a recent verbatim tail.
-Compaction stores the canonical event-prefix and active-projection hashes in
-the same transaction as the new summary. Local bounded attempt records explain
-reductions and failures. One clear provider overflow may retry a materially
-smaller request without replaying completed tools. Rivet policy, tools, and
-applicable `AGENTS.md` instruction state remains independent of the task state,
-which cannot authorize actions or assert current workspace truth. Compaction is
-an intentional prefix boundary; ordinary turns and scoped discovery append to
-the existing model-visible prefix. Legacy sessions establish observed context
-at the next safe turn without rewriting historical user events.
+A non-exported `specialUse` foreground service owns preview lifetime, with a
+visible notification and no boot restart. It cannot retarget a preview to a
+replacement project; servers end when their service/app process ends.
 
-Usage details in Settings expose reported categories and separate compaction
-requests without adding cached input twice or estimating a universal cost.
-OpenRouter documents `cache_write_tokens`; unknown compatible endpoints do not
-assume that field. Native HTTPS `api.anthropic.com/v1/messages` requests for
-Claude use automatic ephemeral caching (default five minutes). Unknown proxies
-and other transports retain their existing request shape. See the official
-[Anthropic caching contract](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
-and [OpenRouter usage fields](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
+`download_file` uses a separate cookie-free HTTPS client, at most five
+revalidated redirects, and a 64 MiB streaming cap. It stages in app cache,
+checks optional content SHA, then commits through SAF hash checks, workspace
+validation, and the normal checkpoint path. Downloaded files are not run or
+installed.
 
-## Conversation titles and app updates
+## Persistence and credentials
 
-New sessions enroll for one isolated title request after a successful first
-turn. Input is limited to 2 KiB of the human request and 1 KiB of the completed
-answer, with default reasoning and no tools. A metadata marker and SQL title
-compare-and-set preserve manual names without a schema migration. `title-%`
-usage is counted separately and excluded from coding-context anchors; active
-and canonical events are unchanged.
+Provider configuration and active selection use DataStore's stable `configs`
+and `active_id` keys. Custom header values are AES-GCM encrypted before storage;
+legacy plaintext headers migrate on first read. API keys stay separate.
 
-Settings updates use a separate credential-free HTTPS client for the official
-GitHub latest published release and its exact `Rivet-v<version>.apk` asset.
-Downloads stream into private cache with a 200 MiB cap. AOSP apksig verifies
-integrity; Android package metadata must match Rivet, the expected version, a
-higher version code, and the currently installed signer set. Only verified
-files reach MediaStore Downloads (API 29+) or a user save picker (API 26–28).
-Owned pending exports and private partials are cleaned on reconstruction.
-The Activity ViewModel retains active work across rotation. No polling,
-installation, extra service, or new permission is involved.
+`SecretStore` uses a non-exportable AndroidKeyStore AES-256 key and
+AES/GCM/NoPadding, authenticating provider ID as associated data. App-private
+preferences hold versioned IV/ciphertext records. Missing/corrupt records affect
+only that credential; errors never wipe unrelated keys. Credentials do not
+enter conversation storage, logs, or saved state. An early development
+EncryptedSharedPreferences format is not migrated; those installs must reenter
+keys once.
+
+SQLite stores full provider-neutral event rows, bounded active context,
+compaction metadata, usage, and session headers. Full history has no aggregate
+512 KiB cap and is paged for display. The old DataStore `agent_messages` imports
+once, decoding earlier `messages` records where needed and retaining source
+bytes. Pinned sessions sort before recency without changing activity time.
+Selected tree and legacy browsing identity preferences remain for compatibility;
+whole project contents are not stored in preferences.
+
+Process death ends streams and pending approvals. Completed events reload, an
+interrupted marker is shown once, and neither approval nor execution authority
+is reconstructed from history.
+
+## Project instructions, context, and usage
+
+Stable system policy is independent of summaries. Applicable `AGENTS.md` files
+are root-to-target observations loaded only for touched scopes: at most eight
+files, 8 KiB per file, and 32 KiB total, with bounded discovery depth/counts. Typed
+internal events are projected as untrusted native user data, without rewriting
+human messages or exposing persistent metadata on the wire. Unchanged guidance
+deduplicates; changes and removals append in canonical order, bound to the exact
+workspace. Project instructions cannot change approval or security policy.
+
+Before each request, Rivet accounts for assembled messages, system text, and
+tool schemas. Listed model metadata can supply a scoped input limit; unknown
+models use a conservative planning threshold, explicitly not a known capacity.
+Compatible reported input usage anchors later estimates. Context pressure first
+prunes old successful tool bodies, then reduces older complete groups into
+bounded structured task state while retaining a recent verbatim tail.
+
+Compaction commits canonical-prefix and active-projection hashes with the new
+summary. It is the only prefix-rewrite boundary: current guidance and task notes
+replace old deltas, while full history remains intact. Attempt records capture
+reductions and failures. One clear provider overflow can retry a materially
+smaller request without replaying completed tools. Policy, schemas, instruction
+state, and workspace authority are reconstructed outside model-generated task
+notes; notes cannot authorize actions or assert current workspace truth.
+
+Usage distinguishes reported, estimated, and unknown counts. Diagnostics show
+categories and separate compaction/title requests without double-counting cached
+input or inventing universal costs. OpenRouter's `cache_write_tokens` is parsed
+only where documented. Native HTTPS `api.anthropic.com/v1/messages` requests for
+Claude use automatic ephemeral caching (five-minute default); proxies and other
+transports keep their existing contract. See
+[Anthropic caching](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+and [OpenRouter usage](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
+
+New conversations enroll for one isolated title request after their first
+successful turn: at most 2 KiB human input and 1 KiB completed answer, default
+reasoning, no tools. A metadata marker and SQL compare-and-set preserve manual
+names without a schema change. Title usage is separate and cannot anchor coding
+context; canonical/active events do not change.
+
+## App updates and release security
+
+Settings manually checks the official latest published GitHub release and exact
+`Rivet-v<version>.apk` asset. A separate credential-free HTTPS client streams up
+to 200 MiB into private cache. AOSP apksig verifies integrity; Android package
+metadata must match Rivet, the expected version name, a higher version code, and
+the installed signer set. Only verified bytes reach Downloads (API 29+) or a
+save picker (API 26–28). Owned partials/pending exports are cleaned on restart,
+and the Activity ViewModel retains work across rotation. No polling or installer
+is involved.
+
+Release builds have no debug cleartext exception. Debug alone permits cleartext
+mock-provider testing; neither variant replaces HTTPS certificate validation.
+The public debug key is distinct from the permanent production signer. Release
+CI requires secrets and an independently committed certificate pin, then
+verifies identity before staging the public filename. See
+[RELEASE_PROCESS.md](RELEASE_PROCESS.md).
+
+## Testing and recovery
+
+Provider I/O and filesystem work run off the UI thread. Cancellation signals
+and closing descriptors interrupt reads where supported; document providers
+can delay or ignore cancellation. Runtime/preflight errors stop or offer a
+specific recovery action rather than inviting model retries around unavailable
+state. Completed tool results remain authoritative even when model prose differs.
+
+Physical mutation testing uses a disposable project with generated text, binary,
+search, rename/move/delete, and normalization fixtures. Never adversarially test
+destructive operations against a user's existing project.
