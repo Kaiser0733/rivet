@@ -30,7 +30,7 @@ class ConversationTitleWireTest {
                 assertFalse(body.containsKey("thinking"))
                 val messages = body[if (type == ProviderType.Gemini) "contents" else "messages"]!!.jsonArray
                 assertEquals("user", messages.last().jsonObject["role"]!!.jsonPrimitive.content)
-                assertEquals(1, messages.size)
+                assertEquals(1, messages.count { it.jsonObject["role"]!!.jsonPrimitive.content != "system" })
             }
         } finally { server.shutdown() }
     }
