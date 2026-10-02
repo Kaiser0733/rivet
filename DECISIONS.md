@@ -22,15 +22,15 @@ documented in RELEASE_PROCESS.md — never silently.
 
 ## D3 — GitHub Actions is the primary build environment
 
-What: CI builds every APK, including release candidates; local Android
-builds are not part of the workflow.
-Why: the developer works from an Android tablet; CI guarantees identical
-builds and keeps signing material off local devices.
+What: CI is authoritative for tests, APK verification, and release builds.
+Local builds use the same pinned toolchain but do not replace CI evidence.
+Why: one build workflow keeps verification repeatable and production signing
+separate from ordinary development.
 
 ## D4 — Kotlin 2.1.10, Compose via BOM 2025.03.00, AGP 8.9.2, Gradle 8.13, JDK 17, compileSdk/targetSdk 35, minSdk 26
 
 What: the toolchain matrix, pinned at the root build file.
-Why: a mutually compatible, currently maintained set; minSdk 26 covers
+Why: a validated, pinned toolchain; minSdk 26 covers
 adaptive icons and current devices without legacy work.
 Change trigger: a security fix or a required platform feature, with the
 whole matrix re-validated together — never piecemeal dependency bumps.
@@ -47,8 +47,7 @@ add machinery the current code does not need.
 What: UI icons use hand-authored `res/drawable` vectors. Technical destinations
 were removed with the Chat-first surface under D30; History and editor actions
 use small outlined vectors.
-Why: the old `material-icons-core` artifacts publish as empty stubs, and
-an icon dependency for five glyphs is not worth its weight.
+Why: the small vector set needs no separate icon dependency.
 
 ## D7 — Dark-only shell (superseded by D32)
 
@@ -60,8 +59,7 @@ on the table if a real request exists.
 
 What: no speculative interface or package without a present consumer or
 testable platform boundary.
-Why: the codebase grows by feature, and structure that exists before the
-feature it serves is the primary decay vector for a repository like this.
+Why: structure without a current use adds maintenance work.
 Change trigger: a second real implementation demanding a seam.
 
 ## D9 — Pinned debug keystore committed, release key never committed
@@ -146,7 +144,8 @@ in DataStore. The old chat keys remain readable for one-time migration.
 ## D18 — SAF tree as the workspace boundary
 
 What: native DocumentsContract operations under a persistently granted tree URI;
-no raw filesystem paths, shell commands, or broad storage permissions.
+file tools use no raw filesystem paths or broad storage permissions. Shell
+commands use the private mirror described in D25, not SAF document IDs as paths.
 Why: scoped storage and read-only/cloud provider compatibility. Relative paths
 resolve one directory at a time, and provider metadata carries capabilities.
 Change trigger: a new Android storage contract, not a runtime shortcut.
@@ -158,7 +157,7 @@ snapshots. Saves recheck the hash and verify the resulting bytes. Exact patches
 validate sequential unique matches entirely in memory before saving.
 Why: bounded Android memory use and explicit external-change conflicts. SAF
 cannot guarantee atomic writes or lock out external writers; provider failure
-may leave partial content. Drafts remain in memory on save errors.
+may leave partial content; a refused or failed save must be reported truthfully.
 
 ## D20 — Native moves only, capability-gated mutations
 
@@ -186,11 +185,12 @@ structured protocol. Assistant prose is never parsed or executed as a tool.
 
 ## D23 — SAF remains authoritative for agent tools
 
-What: three read-only tools run automatically. Seven native file mutations and
-each agent command require a fresh, one-shot approval. File tools retain hash,
+What: three read-only tools run automatically. In Ask mode, seven native file
+mutations and each agent command require fresh, one-shot approval; D36 extends
+the confirmation policy for other modes. File tools retain hash,
 patch, path, capability, root, and move rules from `SafWorkspace`. Turns bind
 to the tree selected at Send.
-Why: model arguments are untrusted. Approval and identity checks prevent an old
+Why: model arguments are untrusted. Authorization and identity checks prevent an old
 turn from changing a replacement workspace or replaying after process death.
 
 ## D24 — Durable completed events, interrupted turns do not resume
