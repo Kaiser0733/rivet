@@ -318,3 +318,22 @@ Claude use automatic ephemeral caching (default five minutes). Unknown proxies
 and other transports retain their existing request shape. See the official
 [Anthropic caching contract](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
 and [OpenRouter usage fields](https://openrouter.ai/docs/guides/best-practices/prompt-caching).
+
+## Conversation titles and app updates
+
+New sessions enroll for one isolated title request after a successful first
+turn. Input is limited to 2 KiB of the human request and 1 KiB of the completed
+answer, with default reasoning and no tools. A metadata marker and SQL title
+compare-and-set preserve manual names without a schema migration. `title-%`
+usage is counted separately and excluded from coding-context anchors; active
+and canonical events are unchanged.
+
+Settings updates use a separate credential-free HTTPS client for the official
+GitHub latest published release and its exact `Rivet-v<version>.apk` asset.
+Downloads stream into private cache with a 200 MiB cap. AOSP apksig verifies
+integrity; Android package metadata must match Rivet, the expected version, a
+higher version code, and the currently installed signer set. Only verified
+files reach MediaStore Downloads (API 29+) or a user save picker (API 26–28).
+Owned pending exports and private partials are cleaned on reconstruction.
+The Activity ViewModel retains active work across rotation. No polling,
+installation, extra service, or new permission is involved.

@@ -350,3 +350,14 @@ Why: rewriting the latest human message changed previously sent prefixes on
 ordinary turns and nested instruction discovery. Context remains data and
 cannot change approval, tool effects, or workspace authority. No SQL schema
 change is required; code-20 events remain readable.
+
+## D41 — Auxiliary titles and verified manual updates
+
+What: new conversations receive one bounded, isolated title request after a
+successful first turn. SQL guards preserve manual names; auxiliary usage
+never anchors coding context. App updates are user-triggered official GitHub
+release downloads, verified against the installed package and signer before
+export. Public assets use `Rivet-v<version>.apk`; canonical Gradle APKs remain
+unchanged until verification succeeds.
+Why: conversation recognition and APK retrieval should not alter agent state,
+spend tokens on existing history, expose credentials, or authorize installation.
