@@ -56,6 +56,7 @@ class AgentLoop(
     private val failureState: suspend () -> String = { "" },
     private val compactContext: suspend (List<AgentMessage>, Boolean) -> List<AgentMessage> = { messages, _ -> messages },
     private val contextFootprint: (List<AgentMessage>) -> Long = { AgentContext.serializedBytes(it).toLong() },
+    private val contextUpdates: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
 ) {
     suspend fun run(
         initial: List<AgentMessage>,
@@ -89,6 +90,18 @@ class AgentLoop(
         var mutationsCompleted = 0
         while (modelIterations < RUNAWAY_MODEL_ITERATIONS) {
             currentCoroutineContext().ensureActive()
+            if (!workspaceIsCurrent()) return AgentRunResult(messages, AgentStopReason.WorkspaceChanged,
+                modelIterations, toolCalls, mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
+            val updates = contextUpdates(messages.toList())
+            require(updates.all { it.role == AgentRole.Context && it.internalContext?.valid() == true &&
+                it.text.isEmpty() && it.toolCalls.isEmpty() && it.toolResults.isEmpty() && it.transportState == null })
+            if (updates.isNotEmpty() && !AgentContext.validGroups(messages)) return AgentRunResult(messages,
+                AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
+                mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
+            if (updates.isNotEmpty() && !canPersistToolOutput(messages + updates, 0)) return AgentRunResult(messages,
+                AgentStopReason.SessionLimit, modelIterations, toolCalls,
+                mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
+            for (update in updates) append(update)
             val active = try { compactContext(messages.toList(), false) }
                 catch (e: CancellationException) { throw e
                 } catch (e: ProviderError) { throw e

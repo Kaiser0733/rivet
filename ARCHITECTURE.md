@@ -61,8 +61,11 @@ message only; the active request completes (or is stopped) on its own.
   source bytes are retained. Sessions bind to the selected workspace and can be resumed or
   switched independently of provider/model selection.
 - The stable Rivet security policy stays in the system role. Applicable
-  `AGENTS.md` contents and the prior task summary are added as untrusted user
-  context before the current request, and are rebuilt from their sources.
+  `AGENTS.md` observations are bounded, ordered internal context events. Native
+  adapters project them as untrusted user data without rewriting human messages.
+  Unchanged scopes deduplicate; changed or removed scopes append updates bound
+  to the exact workspace. Compaction replaces old context deltas with a current
+  snapshot and one bounded task-state event; full canonical history is retained.
 - API keys: app-private preferences contain versioned IV+ciphertext records.
   A non-exportable AES-256 key in AndroidKeyStore encrypts each value with
   AES/GCM/NoPadding; the provider id is authenticated as associated data.
@@ -301,5 +304,17 @@ Compaction stores the canonical event-prefix and active-projection hashes in
 the same transaction as the new summary. Local bounded attempt records explain
 reductions and failures. One clear provider overflow may retry a materially
 smaller request without replaying completed tools. Rivet policy, tools, and
-applicable `AGENTS.md` instructions are rebuilt outside the task state, which
-cannot authorize actions or assert current workspace truth.
+applicable `AGENTS.md` instruction state remains independent of the task state,
+which cannot authorize actions or assert current workspace truth. Compaction is
+an intentional prefix boundary; ordinary turns and scoped discovery append to
+the existing model-visible prefix. Legacy sessions establish observed context
+at the next safe turn without rewriting historical user events.
+
+Usage details in Settings expose reported categories and separate compaction
+requests without adding cached input twice or estimating a universal cost.
+OpenRouter documents `cache_write_tokens`; unknown compatible endpoints do not
+assume that field. Native HTTPS `api.anthropic.com/v1/messages` requests for
+Claude use automatic ephemeral caching (default five minutes). Unknown proxies
+and other transports retain their existing request shape. See the official
+[Anthropic caching contract](https://platform.claude.com/docs/en/build-with-claude/prompt-caching)
+and [OpenRouter usage fields](https://openrouter.ai/docs/guides/best-practices/prompt-caching).

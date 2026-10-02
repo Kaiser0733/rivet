@@ -8,6 +8,10 @@ import android.database.sqlite.SQLiteOpenHelper
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentToolDefinition
 import com.kaiser.rivet.agent.ContextBudget
+import com.kaiser.rivet.agent.validatedContext
+import com.kaiser.rivet.agent.InternalContext
+import com.kaiser.rivet.agent.ProjectInstructionFile
+import com.kaiser.rivet.agent.ProjectContext
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolError
@@ -42,12 +46,22 @@ data class CodingSessionHeader(
 )
 
 data class SessionUsage(
-    val reportedInputTokens: Long,
-    val reportedOutputTokens: Long,
+    val reportedInputTokens: Long?,
+    val reportedOutputTokens: Long?,
     val reportedRequests: Int,
     val unknownRequests: Int,
     val latestInputTokens: Long?,
     val latestSource: String?,
+    val cacheReadTokens: Long? = null,
+    val cacheCreationTokens: Long? = null,
+    val reasoningTokens: Long? = null,
+    val contextInputTokens: Long? = null,
+    val totalTokens: Long? = null,
+    val compaction: AgentUsage? = null,
+    val compactionRequests: Int = 0,
+    val compactionUnknownRequests: Int = 0,
+    val latestUsage: AgentUsage? = null,
+    val latestIsCompaction: Boolean = false,
 )
 
 data class ContextEstimate(val tokens: Long?, val source: String)
@@ -227,22 +241,36 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     suspend fun recent(id: String, limit: Int = 100): List<AgentMessage> = onDatabase { db ->
         require(limit in 1..500)
-        db.rawQuery("SELECT payload FROM events WHERE session_id=? ORDER BY id DESC LIMIT ?",
-            arrayOf(id, limit.toString())).use { cursor ->
-            buildList { while (cursor.moveToNext()) add(decode(cursor.getString(0))) }.asReversed()
+        val visible = mutableListOf<AgentMessage>()
+        var before = Long.MAX_VALUE
+        while (visible.size < limit) {
+            var read = 0
+            db.rawQuery("SELECT id,payload FROM events WHERE session_id=? AND id<? ORDER BY id DESC LIMIT 64",
+                arrayOf(id, before.toString())).use { cursor ->
+                while (cursor.moveToNext() && visible.size < limit) {
+                    read++
+                    before = cursor.getLong(0)
+                    val message = decode(cursor.getString(1))
+                    if (message.role != AgentRole.Context && message.internalContext == null) visible += message
+                }
+            }
+            if (read == 0) break
         }
+        visible.asReversed()
     }
 
     suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String,
                         attempt: ContextAttempt? = null,
-                        expectedSessionId: String? = null) = onDatabase { db ->
+                        expectedSessionId: String? = null): List<AgentMessage> = onDatabase { db ->
         require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
         require(retained != expected || summary != this.summary(db, activeId(db)))
         require(validProjection(expected, retained))
-        if (!AgentSessionCodec.fits(retained, summary.toByteArray(Charsets.UTF_8).size)) {
+        val projected = ProjectContext.projection(expected, retained, summary, header(db, activeId(db)).workspaceId)
+        require(AgentContext.validGroups(projected))
+        if (!AgentSessionCodec.fits(projected, summary.toByteArray(Charsets.UTF_8).size)) {
             throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
         }
-        val activeHash = hashMessages(retained)
+        val activeHash = hashMessages(projected)
         val summaryHash = hash(summary)
         db.beginTransaction()
         try {
@@ -256,12 +284,12 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             val compactionId = db.insertOrThrow("compactions", null, ContentValues().apply {
                 put("session_id", id); put("through_event_id", through)
                 put("summary", summary); put("before_count", expected.size)
-                put("after_count", retained.size); put("created_at", System.currentTimeMillis())
+                put("after_count", projected.size); put("created_at", System.currentTimeMillis())
                 put("prefix_hash", prefixHash); put("active_hash", activeHash)
                 put("summary_hash", summaryHash)
             })
             db.delete("active_events", "session_id=?", arrayOf(id))
-            retained.forEach { message ->
+            projected.forEach { message ->
                 db.insertOrThrow("active_events", null, ContentValues().apply {
                     put("session_id", id)
                     put("payload", json.encodeToString(AgentMessage.serializer(), message))
@@ -269,11 +297,12 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             }
             db.execSQL("UPDATE sessions SET summary=?, active_generation=active_generation+1 WHERE id=?", arrayOf(summary, id))
             if (attempt != null) insertContextAttempt(db, id, through, compactionId, attempt,
-                AgentContext.serializedBytes(expected), AgentContext.serializedBytes(retained),
+                AgentContext.serializedBytes(expected), AgentContext.serializedBytes(projected),
                 summary.toByteArray(Charsets.UTF_8).size)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
+        projected
     }
 
     suspend fun recordContextFailure(sessionId: String, attempt: ContextAttempt) = onDatabase { db ->
@@ -317,7 +346,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     suspend fun recordUsage(sessionId: String, turnId: String, providerId: String, model: String,
                             usage: AgentUsage?, requestMessages: List<AgentMessage> = emptyList(),
                             system: String = "", tools: List<AgentToolDefinition> = emptyList(),
-                            endpoint: String = "", providerType: ProviderType? = null) = onDatabase { db ->
+                            endpoint: String = "", providerType: ProviderType? = null,
+                            reasoning: ReasoningLevel = ReasoningLevel.Default) = onDatabase { db ->
         val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
             if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
             it.getInt(0)
@@ -326,7 +356,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.insertOrThrow("usage", null, ContentValues().apply {
             put("session_id", sessionId); put("turn_id", turnId)
             put("provider_id", providerId); put("model", model)
-            put("source", if (contextInput != null && contextInput > 0) "reported" else "unknown")
+            put("source", if (contextInput != null) "reported" else "unknown")
             put("input_tokens", usage?.inputTokens); put("output_tokens", usage?.outputTokens)
             put("cache_read_tokens", usage?.cacheReadTokens)
             put("cache_creation_tokens", usage?.cacheCreationTokens)
@@ -335,7 +365,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             put("total_tokens", usage?.totalTokens)
             put("base_count", requestMessages.size)
             put("base_prefix_hash", hashMessages(requestMessages))
-            put("system_hash", requestEnvironmentHash(endpoint, system, tools))
+            put("system_hash", requestEnvironmentHash(endpoint, system, tools, reasoning))
             put("active_generation", generation)
             put("created_at", System.currentTimeMillis())
         })
@@ -347,23 +377,23 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     suspend fun contextEstimate(sessionId: String, providerId: String, model: String,
                                 messages: List<AgentMessage>, system: String,
                                 tools: List<AgentToolDefinition> = emptyList(),
-                                endpoint: String = ""): ContextEstimate = onDatabase { db ->
+                                endpoint: String = "", reasoning: ReasoningLevel = ReasoningLevel.Default): ContextEstimate = onDatabase { db ->
         val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
             if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
             it.getInt(0)
         }
-        val request = AgentRequest(model, messages, system, ReasoningLevel.Default, tools)
+        val request = AgentRequest(model, messages, system, reasoning, tools)
         val estimated = ContextBudget.estimateRequestTokens(request)
         val anchor = db.rawQuery("SELECT context_input_tokens,base_count,base_prefix_hash,system_hash,active_generation " +
             "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' " +
-            "AND context_input_tokens IS NOT NULL AND turn_id NOT LIKE 'compaction-%' " +
+            "AND context_input_tokens > 0 AND turn_id NOT LIKE 'compaction-%' " +
             "ORDER BY id DESC LIMIT 1", arrayOf(sessionId, providerId, model)).use { cursor ->
             if (!cursor.moveToFirst()) null else UsageAnchor(cursor.getLong(0), cursor.getInt(1),
                 if (cursor.isNull(2)) null else cursor.getString(2), cursor.getString(3), cursor.getInt(4))
         }
         if (anchor != null) {
             if (anchor.generation == generation &&
-                anchor.environmentHash == requestEnvironmentHash(endpoint, system, tools) &&
+                anchor.environmentHash == requestEnvironmentHash(endpoint, system, tools, reasoning) &&
                 anchor.count in 1..messages.size &&
                 anchor.prefixHash == hashMessages(messages.take(anchor.count))) {
                 if (anchor.count == messages.size) return@onDatabase ContextEstimate(anchor.input, "reported")
@@ -378,19 +408,42 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     suspend fun usage(sessionId: String): SessionUsage = onDatabase { db ->
-        val totals = db.rawQuery("SELECT COALESCE(SUM(input_tokens),0),COALESCE(SUM(output_tokens),0)," +
+        val totals = db.rawQuery("SELECT SUM(input_tokens),SUM(output_tokens)," +
             "SUM(CASE WHEN source='reported' THEN 1 ELSE 0 END)," +
             "SUM(CASE WHEN source='unknown' THEN 1 ELSE 0 END) FROM usage WHERE session_id=?",
             arrayOf(sessionId)).use { cursor ->
             cursor.moveToFirst()
-            listOf(cursor.getLong(0), cursor.getLong(1), cursor.getLong(2), cursor.getLong(3))
+            listOf(if (cursor.isNull(0)) null else cursor.getLong(0),
+                if (cursor.isNull(1)) null else cursor.getLong(1), cursor.getLong(2), cursor.getLong(3))
         }
-        val latest = db.rawQuery("SELECT input_tokens,source FROM usage WHERE session_id=? ORDER BY id DESC LIMIT 1",
+        fun usageFields(cursor: android.database.Cursor, offset: Int = 0) = AgentUsage(
+            inputTokens = if (cursor.isNull(offset)) null else cursor.getLong(offset),
+            outputTokens = if (cursor.isNull(offset + 1)) null else cursor.getLong(offset + 1),
+            cacheReadTokens = if (cursor.isNull(offset + 2)) null else cursor.getLong(offset + 2),
+            cacheCreationTokens = if (cursor.isNull(offset + 3)) null else cursor.getLong(offset + 3),
+            reasoningTokens = if (cursor.isNull(offset + 4)) null else cursor.getLong(offset + 4),
+            totalTokens = if (cursor.isNull(offset + 5)) null else cursor.getLong(offset + 5))
+        val extra = db.rawQuery("SELECT SUM(cache_read_tokens),SUM(cache_creation_tokens),SUM(reasoning_tokens)," +
+            "SUM(context_input_tokens),SUM(total_tokens) FROM usage WHERE session_id=?", arrayOf(sessionId)).use { cursor ->
+            cursor.moveToFirst()
+            (0..4).map { if (cursor.isNull(it)) null else cursor.getLong(it) }
+        }
+        val latest = db.rawQuery("SELECT input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens," +
+            "reasoning_tokens,total_tokens,source,turn_id FROM usage WHERE session_id=? ORDER BY id DESC LIMIT 1",
             arrayOf(sessionId)).use { cursor ->
-            if (cursor.moveToFirst()) (if (cursor.isNull(0)) null else cursor.getLong(0)) to cursor.getString(1)
-            else null to null
+            if (cursor.moveToFirst()) Triple(usageFields(cursor), cursor.getString(6), cursor.getString(7).startsWith("compaction-"))
+            else Triple(null, null, false)
         }
-        SessionUsage(totals[0], totals[1], totals[2].toInt(), totals[3].toInt(), latest.first, latest.second)
+        val compaction = db.rawQuery("SELECT SUM(input_tokens),SUM(output_tokens),SUM(cache_read_tokens)," +
+            "SUM(cache_creation_tokens),SUM(reasoning_tokens),SUM(total_tokens),COUNT(*)," +
+            "SUM(CASE WHEN source='unknown' THEN 1 ELSE 0 END) FROM usage WHERE session_id=? AND turn_id LIKE 'compaction-%'",
+            arrayOf(sessionId)).use { cursor ->
+            cursor.moveToFirst()
+            Triple(usageFields(cursor), cursor.getInt(6), cursor.getInt(7))
+        }
+        SessionUsage(totals[0], totals[1], requireNotNull(totals[2]).toInt(), requireNotNull(totals[3]).toInt(), latest.first?.inputTokens, latest.second,
+            extra[0], extra[1], extra[2], extra[3], extra[4], compaction.first, compaction.second, compaction.third,
+            latest.first, latest.third)
     }
 
     private suspend fun <T> onDatabase(block: suspend (SQLiteDatabase) -> T): T = withContext(Dispatchers.IO) {
@@ -488,9 +541,10 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         json.decodeFromString(AgentMessage.serializer(), payload)
 
     private fun requestEnvironmentHash(endpoint: String, system: String,
-                                       tools: List<AgentToolDefinition>): String = hash(buildString {
+                                       tools: List<AgentToolDefinition>, reasoning: ReasoningLevel): String = hash(buildString {
         fun part(value: String) { append(value.length).append(':').append(value) }
         part(endpoint)
+        part(reasoning.name)
         part(system)
         append(tools.size).append(':')
         tools.forEach { tool ->
@@ -608,7 +662,10 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         while (tail.firstOrNull()?.role == AgentRole.Tool) tail.removeAt(0)
         while (tail.isNotEmpty() && (!AgentSessionCodec.fits(tail + listOfNotNull(pending)) ||
                 !AgentContext.validGroups(tail))) dropFirstGroup()
-        val recovered = tail + listOfNotNull(pending)
+        val remembered = canonicalProjectState(db, id)
+        while (tail.isNotEmpty() && !AgentSessionCodec.fits(ProjectContext.projection(remembered,
+                tail + listOfNotNull(pending), ""))) dropFirstGroup()
+        val recovered = ProjectContext.projection(remembered, tail + listOfNotNull(pending), "")
         val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(id)).use {
             it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
         }
@@ -632,6 +689,32 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         summaryBytes = 0
+    }
+
+    private fun canonicalProjectState(db: SQLiteDatabase, id: String): List<AgentMessage> {
+        val workspace = header(db, id).workspaceId ?: return emptyList()
+        val files = linkedMapOf<String, InternalContext>()
+        var notice: AgentMessage? = null
+        db.rawQuery("SELECT payload FROM events WHERE session_id=? AND payload LIKE ? ORDER BY id",
+            arrayOf(id, "%\"role\":\"context\"%")).use { cursor ->
+            while (cursor.moveToNext()) {
+                val message = decode(cursor.getString(0))
+                val context = message.validatedContext()?.takeIf { it.workspaceId == workspace } ?: continue
+                when (context.kind) {
+                    "project_snapshot" -> {
+                        files.clear()
+                        context.projectFiles.forEach { file -> files[file.path] = InternalContext(kind = "project",
+                            workspaceId = workspace, scope = file.path, content = file.content,
+                            digest = InternalContext.digest(file.content), order = file.order) }
+                    }
+                    "project" -> if (context.removed) files.remove(context.scope) else files[context.scope] = context
+                    "project_notice" -> notice = message
+                }
+            }
+        }
+        val entries = files.values.sortedWith(compareBy<InternalContext> { it.order }.thenBy { it.scope })
+            .map { ProjectInstructionFile(it.scope, it.content, it.order) }
+        return listOf(InternalContext.snapshot(entries, workspace)) + listOfNotNull(notice)
     }
 
     private fun hash(value: String): String = MessageDigest.getInstance("SHA-256")

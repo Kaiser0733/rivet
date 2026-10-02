@@ -1,5 +1,6 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
@@ -71,7 +72,7 @@ internal class GeminiClient(
     override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
         val body = buildJsonObject {
             put("contents", buildJsonArray {
-                request.messages.forEach { m ->
+                modelMessages(request.messages).forEach { m ->
                     add(geminiMessage(m))
                 }
             })
@@ -118,6 +119,7 @@ private fun geminiMessage(message: AgentMessage): JsonObject {
     val textSignature = state.takeIf { it["provider"]?.str() == "gemini" }
         ?.get("text_signature")?.str()
     return when (message.role) {
+        AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
         AgentRole.User -> buildJsonObject {
             put("role", "user"); put("parts", buildJsonArray { add(buildJsonObject { put("text", message.text) }) })
         }

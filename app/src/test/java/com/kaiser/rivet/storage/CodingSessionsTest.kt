@@ -41,6 +41,151 @@ class CodingSessionsTest {
         AgentSessionStore(app).clear()
     }
 
+    @Test fun contextEventsSurviveReloadAndDoNotOccupyVisibleHistory() = runBlocking {
+        val sessions = CodingSessions(app)
+        val selected = sessions.create("tree")
+        val guidance = com.kaiser.rivet.agent.InternalContext(kind = "project", workspaceId = "tree", scope = "AGENTS.md",
+            content = "Use Kotlin", digest = com.kaiser.rivet.agent.InternalContext.digest("Use Kotlin")).event()
+        val user = AgentMessage.user("Inspect")
+        sessions.save(listOf(guidance, user), false)
+        val restored = CodingSessions(app).load()
+        assertEquals(listOf(guidance, user), restored.messages)
+        assertEquals(listOf(user), sessions.recent(selected.id!!))
+        assertEquals(2, sessions.fullEventCount(selected.id))
+    }
+
+    @Test fun compactionStoresStableSummaryAndRequiredProjectSnapshotWithoutChangingHistory() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.create("tree").id!!
+        val guidance = com.kaiser.rivet.agent.InternalContext(kind = "project", workspaceId = "tree", scope = "src/AGENTS.md",
+            content = "Nested rule", digest = com.kaiser.rivet.agent.InternalContext.digest("Nested rule"), order = 1).event()
+        val original = listOf(guidance, AgentMessage.user("Old task"), AgentMessage.assistant("Old answer"),
+            AgentMessage.user("Continue"), AgentMessage.assistant("", listOf(AgentToolCall("read", "read_file", "{}"))),
+            AgentMessage.tools(listOf(AgentToolResult("read", "read_file", "{}"))))
+        sessions.save(original, false)
+        val projected = sessions.compact(original, original.takeLast(3), "{\"objective\":\"Continue\"}")
+        assertEquals(1, projected.count { it.internalContext?.kind == "summary" })
+        assertEquals(1, projected.count { it.internalContext?.kind == "project_snapshot" })
+        assertTrue(AgentContext.validGroups(projected))
+        assertEquals(original.size, sessions.fullEventCount(id))
+        val restored = CodingSessions(app).load()
+        assertEquals(projected, restored.messages)
+        assertEquals("Nested rule", com.kaiser.rivet.agent.ProjectContext.current(restored.messages, "tree")
+            .getValue("src/AGENTS.md").content)
+        val next = projected + AgentMessage.user("Next step")
+        sessions.save(next, false)
+        assertEquals(projected, sessions.load().messages.take(projected.size))
+        assertEquals(original.filter { it.role != com.kaiser.rivet.agent.AgentRole.Context } + AgentMessage.user("Next step"),
+            sessions.recent(id))
+    }
+
+    @Test fun reportedAnchorSurvivesAppendStableUserTurnsButOldWrapperDoesNot() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val context = com.kaiser.rivet.agent.InternalContext.summary("Task notes", null)
+        val first = AgentMessage.user("Inspect")
+        val stable = com.kaiser.rivet.agent.modelMessages(listOf(context, first))
+        sessions.recordUsage(id, "turn1", "provider", "model", AgentUsage(inputTokens = 1000), stable, "system")
+        val next = stable + AgentMessage.assistant("Inspected") + AgentMessage.user("Edit")
+        val anchored = sessions.contextEstimate(id, "provider", "model", next, "system")
+        val baseEstimate = com.kaiser.rivet.agent.ContextBudget.estimateRequestTokens(
+            com.kaiser.rivet.provider.AgentRequest("model", stable, "system", com.kaiser.rivet.provider.ReasoningLevel.Default, emptyList()))
+        val nextEstimate = com.kaiser.rivet.agent.ContextBudget.estimateRequestTokens(
+            com.kaiser.rivet.provider.AgentRequest("model", next, "system", com.kaiser.rivet.provider.ReasoningLevel.Default, emptyList()))
+        assertEquals(1000L + nextEstimate - baseEstimate, anchored.tokens)
+        val rewritten = next.toMutableList().also { it[1] = first.copy(text = "New wrapper around Inspect") }
+        assertNotEquals(anchored.tokens, sessions.contextEstimate(id, "provider", "model", rewritten, "system").tokens)
+    }
+
+    @Test fun contextCannotSplitPendingToolResultsAndInterruptedRecoveryRemainsCorrelated() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.create("tree").id!!
+        val call = AgentMessage.assistant("", listOf(AgentToolCall("pending", "read_file", "{}")))
+        sessions.save(listOf(AgentMessage.user("Inspect"), call), true)
+        try {
+            sessions.save(listOf(AgentMessage.user("Inspect"), call,
+                com.kaiser.rivet.agent.InternalContext.summary("Notes", "tree")), true)
+            throw AssertionError("Context split a pending protocol pair")
+        } catch (_: IllegalArgumentException) { }
+        val recovered = CodingSessions(app).load()
+        assertEquals(listOf("pending"), recovered.messages.last().toolResults.map { it.callId })
+        assertTrue(AgentContext.validGroups(recovered.messages))
+        assertEquals(3, sessions.fullEventCount(id))
+    }
+
+    @Test fun usageDiagnosticsSeparateCompactionAndKeepUnknownCategoriesAfterRestart() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        sessions.recordUsage(id, "turn", "provider", "model", AgentUsage(100, 20, 80, 12, 120, 10),
+            providerType = ProviderType.OpenRouter)
+        sessions.recordUsage(id, "compaction-turn", "provider", "model", AgentUsage(5, 2, 7, null, null, 3),
+            providerType = ProviderType.Anthropic)
+        sessions.recordUsage(id, "unknown", "provider", "model", null)
+        val usage = CodingSessions(app).usage(id)
+        assertEquals(105L, usage.reportedInputTokens)
+        assertEquals(87L, usage.cacheReadTokens)
+        assertEquals(13L, usage.cacheCreationTokens)
+        assertEquals(115L, usage.contextInputTokens)
+        assertEquals(12L, usage.reasoningTokens)
+        assertEquals(1, usage.compactionRequests)
+        assertEquals(5L, usage.compaction?.inputTokens)
+        assertEquals(7L, usage.compaction?.cacheReadTokens)
+        assertEquals(3L, usage.compaction?.cacheCreationTokens)
+        assertEquals(1, usage.unknownRequests)
+        assertEquals(null, usage.latestUsage?.inputTokens)
+        val text = usage.diagnostics()
+        assertTrue(text.contains("Compaction cache creation/write: 3"))
+        assertTrue(text.contains("Latest input: Not reported"))
+        assertFalse(text.contains("%"))
+        assertFalse(text.contains("provider-id"))
+        assertFalse(text.contains("model"))
+    }
+
+    @Test fun usageAnchorInvalidatesWhenReasoningEnvironmentChanges() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val messages = listOf(AgentMessage.user("Inspect"))
+        sessions.recordUsage(id, "turn", "provider", "model", AgentUsage(1000), messages, "Policy",
+            reasoning = com.kaiser.rivet.provider.ReasoningLevel.High)
+        assertEquals(1000L, sessions.contextEstimate(id, "provider", "model", messages, "Policy",
+            reasoning = com.kaiser.rivet.provider.ReasoningLevel.High).tokens)
+        assertNotEquals(1000L, sessions.contextEstimate(id, "provider", "model", messages, "Policy",
+            reasoning = com.kaiser.rivet.provider.ReasoningLevel.Default).tokens)
+    }
+
+    @Test fun invalidProjectionRecoveryKeepsGuidanceOlderThanRecentCanonicalTail() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.create("tree").id!!
+        val guidance = com.kaiser.rivet.agent.InternalContext(kind = "project", workspaceId = "tree",
+            scope = "AGENTS.md", content = "Preserve the root rule", digest = com.kaiser.rivet.agent.InternalContext.digest("Preserve the root rule")).event()
+        val full = listOf(guidance) + (0..300).map { AgentMessage.user("Request $it") }
+        sessions.save(full, false)
+        sessions.compact(full, full.takeLast(1), "Task state")
+        app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
+            db.execSQL("UPDATE sessions SET summary='Invalid replacement' WHERE id=?", arrayOf(id))
+        }
+        val restored = CodingSessions(app).load()
+        assertEquals("", restored.summary)
+        assertEquals("Preserve the root rule", com.kaiser.rivet.agent.ProjectContext.current(restored.messages, "tree")
+            .getValue("AGENTS.md").content)
+        assertEquals(full.size, sessions.fullEventCount(id))
+        assertEquals(restored.messages, CodingSessions(app).load().messages)
+    }
+
+    @Test fun reportedZeroAndUnavailableUsageStayDistinguishable() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        assertEquals(null, sessions.usage(id).reportedInputTokens)
+        sessions.recordUsage(id, "turn", "provider", "model", AgentUsage(0, 0))
+        val usage = sessions.usage(id)
+        assertEquals(0L, usage.reportedInputTokens)
+        assertEquals(0L, usage.reportedOutputTokens)
+        assertEquals(1, usage.reportedRequests)
+        assertEquals(0, usage.unknownRequests)
+        assertTrue(usage.diagnostics().contains("Raw input: 0"))
+        assertTrue(usage.diagnostics().contains("Output: 0"))
+    }
+
     @Test fun oldTranscriptMigratesOnceAndRemainsInDataStore() = runBlocking {
         val original = listOf(
             AgentMessage.user("modify this file"),
@@ -155,11 +300,11 @@ class CodingSessionsTest {
         val initial = listOf(AgentMessage.user("Older task"), AgentMessage.assistant("Done"),
             AgentMessage.user("Continue"))
         sessions.save(initial, interrupted = false)
-        sessions.compact(initial, listOf(initial.last()), "Keep the earlier objective")
+        val checkpointed = sessions.compact(initial, listOf(initial.last()), "Keep the earlier objective")
         val call = AgentToolCall("pending", "write_file", "{}")
         val synthetic = AgentMessage.tools(listOf(AgentToolResult(call.id, call.name,
             AgentToolError.content("interrupted"), error = true, summary = "Interrupted write_file")))
-        fun pending(size: Int) = listOf(initial.last(), AgentMessage.user("x".repeat(size)),
+        fun pending(size: Int) = checkpointed + listOf(AgentMessage.user("x".repeat(size)),
             AgentMessage.assistant("", listOf(call)))
         var low = 0
         var high = AgentSessionCodec.MAX_SERIALIZED_BYTES
@@ -393,12 +538,12 @@ class CodingSessionsTest {
             // Retained events must come from the original active transcript.
             active += retained.single()
             sessions.save(active, interrupted = false)
-            sessions.compact(active, retained, "summary through $index")
-            active = retained
+            active = sessions.compact(active, retained, "summary through $index")
         }
         val reopened = CodingSessions(app)
         val restored = reopened.load()
-        assertEquals(listOf(AgentMessage.user("continue 3")), restored.messages)
+        assertEquals(listOf(AgentMessage.user("continue 3")), restored.messages.filter { it.role != com.kaiser.rivet.agent.AgentRole.Context })
+        assertEquals(1, restored.messages.count { it.internalContext?.kind == "summary" })
         assertEquals("summary through 3", restored.summary)
         assertEquals(12, reopened.fullEventCount(id))
         assertTrue(reopened.recent(id, 100).sumOf { it.text.length } > AgentSessionCodec.MAX_SERIALIZED_BYTES)
@@ -423,10 +568,10 @@ class CodingSessionsTest {
         val current = listOf(AgentMessage.user("Continue"))
         sessions.save(current, interrupted = false)
 
-        sessions.compact(current, current, "Short task state")
+        val projected = sessions.compact(current, current, "Short task state")
 
         val reopened = CodingSessions(app)
-        assertEquals(current, reopened.load().messages)
+        assertEquals(projected, reopened.load().messages)
         assertEquals(current, reopened.recent(id))
         assertEquals("Short task state", reopened.load().summary)
         assertEquals(1, reopened.fullEventCount(id))
@@ -438,8 +583,7 @@ class CodingSessionsTest {
         val original = listOf(AgentMessage.user("Original task"), AgentMessage.assistant("Done"),
             AgentMessage.user("Continue"))
         sessions.save(original, interrupted = false)
-        val retained = listOf(original.last())
-        sessions.compact(original, retained, "Prior work completed")
+        val retained = sessions.compact(original, listOf(original.last()), "Prior work completed")
         sessions.save(retained + AgentMessage.assistant(""), interrupted = true)
 
         sessions.save(retained, interrupted = false)
@@ -464,9 +608,9 @@ class CodingSessionsTest {
         )
         sessions.save(original, interrupted = false)
         val projected = AgentContext.pruneOldResults(original, protectedTailBytes = 1024)!!
-        sessions.compact(original, projected, "Prior work was inspected")
+        val stored = sessions.compact(original, projected, "Prior work was inspected")
 
-        assertEquals(projected, CodingSessions(app).load().messages)
+        assertEquals(stored, CodingSessions(app).load().messages)
         assertEquals(original, CodingSessions(app).recent(id))
         app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null).use { db ->
             db.execSQL("UPDATE sessions SET summary='Unverified replacement' WHERE id=?", arrayOf(id))
@@ -614,7 +758,7 @@ class CodingSessionsTest {
         val history = listOf(AgentMessage.user("Original task"), AgentMessage.assistant("Done"),
             AgentMessage.user("Continue"))
         sessions.save(history, interrupted = false)
-        sessions.compact(history, listOf(history.last()), "task state",
+        val compacted = sessions.compact(history, listOf(history.last()), "task state",
             ContextAttempt("automatic", "estimated", 12_000, 4_000, "provider", "model"))
         sessions.recordContextFailure(id,
             ContextAttempt("overflow", "reported", 20_000, null, "provider", "model",
@@ -635,7 +779,7 @@ class CodingSessionsTest {
                 assertFalse(cursor.moveToNext())
             }
         }
-        assertEquals(listOf(history.last()), CodingSessions(app).load().messages)
+        assertEquals(compacted, CodingSessions(app).load().messages)
         assertEquals(history, sessions.recent(id))
         repeat(65) { index ->
             sessions.recordContextFailure(id, ContextAttempt("overflow", "estimated", index.toLong(),

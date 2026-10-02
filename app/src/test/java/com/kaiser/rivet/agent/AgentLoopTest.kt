@@ -998,14 +998,15 @@ class AgentLoopTest {
             AgentToolCall("two", "delete_path", """{"path":"B.kt"}"""),
         )
         var preparations = 0
+        var workspaceCurrent = true
         val loop = AgentLoop(
-            requestModel = { _, _, _ -> AgentResponse(toolCalls = calls) },
+            requestModel = { _, _, _ -> workspaceCurrent = false; AgentResponse(toolCalls = calls) },
             prepareTool = {
                 preparations++
                 error("A changed workspace must not prepare a tool")
             },
             requestApproval = { error("No approval should survive replacement") },
-            workspaceIsCurrent = { false },
+            workspaceIsCurrent = { workspaceCurrent },
         )
 
         val result = loop.run(listOf(AgentMessage.user("Inspect")), emptyList())
