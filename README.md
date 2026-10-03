@@ -36,9 +36,8 @@ available when listing is not supported.
 
 ## Install
 
-Production APKs use **`Rivet-v<version>.apk`** and belong on
+Production APKs use **`Rivet-v<version>.apk`** and are distributed through
 [GitHub Releases](https://github.com/Kaiser0733/rivet/releases).
-The first public release is being prepared; no production APK is published yet.
 
 Download the APK and open it through Android or your file manager. Android may
 ask you to allow installation from that source, and Play Protect may scan or

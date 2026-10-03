@@ -1,8 +1,9 @@
 # Release process
 
-The accepted product is **0.11.0 (22)**. Its debug build passed the focused
-physical gates. Production signing is not configured until the real certificate
-pin and signing secrets are supplied; debug acceptance is not a public release.
+Verify the release candidate's `versionName` and `versionCode` in
+`app/build.gradle.kts` before building. Production releases require all four
+GitHub signing secrets and the independently committed signer pin. The workflow
+fails closed when either is missing; debug acceptance is not a public release.
 
 ## Identity and versions
 
@@ -64,7 +65,6 @@ public version; a compromise needs a separately planned migration.
   debug assembly, release manifest/resource isolation checks, process-boundary
   checks, and APK identity/signature verification. Only then does it stage
   `Rivet-<version>-code<code>-debug.apk` in artifact `rivet-debug-apk`.
-  The current debug filename is `Rivet-0.11.0-code22-debug.apk`.
 - **Release** (`.github/workflows/release.yml`) is manual. It requires all four
   secrets and `release/production-signer.sha256`, decodes a temporary keystore,
   builds the signed release, and verifies it against both that keystore and
@@ -73,7 +73,7 @@ public version; a compromise needs a separately planned migration.
 
 Verification reads canonical Gradle outputs (`app-debug.apk` / `app-release.apk`)
 before staging friendly filenames. The public artifact is **`rivet-release-apk`**
-containing **`Rivet-v0.11.0.apk`**, following `Rivet-v<version>.apk`.
+containing **`Rivet-v<versionName>.apk`**.
 An empty `release_tag` builds an artifact only. A nonempty tag must match
 `v<versionName>` and creates a **draft**, never a published release, targeting
 the workflow's commit. Checkout does not retain credentials; only the Release
@@ -84,14 +84,14 @@ workflow has repository write permission for draft creation.
 1. Merge reviewed changes with successful exact-commit Android Build CI.
 2. Complete the human key setup and review the committed public pin.
 3. Open Actions → Release → Run workflow on the intended main commit. Leave
-   `release_tag` empty for the first production build; do not publish yet.
+   `release_tag` empty for an artifact-only build; do not publish yet.
 4. Download `rivet-release-apk`. Record the APK SHA-256, package, version name,
    version code, production certificate SHA-256, and requested permissions.
    Verify those independently against the pin and Gradle declarations.
 5. Install on a clean device or the same production-signed baseline. Check
    provider/project setup, a disposable edit, command approval, Undo, and
    restart. Keep important project data backed up.
-6. When ready, run Release with `release_tag=v0.11.0` to create the draft.
+6. When ready, run Release with `release_tag=v<versionName>` to create the draft.
    Reverify the attached APK; a second build is not assumed byte-identical.
    Publish the draft only after those checks and the release notes are reviewed.
 
