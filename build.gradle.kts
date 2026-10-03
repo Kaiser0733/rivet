@@ -1,4 +1,4 @@
-// Versions are pinned here once; see DECISIONS.md for the toolchain rationale.
+// Versions are pinned here once.
 plugins {
     id("com.android.application") version "8.9.2" apply false
     id("com.android.library") version "8.9.2" apply false
