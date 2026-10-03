@@ -36,9 +36,8 @@ available when listing is not supported.
 
 ## Install
 
-Production APKs use **`Rivet-v<version>.apk`** and belong on
+Production APKs use **`Rivet-v<version>.apk`** and are distributed through
 [GitHub Releases](https://github.com/Kaiser0733/rivet/releases).
-The first public release is being prepared; no production APK is published yet.
 
 Download the APK and open it through Android or your file manager. Android may
 ask you to allow installation from that source, and Play Protect may scan or
@@ -65,8 +64,7 @@ There are no automatic update checks or automatic installations.
 - Native text edits support UTF-8 files up to 1 MiB. Document-provider
   capabilities and external changes can prevent an operation.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md) for engineering boundaries and recovery
-limitations, and [SECURITY.md](SECURITY.md) for vulnerability reporting.
+See [SECURITY.md](SECURITY.md) for vulnerability reporting.
 
 ## Building from source
 
@@ -79,9 +77,6 @@ JDK 17, Android SDK 35, and NDK 27.2.12479018:
 ```
 
 Signing and public release steps are in [RELEASE_PROCESS.md](RELEASE_PROCESS.md).
-Contributions follow [PROJECT_CONSTITUTION.md](PROJECT_CONSTITUTION.md);
-[DECISIONS.md](DECISIONS.md) records durable choices and
-[MASTER_ROADMAP.md](MASTER_ROADMAP.md) summarizes development history.
 
 ## License
 

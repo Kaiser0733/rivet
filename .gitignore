@@ -21,7 +21,7 @@ __pycache__/
 *.swo
 
 # keystores: the pinned debug key is committed on purpose (public
-# android/android credentials, see DECISIONS.md); every other key stays out
+# android/android credentials, see RELEASE_PROCESS.md); every other key stays out
 *.keystore
 *.jks
 *.keystore.*
