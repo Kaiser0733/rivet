@@ -6,7 +6,7 @@ run project commands on your phone or tablet.
 
 ## Watch it in action
 
-https://github.com/Kaiser0733/rivet/releases/download/v0.11.0/Rivet-v0.11.0-intro.mp4
+https://github.com/user-attachments/assets/b83108c7-88a5-41f8-a440-a76f53d872a5
 
 ## What it does
 
