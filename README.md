@@ -4,6 +4,10 @@ Rivet is an Android-native, chat-first AI coding agent. Choose a project folder
 and a model, describe the work, and let Rivet inspect files, make changes, and
 run project commands on your phone or tablet.
 
+## Watch it in action
+
+https://github.com/Kaiser0733/rivet/releases/download/v0.11.0/Rivet-v0.11.0-intro.mp4
+
 ## What it does
 
 - Reads, searches, edits, and patches files in a selected project.
