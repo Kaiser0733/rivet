@@ -82,6 +82,17 @@ JDK 17, Android SDK 35, and NDK 27.2.12479018:
 
 Signing and public release steps are in [RELEASE_PROCESS.md](RELEASE_PROCESS.md).
 
+## Support
+
+Rivet is free and built by Vastraa Labs, a two-person indie studio. If it saves
+you time, you can support the next build:
+
+- [Buy us a coffee](https://www.buymeacoffee.com/Vastraalabs)
+- UPI: `maybeamardeep@fam`
+
+Every contribution goes into development — better models, faster releases,
+bigger ideas.
+
 ## License
 
 Rivet-authored code is [Apache-2.0](LICENSE). Incorporated components retain
