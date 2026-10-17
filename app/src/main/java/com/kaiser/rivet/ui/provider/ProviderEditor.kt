@@ -223,6 +223,23 @@ fun ProviderEditor(
                 }
             }
 
+            val reasoningOptions = offeredReasoning(config)
+            if (reasoningOptions.size > 1) {
+                HorizontalDivider(Modifier.padding(top = 8.dp),
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+                Text(stringResource(R.string.provider_reasoning_label),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 12.dp, bottom = 4.dp))
+                Row(horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    modifier = Modifier.padding(bottom = 8.dp)) {
+                    reasoningOptions.forEach { level ->
+                        FilterChip(selected = config.reasoning == level,
+                            onClick = { viewModel.updateConfig { it.copy(reasoning = level) } },
+                            label = { Text(level.name) })
+                    }
+                }
+            }
             HorizontalDivider(Modifier.padding(top = 8.dp),
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
             TextButton(onClick = { advanced = !advanced }, modifier = Modifier.fillMaxWidth()) {
@@ -235,20 +252,6 @@ fun ProviderEditor(
                     tint = MaterialTheme.colorScheme.onBackground)
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
-            val reasoningOptions = offeredReasoning(config)
-            if (advanced && reasoningOptions.size > 1) {
-                Text(stringResource(R.string.provider_reasoning_label),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    reasoningOptions.forEach { level ->
-                        FilterChip(selected = config.reasoning == level,
-                            onClick = { viewModel.updateConfig { it.copy(reasoning = level) } },
-                            label = { Text(level.name) })
-                    }
-                }
-            }
             if (advanced) {
                 OutlinedTextField(value = state.headersText, onValueChange = viewModel::updateHeadersText,
                     label = { Text(stringResource(R.string.provider_headers_label)) },
