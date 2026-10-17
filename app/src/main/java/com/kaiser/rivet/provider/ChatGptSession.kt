@@ -110,10 +110,14 @@ class ChatGptLoopback(port: Int = 0) {
  * caller via [onAuthorizeUrl] for browser opening) -> callback -> token
  * exchange -> ID-token validation -> scope gate. The listener is always
  * stopped before returning.
+ *
+ * [clientId] is "dynamic_agent_client" for first registration; pass the saved
+ * issued client id when re-running OAuth after a dead refresh.
  */
 suspend fun runSignIn(
     hostId: String,
     onAuthorizeUrl: (String) -> Unit,
+    clientId: String = CHATGPT_DYNAMIC_CLIENT_ID,
 ): ChatGptSignInResult {
     val verifier = generateCodeVerifier()
     val state = randomToken()
@@ -125,7 +129,7 @@ suspend fun runSignIn(
         val redirectUri = "http://127.0.0.1:$port$CHATGPT_CALLBACK_PATH"
         onAuthorizeUrl(
             buildAuthorizeUrl(
-                clientId = CHATGPT_DYNAMIC_CLIENT_ID,
+                clientId = clientId,
                 hostId = hostId,
                 port = port,
                 state = state,
