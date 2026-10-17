@@ -102,6 +102,7 @@ import com.kaiser.rivet.provider.CHATGPT_DYNAMIC_CLIENT_ID
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.runSignIn
+import com.kaiser.rivet.provider.ChatGptSignInSession
 import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
@@ -138,6 +139,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val context = LocalContext.current
     var showChatGptSignInError by remember { mutableStateOf<String?>(null) }
     var showChatGptIntro by remember { mutableStateOf(false) }
+    // In-flight sign-in handle: lets a re-tap cancel the previous attempt
+    // instead of orphaning its loopback listener.
+    var chatGptSession by remember { mutableStateOf<ChatGptSignInSession?>(null) }
     var usageLimitDialogVisible by remember { mutableStateOf(false) }
     var usageLimitShownFor by remember { mutableStateOf<String?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
@@ -435,43 +439,53 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         onSecondaryAction = { showStartFree = true },
                         tertiaryAction = stringResource(R.string.continue_with_chatgpt),
                         onTertiaryAction = {
+                            // Cancel any in-flight attempt first: no orphaned
+                            // loopback listeners from repeated taps.
+                            chatGptSession?.cancel()
                             chatScope.launch {
-                                showChatGptSignInError = null
-                                val hostId = HostIdStore(context).getOrCreateHostId()
-                                val result = runSignIn(
-                                    hostId = hostId,
-                                    onAuthorizeUrl = { url ->
-                                        try {
-                                            context.startActivity(
-                                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                val session = ChatGptSignInSession()
+                                chatGptSession = session
+                                try {
+                                    showChatGptSignInError = null
+                                    val hostId = HostIdStore(context).getOrCreateHostId()
+                                    val result = runSignIn(
+                                        hostId = hostId,
+                                        onAuthorizeUrl = { url ->
+                                            try {
+                                                context.startActivity(
+                                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                                )
+                                            } catch (_: Exception) { }
+                                        },
+                                        clientId = CHATGPT_DYNAMIC_CLIENT_ID,
+                                        session = session,
+                                    )
+                                    when (result) {
+                                        is ChatGptSignInResult.Success -> {
+                                            providersViewModel.saveChatGptPlanProvider(
+                                                result.bundle,
+                                                onSaved = {
+                                                    if (providersViewModel.shouldShowChatGptPlanIntro()) {
+                                                        providersViewModel.markChatGptPlanIntroSeen()
+                                                        showChatGptIntro = true
+                                                    }
+                                                },
+                                                onError = { msg -> showChatGptSignInError = msg },
                                             )
-                                        } catch (_: Exception) { }
-                                    },
-                                    clientId = CHATGPT_DYNAMIC_CLIENT_ID,
-                                )
-                                when (result) {
-                                    is ChatGptSignInResult.Success -> {
-                                        providersViewModel.saveChatGptPlanProvider(
-                                            result.bundle,
-                                            onSaved = {
-                                                if (providersViewModel.shouldShowChatGptPlanIntro()) {
-                                                    providersViewModel.markChatGptPlanIntroSeen()
-                                                    showChatGptIntro = true
-                                                }
-                                            },
-                                            onError = { msg -> showChatGptSignInError = msg },
-                                        )
+                                        }
+                                        ChatGptSignInResult.UserCancelled -> { }
+                                        ChatGptSignInResult.PlanNotGranted -> showChatGptSignInError = planNotGrantedMsg
+                                        is ChatGptSignInResult.NetworkError -> showChatGptSignInError = networkMsg
+                                        ChatGptSignInResult.InvalidCallback -> showChatGptSignInError = failedMsg
+                                        ChatGptSignInResult.NeedsReauth -> showChatGptSignInError = expiredMsg
+                                        ChatGptSignInResult.TimedOut -> showChatGptSignInError = timeoutMsg
+                                        is ChatGptSignInResult.ServerRejected ->
+                                            showChatGptSignInError = context.getString(
+                                                R.string.chatgpt_signin_server_error, result.code)
                                     }
-                                    ChatGptSignInResult.UserCancelled -> { }
-                                    ChatGptSignInResult.PlanNotGranted -> showChatGptSignInError = planNotGrantedMsg
-                                    is ChatGptSignInResult.NetworkError -> showChatGptSignInError = networkMsg
-                                    ChatGptSignInResult.InvalidCallback -> showChatGptSignInError = failedMsg
-                                    ChatGptSignInResult.NeedsReauth -> showChatGptSignInError = expiredMsg
-                                    ChatGptSignInResult.TimedOut -> showChatGptSignInError = timeoutMsg
-                                    is ChatGptSignInResult.ServerRejected ->
-                                        showChatGptSignInError = context.getString(
-                                            R.string.chatgpt_signin_server_error, result.code)
+                                } finally {
+                                    if (chatGptSession === session) chatGptSession = null
                                 }
                             }
                         })
