@@ -37,11 +37,22 @@ class HostIdStoreTest {
         assertEquals(first, second)
     }
 
-    @Test fun isUuidV4() {
+    @Test fun isUrnUuidV4() {
         val id = HostIdStore(context).getOrCreateHostId()
+        assertTrue(id.startsWith("urn:uuid:"))
         // Throws on malformed input; version digit must be 4.
-        val parsed = UUID.fromString(id)
+        val parsed = UUID.fromString(id.removePrefix("urn:uuid:"))
         assertEquals(4, parsed.version())
-        assertTrue(id.matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")))
+        assertTrue(id.removePrefix("urn:uuid:").matches(Regex("[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}")))
+    }
+
+    @Test fun migratesBareUuidInPlace() {
+        val bare = UUID.randomUUID().toString()
+        context.getSharedPreferences("rivet_host_id", Context.MODE_PRIVATE)
+            .edit().putString("ext_agent_host_id", bare).commit()
+        val migrated = HostIdStore(context).getOrCreateHostId()
+        assertEquals("urn:uuid:$bare", migrated)
+        // Stable afterwards: no double-prefixing on subsequent reads.
+        assertEquals("urn:uuid:$bare", HostIdStore(context).getOrCreateHostId())
     }
 }

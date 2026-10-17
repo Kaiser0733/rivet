@@ -5,8 +5,9 @@ import java.util.UUID
 
 // ext_agent_host_id for Sign in with ChatGPT: an opaque per-device identifier,
 // generated once and reused for every sign-in on this host. Not a secret —
-// plain SharedPreferences, no encryption. (SIWC spec: dynamic client
-// registration is keyed partly on this value.)
+// plain SharedPreferences, no encryption. The SIWC spec requires the
+// urn:uuid: form (bare UUIDs are rejected server-side with
+// invalid_authorize_request).
 class HostIdStore(context: Context) {
     private val prefs = context.applicationContext.getSharedPreferences(
         PREFS_NAME,
@@ -14,8 +15,18 @@ class HostIdStore(context: Context) {
     )
 
     fun getOrCreateHostId(): String {
-        prefs.getString(KEY, null)?.let { return it }
-        val fresh = UUID.randomUUID().toString()
+        prefs.getString(KEY, null)?.takeIf { it.isNotBlank() }?.let { stored ->
+            // Migration: earlier builds persisted a bare UUID, which OpenAI
+            // rejects. Rewrite in place with the urn:uuid: prefix — same UUID,
+            // so the per-device identity stays stable across the upgrade.
+            if (!stored.startsWith("urn:")) {
+                val migrated = "urn:uuid:$stored"
+                prefs.edit().putString(KEY, migrated).commit()
+                return migrated
+            }
+            return stored
+        }
+        val fresh = "urn:uuid:${UUID.randomUUID()}"
         // commit() so a second instance in the same process can never observe
         // an empty slot and mint a competing id.
         prefs.edit().putString(KEY, fresh).commit()
