@@ -10,6 +10,7 @@ enum class ProviderType(val defaultBaseUrl: String) {
     @SerialName("anthropic") Anthropic("https://api.anthropic.com"),
     @SerialName("gemini") Gemini("https://generativelanguage.googleapis.com"),
     @SerialName("openrouter") OpenRouter("https://openrouter.ai/api/v1"),
+    @SerialName("chatgpt_plan") ChatGptPlan("https://api.openai.com/v1"),
 }
 
 @Serializable
@@ -84,7 +85,8 @@ private val standardReasoning = listOf(
 internal enum class AnthropicThinkingMode { Unsupported, Manual, Adaptive }
 
 fun offeredReasoning(type: ProviderType, model: String): List<ReasoningLevel> = when (type) {
-    ProviderType.OpenAiCompatible, ProviderType.Gemini -> listOf(ReasoningLevel.Default)
+    ProviderType.OpenAiCompatible, ProviderType.Gemini, ProviderType.ChatGptPlan ->
+        listOf(ReasoningLevel.Default)
     ProviderType.OpenRouter -> ReasoningLevel.entries
     ProviderType.OpenAi -> if (openAiSupportsReasoning(model)) standardReasoning else listOf(ReasoningLevel.Default)
     ProviderType.Anthropic -> when (anthropicThinkingMode(model)) {

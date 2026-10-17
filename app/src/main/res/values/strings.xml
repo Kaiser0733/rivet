@@ -9,6 +9,7 @@
     <string name="type_anthropic">Anthropic</string>
     <string name="type_gemini">Gemini</string>
     <string name="type_openrouter">OpenRouter</string>
+    <string name="type_chatgpt_plan">ChatGPT plan</string>
 
     <string name="provider_section">Providers</string>
     <string name="provider_add">Add provider</string>
@@ -64,4 +65,10 @@
     <string name="free_models_unreachable">Rivet could\'t reach OpenRouter. Check your connection and try again.</string>
     <string name="free_models_none">OpenRouter didn\'t return any free models right now. Try again in a bit.</string>
     <string name="free_models_failed">Rivet could\'t load OpenRouter\'s free models. Try again.</string>
+
+    <string name="chatgpt_signin_expired">ChatGPT sign-in expired. Sign in again.</string>
+    <string name="chatgpt_models_busy">ChatGPT is busy right now. Try again in a bit.</string>
+    <string name="chatgpt_models_unreachable">Rivet could\'t reach ChatGPT. Check your connection and try again.</string>
+    <string name="chatgpt_models_none">ChatGPT didn\'t return any models right now. Try again in a bit.</string>
+    <string name="chatgpt_models_failed">Rivet could\'t load ChatGPT\'s models. Try again.</string>
 </resources>

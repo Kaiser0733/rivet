@@ -35,6 +35,7 @@ internal fun providerDefaultName(type: ProviderType): String = when (type) {
     ProviderType.Anthropic -> "Anthropic"
     ProviderType.Gemini -> "Gemini"
     ProviderType.OpenRouter -> "OpenRouter"
+    ProviderType.ChatGptPlan -> "ChatGPT plan"
 }
 
 data class ProviderEditorState(

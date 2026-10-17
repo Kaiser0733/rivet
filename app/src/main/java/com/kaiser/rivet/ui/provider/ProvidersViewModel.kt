@@ -4,11 +4,13 @@ import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kaiser.rivet.R
+import com.kaiser.rivet.provider.ChatGptBundle
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.parseHeaders
 import com.kaiser.rivet.provider.providerClient
+import com.kaiser.rivet.provider.resolveChatGptAccessToken
 import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
@@ -18,6 +20,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.serialization.json.Json
 import java.util.UUID
 
 data class ProviderListUiState(
@@ -151,6 +154,103 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
+    // ChatGPT plan equivalent of saveFreeProvider: the credential is an OAuth
+    // bundle (stored encrypted via the OAuth slot), not an API key. Mirrors
+    // the same save-then-resolve flow.
+    fun saveChatGptPlanProvider(
+        bundle: ChatGptBundle,
+        onSaved: () -> Unit = {},
+        onError: (String) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val res = getApplication<Application>().resources
+            val id = UUID.randomUUID().toString()
+            val encoded = try {
+                Json.encodeToString(ChatGptBundle.serializer(), bundle)
+            } catch (e: Exception) {
+                null
+            }
+            if (encoded == null || !secrets.saveOAuthBundle(id, encoded)) {
+                onError(res.getString(R.string.free_key_save_failed))
+                return@launch
+            }
+            val hadProviders = _listState.value.configs.isNotEmpty()
+            val activate = !hadProviders
+            val config = ProviderConfig(
+                id = id,
+                type = ProviderType.ChatGptPlan,
+                name = "ChatGPT plan",
+                baseUrl = ProviderType.ChatGptPlan.defaultBaseUrl,
+                model = "",
+            )
+            try {
+                store.save(config)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                onError(res.getString(R.string.free_provider_save_failed))
+                return@launch
+            }
+            if (activate) {
+                try {
+                    store.setActive(id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Keep the saved provider; active selection can be fixed later.
+                }
+            }
+            _listState.update { list ->
+                if (list.activeId == null || activate) list.copy(activeId = id) else list
+            }
+            if (resolveChatGptPlanModel(id, bundle.accessToken, onError)) onSaved()
+        }
+    }
+
+    // Resolve a real model for the freshly saved ChatGPT plan provider and
+    // persist it. Returns true only when a model was set.
+    private suspend fun resolveChatGptPlanModel(
+        providerId: String,
+        accessToken: String,
+        onError: (String) -> Unit,
+    ): Boolean {
+        val res = getApplication<Application>().resources
+        val existing = try {
+            store.configSnapshot().firstOrNull { it.id == providerId }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (existing == null) {
+            onError(res.getString(R.string.free_provider_save_failed))
+            return false
+        }
+        return try {
+            val models = providerClient(existing, accessToken).listModels()
+            if (models.isEmpty()) {
+                onError(res.getString(R.string.chatgpt_models_none))
+                return false
+            }
+            store.save(existing.selectListedModel(models.first()))
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val message = when (e) {
+                is ProviderError.RateLimited,
+                is ProviderError.ResourceExhausted,
+                is ProviderError.UsageLimit,
+                is ProviderError.Server -> res.getString(R.string.chatgpt_models_busy)
+                is ProviderError.Network,
+                is ProviderError.Timeout -> res.getString(R.string.chatgpt_models_unreachable)
+                else -> res.getString(R.string.chatgpt_models_failed)
+            }
+            onError(message)
+            false
+        }
+    }
+
     // Resolve a real :free model for the freshly saved 'Free tier' provider and
     // persist it. Returns true only when a model was set.
     suspend fun resolveFreeModel(
@@ -270,17 +370,21 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     fun testConnection() {
         if (editorRequests.running) return
         val state = _editorState.value
-        val apiKey = state.keyInput.trim().ifEmpty {
-            secrets.apiKey(state.config.id) ?: ""
-        }
-        if (apiKey.isEmpty()) {
-            _editorState.update { it.copy(test = TestUi(false, "Enter an API key first.")) }
-            return
+        val isChatGptPlan = state.config.type == ProviderType.ChatGptPlan
+        if (!isChatGptPlan) {
+            val apiKey = state.keyInput.trim().ifEmpty {
+                secrets.apiKey(state.config.id) ?: ""
+            }
+            if (apiKey.isEmpty()) {
+                _editorState.update { it.copy(test = TestUi(false, "Enter an API key first.")) }
+                return
+            }
         }
         _editorState.update { it.copy(test = null, busy = true) }
         if (!editorRequests.tryLaunch(state.config.id) { ticket ->
                 try {
-                    val result = providerClient(state.config, apiKey).testConnection()
+                    val credential = resolveEditorCredential(state.config, state.keyInput)
+                    val result = providerClient(state.config, credential).testConnection()
                     if (isCurrent(ticket)) {
                         _editorState.update { it.copy(test = TestUi(result.ok, result.message)) }
                     }
@@ -302,17 +406,21 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     fun fetchModels() {
         if (editorRequests.running) return
         val state = _editorState.value
-        val apiKey = state.keyInput.trim().ifEmpty {
-            secrets.apiKey(state.config.id) ?: ""
-        }
-        if (apiKey.isEmpty()) {
-            _editorState.update { it.copy(test = TestUi(false, "Enter an API key first.")) }
-            return
+        val isChatGptPlan = state.config.type == ProviderType.ChatGptPlan
+        if (!isChatGptPlan) {
+            val apiKey = state.keyInput.trim().ifEmpty {
+                secrets.apiKey(state.config.id) ?: ""
+            }
+            if (apiKey.isEmpty()) {
+                _editorState.update { it.copy(test = TestUi(false, "Enter an API key first.")) }
+                return
+            }
         }
         _editorState.update { it.copy(fetching = true, fetchError = null) }
         if (!editorRequests.tryLaunch(state.config.id) { ticket ->
                 try {
-                    val models = providerClient(state.config, apiKey).listModels()
+                    val credential = resolveEditorCredential(state.config, state.keyInput)
+                    val models = providerClient(state.config, credential).listModels()
                     if (isCurrent(ticket)) {
                         _editorState.update {
                             it.copy(
@@ -372,7 +480,20 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     private fun isCurrent(ticket: ProviderEditorRequests.Ticket): Boolean =
         editorRequests.isCurrent(ticket, _editorState.value.config.id)
 
+    // ChatGPT plan providers authenticate with an OAuth access token (refreshed
+    // when expired); every other type uses the API-key slot.
+    private suspend fun resolveEditorCredential(config: ProviderConfig, keyInput: String): String {
+        if (config.type == ProviderType.ChatGptPlan) {
+            return resolveChatGptAccessToken(secrets, config) ?: throw ChatGptReauthRequired()
+        }
+        return keyInput.trim().ifEmpty { secrets.apiKey(config.id) ?: "" }
+    }
+
+    private class ChatGptReauthRequired : Exception()
+
     private fun editorError(error: Exception): String = when (error) {
+        is ChatGptReauthRequired ->
+            getApplication<Application>().resources.getString(R.string.chatgpt_signin_expired)
         is ProviderError -> error.text()
         is IllegalArgumentException -> "Provider configuration contains an invalid header or value."
         is SecurityException -> ProviderError.Network("permission").text()
