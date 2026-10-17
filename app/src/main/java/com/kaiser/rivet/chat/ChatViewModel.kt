@@ -28,6 +28,7 @@ import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderError
+import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
 import com.kaiser.rivet.runtime.RuntimeController
