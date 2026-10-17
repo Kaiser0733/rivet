@@ -33,8 +33,28 @@ class HostIdStore(context: Context) {
         return prefs.getString(KEY, null) ?: fresh
     }
 
+    // Issued ChatGPT client id (oaiapp_...) from the OAuth callback, persisted
+    // the moment it arrives — BEFORE the token exchange. If the exchange fails
+    // (e.g. invalid_grant: the code was consumed or rejected), the next
+    // authorization reuses this id instead of re-registering as
+    // dynamic_agent_client, per the SIWC errors-and-recovery doc ("fresh
+    // authorization with retained issued client_id"). Cleared once an exchange
+    // succeeds and the bundle takes over. A public client identifier, not a
+    // secret — plain prefs like the host id, and never logged.
+    fun savePendingClientId(id: String) {
+        prefs.edit().putString(KEY_PENDING_CLIENT_ID, id).apply()
+    }
+
+    fun pendingClientId(): String? =
+        prefs.getString(KEY_PENDING_CLIENT_ID, null)?.takeIf { it.isNotBlank() }
+
+    fun clearPendingClientId() {
+        prefs.edit().remove(KEY_PENDING_CLIENT_ID).apply()
+    }
+
     private companion object {
         const val PREFS_NAME = "rivet_host_id"
         const val KEY = "ext_agent_host_id"
+        const val KEY_PENDING_CLIENT_ID = "pending_client_id"
     }
 }

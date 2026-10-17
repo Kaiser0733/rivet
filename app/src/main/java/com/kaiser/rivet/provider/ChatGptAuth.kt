@@ -37,6 +37,18 @@ internal const val CHATGPT_SCOPE =
     "openid profile email offline_access resource.invoke chatgpt.tokens.use.direct"
 internal const val CHATGPT_CALLBACK_PATH = "/auth/callback"
 
+/**
+ * Which client_id to open the authorize URL with: the saved bundle's issued
+ * id first (reauth), then the id from the last completed consent — its token
+ * exchange may have failed (e.g. invalid_grant), so the retry reuses it per
+ * the SIWC doc instead of re-registering — then fresh registration as
+ * dynamic_agent_client.
+ */
+fun resolveSignInClientId(bundleClientId: String?, pendingClientId: String?): String =
+    if (!bundleClientId.isNullOrBlank()) bundleClientId
+    else if (!pendingClientId.isNullOrBlank()) pendingClientId
+    else CHATGPT_DYNAMIC_CLIENT_ID
+
 // Error codes from the SIWC errors-and-recovery doc that mean the refresh
 // token is dead: clear local tokens and re-run OAuth with the saved client id.
 internal val CHATGPT_DEAD_REFRESH_ERRORS = setOf(

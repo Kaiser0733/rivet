@@ -99,9 +99,9 @@ import com.kaiser.rivet.chat.projectBindingState
 import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
 import com.kaiser.rivet.ui.RivetOutlinedButton
-import com.kaiser.rivet.provider.CHATGPT_DYNAMIC_CLIENT_ID
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.resolveSignInClientId
 import com.kaiser.rivet.provider.runSignIn
 import com.kaiser.rivet.provider.ChatGptSignInSession
 import com.kaiser.rivet.provider.ChatGptSignInResult
@@ -448,9 +448,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                                 chatGptSession = session
                                 try {
                                     showChatGptSignInError = null
-                                    val hostId = HostIdStore(context).getOrCreateHostId()
+                                    val hostIds = HostIdStore(context)
                                     val result = runSignIn(
-                                        hostId = hostId,
+                                        hostId = hostIds.getOrCreateHostId(),
                                         onAuthorizeUrl = { url ->
                                             try {
                                                 context.startActivity(
@@ -459,8 +459,12 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                                                 )
                                             } catch (_: Exception) { }
                                         },
-                                        clientId = CHATGPT_DYNAMIC_CLIENT_ID,
+                                        clientId = resolveSignInClientId(
+                                            bundleClientId = null,
+                                            pendingClientId = hostIds.pendingClientId(),
+                                        ),
                                         session = session,
+                                        hostIds = hostIds,
                                     )
                                     when (result) {
                                         is ChatGptSignInResult.Success -> {

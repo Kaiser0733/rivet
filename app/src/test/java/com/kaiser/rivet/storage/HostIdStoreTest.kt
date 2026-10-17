@@ -55,4 +55,19 @@ class HostIdStoreTest {
         // Stable afterwards: no double-prefixing on subsequent reads.
         assertEquals("urn:uuid:$bare", HostIdStore(context).getOrCreateHostId())
     }
+
+    @Test fun pendingClientIdRoundTrip() {
+        val store = HostIdStore(context)
+        // Absent by default.
+        assertEquals(null, store.pendingClientId())
+        store.savePendingClientId("oaiapp_test123")
+        assertEquals("oaiapp_test123", store.pendingClientId())
+        // Visible across instances (same prefs).
+        assertEquals("oaiapp_test123", HostIdStore(context).pendingClientId())
+        // Overwrite wins: the latest callback's id is the one a retry needs.
+        store.savePendingClientId("oaiapp_test456")
+        assertEquals("oaiapp_test456", store.pendingClientId())
+        store.clearPendingClientId()
+        assertEquals(null, store.pendingClientId())
+    }
 }
