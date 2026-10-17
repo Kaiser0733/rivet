@@ -47,4 +47,21 @@
     <string name="chat_stop">Stop</string>
     <string name="chat_error_dismiss">Dismiss</string>
     <string name="model_switch">Switch provider</string>
+
+    <string name="start_free">Start free</string>
+    <string name="start_free_title">Work for free with OpenRouter</string>
+    <string name="start_free_body">Rivet can use OpenRouter\'s free models at no cost. You need a free OpenRouter account (no card needed). 1) Make the free account. 2) Come back here and paste your key.</string>
+    <string name="open_openrouter">Open openrouter.ai</string>
+    <string name="i_have_a_key">I have a key</string>
+
+    <string name="free_key_title">Paste your OpenRouter key</string>
+    <string name="free_key_label">OpenRouter API key</string>
+    <string name="free_key_hint">Paste the key from your OpenRouter account.</string>
+    <string name="free_key_blank">Enter your OpenRouter API key.</string>
+    <string name="free_key_save_failed">Rivet could\'t save your key securely. Try again.</string>
+    <string name="free_provider_save_failed">Rivet could\'t save this provider. Try again.</string>
+    <string name="free_models_busy">OpenRouter is busy right now. Try again in a bit.</string>
+    <string name="free_models_unreachable">Rivet could\'t reach OpenRouter. Check your connection and try again.</string>
+    <string name="free_models_none">OpenRouter didn\'t return any free models right now. Try again in a bit.</string>
+    <string name="free_models_failed">Rivet could\'t load OpenRouter\'s free models. Try again.</string>
 </resources>

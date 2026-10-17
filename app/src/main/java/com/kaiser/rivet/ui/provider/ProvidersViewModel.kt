@@ -3,6 +3,7 @@ package com.kaiser.rivet.ui.provider
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
@@ -88,6 +89,115 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     fun closeEditor() {
         cancelEditorRequests()
         _editorState.value = ProviderEditorState()
+    }
+
+    // Curated preference order for OpenRouter :free models. The first id present
+    // in a live listing wins; otherwise the first :free model returned.
+    private val preferredFreeModels = listOf(
+        "nvidia/nemotron-3-super-120b-a12b:free",
+        "google/gemma-4-31b-it:free",
+        "meta-llama/llama-3.3-70b-instruct:free",
+        "mistralai/mistral-small-3.1-24b-instruct:free",
+        "google/gemma-3-27b-it:free",
+    )
+
+    fun saveFreeProvider(
+        apiKey: String,
+        onSaved: () -> Unit = {},
+        onError: (String) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val res = getApplication<Application>().resources
+            val key = apiKey.trim()
+            if (key.isBlank()) {
+                onError(res.getString(R.string.free_key_blank))
+                return@launch
+            }
+            val hadProviders = _listState.value.configs.isNotEmpty()
+            val activate = !hadProviders
+            val id = UUID.randomUUID().toString()
+            if (!secrets.saveApiKey(id, key)) {
+                onError(res.getString(R.string.free_key_save_failed))
+                return@launch
+            }
+            val config = ProviderConfig(
+                id = id,
+                type = ProviderType.OpenRouter,
+                name = "Free tier",
+                baseUrl = "https://openrouter.ai/api/v1",
+                model = "",
+            )
+            try {
+                store.save(config)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                onError(res.getString(R.string.free_provider_save_failed))
+                return@launch
+            }
+            if (activate) {
+                try {
+                    store.setActive(id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Keep the saved provider; active selection can be fixed later.
+                }
+            }
+            _listState.update { list ->
+                if (list.activeId == null || activate) list.copy(activeId = id) else list
+            }
+            if (resolveFreeModel(id, key, onError)) onSaved()
+        }
+    }
+
+    // Resolve a real :free model for the freshly saved 'Free tier' provider and
+    // persist it. Returns true only when a model was set.
+    suspend fun resolveFreeModel(
+        providerId: String,
+        apiKey: String,
+        onError: (String) -> Unit = {},
+    ): Boolean {
+        val res = getApplication<Application>().resources
+        val existing = try {
+            store.configSnapshot().firstOrNull { it.id == providerId }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (existing == null) {
+            onError(res.getString(R.string.free_provider_save_failed))
+            return false
+        }
+        return try {
+            val models = providerClient(existing, apiKey).listModels()
+            val freeModels = models.filter { it.id.endsWith(":free") }
+            if (freeModels.isEmpty()) {
+                onError(res.getString(R.string.free_models_none))
+                return false
+            }
+            val freeIds = freeModels.map { it.id }.toSet()
+            val chosenId = preferredFreeModels.firstOrNull { it in freeIds }
+                ?: freeModels.first().id
+            val chosen = freeModels.first { it.id == chosenId }
+            store.save(existing.selectListedModel(chosen))
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            val message = when (e) {
+                is ProviderError.RateLimited,
+                is ProviderError.ResourceExhausted,
+                is ProviderError.UsageLimit,
+                is ProviderError.Server -> res.getString(R.string.free_models_busy)
+                is ProviderError.Network,
+                is ProviderError.Timeout -> res.getString(R.string.free_models_unreachable)
+                else -> res.getString(R.string.free_models_failed)
+            }
+            onError(message)
+            false
+        }
     }
 
     fun updateConfig(transform: (ProviderConfig) -> ProviderConfig) {
