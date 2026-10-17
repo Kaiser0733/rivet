@@ -1,5 +1,6 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.storage.HostIdStore
 import java.io.BufferedReader
 import java.io.InputStreamReader
 import java.io.OutputStream
@@ -201,12 +202,16 @@ class ChatGptSignInSession {
  * [clientId] is "dynamic_agent_client" for first registration; pass the saved
  * issued client id when re-running OAuth after a dead refresh.
  * [session] lets the caller abort early via [ChatGptSignInSession.cancel].
+ * [hostIds] persists the issued client id from the callback BEFORE the token
+ * exchange, so a retry after an exchange failure (e.g. invalid_grant) reuses
+ * it; the pending id is cleared once an exchange succeeds.
  */
 suspend fun runSignIn(
     hostId: String,
     onAuthorizeUrl: (String) -> Unit,
     clientId: String = CHATGPT_DYNAMIC_CLIENT_ID,
     session: ChatGptSignInSession = ChatGptSignInSession(),
+    hostIds: HostIdStore,
 ): ChatGptSignInResult {
     val verifier = generateCodeVerifier()
     val state = randomToken()
@@ -238,13 +243,18 @@ suspend fun runSignIn(
                 if (cb.state != state) return ChatGptSignInResult.InvalidCallback
                 if (cb.clientId.isEmpty()) return ChatGptSignInResult.InvalidCallback
                 // The issued client id comes from the callback — never persist
-                // "dynamic_agent_client".
+                // "dynamic_agent_client". Save it BEFORE the exchange: if the
+                // exchange fails, the retry reuses this id per the SIWC doc.
+                hostIds.savePendingClientId(cb.clientId)
                 return when (val tokens = exchangeCode(cb.code, verifier, redirectUri, cb.clientId)) {
                     is TokenResult.NetworkFailed ->
                         ChatGptSignInResult.NetworkError("Token exchange failed: network")
                     is TokenResult.Failed ->
                         ChatGptSignInResult.ServerRejected(tokens.error)
                     is TokenResult.Ok -> {
+                        // Exchange consumed the code; the pending id's job is
+                        // done — the bundle below takes over from here.
+                        hostIds.clearPendingClientId()
                         val jwks = fetchJwks()
                             ?: return ChatGptSignInResult.NetworkError("Could not fetch signing keys")
                         val sub = validateIdToken(tokens.idToken, cb.clientId, nonce, jwks)

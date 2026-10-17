@@ -50,9 +50,9 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.offeredReasoning
-import com.kaiser.rivet.provider.CHATGPT_DYNAMIC_CLIENT_ID
 import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.resolveSignInClientId
 import com.kaiser.rivet.provider.runSignIn
 import com.kaiser.rivet.provider.ChatGptSignInSession
 import com.kaiser.rivet.storage.HostIdStore
@@ -154,11 +154,9 @@ fun ProviderEditor(
                             signingIn = true
                             signInError = null
                             try {
-                                val hostId = HostIdStore(context).getOrCreateHostId()
-                                val savedClientId = viewModel.chatGptClientId(config.id)
-                                    ?: CHATGPT_DYNAMIC_CLIENT_ID
+                                val hostIds = HostIdStore(context)
                                 val result = runSignIn(
-                                    hostId = hostId,
+                                    hostId = hostIds.getOrCreateHostId(),
                                     onAuthorizeUrl = { url ->
                                         try {
                                             context.startActivity(
@@ -167,8 +165,12 @@ fun ProviderEditor(
                                             )
                                         } catch (_: Exception) { }
                                     },
-                                    clientId = savedClientId,
+                                    clientId = resolveSignInClientId(
+                                        bundleClientId = viewModel.chatGptClientId(config.id),
+                                        pendingClientId = hostIds.pendingClientId(),
+                                    ),
                                     session = session,
+                                    hostIds = hostIds,
                                 )
                                 when (result) {
                                     is ChatGptSignInResult.Success -> {
