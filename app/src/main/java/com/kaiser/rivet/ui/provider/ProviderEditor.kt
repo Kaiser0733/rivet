@@ -81,6 +81,7 @@ fun ProviderEditor(
     val networkMsg = stringResource(R.string.chatgpt_signin_network)
     val failedMsg = stringResource(R.string.chatgpt_signin_failed)
     val expiredMsg = stringResource(R.string.chatgpt_signin_expired)
+    val timeoutMsg = stringResource(R.string.chatgpt_signin_timeout)
     val filteredModels = remember(state.models, config.model, modelSearch) {
         filterModels(state.models, config.model, modelSearch)
     }
@@ -186,6 +187,10 @@ fun ProviderEditor(
                                     is ChatGptSignInResult.NetworkError -> signInError = networkMsg
                                     ChatGptSignInResult.InvalidCallback -> signInError = failedMsg
                                     ChatGptSignInResult.NeedsReauth -> signInError = expiredMsg
+                                    ChatGptSignInResult.TimedOut -> signInError = timeoutMsg
+                                    is ChatGptSignInResult.ServerRejected ->
+                                        signInError = context.getString(
+                                            R.string.chatgpt_signin_server_error, result.code)
                                 }
                             } finally {
                                 signingIn = false

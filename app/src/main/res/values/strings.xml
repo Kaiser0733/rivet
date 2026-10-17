@@ -80,6 +80,8 @@
     <string name="chatgpt_plan_not_granted">ChatGPT plan usage wasn\'t granted. Try again or use another provider.</string>
     <string name="chatgpt_signin_network">Rivet couldn\'t reach ChatGPT. Check your connection and try again.</string>
     <string name="chatgpt_signin_failed">ChatGPT sign-in didn\'t complete. Try again.</string>
+    <string name="chatgpt_signin_timeout">ChatGPT sign-in timed out. Try again.</string>
+    <string name="chatgpt_signin_server_error">ChatGPT sign-in didn\'t complete (error: %1$s). Try again.</string>
     <string name="chatgpt_usage_limit_title">ChatGPT plan limit reached</string>
     <string name="chatgpt_usage_limit_body">Your ChatGPT plan limit for Rivet is reached. Manage your usage in ChatGPT settings.</string>
     <string name="chatgpt_models_busy">ChatGPT is busy right now. Try again in a bit.</string>

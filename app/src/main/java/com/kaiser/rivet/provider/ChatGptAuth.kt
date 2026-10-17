@@ -133,10 +133,19 @@ sealed interface ChatGptSignInResult {
     data class Success(val bundle: ChatGptBundle) : ChatGptSignInResult
     data object UserCancelled : ChatGptSignInResult
     data object PlanNotGranted : ChatGptSignInResult
+    /** True transport failure (unreachable host, socket error). Never use for
+     * server rejections or timeouts — those get their own results below. */
     data class NetworkError(val message: String) : ChatGptSignInResult
     data object InvalidCallback : ChatGptSignInResult
     /** Refresh token is dead; clear local tokens and re-run OAuth. */
     data object NeedsReauth : ChatGptSignInResult
+    /** No callback arrived before the wait expired (user abandoned the flow).
+     * Not a network failure — never show the "check your connection" copy. */
+    data object TimedOut : ChatGptSignInResult
+    /** The token endpoint answered with an explicit error code (e.g.
+     * invalid_grant). Surface the code; it is a server rejection, not a
+     * network failure. */
+    data class ServerRejected(val code: String) : ChatGptSignInResult
 }
 
 sealed interface TokenResult {

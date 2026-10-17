@@ -201,7 +201,7 @@ suspend fun runSignIn(
         )
         when (val cb = loopback.awaitCallback()) {
             is ChatGptCallback.Timeout ->
-                return ChatGptSignInResult.NetworkError("Sign-in timed out waiting for the browser callback")
+                return ChatGptSignInResult.TimedOut
             is ChatGptCallback.Error ->
                 return if (cb.error == "access_denied") ChatGptSignInResult.UserCancelled
                 else ChatGptSignInResult.InvalidCallback
@@ -214,7 +214,7 @@ suspend fun runSignIn(
                     is TokenResult.NetworkFailed ->
                         ChatGptSignInResult.NetworkError("Token exchange failed: network")
                     is TokenResult.Failed ->
-                        ChatGptSignInResult.NetworkError("Token exchange failed: ${tokens.error}")
+                        ChatGptSignInResult.ServerRejected(tokens.error)
                     is TokenResult.Ok -> {
                         val jwks = fetchJwks()
                             ?: return ChatGptSignInResult.NetworkError("Could not fetch signing keys")

@@ -133,6 +133,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val networkMsg = stringResource(R.string.chatgpt_signin_network)
     val failedMsg = stringResource(R.string.chatgpt_signin_failed)
     val expiredMsg = stringResource(R.string.chatgpt_signin_expired)
+    val timeoutMsg = stringResource(R.string.chatgpt_signin_timeout)
     val chatScope = rememberCoroutineScope()
     val context = LocalContext.current
     var showChatGptSignInError by remember { mutableStateOf<String?>(null) }
@@ -467,6 +468,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                                     is ChatGptSignInResult.NetworkError -> showChatGptSignInError = networkMsg
                                     ChatGptSignInResult.InvalidCallback -> showChatGptSignInError = failedMsg
                                     ChatGptSignInResult.NeedsReauth -> showChatGptSignInError = expiredMsg
+                                    ChatGptSignInResult.TimedOut -> showChatGptSignInError = timeoutMsg
+                                    is ChatGptSignInResult.ServerRejected ->
+                                        showChatGptSignInError = context.getString(
+                                            R.string.chatgpt_signin_server_error, result.code)
                                 }
                             }
                         })
