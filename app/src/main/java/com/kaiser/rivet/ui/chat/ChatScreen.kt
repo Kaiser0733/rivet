@@ -62,6 +62,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
@@ -114,6 +115,11 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         state.projectIdentity, state.projectLoading)
     val wrongProject = projectBinding == ProjectBindingState.Mismatch
     var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
+    var showKeyInput by remember { mutableStateOf(false) }
+    var keyInput by remember { mutableStateOf("") }
+    var keyError by remember { mutableStateOf<String?>(null) }
+    val onIHaveAKey: () -> Unit = { showKeyInput = true }
+    var showStartFree by remember { mutableStateOf(false) }
     var confirmUndo by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -166,6 +172,78 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 chatViewModel.discardProjectChanges(identity)
             }) { Text("Discard pending changes") } },
             dismissButton = { TextButton(onClick = { confirmDiscard = null }) { Text("Cancel") } })
+    }
+    if (showStartFree) {
+        val context = LocalContext.current
+        AlertDialog(onDismissRequest = { showStartFree = false },
+            title = { Text(stringResource(R.string.start_free_title),
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = { Text(stringResource(R.string.start_free_body),
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
+            confirmButton = {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = {
+                        try {
+                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://openrouter.ai"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                        } catch (_: Exception) { }
+                    }) { Text(stringResource(R.string.open_openrouter)) }
+                    RivetOutlinedButton(onClick = { showStartFree = false; onIHaveAKey() }) {
+                        Text(stringResource(R.string.i_have_a_key))
+                    }
+                }
+            },
+            dismissButton = { TextButton(onClick = { showStartFree = false }) {
+                Text(stringResource(R.string.close))
+            } })
+    }
+    if (showKeyInput) {
+        val blankKeyMessage = stringResource(R.string.free_key_blank)
+        AlertDialog(onDismissRequest = { showKeyInput = false; keyInput = ""; keyError = null },
+            title = { Text(stringResource(R.string.free_key_title),
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = keyInput,
+                        onValueChange = { keyInput = it; keyError = null },
+                        label = { Text(stringResource(R.string.free_key_label)) },
+                        placeholder = { Text(stringResource(R.string.free_key_hint)) },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+                            autoCorrect = false,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    keyError?.let { message ->
+                        Text(message, color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                RivetOutlinedButton(onClick = {
+                    val trimmed = keyInput.trim()
+                    if (trimmed.isBlank()) {
+                        keyError = blankKeyMessage
+                        return@RivetOutlinedButton
+                    }
+                    providersViewModel.saveFreeProvider(
+                        trimmed,
+                        onSaved = {
+                            showKeyInput = false
+                            keyInput = ""
+                            keyError = null
+                        },
+                        onError = { message -> keyError = message },
+                    )
+                }) { Text(stringResource(R.string.provider_save)) }
+            },
+            dismissButton = { TextButton(onClick = { showKeyInput = false; keyInput = ""; keyError = null }) {
+                Text(stringResource(R.string.provider_cancel))
+            } })
     }
     state.pendingApproval?.let { approval ->
         ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
@@ -250,7 +328,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 if (providers.configs.isEmpty()) {
                     EmptyState(RivetDoodle.Provider, "Choose a model to get started.",
                         "Add a provider first. Then choose the project you want Rivet to work on.",
-                        "Open Settings", onOpenSettings, Modifier.weight(1f))
+                        "Open Settings", onOpenSettings, Modifier.weight(1f),
+                        secondaryAction = stringResource(R.string.start_free),
+                        onSecondaryAction = { showStartFree = true })
                 } else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty()) {
                     EmptyState(RivetDoodle.Project, "Rivet no longer has access to this project.",
                         "Choose the folder again to continue this conversation.",
@@ -298,7 +378,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
 
 @Composable
 private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action: String?,
-                       onAction: () -> Unit, modifier: Modifier = Modifier) {
+                       onAction: () -> Unit, modifier: Modifier = Modifier,
+                      secondaryAction: String? = null, onSecondaryAction: (() -> Unit)? = null) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Column(Modifier.widthIn(max = 390.dp).verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 20.dp),
@@ -310,7 +391,13 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
             Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 style = MaterialTheme.typography.bodyLarge)
-            if (action != null) RivetOutlinedButton(onClick = onAction) { Text(action) }
+            if (action != null || secondaryAction != null) {
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    if (action != null) RivetOutlinedButton(onClick = onAction) { Text(action) }
+                    if (secondaryAction != null && onSecondaryAction != null)
+                        RivetOutlinedButton(onClick = onSecondaryAction) { Text(secondaryAction) }
+                }
+            }
         }
     }
 }
