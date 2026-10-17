@@ -11,6 +11,7 @@ import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.fillMaxSize
@@ -531,7 +532,13 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 style = MaterialTheme.typography.bodyLarge)
             if (action != null || secondaryAction != null || tertiaryAction != null) {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                // FlowRow: on narrow screens (360dp) three buttons no longer
+                // fit one row — "Continue with ChatGPT" was squeezed to 56px
+                // and wrapped mid-word. Wrap instead of squeezing.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     if (action != null) RivetOutlinedButton(onClick = onAction) { Text(action) }
                     if (secondaryAction != null && onSecondaryAction != null)
                         RivetOutlinedButton(onClick = onSecondaryAction) { Text(secondaryAction) }
