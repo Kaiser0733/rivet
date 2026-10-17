@@ -53,4 +53,11 @@
     <string name="start_free_body">Rivet can use OpenRouter's free models at no cost. You need a free OpenRouter account (no card needed). 1) Make the free account. 2) Come back here and paste your key.</string>
     <string name="open_openrouter">Open openrouter.ai</string>
     <string name="i_have_a_key">I have a key</string>
+
+    <string name="free_key_title">Paste your OpenRouter key</string>
+    <string name="free_key_label">OpenRouter API key</string>
+    <string name="free_key_hint">Paste the key from your OpenRouter account.</string>
+    <string name="free_key_blank">Enter your OpenRouter API key.</string>
+    <string name="free_key_save_failed">Rivet couldn't save your key securely. Try again.</string>
+    <string name="free_provider_save_failed">Rivet couldn't save this provider. Try again.</string>
 </resources>

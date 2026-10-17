@@ -114,10 +114,11 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val projectBinding = projectBindingState(state.currentSessionId, state.currentSessionWorkspaceId,
         state.projectIdentity, state.projectLoading)
     val wrongProject = projectBinding == ProjectBindingState.Mismatch
-    val onIHaveAKey: () -> Unit = {
-        // TODO(step 3): implement OpenRouter key capture and storage
-    }
     var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
+    var showKeyInput by remember { mutableStateOf(false) }
+    var keyInput by remember { mutableStateOf("") }
+    var keyError by remember { mutableStateOf<String?>(null) }
+    val onIHaveAKey: () -> Unit = { showKeyInput = true }
     var showStartFree by remember { mutableStateOf(false) }
     var confirmUndo by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf<String?>(null) }
@@ -194,6 +195,53 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             },
             dismissButton = { TextButton(onClick = { showStartFree = false }) {
                 Text(stringResource(R.string.close))
+            } })
+    }
+    if (showKeyInput) {
+        AlertDialog(onDismissRequest = { showKeyInput = false; keyInput = ""; keyError = null },
+            title = { Text(stringResource(R.string.free_key_title),
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    OutlinedTextField(
+                        value = keyInput,
+                        onValueChange = { keyInput = it; keyError = null },
+                        label = { Text(stringResource(R.string.free_key_label)) },
+                        placeholder = { Text(stringResource(R.string.free_key_hint)) },
+                        singleLine = true,
+                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+                            autoCorrect = false,
+                        ),
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    keyError?.let { message ->
+                        Text(message, color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                RivetOutlinedButton(onClick = {
+                    val trimmed = keyInput.trim()
+                    if (trimmed.isBlank()) {
+                        keyError = stringResource(R.string.free_key_blank)
+                        return@RivetOutlinedButton
+                    }
+                    providersViewModel.saveFreeProvider(
+                        trimmed,
+                        onSaved = {
+                            showKeyInput = false
+                            keyInput = ""
+                            keyError = null
+                        },
+                        onError = { message -> keyError = message },
+                    )
+                }) { Text(stringResource(R.string.provider_save)) }
+            },
+            dismissButton = { TextButton(onClick = { showKeyInput = false; keyInput = ""; keyError = null }) {
+                Text(stringResource(R.string.provider_cancel))
             } })
     }
     state.pendingApproval?.let { approval ->
