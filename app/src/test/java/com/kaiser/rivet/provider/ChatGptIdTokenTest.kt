@@ -73,7 +73,7 @@ class ChatGptIdTokenTest {
         fun strip(v: BigInteger) = enc.encodeToString(v.toByteArray().let {
             if (it[0] == 0.toByte()) it.copyOfRange(1, it.size) else it
         })
-        val jwks = """{"keys":[{"kty":"RSA","kid":"$kid","n":"${strip(rsaPub.modulus)}","e":"${strip(rsaPub.publicExponent)}"}]}"
+        val jwks = """{"keys":[{"kty":"RSA","kid":"$kid","n":"${strip(rsaPub.modulus)}","e":"${strip(rsaPub.publicExponent)}"}]}"""
         return token to jwks
     }
 
