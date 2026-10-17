@@ -107,6 +107,7 @@ import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.history.HistoryPane
 import com.kaiser.rivet.runtime.ManagedProcessStatus
 import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.launch
 
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,

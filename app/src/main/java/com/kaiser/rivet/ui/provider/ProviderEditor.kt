@@ -58,6 +58,7 @@ import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.chat.displaySafeText
+import kotlinx.coroutines.launch
 
 private val MAX_WIDTH = 640.dp
 
