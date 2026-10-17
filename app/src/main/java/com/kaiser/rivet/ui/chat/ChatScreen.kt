@@ -53,6 +53,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.Role
@@ -96,6 +97,12 @@ import com.kaiser.rivet.chat.projectBindingState
 import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
 import com.kaiser.rivet.ui.RivetOutlinedButton
+import com.kaiser.rivet.provider.CHATGPT_DYNAMIC_CLIENT_ID
+import com.kaiser.rivet.provider.ProviderError
+import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.runSignIn
+import com.kaiser.rivet.provider.ChatGptSignInResult
+import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.history.HistoryPane
 import com.kaiser.rivet.runtime.ManagedProcessStatus
@@ -120,6 +127,16 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     var keyError by remember { mutableStateOf<String?>(null) }
     val onIHaveAKey: () -> Unit = { showKeyInput = true }
     var showStartFree by remember { mutableStateOf(false) }
+    val planNotGrantedMsg = stringResource(R.string.chatgpt_plan_not_granted)
+    val networkMsg = stringResource(R.string.chatgpt_signin_network)
+    val failedMsg = stringResource(R.string.chatgpt_signin_failed)
+    val expiredMsg = stringResource(R.string.chatgpt_signin_expired)
+    val chatScope = rememberCoroutineScope()
+    val context = LocalContext.current
+    var showChatGptSignInError by remember { mutableStateOf<String?>(null) }
+    var showChatGptIntro by remember { mutableStateOf(false) }
+    var usageLimitDialogVisible by remember { mutableStateOf(false) }
+    var usageLimitShownFor by remember { mutableStateOf<String?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf<String?>(null) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
@@ -248,6 +265,65 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     state.pendingApproval?.let { approval ->
         ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
     }
+    if (showChatGptSignInError != null) {
+        AlertDialog(
+            onDismissRequest = { showChatGptSignInError = null },
+            text = { Text(showChatGptSignInError.orEmpty()) },
+            confirmButton = {
+                TextButton(onClick = { showChatGptSignInError = null }) {
+                    Text(stringResource(R.string.close))
+                }
+            },
+        )
+    }
+    if (showChatGptIntro) {
+        AlertDialog(
+            onDismissRequest = { showChatGptIntro = false },
+            title = { Text(stringResource(R.string.chatgpt_plan_intro_title),
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
+            text = { Text(stringResource(R.string.chatgpt_plan_intro_body),
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
+            confirmButton = {
+                RivetOutlinedButton(onClick = { showChatGptIntro = false }) {
+                    Text(stringResource(R.string.got_it))
+                }
+            },
+        )
+    }
+    val activeProvider = providers.configs.firstOrNull { it.id == providers.activeId }
+    val isChatGptPlanActive = activeProvider?.type == ProviderType.ChatGptPlan
+    LaunchedEffect(state.error, activeProvider?.id) {
+        val isUsageLimit = state.error == ProviderError.UsageLimit().text()
+        if (isUsageLimit && isChatGptPlanActive && usageLimitShownFor != state.error) {
+            usageLimitShownFor = state.error
+            usageLimitDialogVisible = true
+        }
+    }
+    if (usageLimitDialogVisible) {
+        AlertDialog(
+            onDismissRequest = { usageLimitDialogVisible = false },
+            title = { Text(stringResource(R.string.chatgpt_usage_limit_title),
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
+            text = { Text(stringResource(R.string.chatgpt_usage_limit_body),
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
+            confirmButton = {
+                RivetOutlinedButton(onClick = {
+                    usageLimitDialogVisible = false
+                    try {
+                        context.startActivity(
+                            Intent(Intent.ACTION_VIEW, Uri.parse("https://chatgpt.com/settings/usage"))
+                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                        )
+                    } catch (_: Exception) { }
+                }) { Text(stringResource(R.string.manage_usage)) }
+            },
+            dismissButton = {
+                TextButton(onClick = { usageLimitDialogVisible = false }) {
+                    Text(stringResource(R.string.close))
+                }
+            },
+        )
+    }
 
     BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
         val sidebarWidth = landscapeSidebarWidth(maxWidth.value).dp
@@ -292,6 +368,29 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     Box(Modifier.fillMaxWidth()) {
                         ModelSelector(Modifier.align(Alignment.Center), providersViewModel)
                     }
+                    if (isChatGptPlanActive) {
+                        Row(
+                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(8.dp),
+                        ) {
+                            Text(
+                                stringResource(R.string.using_chatgpt_plan),
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                style = MaterialTheme.typography.bodySmall,
+                            )
+                            TextButton(onClick = {
+                                try {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://chatgpt.com/settings/usage"))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                    )
+                                } catch (_: Exception) { }
+                            }) {
+                                Text(stringResource(R.string.manage_usage))
+                            }
+                        }
+                    }
                 }
                 HorizontalDivider(Modifier.fillMaxWidth()
                     .align(Alignment.CenterHorizontally).padding(top = 2.dp),
@@ -330,7 +429,45 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         "Add a provider first. Then choose the project you want Rivet to work on.",
                         "Open Settings", onOpenSettings, Modifier.weight(1f),
                         secondaryAction = stringResource(R.string.start_free),
-                        onSecondaryAction = { showStartFree = true })
+                        onSecondaryAction = { showStartFree = true },
+                        tertiaryAction = stringResource(R.string.continue_with_chatgpt),
+                        onTertiaryAction = {
+                            chatScope.launch {
+                                showChatGptSignInError = null
+                                val hostId = HostIdStore(context).getOrCreateHostId()
+                                val result = runSignIn(
+                                    hostId = hostId,
+                                    onAuthorizeUrl = { url ->
+                                        try {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                            )
+                                        } catch (_: Exception) { }
+                                    },
+                                    clientId = CHATGPT_DYNAMIC_CLIENT_ID,
+                                )
+                                when (result) {
+                                    is ChatGptSignInResult.Success -> {
+                                        providersViewModel.saveChatGptPlanProvider(
+                                            result.bundle,
+                                            onSaved = {
+                                                if (providersViewModel.shouldShowChatGptPlanIntro()) {
+                                                    providersViewModel.markChatGptPlanIntroSeen()
+                                                    showChatGptIntro = true
+                                                }
+                                            },
+                                            onError = { msg -> showChatGptSignInError = msg },
+                                        )
+                                    }
+                                    ChatGptSignInResult.UserCancelled -> { }
+                                    ChatGptSignInResult.PlanNotGranted -> showChatGptSignInError = planNotGrantedMsg
+                                    is ChatGptSignInResult.NetworkError -> showChatGptSignInError = networkMsg
+                                    ChatGptSignInResult.InvalidCallback -> showChatGptSignInError = failedMsg
+                                    ChatGptSignInResult.NeedsReauth -> showChatGptSignInError = expiredMsg
+                                }
+                            }
+                        })
                 } else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty()) {
                     EmptyState(RivetDoodle.Project, "Rivet no longer has access to this project.",
                         "Choose the folder again to continue this conversation.",
@@ -379,7 +516,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
 @Composable
 private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action: String?,
                        onAction: () -> Unit, modifier: Modifier = Modifier,
-                      secondaryAction: String? = null, onSecondaryAction: (() -> Unit)? = null) {
+                      secondaryAction: String? = null, onSecondaryAction: (() -> Unit)? = null,
+                      tertiaryAction: String? = null, onTertiaryAction: (() -> Unit)? = null) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Column(Modifier.widthIn(max = 390.dp).verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 20.dp),
@@ -391,11 +529,13 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
             Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = androidx.compose.ui.text.style.TextAlign.Center,
                 style = MaterialTheme.typography.bodyLarge)
-            if (action != null || secondaryAction != null) {
+            if (action != null || secondaryAction != null || tertiaryAction != null) {
                 Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                     if (action != null) RivetOutlinedButton(onClick = onAction) { Text(action) }
                     if (secondaryAction != null && onSecondaryAction != null)
                         RivetOutlinedButton(onClick = onSecondaryAction) { Text(secondaryAction) }
+                    if (tertiaryAction != null && onTertiaryAction != null)
+                        RivetOutlinedButton(onClick = onTertiaryAction) { Text(tertiaryAction) }
                 }
             }
         }

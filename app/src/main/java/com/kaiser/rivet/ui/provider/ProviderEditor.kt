@@ -19,6 +19,9 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
+import android.content.Intent
+import android.net.Uri
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -30,6 +33,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -37,6 +41,7 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.input.PasswordVisualTransformation
@@ -45,7 +50,11 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.offeredReasoning
+import com.kaiser.rivet.provider.CHATGPT_DYNAMIC_CLIENT_ID
+import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.runSignIn
+import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.chat.displaySafeText
@@ -62,6 +71,15 @@ fun ProviderEditor(
     var advanced by remember(config.id) { mutableStateOf(state.headersText.isNotEmpty()) }
     var showKey by remember(config.id) { mutableStateOf(false) }
     var modelSearch by remember(config.id, state.models) { mutableStateOf("") }
+    val context = LocalContext.current
+    val scope = rememberCoroutineScope()
+    var signingIn by remember(config.id) { mutableStateOf(false) }
+    var signInError by remember(config.id) { mutableStateOf<String?>(null) }
+    var showIntroDialog by remember(config.id) { mutableStateOf(false) }
+    val planNotGrantedMsg = stringResource(R.string.chatgpt_plan_not_granted)
+    val networkMsg = stringResource(R.string.chatgpt_signin_network)
+    val failedMsg = stringResource(R.string.chatgpt_signin_failed)
+    val expiredMsg = stringResource(R.string.chatgpt_signin_expired)
     val filteredModels = remember(state.models, config.model, modelSearch) {
         filterModels(state.models, config.model, modelSearch)
     }
@@ -107,30 +125,121 @@ fun ProviderEditor(
                         modifier = Modifier.padding(top = 4.dp, start = 4.dp))
                 }
             }
-            OutlinedTextField(
-                value = state.keyInput,
-                onValueChange = viewModel::setKeyInput,
-                label = { Text(stringResource(R.string.provider_api_key_label)) },
-                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
-                singleLine = true,
-                visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
-                trailingIcon = if (state.keyInput.isNotEmpty()) {
-                    {
-                        IconButton(onClick = { showKey = !showKey }) {
-                            Icon(painterResource(if (showKey) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
-                                if (showKey) "Hide API key" else "Show API key",
-                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (config.type == ProviderType.ChatGptPlan) {
+                val signedIn = viewModel.chatGptClientId(config.id) != null
+                val displayEmail = state.chatGptEmail ?: viewModel.chatGptEmail(config.id)
+                if (signedIn) {
+                    Text(
+                        stringResource(
+                            R.string.chatgpt_signed_in_as,
+                            displayEmail ?: stringResource(R.string.chatgpt_account_fallback),
+                        ),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(top = 8.dp),
+                    )
+                }
+                RivetOutlinedButton(
+                    onClick = {
+                        if (signingIn) return@RivetOutlinedButton
+                        scope.launch {
+                            signingIn = true
+                            signInError = null
+                            try {
+                                val hostId = HostIdStore(context).getOrCreateHostId()
+                                val savedClientId = viewModel.chatGptClientId(config.id)
+                                    ?: CHATGPT_DYNAMIC_CLIENT_ID
+                                val result = runSignIn(
+                                    hostId = hostId,
+                                    onAuthorizeUrl = { url ->
+                                        try {
+                                            context.startActivity(
+                                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
+                                            )
+                                        } catch (_: Exception) { }
+                                    },
+                                    clientId = savedClientId,
+                                )
+                                when (result) {
+                                    is ChatGptSignInResult.Success -> {
+                                        if (state.isNew) {
+                                            viewModel.saveChatGptPlanProvider(
+                                                result.bundle,
+                                                onSaved = {
+                                                    if (viewModel.shouldShowChatGptPlanIntro()) {
+                                                        viewModel.markChatGptPlanIntroSeen()
+                                                        showIntroDialog = true
+                                                    } else {
+                                                        onDone()
+                                                    }
+                                                },
+                                                onError = { msg -> signInError = msg },
+                                            )
+                                        } else {
+                                            viewModel.updateChatGptPlanBundle(result.bundle)
+                                        }
+                                    }
+                                    ChatGptSignInResult.UserCancelled -> { }
+                                    ChatGptSignInResult.PlanNotGranted -> signInError = planNotGrantedMsg
+                                    is ChatGptSignInResult.NetworkError -> signInError = networkMsg
+                                    ChatGptSignInResult.InvalidCallback -> signInError = failedMsg
+                                    ChatGptSignInResult.NeedsReauth -> signInError = expiredMsg
+                                }
+                            } finally {
+                                signingIn = false
+                            }
                         }
+                    },
+                    enabled = !signingIn && !state.busy && !state.fetching,
+                ) {
+                    Text(stringResource(R.string.continue_with_chatgpt))
+                }
+                if (signingIn) {
+                    CircularProgressIndicator(
+                        Modifier.padding(top = 8.dp).size(16.dp),
+                        strokeWidth = 2.dp,
+                    )
+                }
+                if (signedIn) {
+                    TextButton(onClick = { viewModel.signOutChatGptPlan() }) {
+                        Text(stringResource(R.string.sign_out))
                     }
-                } else null,
-                supportingText = {
-                    Column {
-                        if (state.keyPresent && state.keyInput.isEmpty())
-                            Text(stringResource(R.string.provider_api_key_present))
-                        Text(stringResource(R.string.provider_api_key_security_hint))
-                    }
-                },
-            )
+                }
+                signInError?.let { msg ->
+                    Text(
+                        msg,
+                        color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        modifier = Modifier.padding(top = 4.dp),
+                    )
+                }
+            } else {
+                OutlinedTextField(
+                    value = state.keyInput,
+                    onValueChange = viewModel::setKeyInput,
+                    label = { Text(stringResource(R.string.provider_api_key_label)) },
+                    modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+                    singleLine = true,
+                    visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
+                    trailingIcon = if (state.keyInput.isNotEmpty()) {
+                        {
+                            IconButton(onClick = { showKey = !showKey }) {
+                                Icon(painterResource(if (showKey) R.drawable.ic_visibility_off else R.drawable.ic_visibility),
+                                    if (showKey) "Hide API key" else "Show API key",
+                                    tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    } else null,
+                    supportingText = {
+                        Column {
+                            if (state.keyPresent && state.keyInput.isEmpty())
+                                Text(stringResource(R.string.provider_api_key_present))
+                            Text(stringResource(R.string.provider_api_key_security_hint))
+                        }
+                    },
+                )
+            }
 
             Row(Modifier.fillMaxWidth().padding(top = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -278,6 +387,20 @@ fun ProviderEditor(
                 }
             }
         }
+    }
+    if (showIntroDialog) {
+        AlertDialog(
+            onDismissRequest = { showIntroDialog = false; onDone() },
+            title = { Text(stringResource(R.string.chatgpt_plan_intro_title),
+                style = MaterialTheme.typography.titleMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
+            text = { Text(stringResource(R.string.chatgpt_plan_intro_body),
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
+            confirmButton = {
+                RivetOutlinedButton(onClick = { showIntroDialog = false; onDone() }) {
+                    Text(stringResource(R.string.got_it))
+                }
+            },
+        )
     }
 }
 

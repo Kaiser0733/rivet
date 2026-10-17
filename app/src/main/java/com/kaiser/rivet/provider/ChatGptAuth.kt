@@ -324,6 +324,29 @@ fun validateIdToken(
     return claims["sub"]?.str()
 }
 
+/** Best-effort revoke of a ChatGPT refresh token. Returns false on any failure. */
+suspend fun revokeChatGptRefreshToken(clientId: String, refreshToken: String): Boolean {
+    return try {
+        val configBody = http.quick().await(requestBuilder(CHATGPT_OPENID_CONFIG_URL).get().build())
+            .use { it.readBoundedBody() } ?: return false
+        val endpoint = parseJsonObject(configBody)?.get("revocation_endpoint")?.str() ?: return false
+        val request = Request.Builder()
+            .url(endpoint)
+            .post(
+                FormBody.Builder()
+                    .add("token", refreshToken)
+                    .add("token_type_hint", "refresh_token")
+                    .add("client_id", clientId)
+                    .build(),
+            )
+            .header("Accept", "application/json")
+            .build()
+        http.quick().await(request).use { it.isSuccessful }
+    } catch (_: Exception) {
+        false
+    }
+}
+
 /** Best-effort `email` claim from an ID token payload; null when absent. */
 fun idTokenEmail(idToken: String): String? {
     val parts = idToken.split('.')
