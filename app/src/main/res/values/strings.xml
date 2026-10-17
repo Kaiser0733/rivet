@@ -3,6 +3,7 @@
     <string name="app_name">Rivet</string>
     <string name="settings">Settings</string>
     <string name="close">Close</string>
+    <string name="cancel">Cancel</string>
 
     <string name="type_openai_compatible">OpenAI-compatible</string>
     <string name="type_openai">OpenAI</string>

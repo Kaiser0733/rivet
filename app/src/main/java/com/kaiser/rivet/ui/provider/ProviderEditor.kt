@@ -54,6 +54,7 @@ import com.kaiser.rivet.provider.CHATGPT_DYNAMIC_CLIENT_ID
 import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.runSignIn
+import com.kaiser.rivet.provider.ChatGptSignInSession
 import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.ui.RivetOutlinedButton
@@ -77,6 +78,9 @@ fun ProviderEditor(
     var signingIn by remember(config.id) { mutableStateOf(false) }
     var signInError by remember(config.id) { mutableStateOf<String?>(null) }
     var showIntroDialog by remember(config.id) { mutableStateOf(false) }
+    // In-flight sign-in handle: the Cancel button aborts it immediately
+    // instead of leaving the loopback listener until the await timeout.
+    var chatGptSession by remember(config.id) { mutableStateOf<ChatGptSignInSession?>(null) }
     val planNotGrantedMsg = stringResource(R.string.chatgpt_plan_not_granted)
     val networkMsg = stringResource(R.string.chatgpt_signin_network)
     val failedMsg = stringResource(R.string.chatgpt_signin_failed)
@@ -145,6 +149,8 @@ fun ProviderEditor(
                     onClick = {
                         if (signingIn) return@RivetOutlinedButton
                         scope.launch {
+                            val session = ChatGptSignInSession()
+                            chatGptSession = session
                             signingIn = true
                             signInError = null
                             try {
@@ -162,6 +168,7 @@ fun ProviderEditor(
                                         } catch (_: Exception) { }
                                     },
                                     clientId = savedClientId,
+                                    session = session,
                                 )
                                 when (result) {
                                     is ChatGptSignInResult.Success -> {
@@ -194,6 +201,7 @@ fun ProviderEditor(
                                 }
                             } finally {
                                 signingIn = false
+                                if (chatGptSession === session) chatGptSession = null
                             }
                         }
                     },
@@ -202,10 +210,18 @@ fun ProviderEditor(
                     Text(stringResource(R.string.continue_with_chatgpt))
                 }
                 if (signingIn) {
-                    CircularProgressIndicator(
-                        Modifier.padding(top = 8.dp).size(16.dp),
-                        strokeWidth = 2.dp,
-                    )
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier.padding(top = 8.dp),
+                    ) {
+                        CircularProgressIndicator(
+                            Modifier.size(16.dp),
+                            strokeWidth = 2.dp,
+                        )
+                        TextButton(onClick = { chatGptSession?.cancel() }) {
+                            Text(stringResource(R.string.cancel))
+                        }
+                    }
                 }
                 if (signedIn) {
                     TextButton(onClick = { viewModel.signOutChatGptPlan() }) {

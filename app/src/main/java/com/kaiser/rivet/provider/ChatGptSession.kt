@@ -27,6 +27,8 @@ sealed interface ChatGptCallback {
     ) : ChatGptCallback
     data class Error(val error: String, val state: String?) : ChatGptCallback
     data object Timeout : ChatGptCallback
+    /** The waiter was cancelled via [ChatGptSignInSession.cancel]. */
+    data object Cancelled : ChatGptCallback
 }
 
 /** How long runSignIn waits for the user to finish in the browser. */
@@ -64,6 +66,16 @@ class ChatGptLoopback(port: Int = 0) {
             val arrived = latch.await(timeoutMs, TimeUnit.MILLISECONDS)
             if (!arrived) ChatGptCallback.Timeout else result.get() ?: ChatGptCallback.Timeout
         }
+
+    /**
+     * Aborts a waiting sign-in immediately: the waiter observes [Cancelled]
+     * and the server socket is closed now instead of lingering until the
+     * await timeout. Safe to call when idle.
+     */
+    fun cancel() {
+        if (result.compareAndSet(null, ChatGptCallback.Cancelled)) latch.countDown()
+        stop()
+    }
 
     fun stop() {
         running = false
@@ -168,6 +180,19 @@ class ChatGptLoopback(port: Int = 0) {
 }
 
 /**
+ * Handle for an in-flight sign-in. Create one per attempt, pass it to
+ * [runSignIn], and keep it while the attempt is active. [cancel] aborts the
+ * attempt immediately — the loopback listener stops at once instead of
+ * lingering until the await timeout, and the waiter observes cancellation
+ * (surfaced as [ChatGptSignInResult.UserCancelled]).
+ */
+class ChatGptSignInSession {
+    private val loopback = ChatGptLoopback()
+    internal fun loopback(): ChatGptLoopback = loopback
+    fun cancel() = loopback.cancel()
+}
+
+/**
  * Runs the full sign-in: PKCE -> loopback -> authorize URL (handed to the
  * caller via [onAuthorizeUrl] for browser opening) -> callback -> token
  * exchange -> ID-token validation -> scope gate. The listener is always
@@ -175,16 +200,18 @@ class ChatGptLoopback(port: Int = 0) {
  *
  * [clientId] is "dynamic_agent_client" for first registration; pass the saved
  * issued client id when re-running OAuth after a dead refresh.
+ * [session] lets the caller abort early via [ChatGptSignInSession.cancel].
  */
 suspend fun runSignIn(
     hostId: String,
     onAuthorizeUrl: (String) -> Unit,
     clientId: String = CHATGPT_DYNAMIC_CLIENT_ID,
+    session: ChatGptSignInSession = ChatGptSignInSession(),
 ): ChatGptSignInResult {
     val verifier = generateCodeVerifier()
     val state = randomToken()
     val nonce = randomToken()
-    val loopback = ChatGptLoopback()
+    val loopback = session.loopback()
     try {
         loopback.start()
         val port = loopback.actualPort
@@ -202,6 +229,8 @@ suspend fun runSignIn(
         when (val cb = loopback.awaitCallback()) {
             is ChatGptCallback.Timeout ->
                 return ChatGptSignInResult.TimedOut
+            is ChatGptCallback.Cancelled ->
+                return ChatGptSignInResult.UserCancelled
             is ChatGptCallback.Error ->
                 return if (cb.error == "access_denied") ChatGptSignInResult.UserCancelled
                 else ChatGptSignInResult.InvalidCallback
