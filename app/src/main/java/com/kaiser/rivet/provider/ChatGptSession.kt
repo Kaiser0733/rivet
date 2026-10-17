@@ -1,13 +1,17 @@
 package com.kaiser.rivet.provider
 
-import com.sun.net.httpserver.HttpServer
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
+import java.io.BufferedReader
+import java.io.InputStreamReader
+import java.io.OutputStream
 import java.net.InetSocketAddress
+import java.net.ServerSocket
+import java.net.Socket
 import java.net.URLDecoder
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 
 // Loopback OAuth listener + sign-in orchestrator for Sign in with ChatGPT.
 // The listener binds 127.0.0.1 on an ephemeral port BEFORE the caller opens
@@ -29,55 +33,29 @@ sealed interface ChatGptCallback {
 internal const val CHATGPT_SIGNIN_TIMEOUT_MS = 300_000L
 
 /**
- * JDK HttpServer on 127.0.0.1. [port] 0 picks an ephemeral port; read the
- * bound port from [actualPort] before building the authorize URL.
+ * Raw ServerSocket on 127.0.0.1 (com.sun.net.httpserver is not on Android).
+ * [port] 0 picks an ephemeral port; read the bound port from [actualPort]
+ * before building the authorize URL.
  */
 class ChatGptLoopback(port: Int = 0) {
-    private val server: HttpServer =
-        HttpServer.create(InetSocketAddress("127.0.0.1", port), 0)
+    private val server: ServerSocket = ServerSocket().apply {
+        reuseAddress = false
+        bind(InetSocketAddress("127.0.0.1", port))
+    }
     private val result = AtomicReference<ChatGptCallback?>()
     private val latch = CountDownLatch(1)
+    @Volatile private var running = false
+    private var acceptThread: Thread? = null
 
     val actualPort: Int
-        get() = server.address.port
+        get() = server.localPort
 
     fun start() {
-        server.createContext(CHATGPT_CALLBACK_PATH) { exchange ->
-            try {
-                if (exchange.requestMethod != "GET") {
-                    exchange.sendResponseHeaders(405, -1)
-                    return@createContext
-                }
-                val params = parseQuery(exchange.requestURI.rawQuery)
-                val callback = when (val error = params["error"]) {
-                    null -> {
-                        val code = params["code"]
-                        val state = params["state"]
-                        if (code.isNullOrEmpty() || state.isNullOrEmpty()) {
-                            ChatGptCallback.Error("missing_code", state)
-                        } else {
-                            ChatGptCallback.Code(
-                                code = code,
-                                state = state,
-                                clientId = params["client_id"].orEmpty(),
-                                scope = params["scope"].orEmpty(),
-                            )
-                        }
-                    }
-                    else -> ChatGptCallback.Error(error, params["state"])
-                }
-                // Minimal close-tab page; one line of English, no resources.
-                val page = "<html><body><p>You can close this tab and return to Rivet.</p></body></html>"
-                val bytes = page.toByteArray(Charsets.UTF_8)
-                exchange.responseHeaders.add("Content-Type", "text/html; charset=utf-8")
-                exchange.sendResponseHeaders(200, bytes.size.toLong())
-                exchange.responseBody.use { it.write(bytes) }
-                if (result.compareAndSet(null, callback)) latch.countDown()
-            } finally {
-                exchange.close()
-            }
+        running = true
+        acceptThread = Thread(::acceptLoop, "ChatGptLoopback").apply {
+            isDaemon = true
+            start()
         }
-        server.start()
     }
 
     /** Suspends until the callback arrives or [timeoutMs] elapses. */
@@ -88,7 +66,87 @@ class ChatGptLoopback(port: Int = 0) {
         }
 
     fun stop() {
-        server.stop(0)
+        running = false
+        try { server.close() } catch (_: Exception) { }
+        acceptThread?.interrupt()
+    }
+
+    private fun acceptLoop() {
+        while (running && result.get() == null) {
+            val client: Socket = try {
+                server.accept()
+            } catch (_: Exception) {
+                return // stopped
+            }
+            try {
+                handleCallback(client)
+            } catch (_: Exception) {
+                // Malformed request; keep listening for the real callback.
+            } finally {
+                try { client.close() } catch (_: Exception) { }
+            }
+        }
+    }
+
+    private fun handleCallback(client: Socket) {
+        client.soTimeout = CALLBACK_SOCKET_TIMEOUT_MS
+        val input = BufferedReader(InputStreamReader(client.getInputStream(), Charsets.US_ASCII))
+        val requestLine = input.readLine() ?: return
+        val parts = requestLine.split(' ')
+        if (parts.size != 3 || parts[0] != "GET") {
+            respond(client.getOutputStream(), 405, "Method Not Allowed")
+            return
+        }
+        val target = parts[1]
+        if (!target.startsWith(CHATGPT_CALLBACK_PATH)) {
+            // Not our callback (e.g. favicon); stay alive for the real one.
+            respond(client.getOutputStream(), 404, "Not Found")
+            return
+        }
+        // Drain headers before responding.
+        while (true) {
+            val line = input.readLine() ?: break
+            if (line.isEmpty()) break
+        }
+        val params = parseQuery(target.substringAfter('?', "").ifEmpty { null })
+        val callback = when (val error = params["error"]) {
+            null -> {
+                val code = params["code"]
+                val state = params["state"]
+                if (code.isNullOrEmpty() || state.isNullOrEmpty()) {
+                    ChatGptCallback.Error("missing_code", state)
+                } else {
+                    ChatGptCallback.Code(
+                        code = code,
+                        state = state,
+                        clientId = params["client_id"].orEmpty(),
+                        scope = params["scope"].orEmpty(),
+                    )
+                }
+            }
+            else -> ChatGptCallback.Error(error, params["state"])
+        }
+        // Minimal close-tab page; one line of English, no resources.
+        val page = "<html><body><p>You can close this tab and return to Rivet.</p></body></html>"
+        val bytes = page.toByteArray(Charsets.UTF_8)
+        val out = client.getOutputStream()
+        out.write("HTTP/1.1 200 OK\r\n".toByteArray(Charsets.US_ASCII))
+        out.write("Content-Type: text/html; charset=utf-8\r\n".toByteArray(Charsets.US_ASCII))
+        out.write("Cache-Control: no-store\r\n".toByteArray(Charsets.US_ASCII))
+        out.write("Content-Length: ${bytes.size}\r\nConnection: close\r\n\r\n"
+            .toByteArray(Charsets.US_ASCII))
+        out.write(bytes)
+        out.flush()
+        if (result.compareAndSet(null, callback)) latch.countDown()
+    }
+
+    private fun respond(out: OutputStream, code: Int, reason: String) {
+        val body = "$reason\n".toByteArray(Charsets.UTF_8)
+        out.write(("HTTP/1.1 $code $reason\r\nContent-Type: text/plain; charset=utf-8\r\n" +
+            "Content-Length: ${body.size}\r\nConnection: close\r\n\r\n")
+            .toByteArray(Charsets.US_ASCII))
+        out.write(body)
+        out.flush()
     }
 
     private fun parseQuery(rawQuery: String?): Map<String, String> {
@@ -102,6 +160,10 @@ class ChatGptLoopback(port: Int = 0) {
                 k to v
             }
         }.toMap()
+    }
+
+    companion object {
+        private const val CALLBACK_SOCKET_TIMEOUT_MS = 10_000
     }
 }
 
