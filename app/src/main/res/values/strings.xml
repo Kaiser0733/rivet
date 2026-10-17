@@ -60,4 +60,8 @@
     <string name="free_key_blank">Enter your OpenRouter API key.</string>
     <string name="free_key_save_failed">Rivet couldn't save your key securely. Try again.</string>
     <string name="free_provider_save_failed">Rivet couldn't save this provider. Try again.</string>
+    <string name="free_models_busy">OpenRouter is busy right now. Try again in a bit.</string>
+    <string name="free_models_unreachable">Rivet couldn't reach OpenRouter. Check your connection and try again.</string>
+    <string name="free_models_none">OpenRouter didn't return any free models right now. Try again in a bit.</string>
+    <string name="free_models_failed">Rivet couldn't load OpenRouter's free models. Try again.</string>
 </resources>
