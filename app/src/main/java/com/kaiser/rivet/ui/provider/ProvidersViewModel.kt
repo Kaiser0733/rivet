@@ -3,6 +3,7 @@ package com.kaiser.rivet.ui.provider
 import android.app.Application
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
@@ -88,6 +89,61 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     fun closeEditor() {
         cancelEditorRequests()
         _editorState.value = ProviderEditorState()
+    }
+
+    // Free-tier onboarding: capture an OpenRouter key and create the 'Free tier'
+    // provider. model is a clearly-marked temporary default; dynamic :free
+    // resolution replaces it.
+    private val freeTierTemporaryModel = "openrouter/free"
+
+    fun saveFreeProvider(
+        apiKey: String,
+        onSaved: () -> Unit = {},
+        onError: (String) -> Unit = {},
+    ) {
+        viewModelScope.launch {
+            val res = getApplication<Application>().resources
+            val key = apiKey.trim()
+            if (key.isBlank()) {
+                onError(res.getString(R.string.free_key_blank))
+                return@launch
+            }
+            val hadProviders = _listState.value.configs.isNotEmpty()
+            val activate = !hadProviders
+            val id = UUID.randomUUID().toString()
+            if (!secrets.saveApiKey(id, key)) {
+                onError(res.getString(R.string.free_key_save_failed))
+                return@launch
+            }
+            val config = ProviderConfig(
+                id = id,
+                type = ProviderType.OpenRouter,
+                name = "Free tier",
+                baseUrl = "https://openrouter.ai/api/v1",
+                model = freeTierTemporaryModel,
+            )
+            try {
+                store.save(config)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                onError(res.getString(R.string.free_provider_save_failed))
+                return@launch
+            }
+            if (activate) {
+                try {
+                    store.setActive(id)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    // Keep the saved provider; active selection can be fixed later.
+                }
+            }
+            _listState.update { list ->
+                if (list.activeId == null || activate) list.copy(activeId = id) else list
+            }
+            onSaved()
+        }
     }
 
     fun updateConfig(transform: (ProviderConfig) -> ProviderConfig) {
