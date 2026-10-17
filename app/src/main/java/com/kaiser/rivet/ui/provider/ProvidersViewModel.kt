@@ -85,12 +85,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         val config = _listState.value.configs.firstOrNull { it.id == id } ?: return
         cancelEditorRequests()
         val email = if (config.type == ProviderType.ChatGptPlan) {
-            try {
-                Json.decodeFromString(ChatGptBundle.serializer(), secrets.oauthBundle(id) ?: "")
-                    .email
-            } catch (_: Exception) {
-                null
-            }
+            decodeChatGptBundle(id)?.email
         } else null
         _editorState.value = ProviderEditorState(
             config = config,
@@ -333,8 +328,9 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             } catch (_: Exception) {
                 null
             }
-            if (encoded != null) secrets.saveOAuthBundle(id, encoded)
-            _editorState.update { it.copy(chatGptEmail = bundle.email) }
+            if (encoded != null && secrets.saveOAuthBundle(id, encoded)) {
+                _editorState.update { it.copy(chatGptEmail = bundle.email) }
+            }
             onDone()
         }
     }
