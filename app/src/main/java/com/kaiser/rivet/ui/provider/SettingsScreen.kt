@@ -133,6 +133,7 @@ fun SettingsScreen(
         ProviderType.Anthropic,
         ProviderType.Gemini,
         ProviderType.OpenRouter,
+        ProviderType.ChatGptPlan,
     )
 
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {

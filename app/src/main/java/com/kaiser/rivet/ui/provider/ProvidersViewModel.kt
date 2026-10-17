@@ -1,10 +1,12 @@
 package com.kaiser.rivet.ui.provider
 
 import android.app.Application
+import android.content.Context
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.ChatGptBundle
+import com.kaiser.rivet.provider.revokeChatGptRefreshToken
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
@@ -75,17 +77,27 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                 model = "",
             ),
             isNew = true,
+            chatGptEmail = null,
         )
     }
 
     fun startEdit(id: String) {
         val config = _listState.value.configs.firstOrNull { it.id == id } ?: return
         cancelEditorRequests()
+        val email = if (config.type == ProviderType.ChatGptPlan) {
+            try {
+                Json.decodeFromString(ChatGptBundle.serializer(), secrets.oauthBundle(id) ?: "")
+                    .email
+            } catch (_: Exception) {
+                null
+            }
+        } else null
         _editorState.value = ProviderEditorState(
             config = config,
             isNew = false,
             keyPresent = secrets.hasApiKey(id),
             headersText = config.headers.joinToString("\n") { "${it.name}: ${it.value}" },
+            chatGptEmail = email,
         )
     }
 
@@ -298,6 +310,56 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             onError(message)
             false
         }
+    }
+
+    // Decode the stored OAuth bundle (if any) for a ChatGptPlan provider.
+    private fun decodeChatGptBundle(providerId: String): ChatGptBundle? = try {
+        secrets.oauthBundle(providerId)?.let {
+            Json.decodeFromString(ChatGptBundle.serializer(), it)
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    fun chatGptEmail(providerId: String): String? = decodeChatGptBundle(providerId)?.email
+
+    fun chatGptClientId(providerId: String): String? = decodeChatGptBundle(providerId)?.clientId
+
+    fun updateChatGptPlanBundle(bundle: ChatGptBundle, onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            val id = _editorState.value.config.id
+            val encoded = try {
+                Json.encodeToString(ChatGptBundle.serializer(), bundle)
+            } catch (_: Exception) {
+                null
+            }
+            if (encoded != null) secrets.saveOAuthBundle(id, encoded)
+            _editorState.update { it.copy(chatGptEmail = bundle.email) }
+            onDone()
+        }
+    }
+
+    fun signOutChatGptPlan(onDone: () -> Unit = {}) {
+        viewModelScope.launch {
+            val id = _editorState.value.config.id
+            val bundle = decodeChatGptBundle(id)
+            if (bundle != null) {
+                revokeChatGptRefreshToken(bundle.clientId, bundle.refreshToken)
+            }
+            secrets.clearOAuthBundle(id)
+            _editorState.update { it.copy(chatGptEmail = null) }
+            onDone()
+        }
+    }
+
+    fun shouldShowChatGptPlanIntro(): Boolean {
+        val prefs = getApplication<Application>().getSharedPreferences("rivet_chatgpt_plan", Context.MODE_PRIVATE)
+        return !prefs.getBoolean("intro_seen", false)
+    }
+
+    fun markChatGptPlanIntroSeen() {
+        getApplication<Application>().getSharedPreferences("rivet_chatgpt_plan", Context.MODE_PRIVATE)
+            .edit().putBoolean("intro_seen", true).commit()
     }
 
     fun updateConfig(transform: (ProviderConfig) -> ProviderConfig) {

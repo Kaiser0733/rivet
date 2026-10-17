@@ -55,6 +55,7 @@ data class ProviderEditorState(
     val test: TestUi? = null,
     val models: List<ModelInfo> = emptyList(),
     val fetchError: String? = null,
+    val chatGptEmail: String? = null,
 )
 
 data class TestUi(val ok: Boolean, val message: String)
