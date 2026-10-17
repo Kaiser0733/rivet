@@ -198,6 +198,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             } })
     }
     if (showKeyInput) {
+        val blankKeyMessage = stringResource(R.string.free_key_blank)
         AlertDialog(onDismissRequest = { showKeyInput = false; keyInput = ""; keyError = null },
             title = { Text(stringResource(R.string.free_key_title),
                 style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
@@ -226,7 +227,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 RivetOutlinedButton(onClick = {
                     val trimmed = keyInput.trim()
                     if (trimmed.isBlank()) {
-                        keyError = stringResource(R.string.free_key_blank)
+                        keyError = blankKeyMessage
                         return@RivetOutlinedButton
                     }
                     providersViewModel.saveFreeProvider(
