@@ -114,6 +114,7 @@ import com.kaiser.rivet.runtime.ManagedProcessStatus
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit) {
@@ -215,7 +216,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             text = { Text(stringResource(R.string.start_free_body),
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
             confirmButton = {
-                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
                     TextButton(onClick = {
                         try {
                             context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://openrouter.ai"))
