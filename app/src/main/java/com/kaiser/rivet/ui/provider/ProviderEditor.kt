@@ -21,6 +21,7 @@ import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
@@ -33,6 +34,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -81,6 +83,13 @@ fun ProviderEditor(
     // In-flight sign-in handle: the Cancel button aborts it immediately
     // instead of leaving the loopback listener until the await timeout.
     var chatGptSession by remember(config.id) { mutableStateOf<ChatGptSignInSession?>(null) }
+    // Cancel sign-in on system back or if the composable is torn down
+    // before the coroutine clears the reference.
+    BackHandler(enabled = signingIn) { chatGptSession?.cancel() }
+    DisposableEffect(chatGptSession) {
+        val session = chatGptSession
+        onDispose { session?.cancel() }
+    }
     val planNotGrantedMsg = stringResource(R.string.chatgpt_plan_not_granted)
     val networkMsg = stringResource(R.string.chatgpt_signin_network)
     val failedMsg = stringResource(R.string.chatgpt_signin_failed)
