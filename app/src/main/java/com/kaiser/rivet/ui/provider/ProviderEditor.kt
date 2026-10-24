@@ -5,6 +5,8 @@ import androidx.compose.foundation.border
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -52,6 +54,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.offeredReasoning
+import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.resolveSignInClientId
@@ -66,6 +69,7 @@ import kotlinx.coroutines.launch
 private val MAX_WIDTH = 640.dp
 
 @Composable
+@OptIn(ExperimentalLayoutApi::class)
 fun ProviderEditor(
     viewModel: ProvidersViewModel,
     onDone: () -> Unit,
@@ -369,6 +373,28 @@ fun ProviderEditor(
 
             HorizontalDivider(Modifier.padding(top = 8.dp),
                 color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+            // Reasoning applies to every turn, so it is not hidden behind the
+            // advanced toggle; it only appears when the endpoint offers more than
+            // one level.
+            val reasoningOptions = offeredReasoning(config)
+            if (reasoningOptions.size > 1) {
+                Text(stringResource(R.string.provider_reasoning_label),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
+                // FlowRow: five levels (OpenRouter) do not fit one 360dp row.
+                FlowRow(
+                    horizontalArrangement = Arrangement.spacedBy(4.dp),
+                    verticalArrangement = Arrangement.spacedBy(4.dp),
+                ) {
+                    reasoningOptions.forEach { level ->
+                        FilterChip(selected = config.reasoning == level,
+                            onClick = { viewModel.updateConfig { it.copy(reasoning = level) } },
+                            label = { Text(stringResource(level.labelRes())) })
+                    }
+                }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
             TextButton(onClick = { advanced = !advanced }, modifier = Modifier.fillMaxWidth()) {
                 Icon(painterResource(R.drawable.ic_settings), null, Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.onBackground)
@@ -379,20 +405,6 @@ fun ProviderEditor(
                     tint = MaterialTheme.colorScheme.onBackground)
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
-            val reasoningOptions = offeredReasoning(config)
-            if (advanced && reasoningOptions.size > 1) {
-                Text(stringResource(R.string.provider_reasoning_label),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
-                Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                    reasoningOptions.forEach { level ->
-                        FilterChip(selected = config.reasoning == level,
-                            onClick = { viewModel.updateConfig { it.copy(reasoning = level) } },
-                            label = { Text(level.name) })
-                    }
-                }
-            }
             if (advanced) {
                 OutlinedTextField(value = state.headersText, onValueChange = viewModel::updateHeadersText,
                     label = { Text(stringResource(R.string.provider_headers_label)) },
@@ -442,4 +454,12 @@ fun ProviderEditor(
 private fun displaySafeModelId(value: String): String {
     val visible = if (value.length <= 90) value else "${value.take(87)}…"
     return displaySafeText(visible)
+}
+
+private fun ReasoningLevel.labelRes(): Int = when (this) {
+    ReasoningLevel.Default -> R.string.reasoning_default
+    ReasoningLevel.Low -> R.string.reasoning_low
+    ReasoningLevel.Medium -> R.string.reasoning_medium
+    ReasoningLevel.High -> R.string.reasoning_high
+    ReasoningLevel.Max -> R.string.reasoning_max
 }
