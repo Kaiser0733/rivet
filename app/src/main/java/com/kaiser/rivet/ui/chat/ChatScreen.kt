@@ -114,6 +114,7 @@ import com.kaiser.rivet.runtime.ManagedProcessStatus
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit) {
