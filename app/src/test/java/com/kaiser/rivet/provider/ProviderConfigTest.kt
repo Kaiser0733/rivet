@@ -181,6 +181,20 @@ class ProviderConfigTest {
     }
 
     @Test
+    fun chatGptPlanExposesLowThroughHighButNotMax() {
+        // The Responses API accepts low/medium/high only. Max maps to the
+        // OpenRouter-only "xhigh" value, so the plan path must never offer it.
+        assertEquals(
+            listOf(ReasoningLevel.Default, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High),
+            offeredReasoning(ProviderType.ChatGptPlan, "gpt-5"),
+        )
+        assertEquals(
+            listOf(ReasoningLevel.Default),
+            offeredReasoning(ProviderType.Gemini, "gemini-2.5-pro"),
+        )
+    }
+
+    @Test
     fun documentedOpenAiPresetsExposeReasoning() {
         assertEquals(
             listOf(ReasoningLevel.Default, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High),
