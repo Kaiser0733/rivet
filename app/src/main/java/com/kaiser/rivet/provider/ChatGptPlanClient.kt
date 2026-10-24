@@ -83,6 +83,9 @@ internal class ChatGptPlanClient(
                     put("parameters", tool.parameters)
                 }) }
             })
+            responsesEffort(request.reasoning)?.let { effort ->
+                put("reasoning", buildJsonObject { put("effort", effort) })
+            }
         }
         val httpRequest = base(Endpoints.openAiResponses(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
@@ -98,6 +101,16 @@ internal class ChatGptPlanClient(
         config.headers.sanitized().forEach { b.header(it.name, it.value) }
         return b
     }
+}
+
+// Responses API reasoning shape is a nested object, not the chat-completions
+// `reasoning_effort` string. "xhigh" is an OpenRouter-only value, so Max is
+// dropped rather than sent. Default omits the key entirely.
+private fun responsesEffort(level: ReasoningLevel): String? = when (level) {
+    ReasoningLevel.Low -> "low"
+    ReasoningLevel.Medium -> "medium"
+    ReasoningLevel.High -> "high"
+    ReasoningLevel.Default, ReasoningLevel.Max -> null
 }
 
 // SIWC model list shape: {"models": [{slug, display_name, visibility}]}.
