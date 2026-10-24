@@ -3,6 +3,7 @@ package com.kaiser.rivet.ui.chat
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
@@ -48,6 +49,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
@@ -143,6 +145,13 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     // In-flight sign-in handle: lets a re-tap cancel the previous attempt
     // instead of orphaning its loopback listener.
     var chatGptSession by remember { mutableStateOf<ChatGptSignInSession?>(null) }
+    // Cancel sign-in on system back and if the composable is torn down
+    // before the coroutine clears the reference.
+    BackHandler(enabled = chatGptSession != null) { chatGptSession?.cancel() }
+    DisposableEffect(chatGptSession) {
+        val session = chatGptSession
+        onDispose { session?.cancel() }
+    }
     var usageLimitDialogVisible by remember { mutableStateOf(false) }
     var usageLimitShownFor by remember { mutableStateOf<String?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
