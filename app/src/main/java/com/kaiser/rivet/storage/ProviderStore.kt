@@ -69,6 +69,7 @@ class ProviderStore(
         }
         if (activeId.first() == id) setActive(null)
         secrets.clearApiKey(id)
+        secrets.clearOAuthBundle(id)
     }
 
     suspend fun setActive(id: String?) {

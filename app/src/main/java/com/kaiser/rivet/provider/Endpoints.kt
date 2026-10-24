@@ -11,6 +11,8 @@ object Endpoints {
 
     fun openAiModels(base: String): String = openAiBase(base) + "/models"
 
+    fun openAiResponses(base: String): String = openAiBase(base) + "/responses"
+
     private fun anthropicBase(base: String): String = base.trim().trimEnd('/').removeSuffix("/v1")
 
     fun anthropicChat(base: String): String = anthropicBase(base) + "/v1/messages"

@@ -91,6 +91,48 @@ class SecretStore private constructor(context: Context, private val keyProvider:
         prefs.edit().remove(providerId).apply()
     }
 
+    // OAuth credential bundles (e.g. ChatGPT plan sign-in) live in a separate
+    // namespaced slot so the one-secret-per-providerId invariant of the apiKey
+    // methods is never disturbed. Same AES-256-GCM + providerId-as-AAD scheme.
+    fun saveOAuthBundle(providerId: String, json: String): Boolean = try {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.ENCRYPT_MODE, encryptionKey())
+        cipher.updateAAD(providerId.toByteArray(Charsets.UTF_8))
+        val ciphertext = cipher.doFinal(json.toByteArray(Charsets.UTF_8))
+        prefs.edit()
+            .putString(oauthPrefsKey(providerId), encodeSecretRecord(cipher.iv, ciphertext))
+            .commit()
+    } catch (e: GeneralSecurityException) {
+        false
+    } catch (e: IOException) {
+        false
+    }
+
+    fun oauthBundle(providerId: String): String? {
+        val stored = prefs.getString(oauthPrefsKey(providerId), null) ?: return null
+        val record = decodeSecretRecord(stored) ?: return null
+        return try {
+            val cipher = Cipher.getInstance(TRANSFORMATION)
+            cipher.init(
+                Cipher.DECRYPT_MODE,
+                encryptionKey(),
+                GCMParameterSpec(GCM_TAG_BITS, record.iv),
+            )
+            cipher.updateAAD(providerId.toByteArray(Charsets.UTF_8))
+            String(cipher.doFinal(record.ciphertext), Charsets.UTF_8)
+        } catch (e: GeneralSecurityException) {
+            null
+        } catch (e: IOException) {
+            null
+        }
+    }
+
+    fun clearOAuthBundle(providerId: String) {
+        prefs.edit().remove(oauthPrefsKey(providerId)).apply()
+    }
+
+    private fun oauthPrefsKey(providerId: String) = "$providerId:oauth"
+
     private fun encryptionKey(): SecretKey = keyProvider()
 
     private companion object {
