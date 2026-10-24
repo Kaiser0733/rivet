@@ -3,12 +3,14 @@
     <string name="app_name">Rivet</string>
     <string name="settings">Settings</string>
     <string name="close">Close</string>
+    <string name="cancel">Cancel</string>
 
     <string name="type_openai_compatible">OpenAI-compatible</string>
     <string name="type_openai">OpenAI</string>
     <string name="type_anthropic">Anthropic</string>
     <string name="type_gemini">Gemini</string>
     <string name="type_openrouter">OpenRouter</string>
+    <string name="type_chatgpt_plan">ChatGPT plan</string>
 
     <string name="provider_section">Providers</string>
     <string name="provider_add">Add provider</string>
@@ -64,4 +66,27 @@
     <string name="free_models_unreachable">Rivet could\'t reach OpenRouter. Check your connection and try again.</string>
     <string name="free_models_none">OpenRouter didn\'t return any free models right now. Try again in a bit.</string>
     <string name="free_models_failed">Rivet could\'t load OpenRouter\'s free models. Try again.</string>
+
+    <string name="chatgpt_signin_expired">ChatGPT sign-in expired. Sign in again.</string>
+
+    <string name="continue_with_chatgpt">Continue with ChatGPT</string>
+    <string name="chatgpt_plan_intro_title">You\'re using your ChatGPT plan</string>
+    <string name="chatgpt_plan_intro_body">Rivet uses your ChatGPT plan quota for requests. You can manage usage in your ChatGPT settings.</string>
+    <string name="got_it">Got it</string>
+    <string name="using_chatgpt_plan">Using ChatGPT plan</string>
+    <string name="manage_usage">Manage usage</string>
+    <string name="sign_out">Sign out</string>
+    <string name="chatgpt_signed_in_as">Signed in as %1$s</string>
+    <string name="chatgpt_account_fallback">ChatGPT account</string>
+    <string name="chatgpt_plan_not_granted">ChatGPT plan usage wasn\'t granted. Try again or use another provider.</string>
+    <string name="chatgpt_signin_network">Rivet couldn\'t reach ChatGPT. Check your connection and try again.</string>
+    <string name="chatgpt_signin_failed">ChatGPT sign-in didn\'t complete. Try again.</string>
+    <string name="chatgpt_signin_timeout">ChatGPT sign-in timed out. Try again.</string>
+    <string name="chatgpt_signin_server_error">ChatGPT sign-in didn\'t complete (error: %1$s). Try again.</string>
+    <string name="chatgpt_usage_limit_title">ChatGPT plan limit reached</string>
+    <string name="chatgpt_usage_limit_body">Your ChatGPT plan limit for Rivet is reached. Manage your usage in ChatGPT settings.</string>
+    <string name="chatgpt_models_busy">ChatGPT is busy right now. Try again in a bit.</string>
+    <string name="chatgpt_models_unreachable">Rivet could\'t reach ChatGPT. Check your connection and try again.</string>
+    <string name="chatgpt_models_none">ChatGPT didn\'t return any models right now. Try again in a bit.</string>
+    <string name="chatgpt_models_failed">Rivet could\'t load ChatGPT\'s models. Try again.</string>
 </resources>

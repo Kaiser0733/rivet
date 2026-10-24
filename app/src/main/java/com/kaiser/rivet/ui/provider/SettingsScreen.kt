@@ -133,6 +133,7 @@ fun SettingsScreen(
         ProviderType.Anthropic,
         ProviderType.Gemini,
         ProviderType.OpenRouter,
+        ProviderType.ChatGptPlan,
     )
 
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -328,4 +329,5 @@ fun typeDisplayName(type: ProviderType): String = when (type) {
     ProviderType.Anthropic -> stringResource(R.string.type_anthropic)
     ProviderType.Gemini -> stringResource(R.string.type_gemini)
     ProviderType.OpenRouter -> stringResource(R.string.type_openrouter)
+    ProviderType.ChatGptPlan -> stringResource(R.string.type_chatgpt_plan)
 }

@@ -36,4 +36,5 @@ fun providerClient(config: ProviderConfig, apiKey: String): ProviderClient =
             OpenAiCompatibleClient(config, apiKey)
         ProviderType.Anthropic -> AnthropicClient(config, apiKey)
         ProviderType.Gemini -> GeminiClient(config, apiKey)
+        ProviderType.ChatGptPlan -> ChatGptPlanClient(config, apiKey)
     }

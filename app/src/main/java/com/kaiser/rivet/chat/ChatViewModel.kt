@@ -28,7 +28,9 @@ import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderError
+import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.providerClient
+import com.kaiser.rivet.provider.resolveChatGptAccessToken
 import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.runtime.ManagedProcesses
 import com.kaiser.rivet.runtime.ProjectDownloader
@@ -146,6 +148,14 @@ private class StoredProviderRuntimeSource(app: Application) : ProviderRuntimeSou
             ?: return ProviderRuntimeResult.Failure("No provider selected. Add one in Settings.")
         val config = providerStore.configSnapshot().firstOrNull { it.id == activeId }
             ?: return ProviderRuntimeResult.Failure("The selected provider no longer exists.")
+        if (config.type == ProviderType.ChatGptPlan) {
+            // OAuth access token (refreshed if expired); the factory's String
+            // slot already carries token-shaped values, so no signature change.
+            val accessToken = resolveChatGptAccessToken(secrets, config)
+                ?: return ProviderRuntimeResult.Failure(
+                    "ChatGPT sign-in expired. Sign in again in Settings.")
+            return ProviderRuntimeResult.Ready(config, accessToken)
+        }
         val apiKey = secrets.apiKey(config.id)
             ?: return ProviderRuntimeResult.Failure("No API key stored for \"${config.name}\".")
         return ProviderRuntimeResult.Ready(config, apiKey)

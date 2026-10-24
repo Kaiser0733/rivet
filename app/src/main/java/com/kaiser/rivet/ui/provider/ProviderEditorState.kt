@@ -35,6 +35,7 @@ internal fun providerDefaultName(type: ProviderType): String = when (type) {
     ProviderType.Anthropic -> "Anthropic"
     ProviderType.Gemini -> "Gemini"
     ProviderType.OpenRouter -> "OpenRouter"
+    ProviderType.ChatGptPlan -> "ChatGPT plan"
 }
 
 data class ProviderEditorState(
@@ -54,6 +55,7 @@ data class ProviderEditorState(
     val test: TestUi? = null,
     val models: List<ModelInfo> = emptyList(),
     val fetchError: String? = null,
+    val chatGptEmail: String? = null,
 )
 
 data class TestUi(val ok: Boolean, val message: String)
