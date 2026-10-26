@@ -73,6 +73,11 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         }
         val editor by providersViewModel.editorState.collectAsState()
         if (editing && editor.config.id.isEmpty()) editing = false
+        // Stable instances so ChatScreen can skip: these only write the
+        // destination state above, which rememberSaveable keeps across recompositions.
+        val openSettings = remember { { destination = RivetDestination.Settings } }
+        val openHistory = remember { { destination = RivetDestination.History } }
+        val openProcesses = remember { { destination = RivetDestination.Processes } }
 
         BackHandler(destination != RivetDestination.Chat || editing) {
             if (editing) {
@@ -89,9 +94,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     RivetDestination.Chat -> Box(Modifier.fillMaxSize()) {
                         RivetChatBackground(intensity = roseIntensity, themeMode = themeMode)
                         ChatScreen(chatViewModel, providersViewModel,
-                            onOpenSettings = { destination = RivetDestination.Settings },
-                            onOpenHistory = { destination = RivetDestination.History },
-                            onOpenProcesses = { destination = RivetDestination.Processes })
+                            onOpenSettings = openSettings,
+                            onOpenHistory = openHistory,
+                            onOpenProcesses = openProcesses)
                     }
                     RivetDestination.History -> HistoryScreen(
                         viewModel = chatViewModel,

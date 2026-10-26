@@ -45,4 +45,22 @@ class ChatPresentationTest {
     @Test fun bidiFormattingControlsAreVisibleInApprovalAndPathText() {
         assertEquals("safe\\u202Etxt", displaySafeText("safe\u202Etxt"))
     }
+
+    @Test fun claudeModelIdsBecomeReadableWords() {
+        assertEquals("Sonnet 4 5", displayModelName("anthropic/claude-sonnet-4-5"))
+        assertEquals("Opus 4 8", displayModelName("claude-opus-4-8"))
+    }
+
+    @Test fun gptModelIdsKeepTheirShapeWithUpperGPTPrefix() {
+        assertEquals("GPT-5.2-codex", displayModelName("openai/gpt-5.2-codex"))
+        assertEquals("GPT-4o", displayModelName("gpt-4o"))
+    }
+
+    @Test fun otherModelIdsAreLeftAlone() {
+        assertEquals("DeepSeek-V4.1-Flash-1017",
+            displayModelName("deepseek-ai/DeepSeek-V4.1-Flash-1017"))
+        assertEquals("llama-3.3-70b", displayModelName("llama-3.3-70b"))
+        assertEquals("model", displayModelName("model"))
+        assertEquals("", displayModelName(""))
+    }
 }

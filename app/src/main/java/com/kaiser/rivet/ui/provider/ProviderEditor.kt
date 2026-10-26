@@ -456,7 +456,7 @@ private fun displaySafeModelId(value: String): String {
     return displaySafeText(visible)
 }
 
-private fun ReasoningLevel.labelRes(): Int = when (this) {
+internal fun ReasoningLevel.labelRes(): Int = when (this) {
     ReasoningLevel.Default -> R.string.reasoning_default
     ReasoningLevel.Low -> R.string.reasoning_low
     ReasoningLevel.Medium -> R.string.reasoning_medium
