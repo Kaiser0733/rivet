@@ -194,4 +194,48 @@ class ChatGptPlanClientTest {
         assertTrue(sent.contains("\"stream\":true"))
         assertTrue(sent.contains("\"instructions\":\"sys\""))
     }
+
+    // --- reasoning ---
+
+    @Test fun defaultReasoningOmitsReasoningKey() = runTest {
+        val sseBody = Buffer().apply {
+            writeUtf8("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n")
+            writeUtf8("data: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+        }
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody)
+                .setHeader("Content-Type", "text/event-stream"),
+        )
+        client().streamAgent(AgentRequest(
+            model = "gpt-5",
+            messages = listOf(AgentMessage.user("hello")),
+            system = "sys",
+            reasoning = ReasoningLevel.Default,
+            tools = emptyList(),
+        )) {}
+        val sent = server.takeRequest().body.readUtf8()
+        assertTrue(!sent.contains("\"reasoning\""))
+    }
+
+    @Test fun highReasoningSendsNestedEffort() = runTest {
+        val sseBody = Buffer().apply {
+            writeUtf8("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n")
+            writeUtf8("data: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+        }
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody)
+                .setHeader("Content-Type", "text/event-stream"),
+        )
+        client().streamAgent(AgentRequest(
+            model = "gpt-5",
+            messages = listOf(AgentMessage.user("hello")),
+            system = "sys",
+            reasoning = ReasoningLevel.High,
+            tools = emptyList(),
+        )) {}
+        val sent = server.takeRequest().body.readUtf8()
+        assertTrue(sent.contains("\"reasoning\":{\"effort\":\"high\"}"))
+    }
 }
