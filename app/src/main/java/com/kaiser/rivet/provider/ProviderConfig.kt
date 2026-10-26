@@ -85,8 +85,10 @@ private val standardReasoning = listOf(
 internal enum class AnthropicThinkingMode { Unsupported, Manual, Adaptive }
 
 fun offeredReasoning(type: ProviderType, model: String): List<ReasoningLevel> = when (type) {
-    ProviderType.OpenAiCompatible, ProviderType.Gemini, ProviderType.ChatGptPlan ->
-        listOf(ReasoningLevel.Default)
+    ProviderType.OpenAiCompatible, ProviderType.Gemini -> listOf(ReasoningLevel.Default)
+    // The Responses API accepts low/medium/high only. Max maps to the
+    // OpenRouter-only "xhigh" value, so it is never offered for the plan path.
+    ProviderType.ChatGptPlan -> standardReasoning
     ProviderType.OpenRouter -> ReasoningLevel.entries
     ProviderType.OpenAi -> if (openAiSupportsReasoning(model)) standardReasoning else listOf(ReasoningLevel.Default)
     ProviderType.Anthropic -> when (anthropicThinkingMode(model)) {

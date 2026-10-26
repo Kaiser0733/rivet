@@ -275,6 +275,11 @@ fun SettingsScreen(
                 }
             }
             item {
+                SectionHeading(stringResource(R.string.support_heading),
+                    Modifier.padding(top = 24.dp))
+                SupportSection()
+            }
+            item {
                 SectionHeading("Updates", Modifier.padding(top = 24.dp))
                 UpdatesSection(versionName)
             }

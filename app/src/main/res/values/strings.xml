@@ -32,6 +32,11 @@
     <string name="provider_fetch_models">Fetch models</string>
     <string name="provider_test">Test connection</string>
     <string name="provider_reasoning_label">Reasoning</string>
+    <string name="reasoning_default">Default</string>
+    <string name="reasoning_low">Low</string>
+    <string name="reasoning_medium">Medium</string>
+    <string name="reasoning_high">High</string>
+    <string name="reasoning_max">Max</string>
     <string name="provider_headers_label">Extra headers</string>
     <string name="provider_headers_hint">Header: value — one per line</string>
     <string name="provider_save">Save</string>
@@ -89,4 +94,11 @@
     <string name="chatgpt_models_unreachable">Rivet could\'t reach ChatGPT. Check your connection and try again.</string>
     <string name="chatgpt_models_none">ChatGPT didn\'t return any models right now. Try again in a bit.</string>
     <string name="chatgpt_models_failed">Rivet could\'t load ChatGPT\'s models. Try again.</string>
+
+    <string name="support_heading">Support Rivet</string>
+    <string name="support_body">Rivet is free and built by a two-person indie studio. If it saves you time, you can support the next build.</string>
+    <string name="support_coffee">Buy us a coffee</string>
+    <string name="support_upi_label">UPI</string>
+    <string name="support_upi_copied">UPI ID copied.</string>
+    <string name="support_no_browser">No browser is available to open this link.</string>
 </resources>
