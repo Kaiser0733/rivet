@@ -7,15 +7,16 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.FilterChip
@@ -75,11 +76,22 @@ fun ModelSheet(
         providersViewModel.fetchModels()
     }
 
-    val selectProvider: (String) -> Unit = { id ->
+    val reseed: (String) -> Unit = { id ->
         providersViewModel.setActive(id)
         query = ""
         reasoningTouched = false
         load(id)
+    }
+
+    // A staged reasoning change belongs to the provider being left, so it is
+    // written before the slot is reseeded for another one. The reseed has to wait
+    // for save() to finish: it clears the editor slot on completion.
+    val selectProvider: (String) -> Unit = { id ->
+        if (reasoningTouched && editorConfig.id.isNotEmpty() && editorConfig.model.isNotBlank()) {
+            providersViewModel.save { reseed(id) }
+        } else {
+            reseed(id)
+        }
     }
 
     // save() clears the shared editor slot, so a reasoning change is written when
@@ -98,25 +110,42 @@ fun ModelSheet(
         if (openedFor != null) load(openedFor)
     }
 
+    // fetchModels reports a missing credential through `test`, not `fetchError`.
+    val loadError = editorState.fetchError
+        ?: editorState.test?.takeIf { !it.ok }?.message
+    val filteredModels = remember(editorState.models, editorConfig.model, query) {
+        filterModels(editorState.models, editorConfig.model, query)
+    }
+    val reasoningOptions = offeredReasoning(editorConfig)
+    // Until a provider is in the editor slot there is no model or reasoning to
+    // show; the previous version offered a Fetch button bound to an empty config.
+    val editorReady = editorConfig.id.isNotEmpty()
+
     ModalBottomSheet(onDismissRequest = close) {
-        Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
-            .padding(horizontal = 16.dp).navigationBarsPadding()) {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Text(stringResource(R.string.model_switch),
-                    style = MaterialTheme.typography.titleMedium,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
-                    modifier = Modifier.weight(1f))
-                IconButton(onClick = close) {
-                    Icon(painterResource(R.drawable.ic_close), stringResource(R.string.close),
-                        tint = MaterialTheme.colorScheme.onBackground)
+        // Lazily composed: on a weak device the 30 model rows and the chips must
+        // not be measured during the sheet's open animation.
+        LazyColumn(Modifier.fillMaxWidth().navigationBarsPadding(),
+            contentPadding = PaddingValues(horizontal = 16.dp)) {
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Text(stringResource(R.string.model_switch),
+                        style = MaterialTheme.typography.titleMedium,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        modifier = Modifier.weight(1f))
+                    IconButton(onClick = close) {
+                        Icon(painterResource(R.drawable.ic_close), stringResource(R.string.close),
+                            tint = MaterialTheme.colorScheme.onBackground)
+                    }
                 }
             }
 
-            Text(stringResource(R.string.provider_section),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
-            listState.configs.forEach { config ->
+            item {
+                Text(stringResource(R.string.provider_section),
+                    style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.primary,
+                    modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+            }
+            items(listState.configs) { config ->
                 val selected = config.id == listState.activeId
                 val onSelect = { selectProvider(config.id) }
                 Row(Modifier.fillMaxWidth().heightIn(min = 52.dp)
@@ -137,91 +166,107 @@ fun ModelSheet(
                 HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.18f))
             }
 
-            Text(stringResource(R.string.provider_model_label),
-                style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
-            // fetchModels reports a missing credential through `test`, not `fetchError`.
-            val loadError = editorState.fetchError
-                ?: editorState.test?.takeIf { !it.ok }?.message
-            when {
-                editorState.fetching -> CircularProgressIndicator(
-                    Modifier.padding(top = 4.dp).size(24.dp))
-                loadError != null -> {
-                    Text(loadError, color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.padding(top = 4.dp))
-                    TextButton(onClick = providersViewModel::fetchModels) {
-                        Text(stringResource(R.string.provider_fetch_models))
-                    }
+            if (editorReady) {
+                item {
+                    Text(stringResource(R.string.provider_model_label),
+                        style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
                 }
-                editorState.models.isNotEmpty() -> {
-                    OutlinedTextField(value = query, onValueChange = { query = it },
-                        label = { Text(stringResource(R.string.provider_search_models)) },
-                        singleLine = true,
-                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
-                    val filtered = filterModels(editorState.models, editorConfig.model, query)
-                    if (filtered.models.isEmpty()) {
-                        Text(stringResource(R.string.provider_models_no_match),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis,
-                            modifier = Modifier.padding(vertical = 12.dp))
-                    } else filtered.models.forEach { model ->
-                        ModelRow(model = model, selected = editorConfig.model == model.id) {
-                            providersViewModel.updateConfig { it.selectListedModel(model) }
-                            providersViewModel.save {}
-                            onDismiss()
+                when {
+                    editorState.fetching -> item {
+                        CircularProgressIndicator(Modifier.padding(top = 4.dp).size(24.dp))
+                    }
+                    loadError != null -> {
+                        item {
+                            Text(loadError, color = MaterialTheme.colorScheme.error,
+                                style = MaterialTheme.typography.bodySmall,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                modifier = Modifier.padding(top = 4.dp))
                         }
-                    }
-                }
-                else -> {
-                    if (editorConfig.model.isNotBlank()) {
-                        Row(Modifier.fillMaxWidth().heightIn(min = 52.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            RadioButton(selected = true, onClick = null)
-                            Column(Modifier.weight(1f).padding(end = 8.dp)) {
-                                Text(displaySafeText(displayModelName(editorConfig.model)),
-                                    style = MaterialTheme.typography.bodyMedium,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                Text(displaySafeText(editorConfig.model),
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        item {
+                            TextButton(onClick = providersViewModel::fetchModels) {
+                                Text(stringResource(R.string.provider_fetch_models))
                             }
                         }
                     }
-                    TextButton(onClick = providersViewModel::fetchModels) {
-                        Text(stringResource(R.string.provider_fetch_models))
+                    editorState.models.isNotEmpty() -> {
+                        item {
+                            OutlinedTextField(value = query, onValueChange = { query = it },
+                                label = { Text(stringResource(R.string.provider_search_models)) },
+                                singleLine = true,
+                                modifier = Modifier.fillMaxWidth().padding(top = 4.dp))
+                        }
+                        if (filteredModels.models.isEmpty()) {
+                            item {
+                                Text(stringResource(R.string.provider_models_no_match),
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis,
+                                    modifier = Modifier.padding(vertical = 12.dp))
+                            }
+                        } else items(filteredModels.models) { model ->
+                            ModelRow(model = model, selected = editorConfig.model == model.id) {
+                                providersViewModel.updateConfig { it.selectListedModel(model) }
+                                providersViewModel.save {}
+                                onDismiss()
+                            }
+                        }
+                    }
+                    else -> {
+                        if (editorConfig.model.isNotBlank()) {
+                            item {
+                                Row(Modifier.fillMaxWidth().heightIn(min = 52.dp),
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    RadioButton(selected = true, onClick = null)
+                                    Column(Modifier.weight(1f).padding(end = 8.dp)) {
+                                        Text(displaySafeText(displayModelName(editorConfig.model)),
+                                            style = MaterialTheme.typography.bodyMedium,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                        Text(displaySafeText(editorConfig.model),
+                                            style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                            maxLines = 1, overflow = TextOverflow.Ellipsis)
+                                    }
+                                }
+                            }
+                        }
+                        item {
+                            TextButton(onClick = providersViewModel::fetchModels) {
+                                Text(stringResource(R.string.provider_fetch_models))
+                            }
+                        }
+                    }
+                }
+
+                if (reasoningOptions.size > 1) {
+                    item {
+                        Text(stringResource(R.string.provider_reasoning_label),
+                            style = MaterialTheme.typography.titleSmall,
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
+                        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                            reasoningOptions.forEach { level ->
+                                FilterChip(selected = editorConfig.reasoning == level,
+                                    onClick = {
+                                        reasoningTouched = true
+                                        providersViewModel.updateConfig { it.copy(reasoning = level) }
+                                    },
+                                    label = { Text(stringResource(level.labelRes())) })
+                            }
+                        }
                     }
                 }
             }
 
-            val reasoningOptions = offeredReasoning(editorConfig)
-            if (reasoningOptions.size > 1) {
-                Text(stringResource(R.string.provider_reasoning_label),
-                    style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 16.dp, bottom = 4.dp))
-                FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp),
-                    verticalArrangement = Arrangement.spacedBy(4.dp)) {
-                    reasoningOptions.forEach { level ->
-                        FilterChip(selected = editorConfig.reasoning == level,
-                            onClick = {
-                                reasoningTouched = true
-                                providersViewModel.updateConfig { it.copy(reasoning = level) }
-                            },
-                            label = { Text(stringResource(level.labelRes())) })
-                    }
+            item {
+                HorizontalDivider(Modifier.padding(top = 16.dp),
+                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+                TextButton(onClick = { commitPending(); onManageProviders() },
+                    modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
+                    Text(stringResource(R.string.manage_providers))
                 }
-            }
-
-            HorizontalDivider(Modifier.padding(top = 16.dp),
-                color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
-            TextButton(onClick = { commitPending(); onManageProviders() },
-                modifier = Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
-                Text(stringResource(R.string.manage_providers))
             }
         }
     }
