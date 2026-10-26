@@ -36,8 +36,6 @@ import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.material3.AlertDialog
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
@@ -134,6 +132,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     var keyError by remember { mutableStateOf<String?>(null) }
     val onIHaveAKey: () -> Unit = { showKeyInput = true }
     var showStartFree by remember { mutableStateOf(false) }
+    var modelSheetVisible by remember { mutableStateOf(false) }
     val planNotGrantedMsg = stringResource(R.string.chatgpt_plan_not_granted)
     val networkMsg = stringResource(R.string.chatgpt_signin_network)
     val failedMsg = stringResource(R.string.chatgpt_signin_failed)
@@ -346,6 +345,18 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         )
     }
 
+    if (modelSheetVisible) {
+        ModelSheet(
+            providersViewModel = providersViewModel,
+            activeId = providers.activeId,
+            onDismiss = { modelSheetVisible = false },
+            onManageProviders = {
+                modelSheetVisible = false
+                onOpenSettings()
+            },
+        )
+    }
+
     BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
         val sidebarWidth = landscapeSidebarWidth(maxWidth.value).dp
         Row(Modifier.fillMaxSize()) {
@@ -384,10 +395,18 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
                             tint = MaterialTheme.colorScheme.onBackground)
                     }
+                    IconButton(onClick = chatViewModel::newSession, modifier = Modifier.size(48.dp),
+                        enabled = state.ready && !state.projectLoading && !state.streaming &&
+                            !state.undoing && !state.recoveringProjectChanges) {
+                        Icon(painterResource(R.drawable.ic_add),
+                            stringResource(R.string.new_conversation),
+                            tint = MaterialTheme.colorScheme.onBackground)
+                    }
                 }
                 if (providers.configs.isNotEmpty()) {
                     Box(Modifier.fillMaxWidth()) {
-                        ModelSelector(Modifier.align(Alignment.Center), providersViewModel)
+                        ModelSelector(Modifier.align(Alignment.Center), providersViewModel,
+                            onOpen = { modelSheetVisible = true })
                     }
                     if (isChatGptPlanActive) {
                         Row(
@@ -589,23 +608,15 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
 }
 
 @Composable
-private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewModel) {
+private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewModel, onOpen: () -> Unit) {
     val state by providersViewModel.listState.collectAsState()
     val active = state.configs.firstOrNull { it.id == state.activeId }
-    var menu by remember { mutableStateOf(false) }
     Box(modifier) {
-        TextButton(onClick = { menu = true }) {
-            Text(active?.let { "${it.name} · ${it.model}" } ?: "Choose model",
+        TextButton(onClick = onOpen) {
+            Text(active?.let { displayModelName(it.model) } ?: "Choose model",
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Icon(painterResource(R.drawable.ic_chevron_down), stringResource(R.string.model_switch))
-        }
-        DropdownMenu(expanded = menu, onDismissRequest = { menu = false }) {
-            state.configs.forEach { config ->
-                DropdownMenuItem(text = { Text("${config.name} · ${config.model}") }, onClick = {
-                    providersViewModel.setActive(config.id); menu = false
-                })
-            }
         }
     }
 }
