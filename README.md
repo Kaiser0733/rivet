@@ -1,8 +1,18 @@
 # Rivet
 
-Rivet is an Android-native, chat-first AI coding agent. Choose a project folder
-and a model, describe the work, and let Rivet inspect files, make changes, and
-run project commands on your phone or tablet.
+**Code with AI, right on your Android phone.**
+
+Rivet is an Android-native, chat-first AI coding agent. No laptop. No Termux
+setup. Choose a project folder and a model, describe the work, and let Rivet
+inspect files, make changes, and run project commands on your phone or tablet.
+
+[![Release](https://img.shields.io/badge/release-v1.0.0-brightgreen)](https://github.com/Kaiser0733/rivet/releases/latest)
+[![Android](https://img.shields.io/badge/Android-8.0%2B-brightgreen)](https://github.com/Kaiser0733/rivet/releases/latest)
+[![License](https://img.shields.io/badge/license-Apache--2.0-blue)](LICENSE)
+
+**[⬇ Download the latest APK](https://github.com/Kaiser0733/rivet/releases/latest)** · [Support the build](https://www.buymeacoffee.com/Vastraalabs)
+
+Built by [Vastraa Labs](https://vastraalabs.online), a two-person indie studio.
 
 ## Watch it in action
 
