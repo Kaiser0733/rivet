@@ -1,13 +1,10 @@
 # Security
 
-Report an unpatched vulnerability privately. Do not put exploit details,
-credentials, or private project data in a public issue.
+Found a hole? Tell us in private first — don't post it in a public issue.
 
-Use this repository's **Security → Report a vulnerability** option when private
-vulnerability reporting is enabled. If that option is unavailable, open an issue
-only to request a private contact channel, without vulnerability details.
+Go to the **Security** tab → **Report a vulnerability**.
 
-In the private report, include the affected Rivet version, Android version,
-reproduction steps, and expected versus observed behavior. Redact secrets and
-use a disposable project for examples. No bug bounty or response deadline is
-promised.
+Say which Rivet version, which Android version, and how to make it happen.
+Don't paste real keys or private code. A fake test project works fine.
+
+No bounty, sorry. We're two people, and we'll reply when we can.
