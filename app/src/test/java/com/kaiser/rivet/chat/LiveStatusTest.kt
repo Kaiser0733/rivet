@@ -1,6 +1,8 @@
 package com.kaiser.rivet.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -46,6 +48,15 @@ class LiveStatusTest {
 
     @Test fun aNegativeClockNeverShows() {
         assertEquals("Working · 0s", liveStatusLine("Working", -5))
+    }
+
+    // The reasoning surface froze at 0s on device: while a chain streams, the rendering
+    // work starves the one-second ticker. No counter there; the other states keep theirs.
+    @Test fun theReasoningLineShowsNoClock() {
+        assertFalse(liveStatusShowsClock(toolRunning = false, writing = false, waitingForApproval = false))
+        assertTrue(liveStatusShowsClock(toolRunning = true, writing = false, waitingForApproval = false))
+        assertTrue(liveStatusShowsClock(toolRunning = false, writing = true, waitingForApproval = false))
+        assertTrue(liveStatusShowsClock(toolRunning = false, writing = false, waitingForApproval = true))
     }
 
     @Test fun aRunningCommandSaysWhyUndoIsUnavailable() {
