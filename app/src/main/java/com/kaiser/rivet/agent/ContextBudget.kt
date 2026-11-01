@@ -59,7 +59,10 @@ internal object ContextBudget {
         val resolvedWindow = config.resolvedContextWindowTokens().takeIf { it > 0 } ?: DEFAULT_PLANNING_LIMIT
         val manualMaxOutput = config.resolvedManualMaxOutputTokens()
         val reserve = when {
-            manualMaxOutput != null -> minOf(resolvedWindow, manualMaxOutput)
+            // A manual output limit at or above the window would leave no room to send
+            // anything, and every request would be refused with "context too small". Half
+            // the window keeps a usable input budget; the editor accepts the same pairing.
+            manualMaxOutput != null -> minOf(resolvedWindow / 2, manualMaxOutput)
             known == null -> UNKNOWN_RESERVE
             config.type == ProviderType.Gemini -> 0 // Gemini publishes a separate input limit.
             config.type == ProviderType.Anthropic -> minOf(known, anthropicOutputCeiling(config))

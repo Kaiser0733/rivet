@@ -128,6 +128,21 @@ class ContextBudgetTest {
         assertTrue(assessed.shouldCompact)
     }
 
+    // Setting a manual output limit at or above the window used to reserve the whole window
+    // and leave nothing to send, so every request failed with "context too small".
+    @Test fun aManualOutputLimitAtOrAboveTheWindowLeavesRoomToSend() {
+        val base = ProviderConfig("c", ProviderType.OpenAiCompatible, "Compat",
+            "https://api.example/v1", "glm-5.1")
+        val equal = base.withManualContextWindow(32_000).withManualMaxOutputTokens(32_000)
+        val assessed = ContextBudget.assess(equal, 1, TokenEstimateSource.Estimated)
+        assertEquals(16_000, assessed.reservedTokens)
+        assertEquals(16_000, assessed.allowedInputTokens)
+        assertTrue(assessed.allowedInputTokens > 0)
+
+        val larger = base.withManualContextWindow(32_000).withManualMaxOutputTokens(64_000)
+        assertEquals(16_000, ContextBudget.assess(larger, 1, TokenEstimateSource.Estimated).allowedInputTokens)
+    }
+
     @Test fun contextWindowResolutionOrderManualBeatsDetectedBeats256kDefault() {
         val base = ProviderConfig(
             id = "compat",
