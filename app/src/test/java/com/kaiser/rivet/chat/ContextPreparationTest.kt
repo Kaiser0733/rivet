@@ -214,6 +214,26 @@ class ContextPreparationTest {
         assertEquals("one summary call is enough", 1, provider.requests.size)
     }
 
+    // A request that still fits the window must be sent even when there is nothing left to
+    // compact: refusing it is a dead stop for a request the provider would have accepted.
+    @Test fun aRequestThatStillFitsIsSentWhenNothingCanBeCompacted() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        // One long user message and nothing else: no tool pair to prune, and no room for
+        // a summary, but the request is under the 16,000-token ceiling.
+        val history = listOf(AgentMessage.user("Pasted notes " + "x".repeat(26_000)))
+        sessions.save(history, interrupted = true)
+        val provider = SummaryProvider()
+        val preparation = preparation(sessions, id, 16_000, provider)
+
+        val retained = preparation.prepare(history)
+
+        assertEquals("nothing was compacted, so the request is unchanged", history, retained)
+        assertEquals("no summary is worth paying for here", 0, provider.requests.size)
+    }
+
     // A summariser that keeps failing must not be paid for on every step of the turn.
     @Test fun aFailingSummariserStopsAfterBoundedAttempts() = runBlocking {
         app.deleteDatabase("coding-sessions.db")

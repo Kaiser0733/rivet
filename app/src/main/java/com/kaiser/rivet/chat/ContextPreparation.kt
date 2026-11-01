@@ -157,7 +157,7 @@ internal class ContextPreparation(
                         attempt.copy(afterTokens = after))
                 }
             }
-            return noHeadroom(durableStore, id, attempt, messages, force)
+            return noHeadroom(durableStore, id, attempt, messages, force, ceilingTokens)
         }
         val next = taskState(plan.removed, id,
             inputLimitBytes, summaryLimitBytes)
@@ -166,7 +166,7 @@ internal class ContextPreparation(
         if (after >= targetTokens ||
             (force && after >= baseline * 9 / 10) ||
             after >= baseline || plan.retained == messages) {
-            return noHeadroom(durableStore, id, attempt, messages, force)
+            return noHeadroom(durableStore, id, attempt, messages, force, ceilingTokens)
         }
         return commit(durableStore, messages, plan.retained, encoded,
             attempt.copy(afterTokens = after))
@@ -178,7 +178,12 @@ internal class ContextPreparation(
     }
 
     private suspend fun noHeadroom(store: CodingSessions, id: String, attempt: ContextAttempt,
-                                   messages: List<AgentMessage>, force: Boolean): List<AgentMessage> {
+                                   messages: List<AgentMessage>, force: Boolean,
+                                   ceilingTokens: Long): List<AgentMessage> {
+        // Nothing worth compacting was found. If the request still fits the ceiling, send
+        // it: refusing a request that fits turns a working turn into a dead stop, and the
+        // provider's own overflow error brings us back here on the forced path.
+        if (!force && attempt.beforeTokens < ceilingTokens) return messages
         if (!force) throw IllegalStateException("context_headroom_unavailable")
         recordFailure(store, id, attempt, "context_headroom_unavailable")
         return messages
