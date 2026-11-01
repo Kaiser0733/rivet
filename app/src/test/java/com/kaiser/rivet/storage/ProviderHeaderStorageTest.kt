@@ -13,11 +13,13 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.Before
@@ -181,5 +183,54 @@ class ProviderHeaderStorageTest {
         val stored = String(file.readBytes(), Charsets.ISO_8859_1)
         assertFalse(stored.contains("still-plaintext"))
         assertTrue(stored.contains("rivet-encrypted:v1:broken"))
+    }
+
+    // A store this build cannot read must never be replaced by the single item that
+    // happens to be saving at the time.
+    @Test
+    fun savingDoesNotOverwriteAStoreItCannotRead() = runBlocking {
+        val payload = """{"configs":"not-a-list"}"""
+        dataStore.edit { it[configsKey] = payload }
+
+        val threw = try { store().save(config(emptyList())); false } catch (_: Exception) { true }
+        val deleteThrew = try { store().delete("anything"); false } catch (_: Exception) { true }
+
+        assertTrue(threw)
+        assertTrue(deleteThrew)
+        assertEquals(payload, dataStore.data.first()[configsKey])
+        assertTrue(String(file.readBytes(), Charsets.ISO_8859_1).contains("not-a-list"))
+    }
+
+    @Test
+    fun anUnreadableStoreIsKeptUnderItsOwnKey() = runBlocking {
+        val payload = """{"configs":"not-a-list"}"""
+        dataStore.edit { it[configsKey] = payload }
+
+        assertEquals(emptyList<ProviderConfig>(), store().configSnapshot())
+
+        val kept = dataStore.data.first()[stringPreferencesKey("configs_unreadable")]
+        assertEquals(payload, kept)
+        assertEquals(payload, dataStore.data.first()[configsKey])
+    }
+
+    // A keystore Rivet cannot reach is not a reason to take the app down.
+    @Test
+    fun aFailingKeystoreDegradesEveryEntryPoint() = runBlocking {
+        val id = "failing-${UUID.randomUUID()}"
+        val working = SecretStore(context, key)
+        assertTrue(working.saveApiKey(id, "secret"))
+        assertTrue(working.saveOAuthBundle(id, """{"a":1}"""))
+        val tagged = working.encryptProviderHeader(id, 0, "header-value")!!
+        val broken = SecretStore(context) { throw IllegalStateException("keystore unavailable") }
+
+        assertFalse(broken.saveApiKey("$id-2", "secret"))
+        assertNull(broken.apiKey(id))
+        assertNull(broken.encryptProviderHeader(id, 0, "value"))
+        assertNull(broken.decryptProviderHeader(id, 0, tagged))
+        assertFalse(broken.saveOAuthBundle("$id-2", """{"a":2}"""))
+        assertNull(broken.oauthBundle(id))
+        // The stored values are untouched by the failed attempts.
+        assertEquals("secret", working.apiKey(id))
+        assertEquals("""{"a":1}""", working.oauthBundle(id))
     }
 }

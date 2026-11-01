@@ -427,7 +427,16 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     fun delete(id: String) {
         viewModelScope.launch {
-            store.delete(id)
+            try {
+                store.delete(id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _listState.update {
+                    it.copy(loadError = "Rivet couldn't delete this provider securely. Try again.")
+                }
+                return@launch
+            }
             _listState.update { list ->
                 if (list.activeId == id) list.copy(activeId = null) else list
             }
@@ -435,7 +444,17 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setActive(id: String) {
-        viewModelScope.launch { store.setActive(id) }
+        viewModelScope.launch {
+            try {
+                store.setActive(id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _listState.update {
+                    it.copy(loadError = "Rivet couldn't switch the active provider. Try again.")
+                }
+            }
+        }
     }
 
     fun testConnection() {

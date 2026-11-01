@@ -37,6 +37,9 @@ class ProviderStore(
     // configuration on every installed copy.
     private val configsKey = stringPreferencesKey("configs")
     private val activeKey = stringPreferencesKey("active_id")
+    // An unreadable store is copied here verbatim before Rivet shows an empty list, so
+    // a schema problem in one release cannot lose what the user configured.
+    private val quarantineKey = stringPreferencesKey("configs_unreadable")
 
     val configs: Flow<List<ProviderConfig>> = flow {
         migrateLegacyHeaderValues()
@@ -50,11 +53,16 @@ class ProviderStore(
     val activeId: Flow<String?> = dataStore.data.map { it[activeKey] }
 
     private fun decode(raw: String?): List<ProviderConfig> = try {
-        if (raw == null) emptyList()
-        else json.decodeFromString(ListSerializer(ProviderConfig.serializer()), raw)
+        decodeOrThrow(raw)
     } catch (e: Exception) {
         emptyList() // unreadable store degrades to empty, never crashes the shell
     }
+
+    // Write paths use this so an unreadable store is reported instead of being
+    // overwritten with the one item being saved.
+    private fun decodeOrThrow(raw: String?): List<ProviderConfig> =
+        if (raw == null) emptyList()
+        else json.decodeFromString(ListSerializer(ProviderConfig.serializer()), raw)
 
     // One unreadable custom header must not hide every configured provider, so it is
     // dropped and counted instead. The count lets the UI say plainly what happened.
@@ -65,7 +73,7 @@ class ProviderStore(
         migrateLegacyHeaderValues()
         val protected = withContext(Dispatchers.IO) { protectHeaders(config) }
         dataStore.edit { prefs ->
-            val current = decode(prefs[configsKey]).toMutableList()
+            val current = decodeOrThrow(prefs[configsKey]).toMutableList()
             val idx = current.indexOfFirst { it.id == protected.id }
             if (idx >= 0) current[idx] = protected else current.add(protected)
             prefs[configsKey] = json.encodeToString(ListSerializer(ProviderConfig.serializer()), current)
@@ -75,7 +83,7 @@ class ProviderStore(
     suspend fun delete(id: String) {
         migrateLegacyHeaderValues()
         dataStore.edit { prefs ->
-            val remaining = decode(prefs[configsKey]).filterNot { it.id == id }
+            val remaining = decodeOrThrow(prefs[configsKey]).filterNot { it.id == id }
             prefs[configsKey] = json.encodeToString(ListSerializer(ProviderConfig.serializer()), remaining)
         }
         if (activeId.first() == id) setActive(null)
@@ -97,7 +105,13 @@ class ProviderStore(
 
     private suspend fun migrateLegacyHeaderValues() {
         dataStore.edit { prefs ->
-            val current = decode(prefs[configsKey])
+            // A store this build cannot read is left exactly as it is, plus one copy
+            // under its own key so a later build can still recover it.
+            val raw = prefs[configsKey]
+            val current = try { decodeOrThrow(raw) } catch (_: Exception) {
+                if (raw != null && prefs[quarantineKey] != raw) prefs[quarantineKey] = raw
+                return@edit
+            }
             var rewrite = false
             val migrated = current.map { config -> config.copy(
                 headers = config.headers.mapIndexedNotNull { index, header ->
@@ -107,10 +121,10 @@ class ProviderStore(
                         header
                     } else {
                         val encrypted = secrets.encryptProviderHeader(config.id, index, header.value)
-                        rewrite = true
-                        // A plaintext value that cannot be encrypted is removed rather
-                        // than left readable on disk.
-                        if (encrypted != null) header.copy(value = encrypted) else null
+                        if (encrypted != null) {
+                            rewrite = true
+                            header.copy(value = encrypted)
+                        } else header // retried next launch; better than losing the value
                     }
                 },
             ) }
