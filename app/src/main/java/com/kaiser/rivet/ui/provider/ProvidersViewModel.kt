@@ -85,8 +85,14 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         viewModelScope.launch {
-            store.activeId.collect { id ->
-                _listState.update { it.copy(activeId = id) }
+            try {
+                store.activeId.collect { id ->
+                    _listState.update { it.copy(activeId = id) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Keep the current activeId if the preferences store cannot be read.
             }
         }
         viewModelScope.launch {
