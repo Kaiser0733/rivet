@@ -3,6 +3,7 @@ package com.kaiser.rivet.runtime
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import com.kaiser.rivet.RivetApplication
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -13,9 +14,17 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
+import java.util.WeakHashMap
 
 enum class ManagedProcessKind { Command, Preview }
 enum class ManagedProcessStatus { Starting, Running, Stopping, Completed, Failed, Stopped }
+
+internal data class ForegroundServiceState(
+    val activeTurns: Int = 0,
+    val activePreviews: Int = 0,
+) {
+    val hasActiveWork: Boolean get() = activeTurns > 0 || activePreviews > 0
+}
 
 data class ManagedProcessInfo(
     val id: String,
@@ -30,7 +39,7 @@ data class ManagedProcessInfo(
     val finishedAtMillis: Long? = null,
 )
 
-/** App-process ownership for live commands and loopback previews. */
+/** App-process ownership for live commands, loopback previews, and active agent turns. */
 class ManagedProcesses {
     private data class Entry(
         var info: ManagedProcessInfo,
@@ -42,10 +51,13 @@ class ManagedProcesses {
     private val lock = Any()
     private val serviceMutex = Mutex()
     private val entries = linkedMapOf<String, Entry>()
+    private val activeTurns = linkedMapOf<String, () -> Unit>()
     private var serviceStarted = false
     private var serviceWaiter: CompletableDeferred<Boolean>? = null
     private val mutableProcesses = MutableStateFlow<List<ManagedProcessInfo>>(emptyList())
     val processes: StateFlow<List<ManagedProcessInfo>> = mutableProcesses.asStateFlow()
+    private val mutableForegroundState = MutableStateFlow(ForegroundServiceState())
+    internal val foregroundState: StateFlow<ForegroundServiceState> = mutableForegroundState.asStateFlow()
 
     fun registerCommand(
         command: String,
@@ -195,13 +207,22 @@ class ManagedProcesses {
     }
 
     fun stopAll() {
-        val active = synchronized(lock) {
-            entries.entries.filter { it.value.info.status in setOf(
+        val (active, turnStops) = synchronized(lock) {
+            val activeEntries = entries.entries.filter { it.value.info.status in setOf(
                 ManagedProcessStatus.Starting, ManagedProcessStatus.Running,
             ) }.map { (id, entry) ->
                 entry.info = entry.info.copy(status = ManagedProcessStatus.Stopping)
                 Triple(id, entry.stop, entry.persistent)
-            }.also { publishLocked() }
+            }
+            val turns = activeTurns.values.toList()
+            activeTurns.clear()
+            publishLocked()
+            activeEntries to turns
+        }
+        turnStops.forEach { stop ->
+            try { stop() }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { /* Other owned processes still need their stop signal. */ }
         }
         active.forEach { (id, stop, persistent) ->
             try {
@@ -210,6 +231,52 @@ class ManagedProcesses {
             }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { /* Other owned processes still need their stop signal. */ }
+        }
+    }
+
+    fun startTurn(context: Context? = null, stop: () -> Unit = {}): String {
+        val (id, shouldStartService) = synchronized(lock) {
+            val id = UUID.randomUUID().toString()
+            activeTurns[id] = stop
+            publishLocked()
+            id to !serviceStarted
+        }
+        if (shouldStartService && context != null) {
+            try {
+                val appContext = context.applicationContext ?: context
+                val intent = Intent(appContext, PersistentProcessService::class.java)
+                    .setAction(PersistentProcessService.ACTION_START)
+                if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) appContext.startForegroundService(intent)
+                else appContext.startService(intent)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // On Android 12+, starting a foreground service while backgrounded may be rejected;
+                // the turn still runs in-process.
+            }
+        }
+        return id
+    }
+
+    fun finishTurn(id: String) = synchronized(lock) {
+        if (activeTurns.remove(id) != null) {
+            publishLocked()
+        }
+    }
+
+    internal fun activeTurnCount(): Int = synchronized(lock) {
+        activeTurns.size
+    }
+
+    internal fun hasForegroundWork(): Boolean = synchronized(lock) {
+        hasForegroundWorkLocked()
+    }
+
+    internal fun stopForegroundServiceIfIdle(): Boolean = synchronized(lock) {
+        if (hasForegroundWorkLocked()) false
+        else {
+            serviceStarted = false
+            true
         }
     }
 
@@ -263,7 +330,7 @@ class ManagedProcesses {
     }
 
     internal fun activePersistentCount(): Int = synchronized(lock) {
-        entries.values.count { it.persistent && it.info.status in ACTIVE }
+        activePersistentCountLocked()
     }
 
     internal fun finishPreview(id: String, failed: Boolean = false) = synchronized(lock) {
@@ -281,11 +348,21 @@ class ManagedProcesses {
         entries[id]?.workspaceIdentity == identity
     }
 
+    private fun activePersistentCountLocked() =
+        entries.values.count { it.persistent && it.info.status in ACTIVE }
+
+    private fun hasForegroundWorkLocked() =
+        activeTurns.isNotEmpty() || activePersistentCountLocked() > 0
+
     private fun canStartPersistentLocked() =
-        entries.values.count { it.persistent && it.info.status in ACTIVE } < MAX_PERSISTENT_PROCESSES
+        activePersistentCountLocked() < MAX_PERSISTENT_PROCESSES
 
     private fun publishLocked() {
         mutableProcesses.value = entries.values.map { it.info }.sortedByDescending { it.startedAtMillis }
+        mutableForegroundState.value = ForegroundServiceState(
+            activeTurns = activeTurns.size,
+            activePreviews = activePersistentCountLocked(),
+        )
     }
 
     private fun trimCompletedLocked() {
@@ -324,5 +401,14 @@ class ManagedProcesses {
         private const val SERVICE_START_TIMEOUT_MS = 5_000L
         private val ACTIVE = setOf(ManagedProcessStatus.Starting, ManagedProcessStatus.Running,
             ManagedProcessStatus.Stopping)
+        private val fallbackByApp = WeakHashMap<Context, ManagedProcesses>()
+
+        fun forApplication(context: Context): ManagedProcesses {
+            val app = context.applicationContext ?: context
+            if (app is RivetApplication) return app.managedProcesses
+            return synchronized(fallbackByApp) {
+                fallbackByApp.getOrPut(app) { ManagedProcesses() }
+            }
+        }
     }
 }

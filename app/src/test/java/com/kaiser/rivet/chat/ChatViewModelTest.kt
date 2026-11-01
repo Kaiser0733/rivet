@@ -28,6 +28,7 @@ import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.TestResult
 import com.kaiser.rivet.runtime.CheckpointFailure
 import com.kaiser.rivet.runtime.MirrorFailure
+import com.kaiser.rivet.runtime.PersistentProcessService
 import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.runtime.WorkspaceMirror
 import com.kaiser.rivet.storage.AgentSession
@@ -1074,6 +1075,51 @@ class ChatViewModelTest {
         assertEquals("", restored.summary)
         assertEquals(20, sessions.fullEventCount(id))
         assertEquals(1, provider.requests.size)
+    }
+
+    @Test fun turnRunsUnderForegroundServiceWithOngoingNotificationAndStopsOnEnd() = runBlocking {
+        val started = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+                started.complete(Unit)
+                finish.await()
+                return AgentResponse(text = "Done")
+            }
+        }
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+        org.robolectric.Shadows.shadowOf(app).clearStartedServices()
+
+        viewModel.send("Keep working while backgrounded")
+        withTimeout(5_000) { started.await() }
+        assertTrue(viewModel.managedProcesses.hasForegroundWork())
+        assertEquals(1, viewModel.managedProcesses.activeTurnCount())
+        val startedIntent = org.robolectric.Shadows.shadowOf(app).nextStartedService
+        assertEquals(PersistentProcessService.ACTION_START, startedIntent?.action)
+
+        val controller = Robolectric.buildService(PersistentProcessService::class.java, startedIntent)
+            .create().startCommand(0, 1)
+        val service = controller.get()
+        val shadowService = org.robolectric.Shadows.shadowOf(service)
+        val notification = shadowService.lastForegroundNotification
+        assertEquals(
+            "Rivet is working — tap to return",
+            notification.extras.getCharSequence(android.app.Notification.EXTRA_TEXT)?.toString(),
+        )
+        assertFalse(shadowService.isStoppedBySelf)
+
+        finish.complete(Unit)
+        await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Done" }
+        assertFalse(viewModel.managedProcesses.hasForegroundWork())
+        assertEquals(0, viewModel.managedProcesses.activeTurnCount())
+        assertTrue(shadowService.isStoppedBySelf)
+        controller.destroy()
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =

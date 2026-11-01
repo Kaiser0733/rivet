@@ -247,6 +247,13 @@ class RuntimeController(
         }
     }
 
+    fun startTurn(onStop: () -> Unit = {}): String? =
+        managedProcesses?.startTurn(app, onStop)
+
+    fun finishTurn(id: String?) {
+        if (id != null) managedProcesses?.finishTurn(id)
+    }
+
     suspend fun retryPendingChanges(expectedWorkspace: String): MirrorSyncResult? = operations.withLock {
         if (selection.currentIdentity() != expectedWorkspace) return@withLock null
         currentMirror()?.sync()
