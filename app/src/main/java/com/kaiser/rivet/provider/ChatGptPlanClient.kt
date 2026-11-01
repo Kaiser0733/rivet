@@ -359,7 +359,7 @@ internal suspend fun OkHttpClient.responsesSse(
                             }
                             val now = clockMillis()
                             if (now - lastProgressAt > progressDeadlineMs) {
-                                throw ProviderError.Timeout()
+                                throw ProviderError.Timeout("progress")
                             }
                             responseBytes += line.toByteArray(Charsets.UTF_8).size + 2
                             if (responseBytes > MAX_SSE_RESPONSE_BYTES) {

@@ -181,7 +181,10 @@ class HttpBridgeTest {
                     clockMillis = { now.also { now += 25_000L } },
                 ) { events += it }
                 throw AssertionError("expected stalled heartbeat stream to time out")
-            } catch (_: ProviderError.Timeout) {
+            } catch (e: ProviderError.Timeout) {
+                // A stream that keeps sending heartbeat lines but no data is the
+                // "progress" watchdog; a socket that goes silent is "socket".
+                assertEquals("progress", e.stage)
                 assertEquals(listOf("{\"delta\":1}"), events)
             }
         } finally {
