@@ -339,7 +339,9 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun genericProviderOmitsReasoningEffort() = runTest {
+    fun genericProviderSendsReasoningEffort() = runTest {
+        // A custom endpoint decides per model what it accepts, so the chosen level is
+        // sent; a refusal comes back through the effort ladder.
         server.enqueue(MockResponse().setBody(
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
                 "data: [DONE]\n\n",
@@ -348,7 +350,7 @@ class OpenAiCompatibleClientTest {
             AgentRequest("test-model", emptyList(), "", ReasoningLevel.High, emptyList()),
         ) {}
         val body = server.takeRequest().body.readUtf8()
-        assertTrue(!body.contains("reasoning_effort"))
+        assertTrue(body.contains("\"reasoning_effort\":\"high\""))
     }
 
     @Test
