@@ -1300,6 +1300,49 @@ class ChatViewModelTest {
             provider.requests[1].messages.last { it.role == com.kaiser.rivet.agent.AgentRole.User }.text)
     }
 
+    // A failure after partial output leaves an assistant message at the end of the
+    // transcript. Retry must re-run that transcript, not append the prompt a second time.
+    @Test fun retryAfterAPartialAnswerDoesNotSendThePromptTwice() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val config = ProviderConfig("t", ProviderType.Anthropic, "Test", "https://example.invalid", "m")
+        val provider = object : ProviderClient {
+            val requests = mutableListOf<AgentRequest>()
+            var calls = 0
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                requests += request
+                calls++
+                if (calls == 1) {
+                    onDelta("Half an answer")
+                    throw ProviderError.Timeout("progress")
+                }
+                onDelta("done")
+                return AgentResponse(text = "done")
+            }
+        }
+        val viewModel = newChatViewModel(app, AgentSessionStore(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.send("Explain the fix")
+        await(viewModel) { !it.streaming && it.error != null }
+
+        viewModel.retryFailedTurn()
+        await(viewModel) { !it.streaming && provider.calls >= 2 }
+
+        val second = provider.requests[1].messages
+        assertEquals("the prompt must appear once", 1,
+            second.count { it.role == com.kaiser.rivet.agent.AgentRole.User && it.text == "Explain the fix" })
+        assertEquals("the cut-off answer is still the tail before the retry",
+            1, second.count { it.text == "Half an answer" })
+    }
+
     // The device path for an ultra send on River: the refusal arrives inside the stream,
     // so it has no HTTP status. The ladder must still come back, with Max recommended.
     @Test fun anEffortRefusedInsideTheStreamStillOffersTheStepDown() = runBlocking {

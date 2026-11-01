@@ -567,9 +567,10 @@ class ChatViewModel private constructor(
                     tools = tools,
                 )
             }
-            val lastNonContext = activeMessages.lastOrNull { it.role != AgentRole.Context && it.internalContext == null }
-            val reuseExistingTail = retryingInterrupted &&
-                (lastNonContext?.role == AgentRole.User || lastNonContext?.role == AgentRole.Tool)
+            // A retry always re-runs the transcript that is already there. The failed
+            // request left its user message in it, and a failure after partial output also
+            // left the cut-off answer, so appending the prompt again sent it twice.
+            val reuseExistingTail = retryingInterrupted
             val pendingUser = if (reuseExistingTail) emptyList() else listOf(AgentMessage.user(trimmed))
             if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
                 try {
