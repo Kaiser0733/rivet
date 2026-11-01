@@ -459,7 +459,7 @@ class OpenAiCompatibleClientTest {
 
     @Test
     fun completeLookingToolCallIsRejectedWhenGenerationHitsLengthLimit() = runTest {
-        val tool = """{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call-1","function":{"name":"delete_path","arguments":"{\"path\":\"Max.txt\"}"}}]}}]}"""
+        val tool = """{"choices":[{"delta":{"content":"Writing file...","tool_calls":[{"index":0,"id":"call-1","function":{"name":"delete_path","arguments":"{\"path\":\"Max.txt\""}}]}}]}"""
         val limited = """{"choices":[{"delta":{},"finish_reason":"length"}]}"""
         server.enqueue(MockResponse().setBody("data: $tool\n\ndata: $limited\n\ndata: [DONE]\n\n"))
 
@@ -470,6 +470,8 @@ class OpenAiCompatibleClientTest {
             fail("A length-limited generation must not return a tool call")
         } catch (error: ProviderError.IncompleteGeneration) {
             assertEquals("length", error.reason)
+            assertEquals("Writing file...", error.partialText)
+            assertEquals(listOf(AgentToolCall("call-1", "delete_path", "{}")), error.truncatedToolCalls)
             assertTrue(error.text().contains("stopped before finishing"))
         }
     }

@@ -1,5 +1,7 @@
 package com.kaiser.rivet.provider
 
+import com.kaiser.rivet.agent.AgentToolCall
+
 sealed class ProviderError(message: String) : Exception(message) {
     class Unauthorized : ProviderError("unauthorized")
     class Forbidden : ProviderError("forbidden")
@@ -14,7 +16,15 @@ sealed class ProviderError(message: String) : Exception(message) {
     class Network(val reason: String) : ProviderError("network: $reason")
     class Timeout : ProviderError("timeout")
     class InvalidResponse(val detail: String) : ProviderError("invalid response: $detail")
-    class IncompleteGeneration(val reason: String) : ProviderError("generation incomplete: $reason")
+    class IncompleteGeneration(
+        val reason: String,
+        val partialText: String = "",
+        val truncatedToolCalls: List<AgentToolCall> = emptyList(),
+        val transportState: String? = null,
+    ) : ProviderError("generation incomplete: $reason") {
+        val isLengthCut: Boolean
+            get() = reason in setOf("length", "max_tokens", "MAX_TOKENS", "max_output_tokens")
+    }
     class ResponseTooLarge : ProviderError("provider response exceeded Rivet's size limit")
     class Server(val status: Int) : ProviderError("server error: $status")
     object EmptyResponse : ProviderError("empty response")

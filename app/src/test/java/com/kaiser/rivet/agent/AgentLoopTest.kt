@@ -1019,6 +1019,57 @@ class AgentLoopTest {
     }
 
     @Test
+    fun lengthCutToolCallKeepsTextAndContinuesWithSmallerPiecesResult() = runTest {
+        var requests = 0
+        var executions = 0
+        val seenMessages = mutableListOf<List<AgentMessage>>()
+        val persisted = mutableListOf<AgentMessage>()
+        val loop = AgentLoop(
+            requestModel = { messages, _, onText ->
+                requests++
+                seenMessages += messages
+                if (requests == 1) {
+                    onText("Writing the file in parts.")
+                    throw ProviderError.IncompleteGeneration(
+                        reason = "length",
+                        partialText = "Writing the file in parts.",
+                        truncatedToolCalls = listOf(AgentToolCall("call-big", "write_file", "{}")),
+                    )
+                } else {
+                    val smallCall = AgentToolCall("call-small", "write_file", """{"path":"A.kt","content":"part 1"}""")
+                    if (requests == 2) AgentResponse(toolCalls = listOf(smallCall))
+                    else AgentResponse(text = "Done in smaller pieces.")
+                }
+            },
+            prepareTool = { call ->
+                PreparedAgentTool(call, AgentApprovalRequest(call, "Write", "A.kt")) {
+                    executions++
+                    AgentToolResult(call.id, call.name, """{"path":"A.kt"}""")
+                }
+            },
+            requestApproval = { true },
+        )
+
+        val result = loop.run(
+            listOf(AgentMessage.user("Write A.kt")),
+            emptyList(),
+            onMessage = { persisted += it },
+        )
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(3, requests)
+        assertEquals(1, executions)
+        assertEquals("Writing the file in parts.", seenMessages[1][1].text)
+        assertEquals(listOf(AgentToolCall("call-big", "write_file", "{}")), seenMessages[1][1].toolCalls)
+        val recoveryResult = seenMessages[1][2].toolResults.single()
+        assertEquals("call-big", recoveryResult.callId)
+        assertTrue(recoveryResult.error)
+        assertTrue(recoveryResult.content.contains("output_token_limit"))
+        assertTrue(recoveryResult.content.contains("smaller pieces"))
+        assertEquals("Done in smaller pieces.", result.messages.last().text)
+    }
+
+    @Test
     fun workspaceReplacementRejectsEveryUnstartedCall() = runTest {
         val calls = listOf(
             AgentToolCall("one", "read_file", """{"path":"A.kt"}"""),

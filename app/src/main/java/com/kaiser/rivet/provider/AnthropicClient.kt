@@ -265,11 +265,39 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
         }
     }
 
+    private fun transportState(): String? {
+        val blocks = thinking.values.map { block -> buildJsonObject {
+            put("type", block.type)
+            if (block.type == "thinking") {
+                put("thinking", block.thinking.toString())
+                block.signature?.let { put("signature", it) }
+            } else block.data?.let { put("data", it) }
+        } }
+        return blocks.takeIf { it.isNotEmpty() }?.let { values -> buildJsonObject {
+            put("provider", "anthropic")
+            put("blocks", JsonArray(values))
+        }.toString() }
+    }
+
     fun response(completed: Boolean = false): AgentResponse {
         val reason = stopReason
         if (tools.isNotEmpty() && reason != "tool_use" ||
             tools.isEmpty() && reason !in setOf("end_turn", "stop_sequence", "refusal")) {
-            throw ProviderError.IncompleteGeneration(reason ?: "missing stop reason")
+            val truncatedCalls = if (reason == "max_tokens" && tools.isNotEmpty()) {
+                tools.values.map { tool ->
+                    val rawArgs = tool.fragments.toString().ifEmpty { tool.initial.toString() }
+                    val safeArgs = rawArgs.takeIf {
+                        it.isNotBlank() && jsonNestingWithinLimit(it, 32) && parseJsonObject(it) != null
+                    } ?: "{}"
+                    AgentToolCall(tool.id, tool.name, safeArgs)
+                }
+            } else emptyList()
+            throw ProviderError.IncompleteGeneration(
+                reason = reason ?: "missing stop reason",
+                partialText = text.toString(),
+                truncatedToolCalls = truncatedCalls,
+                transportState = if (truncatedCalls.isNotEmpty()) transportState() else null,
+            )
         }
         if (!messageStopped && !completed && text.isEmpty() && tools.isEmpty()) {
             throw ProviderError.IncompleteGeneration("incomplete stream")
@@ -281,18 +309,7 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
             }
             AgentToolCall(tool.id, tool.name, arguments)
         }
-        val blocks = thinking.values.map { block -> buildJsonObject {
-            put("type", block.type)
-            if (block.type == "thinking") {
-                put("thinking", block.thinking.toString())
-                block.signature?.let { put("signature", it) }
-            } else block.data?.let { put("data", it) }
-        } }
-        val state = blocks.takeIf { it.isNotEmpty() }?.let { values -> buildJsonObject {
-            put("provider", "anthropic")
-            put("blocks", JsonArray(values))
-        }.toString() }
-        return AgentResponse(text.toString(), calls, state, usage)
+        return AgentResponse(text.toString(), calls, transportState(), usage)
     }
 }
 

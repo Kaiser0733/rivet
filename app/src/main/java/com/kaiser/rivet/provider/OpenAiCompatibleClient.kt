@@ -168,7 +168,24 @@ private class OpenAiAgentStream(
         val reason = finishReason
         val expectedReason = if (tools.isEmpty()) "stop" else "tool_calls"
         if (reason != expectedReason) {
-            throw ProviderError.IncompleteGeneration(reason ?: "missing finish reason")
+            val truncatedCalls = if (reason in setOf("length", "max_tokens") && tools.isNotEmpty()) {
+                tools.entries.mapIndexed { idx, (_, pending) ->
+                    val rawArgs = pending.arguments.toString()
+                    val safeArgs = rawArgs.takeIf {
+                        it.isNotBlank() && jsonNestingWithinLimit(it, 32) && parseJsonObject(it) != null
+                    } ?: "{}"
+                    AgentToolCall(
+                        id = pending.id?.takeIf { it.isNotBlank() } ?: "_rivet_truncated_${idx + 1}",
+                        name = pending.name.toString().takeIf { it.isNotBlank() } ?: "unknown_tool",
+                        arguments = safeArgs,
+                    )
+                }
+            } else emptyList()
+            throw ProviderError.IncompleteGeneration(
+                reason = reason ?: "missing finish reason",
+                partialText = text.toString(),
+                truncatedToolCalls = truncatedCalls,
+            )
         }
         if (!completed && text.isEmpty() && tools.isEmpty()) {
             throw ProviderError.IncompleteGeneration("incomplete stream")

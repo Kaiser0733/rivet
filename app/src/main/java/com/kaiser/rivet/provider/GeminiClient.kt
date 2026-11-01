@@ -200,9 +200,28 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
         }
     }
 
+    private fun transportState(): String? =
+        signatures.takeIf { it.isNotEmpty() }.let { values ->
+            if (values == null && textSignature == null) null else buildJsonObject {
+                put("provider", "gemini")
+                values?.let { callSignatures -> put("call_signatures", buildJsonObject {
+                    callSignatures.forEach { (id, signature) -> put(id, signature) }
+                }) }
+                textSignature?.let { put("text_signature", it) }
+            }.toString()
+        }
+
     fun response(completed: Boolean = false): AgentResponse {
         if (!finished || finishReason != "STOP") {
-            throw ProviderError.IncompleteGeneration(finishReason ?: "missing finish reason")
+            val truncatedCalls = if (finishReason == "MAX_TOKENS" && calls.isNotEmpty()) {
+                calls.toList()
+            } else emptyList()
+            throw ProviderError.IncompleteGeneration(
+                reason = finishReason ?: "missing finish reason",
+                partialText = text.toString(),
+                truncatedToolCalls = truncatedCalls,
+                transportState = if (truncatedCalls.isNotEmpty()) transportState() else null,
+            )
         }
         if (!completed && text.isEmpty() && calls.isEmpty() && textSignature == null) {
             throw ProviderError.IncompleteGeneration("incomplete stream")
@@ -210,15 +229,7 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
         return AgentResponse(
             text.toString(),
             calls.toList(),
-            signatures.takeIf { it.isNotEmpty() }.let { values ->
-                if (values == null && textSignature == null) null else buildJsonObject {
-                    put("provider", "gemini")
-                    values?.let { callSignatures -> put("call_signatures", buildJsonObject {
-                        callSignatures.forEach { (id, signature) -> put(id, signature) }
-                    }) }
-                    textSignature?.let { put("text_signature", it) }
-                }.toString()
-            },
+            transportState(),
             usage,
         )
     }
