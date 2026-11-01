@@ -193,6 +193,48 @@ class ContextPreparationTest {
         assertTrue(reduced.flatMap { it.toolResults }.any { it.content.contains("\"path\":\"index.html\"") })
     }
 
+    // Compaction must happen while there is still room to send the compacted request, so
+    // the same turn continues; waiting for the ceiling is what dead-stopped long chats.
+    @Test fun aConversationOverTheTriggerCompactsWellBeforeTheCeiling() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = listOf(AgentMessage.user("Old investigation " + "x".repeat(84_000)),
+            AgentMessage.assistant("Found a clue"), AgentMessage.user("Continue the current fix"))
+        sessions.save(history, interrupted = true)
+        val provider = SummaryProvider()
+        val preparation = preparation(sessions, id, 32_768, provider)
+
+        val retained = preparation.prepare(history)
+
+        assertTrue("the request must shrink", retained.count { it.internalContext == null } < history.size)
+        assertTrue("the newest request survives verbatim", retained.contains(history.last()))
+        assertTrue("a summary replaces the old history", preparation.summary.isNotBlank())
+        assertEquals("one summary call is enough", 1, provider.requests.size)
+    }
+
+    // A summariser that keeps failing must not be paid for on every step of the turn.
+    @Test fun aFailingSummariserStopsAfterBoundedAttempts() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = listOf(AgentMessage.user("Old investigation " + "x".repeat(84_000)),
+            AgentMessage.assistant("Found a clue"), AgentMessage.user("Continue the current fix"))
+        sessions.save(history, interrupted = true)
+        val provider = FailingSummaryProvider()
+        val preparation = preparation(sessions, id, 32_768, provider)
+
+        repeat(3) {
+            try { preparation.prepare(history); throw AssertionError("a failed summary must not pass silently")
+            } catch (_: IllegalStateException) { /* expected: the failure surfaces */ }
+        }
+
+        assertTrue("summary attempts are bounded per turn, got ${provider.requests.size}",
+            provider.requests.size <= 2)
+    }
+
     private fun preparation(sessions: CodingSessions, id: String, limit: Int,
                             provider: SummaryProvider, priorSummary: String = ""): ContextPreparation {
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
@@ -200,6 +242,20 @@ class ContextPreparationTest {
         return ContextPreparation(sessions, id, provider, config, "turn-$limit", priorSummary) { messages, _ ->
             AgentRequest("small", com.kaiser.rivet.agent.modelMessages(messages),
                 "S".repeat(6000), ReasoningLevel.Default, emptyList())
+        }
+    }
+
+    private class FailingSummaryProvider : ProviderClient {
+        val requests = mutableListOf<AgentRequest>()
+        override suspend fun listModels(): List<ModelInfo> = emptyList()
+        override suspend fun testConnection() = TestResult(true, "ok")
+        override suspend fun streamAgent(
+            request: AgentRequest,
+            onReasoning: (String) -> Unit,
+            onDelta: (String) -> Unit,
+        ): AgentResponse {
+            requests += request
+            throw IllegalStateException("provider down")
         }
     }
 

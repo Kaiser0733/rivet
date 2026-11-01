@@ -1078,7 +1078,7 @@ class ChatViewModel private constructor(
                     "Rivet stopped after an attempted change could not be confirmed. Project changes may remain; safe Undo is unavailable."
                 else -> "Rivet couldn't prepare a safe Undo, so it stopped before changing files."
             } + CHECKPOINT_LIMITS_HINT
-            AgentStopReason.ContextUnavailable -> "Rivet couldn't make room within the $windowTokens-token context window to continue this conversation. Your messages were kept. Try again or start a new conversation."
+            AgentStopReason.ContextUnavailable -> "Rivet compacted this chat as far as it could, and it still does not fit the $windowTokens-token context window. Your messages were kept. Start a new conversation to keep going."
             AgentStopReason.ContextTooSmall -> "This model's context capacity is too small ($windowTokens-token context window) for this request. Choose a model with a larger context window or shorten the request."
             AgentStopReason.NoProgress -> "Rivet couldn't get past the same problem. Check the last message, then tell it what to try next."
             AgentStopReason.RuntimeBlocked -> runtimeFailureMessage(result.failureCode)
