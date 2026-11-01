@@ -36,6 +36,42 @@ class ReasoningEffortRejectionTest {
             ReasoningLevel.Default))
     }
 
+    // River answers a rejected effort with a generic parameter message that never names
+    // the effort, so the status code and the shape of the message have to carry it.
+    private fun riverRejection(code: Int = 400) = ProviderError.ProviderMessage(
+        "Invalid inference request. Check the model's supported parameters and input limits.", code)
+
+    @Test fun theRiverParameterRejectionIsRecognisedAsAnEffortRejection() {
+        assertTrue(isUnsupportedReasoningError(riverRejection(), ReasoningLevel.Ultra))
+        // Off sends no effort at all, so nothing can be blamed on it.
+        assertFalse(isUnsupportedReasoningError(riverRejection(), ReasoningLevel.Default))
+    }
+
+    @Test fun onlyClientSideRejectionsCarryTheBlame() {
+        assertFalse(isUnsupportedReasoningError(riverRejection(500), ReasoningLevel.Ultra))
+        assertFalse(isUnsupportedReasoningError(riverRejection(429), ReasoningLevel.Ultra))
+        assertFalse(isUnsupportedReasoningError(
+            ProviderError.ProviderMessage("Invalid inference request. Check the model's supported parameters."),
+            ReasoningLevel.Ultra))
+    }
+
+    @Test fun anOversizedInputOrAnotherFieldIsNeverBlamedOnTheEffort() {
+        assertFalse(isUnsupportedReasoningError(ProviderError.ProviderMessage(
+            "Invalid request: input token count exceeds the maximum number of tokens allowed.", 400),
+            ReasoningLevel.Ultra))
+        assertFalse(isUnsupportedReasoningError(ProviderError.ProviderMessage(
+            "Invalid parameter: temperature must be between 0 and 2.", 400), ReasoningLevel.Ultra))
+        assertFalse(isUnsupportedReasoningError(ProviderError.ProviderMessage(
+            "Invalid request: messages must not be empty.", 400), ReasoningLevel.Ultra))
+        assertFalse(isUnsupportedReasoningError(ProviderError.ProviderMessage(
+            "Invalid request. The model 'deepseek-x' does not exist.", 400), ReasoningLevel.Ultra))
+    }
+
+    @Test fun anEffortThatWasNotSentIsNotBlamed() {
+        assertFalse(isUnsupportedReasoningError(riverRejection(), ReasoningLevel.Ultra,
+            effortWasSent = false))
+    }
+
     @Test fun theClientsOwnUnsupportedConfigurationCounts() {
         assertTrue(isUnsupportedReasoningError(ProviderError.UnsupportedConfiguration(),
             ReasoningLevel.High))
