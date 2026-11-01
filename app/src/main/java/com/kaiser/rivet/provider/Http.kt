@@ -151,11 +151,15 @@ private fun isContextOverflow(text: String): Boolean {
 }
 
 private fun isModelNotFound(code: Int, detail: String): Boolean {
-    if (code == 404) return detail.contains("model", ignoreCase = true)
-    if (code != 400 || !detail.contains("model", ignoreCase = true)) return false
+    // A body that merely mentions "model" is not a missing model: "Invalid URL (GET /models)"
+    // from a base URL without /v1 used to become "Model \"Invalid URL (GET /models)\" was not
+    // found", walking the user into the model picker for a path problem. A model id has to
+    // be named, either by one of the conventions below or by Anthropic's "model: <id>".
+    if (code != 400 && code != 404) return false
+    if (!detail.contains("model", ignoreCase = true)) return false
     val value = detail.lowercase(java.util.Locale.ROOT)
     return "model_not_found" in value || "unknown model" in value || "no such model" in value ||
-        "could not find model" in value ||
+        "could not find model" in value || (code == 404 && "model:" in value) ||
         ("model" in value && ("not found" in value || "does not exist" in value || "doesn't exist" in value))
 }
 
