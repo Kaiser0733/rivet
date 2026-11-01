@@ -238,4 +238,30 @@ class ChatGptPlanClientTest {
         val sent = server.takeRequest().body.readUtf8()
         assertTrue(sent.contains("\"reasoning\":{\"effort\":\"high\"}"))
     }
+
+    @Test fun responsesSseTimesOutWhenHeartbeatsExceedProgressDeadline() = runTest {
+        val sseBody = Buffer().apply {
+            writeUtf8("data: {\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}\n\n")
+            repeat(5) { writeUtf8(": keepalive\n\n") }
+            writeUtf8("data: {\"type\":\"response.completed\",\"response\":{}}\n\n")
+        }
+        server.enqueue(
+            MockResponse()
+                .setBody(sseBody)
+                .setHeader("Content-Type", "text/event-stream"),
+        )
+        val request = okhttp3.Request.Builder().url(server.url("/v1/responses")).build()
+        var now = 0L
+        val events = mutableListOf<String>()
+        try {
+            http.responsesSse(
+                request = request,
+                progressDeadlineMs = SSE_PROGRESS_DEADLINE_MS,
+                clockMillis = { now.also { now += 25_000L } },
+            ) { events += it }
+            fail("expected stalled responses stream to time out")
+        } catch (_: ProviderError.Timeout) {
+            assertEquals(1, events.size)
+        }
+    }
 }
