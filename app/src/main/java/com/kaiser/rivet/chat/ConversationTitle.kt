@@ -17,15 +17,19 @@ internal object ConversationTitle {
     )
 
     fun sanitize(output: String): String? {
-        val line = output.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: return null
+        val withoutThinking = output.replace(Regex("(?is)<think>.*?</think>"), "")
+        val line = withoutThinking.lineSequence().firstOrNull { it.isNotBlank() }?.trim() ?: return null
         if (line.startsWith("```") && !line.endsWith("```")) return null
         val clean = line.replace(Regex("^(?:#{1,6}\\s+|[-*+]\\s+|\\d+[.)]\\s+)"), "")
-            .trim().trim('"', '\'', '`', '“', '”', '‘', '’').trim()
+            .trim().trim('"', '\'', '`', '“', '”', '‘', '’', '*', '_').trim()
             .replace(Regex("^(?:#{1,6}\\s+|[-*+]\\s+|\\d+[.)]\\s+)"), "")
+            .replace(Regex("^(?i)title\\s*:\\s*"), "")
+            .trim().trim('"', '\'', '`', '“', '”', '‘', '’', '*', '_').trim()
             .trimEnd('.', '!', '?', ':', ';', ',').trim()
             .replace(Regex("\\s+"), " ")
-        if (Regex("^[\"'`]?(?:title|name|arguments|function)[\"'`]?\\s*:", RegexOption.IGNORE_CASE)
-                .containsMatchIn(clean)) return null
+        if (Regex("^[\"'`](?:title|name|arguments|function)[\"'`]\\s*:", RegexOption.IGNORE_CASE)
+                .containsMatchIn(clean) ||
+            Regex("^(?:name|arguments|function)\\s*:", RegexOption.IGNORE_CASE).containsMatchIn(clean)) return null
         if (clean.isBlank() || clean.any { it.isISOControl() || it in "{}[]<>" } ||
             Regex("(?i)^(?:tool[_ ]?(?:call|result)|function[_ ]?call|assistant\\s*:|system\\s*:|json\\s*:)")
                 .containsMatchIn(clean)) return null

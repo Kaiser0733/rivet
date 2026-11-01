@@ -238,6 +238,14 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         } finally { db.endTransaction() }
     }
 
+    suspend fun hasPendingAutoTitle(id: String): Boolean = onDatabase { db ->
+        header(db, id).title == "New session" && meta(db, "auto_title-$id") == "pending"
+    }
+
+    suspend fun clearAutoTitle(id: String) = onDatabase { db ->
+        db.delete("metadata", "key=?", arrayOf("auto_title-$id"))
+    }
+
     suspend fun renameIfCurrentTitle(id: String, expected: String, title: String): Boolean = onDatabase { db ->
         require(title.isNotBlank() && title.length <= 80 && title.toByteArray(Charsets.UTF_8).size <= 80)
         db.beginTransaction()
