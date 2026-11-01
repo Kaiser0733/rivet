@@ -386,6 +386,22 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun openRouterSendsXhighForUltra() = runTest {
+        server.enqueue(MockResponse().setBody(
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
+        OpenAiCompatibleClient(
+            config(ProviderType.OpenRouter),
+            "key",
+        ).streamAgent(
+            AgentRequest("test-model", emptyList(), "", ReasoningLevel.Ultra, emptyList()),
+        ) {}
+        val body = server.takeRequest().body.readUtf8()
+        assertTrue(body.contains("\"reasoning_effort\":\"xhigh\""))
+    }
+
+    @Test
     fun agentStreamSendsAuthAndCustomHeaders() = runTest {
         server.enqueue(MockResponse().setBody(
             "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
