@@ -3,6 +3,7 @@ package com.kaiser.rivet.ui.chat
 import android.app.Activity
 import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
@@ -80,6 +81,8 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
+import com.kaiser.rivet.chat.liveStatusLabel
+import com.kaiser.rivet.chat.liveStatusLine
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
@@ -109,6 +112,7 @@ import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.history.HistoryPane
 import com.kaiser.rivet.runtime.ManagedProcessStatus
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
 
@@ -638,10 +642,23 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         AgentToolLifecycleStage.Started,
     ) }
     val streamingText = state.streamingText
-    val showActivity = state.activity != null && streamingText.isBlank() && liveOperation == null
+    val streaming = state.streaming
+    // While a turn runs the status line is always shown, so a long tool call and a
+    // stalled stream never look the same. Outside a turn the plain activity text is
+    // still used for recovery messages.
+    val showLiveStatus = streaming
+    val statusLabel = liveStatusLabel(
+        activity = state.activity,
+        toolRunning = liveOperation != null,
+        writing = streamingText.isNotBlank(),
+        waitingForApproval = state.pendingApproval != null || liveOperation?.stage ==
+            AgentToolLifecycleStage.AwaitingApproval,
+    )
+    val showActivity = !streaming && state.activity != null
     val showInterruptedTurn = state.interruptedTurn && !state.streaming
     val totalItems = timeline.size +
         (if (streamingText.isNotBlank()) 1 else 0) +
+        (if (showLiveStatus) 1 else 0) +
         (if (showActivity) 1 else 0) +
         (if (showInterruptedTurn) 1 else 0) +
         (if (state.notice != null) 1 else 0) +
@@ -685,6 +702,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
         }
+        if (showLiveStatus) item(key = "live-status") { LiveStatusRow(statusLabel) }
         if (showActivity) state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
@@ -710,6 +728,25 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
                 })
         } }
+    }
+}
+
+// Ticks once a second from the moment the turn started. The label is recomputed by the
+// caller, so a new step ("Writing", a tool name) shows up without restarting the clock.
+@Composable
+private fun LiveStatusRow(label: String) {
+    val startedAt = remember { SystemClock.elapsedRealtime() }
+    var elapsed by remember { mutableStateOf(0L) }
+    LaunchedEffect(startedAt) {
+        while (true) {
+            elapsed = ((SystemClock.elapsedRealtime() - startedAt) / 1000).coerceAtLeast(0)
+            delay(1000)
+        }
+    }
+    Row(Modifier.fillMaxWidth().heightIn(min = 24.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text(liveStatusLine(label, elapsed), style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
