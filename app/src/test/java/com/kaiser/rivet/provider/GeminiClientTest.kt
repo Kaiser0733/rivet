@@ -148,6 +148,25 @@ class GeminiClientTest {
     }
 
     @Test
+    fun thoughtPartsRouteToReasoningAndNeverToAnswerText() = runTest {
+        val sse = listOf(
+            """{"candidates":[{"content":{"parts":[{"text":"First I should check A.kt","thought":true}]}}]}""",
+            """{"candidates":[{"content":{"parts":[{"text":" and B.kt.","thought":true},{"text":"Here is the fix."}]},"finishReason":"STOP"}]}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+        val reasoning = StringBuilder()
+        val answerDeltas = StringBuilder()
+        val response = GeminiClient(config(), "key").streamAgent(
+            AgentRequest("gemini-x", emptyList(), "sys", ReasoningLevel.High, emptyList()),
+            onReasoning = { reasoning.append(it) },
+            onDelta = { answerDeltas.append(it) },
+        )
+        assertEquals("Here is the fix.", response.text)
+        assertEquals("Here is the fix.", answerDeltas.toString())
+        assertEquals("First I should check A.kt and B.kt.", reasoning.toString())
+    }
+
+    @Test
     fun streamErrorChunkSurfacesMessage() = runTest {
         val sse = "data: {\"error\":{\"code\":429,\"message\":\"Resource exhausted\"}}\n\n"
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))

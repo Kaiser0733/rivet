@@ -154,6 +154,26 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun reasoningContentDeltasEmitSeparatelyFromAnswerText() = runTest {
+        val sse = "data: {\"choices\":[{\"delta\":{\"reasoning_content\":\"plan: \"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{\"reasoning\":\"check file\"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{\"content\":\"Answer\"}}]}\n\n" +
+            "data: {\"choices\":[{\"delta\":{},\"finish_reason\":\"stop\"}]}\n\n" +
+            "data: [DONE]\n\n"
+        server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+        val reasoning = StringBuilder()
+        val deltas = StringBuilder()
+        val response = OpenAiCompatibleClient(config(), "key").streamAgent(
+            AgentRequest("test-model", emptyList(), "sys", ReasoningLevel.Default, emptyList()),
+            onReasoning = { reasoning.append(it) },
+            onDelta = { deltas.append(it) },
+        )
+        assertEquals("Answer", response.text)
+        assertEquals("Answer", deltas.toString())
+        assertEquals("plan: check file", reasoning.toString())
+    }
+
+    @Test
     fun customTextWithoutFinishReasonIsIncomplete() = runTest {
         server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
             "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}}]}\n\n" +

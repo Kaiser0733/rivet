@@ -221,17 +221,27 @@ class AnthropicClientTest {
     fun agentStreamExtractsTextDeltas() = runTest {
         val sse = listOf(
             """{"type":"message_start","message":{}}""",
-            """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Hi "}}""",
+            """{"type":"content_block_start","index":0,"content_block":{"type":"thinking","thinking":"step 1: "}}""",
             """{"type":"content_block_delta","index":0,"delta":{"type":"thinking_delta","thinking":"internal"}}""",
-            """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"there"}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"signature_delta","signature":"sig-1"}}""",
+            """{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"Hi "}}""",
+            """{"type":"content_block_delta","index":1,"delta":{"type":"text_delta","text":"there"}}""",
             """{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""",
             """{"type":"message_stop"}""",
         ).joinToString("") { "data: $it\n\n" }
         server.enqueue(MockResponse().setBody(sse).setHeader("Content-Type", "text/event-stream"))
+        val reasoning = StringBuilder()
+        val textDeltas = StringBuilder()
         val full = AnthropicClient(config(), "key").streamAgent(
             AgentRequest("claude-x", emptyList(), "sys", ReasoningLevel.Default, emptyList()),
-        ) {}
+            onReasoning = { reasoning.append(it) },
+            onDelta = { textDeltas.append(it) },
+        )
         assertEquals("Hi there", full.text)
+        assertEquals("Hi there", textDeltas.toString())
+        assertEquals("step 1: internal", reasoning.toString())
+        assertTrue(full.transportState!!.contains("\"thinking\":\"step 1: internal\""))
+        assertTrue(full.transportState!!.contains("\"signature\":\"sig-1\""))
 
         val recorded = server.takeRequest()
         assertEquals("key", recorded.getHeader("x-api-key"))

@@ -1203,6 +1203,61 @@ class ChatViewModelTest {
         assertFalse(CodingSessions(app).load().interrupted)
     }
 
+    @Test fun streamingReasoningAccumulatesSeparatelyAndSurvivesTurnCompletion() = runBlocking {
+        val reasoningEmitted = CompletableDeferred<Unit>()
+        val finishStream = CompletableDeferred<Unit>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                onReasoning("Analyzing ")
+                onReasoning("constraints")
+                onDelta("Partial ")
+                reasoningEmitted.complete(Unit)
+                finishStream.await()
+                onDelta("answer")
+                return AgentResponse(text = "Partial answer")
+            }
+        }
+        val config = ProviderConfig(
+            id = "test",
+            type = ProviderType.Anthropic,
+            name = "Test",
+            baseUrl = "https://example.invalid",
+            model = "claude-x",
+        )
+        val viewModel = newChatViewModel(
+            app,
+            RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> provider },
+        )
+        await(viewModel) { it.ready }
+
+        viewModel.send("Explain the fix")
+        withTimeout(5_000) { reasoningEmitted.await() }
+        val midStream = await(viewModel) {
+            it.streaming && it.streamingReasoning == "Analyzing constraints" && it.streamingText == "Partial "
+        }
+        assertEquals("Analyzing constraints", midStream.streamingReasoning)
+        assertEquals("Partial ", midStream.streamingText)
+        assertTrue(midStream.messageReasoning.isEmpty())
+
+        finishStream.complete(Unit)
+        val completed = await(viewModel) {
+            !it.streaming && it.messages.lastOrNull()?.text == "Partial answer"
+        }
+        val assistantIndex = completed.messages.indexOfLast { it.text == "Partial answer" }
+        assertEquals(1, assistantIndex)
+        assertEquals("", completed.streamingReasoning)
+        assertEquals("", completed.streamingText)
+        assertEquals("Analyzing constraints", completed.messageReasoning[assistantIndex])
+    }
+
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withTimeout(5_000) { viewModel.uiState.first(predicate) }
 

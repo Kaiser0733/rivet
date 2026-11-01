@@ -96,6 +96,20 @@ class ChatGptPlanClientTest {
         assertTrue(response.toolCalls.isEmpty())
     }
 
+    @Test fun streamSeparatesReasoningSummaryAndTextDeltasFromOutputText() {
+        val reasoning = mutableListOf<String>()
+        val deltas = mutableListOf<String>()
+        val stream = ResponsesAgentStream(onReasoning = reasoning::add, onDelta = deltas::add)
+        stream.accept("""{"type":"response.reasoning_summary_text.delta","delta":"Checking "}""")
+        stream.accept("""{"type":"response.reasoning_text.delta","delta":"files"}""")
+        stream.accept("""{"type":"response.output_text.delta","delta":"Done"}""")
+        stream.accept("""{"type":"response.completed","response":{}}""")
+        val response = stream.response()
+        assertEquals("Done", response.text)
+        assertEquals(listOf("Done"), deltas)
+        assertEquals(listOf("Checking ", "files"), reasoning)
+    }
+
     @Test fun streamFailedMapsUsageLimitCode() {
         val stream = ResponsesAgentStream {}
         stream.accept("""{"type":"response.failed","response":{"error":{
