@@ -909,8 +909,8 @@ class ChatViewModel private constructor(
                     "Rivet stopped before another change because safe Undo is unavailable. Earlier project changes may remain."
                 result.mutationsAttempted > 0 ->
                     "Rivet stopped after an attempted change could not be confirmed. Project changes may remain; safe Undo is unavailable."
-                else -> "Rivet couldn't prepare a safe Undo, so it stopped before changing files. Try again."
-            }
+                else -> "Rivet couldn't prepare a safe Undo, so it stopped before changing files."
+            } + CHECKPOINT_LIMITS_HINT
             AgentStopReason.ContextUnavailable -> "Rivet couldn't make room to continue this conversation. Your messages were kept. Try again or start a new conversation."
             AgentStopReason.ContextTooSmall -> "This model's context capacity is too small for this request. Choose a model with a larger context window or shorten the request."
             AgentStopReason.NoProgress -> "Rivet couldn't get past the same problem. Check the last message, then tell it what to try next."
@@ -1202,6 +1202,9 @@ class ChatViewModel private constructor(
         }
 
         private const val RUN_COMMAND_TOOL = "run_command"
+        // Undo keeps a copy of the project per turn, so its ceiling is the project's
+        // size. Say the real numbers and the way out, the same ones the model is told.
+        internal const val CHECKPOINT_LIMITS_HINT = " Undo covers up to 50,000 items and 1 GiB per project. Adding generated folders to .rivetignore can bring a large project under that."
         private val MUTATION_TOOLS = setOf("write_file", "apply_patch", "create_file", "create_directory",
             "rename_path", "move_path", "delete_path", "run_command", "download_file")
         internal fun systemInstruction(workspace: Boolean): String = if (workspace) {
