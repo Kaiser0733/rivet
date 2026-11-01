@@ -163,6 +163,11 @@ fun SettingsScreen(
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(vertical = 8.dp)) }
             }
+            state.headerNotice?.let { message ->
+                item { Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
+                    modifier = Modifier.padding(vertical = 8.dp)) }
+            }
             item { SectionHeading("Current provider") }
             if (active == null) {
                 item {
