@@ -52,12 +52,17 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
+import com.kaiser.rivet.provider.DEFAULT_CONTEXT_WINDOW_TOKENS
+import com.kaiser.rivet.provider.detectedContextWindowForModel
+import com.kaiser.rivet.provider.manualContextWindowForModel
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.selectListedModel
+import com.kaiser.rivet.provider.withModelId
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.chat.displaySafeText
+import java.util.Locale
 
 private val MAX_WIDTH = 640.dp
 
@@ -238,10 +243,49 @@ fun ProviderEditor(
             OutlinedTextField(
                 value = config.model,
                 onValueChange = { v -> viewModel.updateConfig {
-                    it.copy(model = v, modelContextLimit = null, anthropicModelMetadata = null)
+                    it.withModelId(v, state.models)
                 } },
                 label = { Text(stringResource(R.string.provider_model_label)) },
                 placeholder = { Text(stringResource(R.string.provider_model_hint)) },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+
+            val detectedContextWindow = config.detectedContextWindowForModel()
+            val manualContextWindow = config.manualContextWindowForModel()
+            OutlinedTextField(
+                value = state.contextWindowInput,
+                onValueChange = viewModel::setContextWindowInput,
+                label = { Text(stringResource(R.string.provider_context_window_label)) },
+                placeholder = {
+                    Text(
+                        if (detectedContextWindow != null) {
+                            String.format(Locale.US, "%,d (auto-detected)", detectedContextWindow)
+                        } else {
+                            stringResource(R.string.provider_context_window_hint)
+                        }
+                    )
+                },
+                supportingText = {
+                    val activeWindow = manualContextWindow ?: detectedContextWindow ?: DEFAULT_CONTEXT_WINDOW_TOKENS
+                    val formatted = String.format(Locale.US, "%,d", activeWindow)
+                    Text(
+                        when {
+                            manualContextWindow != null -> "Manual limit: $formatted tokens"
+                            detectedContextWindow != null -> "Auto-detected: $formatted tokens"
+                            else -> "Default: $formatted tokens (256K)"
+                        }
+                    )
+                },
+                singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
+            )
+
+            OutlinedTextField(
+                value = state.maxOutputTokensInput,
+                onValueChange = viewModel::setMaxOutputTokensInput,
+                label = { Text(stringResource(R.string.provider_max_output_tokens_label)) },
+                placeholder = { Text(stringResource(R.string.provider_max_output_tokens_hint)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )

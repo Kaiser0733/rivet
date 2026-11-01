@@ -90,6 +90,9 @@ internal class ChatGptPlanClient(
             responsesEffort(request.reasoning)?.let { effort ->
                 put("reasoning", buildJsonObject { put("effort", effort) })
             }
+            config.resolvedManualMaxOutputTokens(request.model)?.let {
+                put("max_output_tokens", it)
+            }
         }
         val httpRequest = base(Endpoints.openAiResponses(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
@@ -128,7 +131,12 @@ internal fun parseChatGptModels(text: String): List<ModelInfo> {
         val model = el.obj() ?: return@mapNotNull null
         if (model["visibility"]?.str() != "list") return@mapNotNull null
         val slug = model["slug"]?.str() ?: return@mapNotNull null
-        ModelInfo(slug, model["display_name"]?.str() ?: slug)
+        ModelInfo(
+            id = slug,
+            label = model["display_name"]?.str() ?: slug,
+            inputLimitTokens = extractModelContextWindow(model),
+            outputLimitTokens = extractModelOutputLimit(model),
+        )
     }.take(MAX_RETAINED_MODELS).sortedBy { it.id.lowercase() }.toList()
 }
 

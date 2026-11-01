@@ -26,6 +26,10 @@
     <string name="provider_model_label">Model</string>
     <string name="provider_model_hint">Model ID</string>
     <string name="provider_model_current">Selected model: %1$s</string>
+    <string name="provider_context_window_label">Context window</string>
+    <string name="provider_context_window_hint">262144 (256K)</string>
+    <string name="provider_max_output_tokens_label">Max output tokens</string>
+    <string name="provider_max_output_tokens_hint">Provider default (e.g. 65536 or 384K)</string>
     <string name="provider_search_models">Search models</string>
     <string name="provider_models_showing">Showing %1$d of %2$d models. Search to see more.</string>
     <string name="provider_models_no_match">No models match. You can still enter a Model ID above.</string>

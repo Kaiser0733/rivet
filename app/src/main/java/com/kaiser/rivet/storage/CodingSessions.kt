@@ -805,6 +805,20 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     private fun sameOrPruned(original: AgentMessage, projected: AgentMessage): Boolean {
         if (original == projected) return true
+        if (original.role == AgentRole.Assistant && projected.role == AgentRole.Assistant) {
+            if (original.toolCalls.size != projected.toolCalls.size ||
+                original.copy(toolCalls = projected.toolCalls) != projected) return false
+            return original.toolCalls.zip(projected.toolCalls).all { (before, after) ->
+                if (before == after) true else {
+                    val marker = try { json.parseToJsonElement(after.arguments).jsonObject["arguments_pruned"]
+                        ?.jsonPrimitive?.booleanOrNull == true }
+                        catch (_: IllegalArgumentException) { false }
+                    marker && after.arguments.toByteArray(Charsets.UTF_8).size <
+                        before.arguments.toByteArray(Charsets.UTF_8).size &&
+                        before.copy(arguments = after.arguments) == after
+                }
+            }
+        }
         if (original.role != AgentRole.Tool || projected.role != AgentRole.Tool ||
             original.toolResults.size != projected.toolResults.size ||
             original.copy(toolResults = projected.toolResults) != projected) return false

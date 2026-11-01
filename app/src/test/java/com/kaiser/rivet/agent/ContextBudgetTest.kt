@@ -1,11 +1,17 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.provider.AgentRequest
+import com.kaiser.rivet.provider.DEFAULT_CONTEXT_WINDOW_TOKENS
 import com.kaiser.rivet.provider.ModelContextLimit
+import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.anthropicOutputCeiling
+import com.kaiser.rivet.provider.resolvedContextWindowTokens
+import com.kaiser.rivet.provider.selectListedModel
+import com.kaiser.rivet.provider.withManualContextWindow
+import com.kaiser.rivet.provider.withManualMaxOutputTokens
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
@@ -91,5 +97,36 @@ class ContextBudgetTest {
         val default = ContextBudget.assess(anthropic.copy(reasoning = ReasoningLevel.Default),
             180_000, TokenEstimateSource.Estimated)
         assertFalse(default.needsReduction)
+    }
+
+    @Test fun contextWindowResolutionOrderManualBeatsDetectedBeats256kDefault() {
+        val base = ProviderConfig(
+            id = "compat",
+            type = ProviderType.OpenAiCompatible,
+            name = "Custom",
+            baseUrl = "https://api.example/v1",
+            model = "glm-5.1",
+        )
+        assertEquals(DEFAULT_CONTEXT_WINDOW_TOKENS, base.resolvedContextWindowTokens())
+        assertEquals(262_144, base.resolvedContextWindowTokens())
+        val defaultAssessment = ContextBudget.assess(base, 120_000, TokenEstimateSource.Estimated)
+        assertNull(defaultAssessment.knownInputLimitTokens)
+        assertEquals(262_144 - 16_000, defaultAssessment.allowedInputTokens)
+        assertFalse(defaultAssessment.needsReduction)
+
+        val detected = base.selectListedModel(ModelInfo("glm-5.1", "GLM 5.1", inputLimitTokens = 200_000))
+        assertEquals(200_000, detected.resolvedContextWindowTokens())
+        val detectedAssessment = ContextBudget.assess(detected, 120_000, TokenEstimateSource.Estimated)
+        assertEquals(200_000, detectedAssessment.knownInputLimitTokens)
+        assertEquals(200_000 - 16_000, detectedAssessment.allowedInputTokens)
+        assertFalse(detectedAssessment.needsReduction)
+
+        val manual = detected.withManualContextWindow(100_000).withManualMaxOutputTokens(8_000)
+        assertEquals(100_000, manual.resolvedContextWindowTokens())
+        val manualAssessment = ContextBudget.assess(manual, 95_000, TokenEstimateSource.Estimated)
+        assertEquals(100_000, manualAssessment.knownInputLimitTokens)
+        assertEquals(8_000, manualAssessment.reservedTokens)
+        assertEquals(92_000, manualAssessment.allowedInputTokens)
+        assertTrue(manualAssessment.needsReduction)
     }
 }

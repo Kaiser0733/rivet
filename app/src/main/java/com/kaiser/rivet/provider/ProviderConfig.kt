@@ -16,12 +16,20 @@ enum class ProviderType(val defaultBaseUrl: String) {
 @Serializable
 enum class ReasoningLevel { Default, Low, Medium, High, Max }
 
+const val DEFAULT_CONTEXT_WINDOW_TOKENS = 262_144
+
 @Serializable
 data class ProviderHeader(val name: String, val value: String)
 
 @Serializable
 data class ModelContextLimit(val model: String, val baseUrl: String, val inputLimitTokens: Int,
                              val maxOutputTokens: Int? = null)
+
+@Serializable
+data class ModelTokenSettings(
+    val manualContextWindowTokens: Int? = null,
+    val manualMaxOutputTokens: Int? = null,
+)
 
 @Serializable
 data class AnthropicModelMetadata(
@@ -46,12 +54,94 @@ data class ProviderConfig(
     val headers: List<ProviderHeader> = emptyList(),
     val modelContextLimit: ModelContextLimit? = null,
     val anthropicModelMetadata: AnthropicModelMetadata? = null,
+    val manualContextWindowTokens: Int? = null,
+    val manualMaxOutputTokens: Int? = null,
+    val modelTokenSettings: Map<String, ModelTokenSettings> = emptyMap(),
 )
 
-fun ProviderConfig.trustedInputLimitTokens(): Int? = modelContextLimit?.takeIf {
-    type in setOf(ProviderType.Anthropic, ProviderType.Gemini, ProviderType.OpenRouter) &&
-        it.model == model && it.baseUrl == baseUrl && it.inputLimitTokens > 0
-}?.inputLimitTokens
+fun parseTokenCount(raw: String): Int? {
+    val cleaned = raw.trim().replace(",", "").replace("_", "").replace(" ", "")
+    if (cleaned.isEmpty()) return null
+    val suffix = cleaned.last().lowercaseChar()
+    val multiplier = when (suffix) {
+        'k' -> 1024L
+        'm' -> 1024L * 1024L
+        else -> 1L
+    }
+    val numberPart = if (multiplier > 1L) cleaned.dropLast(1) else cleaned
+    if (numberPart.isEmpty()) return null
+    val tokens = if ('.' in numberPart && multiplier > 1L) {
+        val d = numberPart.toDoubleOrNull() ?: return null
+        if (!d.isFinite() || d <= 0.0) return null
+        (d * multiplier).toLong()
+    } else {
+        val n = numberPart.toLongOrNull() ?: return null
+        if (n <= 0L || n > Int.MAX_VALUE / multiplier) return null
+        n * multiplier
+    }
+    return tokens.takeIf { it in 1..Int.MAX_VALUE.toLong() }?.toInt()
+}
+
+fun ProviderConfig.manualContextWindowForModel(targetModel: String = model): Int? =
+    (modelTokenSettings[targetModel]?.manualContextWindowTokens
+        ?: manualContextWindowTokens?.takeIf { targetModel == model })
+        ?.takeIf { it > 0 }
+
+fun ProviderConfig.detectedContextWindowForModel(targetModel: String = model): Int? =
+    modelContextLimit?.takeIf {
+        it.model == targetModel && it.baseUrl == baseUrl && it.inputLimitTokens > 0
+    }?.inputLimitTokens
+
+fun ProviderConfig.trustedInputLimitTokens(): Int? =
+    manualContextWindowForModel() ?: detectedContextWindowForModel()
+
+fun ProviderConfig.resolvedContextWindowTokens(targetModel: String = model): Int =
+    manualContextWindowForModel(targetModel)
+        ?: detectedContextWindowForModel(targetModel)
+        ?: DEFAULT_CONTEXT_WINDOW_TOKENS
+
+fun ProviderConfig.resolvedManualMaxOutputTokens(targetModel: String = model): Int? =
+    (modelTokenSettings[targetModel]?.manualMaxOutputTokens
+        ?: manualMaxOutputTokens?.takeIf { targetModel == model })
+        ?.takeIf { it > 0 }
+
+fun ProviderConfig.withManualContextWindow(tokens: Int?): ProviderConfig {
+    val normalized = tokens?.takeIf { it > 0 }
+    val nextMap = if (model.isBlank()) {
+        modelTokenSettings
+    } else {
+        val current = modelTokenSettings[model] ?: ModelTokenSettings()
+        val updated = current.copy(manualContextWindowTokens = normalized)
+        if (updated.manualContextWindowTokens == null && updated.manualMaxOutputTokens == null) {
+            modelTokenSettings - model
+        } else {
+            modelTokenSettings + (model to updated)
+        }
+    }
+    return copy(
+        manualContextWindowTokens = normalized,
+        modelTokenSettings = nextMap,
+    )
+}
+
+fun ProviderConfig.withManualMaxOutputTokens(tokens: Int?): ProviderConfig {
+    val normalized = tokens?.takeIf { it > 0 }
+    val nextMap = if (model.isBlank()) {
+        modelTokenSettings
+    } else {
+        val current = modelTokenSettings[model] ?: ModelTokenSettings()
+        val updated = current.copy(manualMaxOutputTokens = normalized)
+        if (updated.manualContextWindowTokens == null && updated.manualMaxOutputTokens == null) {
+            modelTokenSettings - model
+        } else {
+            modelTokenSettings + (model to updated)
+        }
+    }
+    return copy(
+        manualMaxOutputTokens = normalized,
+        modelTokenSettings = nextMap,
+    )
+}
 
 internal fun ProviderConfig.openRouterOutputCeiling(): Int? {
     if (type != ProviderType.OpenRouter) return null
@@ -64,16 +154,39 @@ internal fun ProviderConfig.trustedAnthropicModelMetadata(): AnthropicModelMetad
     type == ProviderType.Anthropic && it.model == model && it.baseUrl == baseUrl
 }
 
-fun ProviderConfig.selectListedModel(info: ModelInfo): ProviderConfig = copy(
-    model = info.id,
-    modelContextLimit = info.inputLimitTokens?.takeIf {
-        it > 0 && type in setOf(ProviderType.Anthropic, ProviderType.Gemini, ProviderType.OpenRouter)
-    }?.let { ModelContextLimit(info.id, baseUrl, it,
-        info.outputLimitTokens?.takeIf { limit -> limit > 0 }) },
-    anthropicModelMetadata = info.anthropicMetadata?.takeIf {
-        type == ProviderType.Anthropic && it.model == info.id && it.baseUrl == baseUrl
-    },
-)
+fun ProviderConfig.selectListedModel(info: ModelInfo): ProviderConfig {
+    val savedManual = modelTokenSettings[info.id]
+    val manualContext = savedManual?.manualContextWindowTokens
+        ?: manualContextWindowTokens?.takeIf { info.id == model }
+    val manualMaxOutput = savedManual?.manualMaxOutputTokens
+        ?: manualMaxOutputTokens?.takeIf { info.id == model }
+    val detectedOutput = info.outputLimitTokens?.takeIf { it > 0 }
+        ?: info.anthropicMetadata?.maxOutputTokens?.takeIf { it > 0 }
+    return copy(
+        model = info.id,
+        modelContextLimit = info.inputLimitTokens?.takeIf { it > 0 }?.let {
+            ModelContextLimit(info.id, baseUrl, it, detectedOutput)
+        },
+        anthropicModelMetadata = info.anthropicMetadata?.takeIf {
+            type == ProviderType.Anthropic && it.model == info.id && it.baseUrl == baseUrl
+        },
+        manualContextWindowTokens = manualContext,
+        manualMaxOutputTokens = manualMaxOutput,
+    )
+}
+
+fun ProviderConfig.withModelId(newModel: String, listedModels: List<ModelInfo> = emptyList()): ProviderConfig {
+    val matched = listedModels.firstOrNull { it.id == newModel }
+    if (matched != null) return selectListedModel(matched)
+    val savedManual = modelTokenSettings[newModel]
+    return copy(
+        model = newModel,
+        modelContextLimit = modelContextLimit?.takeIf { it.model == newModel && it.baseUrl == baseUrl },
+        anthropicModelMetadata = anthropicModelMetadata?.takeIf { it.model == newModel && it.baseUrl == baseUrl },
+        manualContextWindowTokens = savedManual?.manualContextWindowTokens,
+        manualMaxOutputTokens = savedManual?.manualMaxOutputTokens,
+    )
+}
 
 private val standardReasoning = listOf(
     ReasoningLevel.Default,

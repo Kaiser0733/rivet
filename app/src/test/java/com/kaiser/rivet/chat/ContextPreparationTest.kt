@@ -145,6 +145,54 @@ class ContextPreparationTest {
         assertEquals(history, sessions.recent(id, 100).takeLast(100))
     }
 
+    @Test fun transcriptWithRepeatedLargeFileCreateAndReadBacksStubsInsteadOfDying() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val largeHtml = "<html><body>" + "<div class=\"card\">dashboard</div>".repeat(1200) + "</body></html>"
+        val transcript = buildList {
+            add(AgentMessage.user("Build a single-file dashboard in index.html"))
+            val createCall = com.kaiser.rivet.agent.AgentToolCall(
+                "call-write-1",
+                "write_file",
+                """{"path":"index.html","content":"$largeHtml"}""",
+            )
+            add(AgentMessage.assistant("", listOf(createCall)))
+            add(AgentMessage.tools(listOf(com.kaiser.rivet.agent.AgentToolResult(
+                "call-write-1",
+                "write_file",
+                """{"path":"index.html","size":${largeHtml.length},"sha256":"sha-1"}""",
+                summary = "Wrote index.html",
+            ))))
+            repeat(5) { step ->
+                val callId = "call-read-$step"
+                add(AgentMessage.assistant("", listOf(com.kaiser.rivet.agent.AgentToolCall(
+                    callId,
+                    "read_file",
+                    """{"path":"index.html","offset":${step * 8000},"limit":24000}""",
+                ))))
+                add(AgentMessage.tools(listOf(com.kaiser.rivet.agent.AgentToolResult(
+                    callId,
+                    "read_file",
+                    """{"path":"index.html","size":${largeHtml.length},"sha256":"sha-1","content":"$largeHtml"}""",
+                    summary = "Read index.html chunk $step",
+                ))))
+            }
+        }
+        sessions.save(transcript, interrupted = true)
+        val provider = SummaryProvider()
+        val preparation = preparation(sessions, id, 16_000, provider)
+
+        val reduced = preparation.prepare(transcript)
+
+        assertEquals(0, provider.requests.size)
+        assertTrue(com.kaiser.rivet.agent.AgentContext.serializedBytes(reduced) < 12_000)
+        assertTrue(reduced.flatMap { it.toolCalls }.any { it.arguments.contains("\"arguments_pruned\":true") })
+        assertTrue(reduced.flatMap { it.toolResults }.any { it.content.contains("\"output_pruned\":true") })
+        assertTrue(reduced.flatMap { it.toolResults }.any { it.content.contains("\"path\":\"index.html\"") })
+    }
+
     private fun preparation(sessions: CodingSessions, id: String, limit: Int,
                             provider: SummaryProvider, priorSummary: String = ""): ContextPreparation {
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
