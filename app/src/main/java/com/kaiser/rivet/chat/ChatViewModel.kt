@@ -621,7 +621,10 @@ class ChatViewModel private constructor(
             var lastSystem = ""
             val streamPreview = StringBuilder()
             val reasoningPreview = StringBuilder()
-            var lastPreviewNanos = 0L
+            // Reasoning used to publish on every delta, which copies and re-lays out the
+            // whole chain hundreds of times a second. Both streams now share one window.
+            val textWindow = PreviewWindow()
+            val reasoningWindow = PreviewWindow()
             var checkpointId: String? = null
             var checkpointBroken = false
             var needsPostCheck = false
@@ -636,7 +639,8 @@ class ChatViewModel private constructor(
                         onReasoning = { delta ->
                             if (delta.isNotEmpty()) {
                                 reasoningPreview.append(delta)
-                                if (ticket == generation) {
+                                if (ticket == generation &&
+                                    reasoningWindow.shouldPublish(System.nanoTime())) {
                                     val preview = reasoningPreview.toString()
                                     _uiState.update { it.copy(streamingReasoning = preview) }
                                 }
@@ -755,10 +759,8 @@ class ChatViewModel private constructor(
                         autonomyMode = autonomyMode,
                         onText = { delta ->
                             streamPreview.append(delta)
-                            val now = System.nanoTime()
                             if (ticket == generation && delta.isNotEmpty() &&
-                                (lastPreviewNanos == 0L || now - lastPreviewNanos >= 80_000_000L)) {
-                                lastPreviewNanos = now
+                                textWindow.shouldPublish(System.nanoTime())) {
                                 val preview = streamPreview.toString()
                                 _uiState.update { it.copy(streamingText = preview) }
                             }
