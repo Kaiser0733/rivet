@@ -93,7 +93,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val summary = summary(db, id)
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
         val active = activeMessages(db, id)
-        val interrupted = header.interrupted || hasPendingToolCall(active.lastOrNull())
+        val interrupted = hasPendingToolCall(active.lastOrNull()) ||
+            (header.interrupted && hasUnfinishedTurn(active))
         val messages = recoverInterrupted(db, id, interrupted, active, summaryBytes)
         AgentSession(messages, interrupted, header.id, header.title, header.workspaceId, summary)
     }
@@ -202,7 +203,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         validateProjection(db, id)
         val summary = summary(db, id)
         val active = activeMessages(db, id)
-        val interrupted = selected.interrupted || hasPendingToolCall(active.lastOrNull())
+        val interrupted = hasPendingToolCall(active.lastOrNull()) ||
+            (selected.interrupted && hasUnfinishedTurn(active))
         val messages = recoverInterrupted(db, id, interrupted, active,
             summary.toByteArray(Charsets.UTF_8).size)
         setActive(db, id)
@@ -271,9 +273,14 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         } finally { db.endTransaction() }
         val active = activeId(db)
         val selected = header(db, active)
+        validateProjection(db, active)
         val summary = summary(db, active)
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
-        AgentSession(activeMessages(db, active), selected.interrupted, active, selected.title, selected.workspaceId, summary)
+        val currentMessages = activeMessages(db, active)
+        val interrupted = hasPendingToolCall(currentMessages.lastOrNull()) ||
+            (selected.interrupted && hasUnfinishedTurn(currentMessages))
+        val messages = recoverInterrupted(db, active, interrupted, currentMessages, summaryBytes)
+        AgentSession(messages, interrupted, active, selected.title, selected.workspaceId, summary)
     }
 
     suspend fun recent(id: String, limit: Int = 100): List<AgentMessage> = onDatabase { db ->
@@ -534,9 +541,22 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     private fun hasPendingToolCall(last: AgentMessage?): Boolean =
         last?.role == AgentRole.Assistant && last.toolCalls.isNotEmpty()
 
+    private fun hasUnfinishedTurn(messages: List<AgentMessage>): Boolean {
+        val last = messages.lastOrNull { it.role != AgentRole.Context && it.internalContext == null }
+            ?: return false
+        return last.role != AgentRole.Assistant || last.toolCalls.isNotEmpty() || last.text.isBlank()
+    }
+
     private fun recoverInterrupted(db: SQLiteDatabase, id: String, interrupted: Boolean,
                                    active: List<AgentMessage>, summaryBytes: Int): List<AgentMessage> {
-        val pending = active.lastOrNull()?.takeIf { interrupted && hasPendingToolCall(it) } ?: return active
+        if (!interrupted) {
+            db.execSQL("UPDATE sessions SET interrupted=0 WHERE id=? AND interrupted!=0", arrayOf(id))
+            return active
+        }
+        val pending = active.lastOrNull()?.takeIf { hasPendingToolCall(it) } ?: run {
+            db.execSQL("UPDATE sessions SET interrupted=1 WHERE id=? AND interrupted!=1", arrayOf(id))
+            return active
+        }
         val result = AgentMessage.tools(pending.toolCalls.map { call ->
             AgentToolResult(call.id, call.name, AgentToolError.content("interrupted"), true,
                 "Interrupted  ${call.name}".take(256))

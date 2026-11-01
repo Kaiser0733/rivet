@@ -542,7 +542,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     EmptyState(RivetDoodle.Project, "Opening your project…",
                         "Rivet is restoring access to the folder you selected.",
                         null, {}, Modifier.weight(1f))
-                } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null) {
+                } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null && !state.interruptedTurn) {
                     EmptyState(RivetDoodle.Ready, "Tell Rivet what you want to change.",
                         "Rivet can inspect this project and will ask before changing files.",
                         null, {}, Modifier.weight(1f))
@@ -552,6 +552,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     key(state.currentSessionId) {
                         MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
                             onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
+                            onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
+                            onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
                             modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
                     }
                 }
@@ -624,7 +626,10 @@ private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewM
 @Composable
 private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
-                        onDiscardProjectChanges: () -> Unit, modifier: Modifier = Modifier) {
+                        onDiscardProjectChanges: () -> Unit,
+                        onRetryInterruptedTurn: () -> Unit,
+                        onDismissInterruptedTurn: () -> Unit,
+                        modifier: Modifier = Modifier) {
     val timeline = remember(state.messages, state.toolLifecycle) {
         AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
     }
@@ -634,9 +639,11 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     ) }
     val streamingText = state.streamingText
     val showActivity = state.activity != null && streamingText.isBlank() && liveOperation == null
+    val showInterruptedTurn = state.interruptedTurn && !state.streaming
     val totalItems = timeline.size +
         (if (streamingText.isNotBlank()) 1 else 0) +
         (if (showActivity) 1 else 0) +
+        (if (showInterruptedTurn) 1 else 0) +
         (if (state.notice != null) 1 else 0) +
         (if (state.error != null) 1 else 0)
     val listState = rememberLazyListState()
@@ -656,7 +663,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
     }
     LaunchedEffect(timeline.size, streamingText.length, state.streaming, state.activity,
-        state.toolLifecycle, state.error, state.notice) {
+        state.toolLifecycle, state.interruptedTurn, state.error, state.notice) {
         if (followBottom && totalItems > 0) {
             programmaticScroll = true
             try {
@@ -680,6 +687,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         }
         if (showActivity) state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        }
+        if (showInterruptedTurn) item(key = "interrupted-turn") {
+            InterruptedTurnRow(onRetry = onRetryInterruptedTurn, onDismiss = onDismissInterruptedTurn)
         }
         state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         state.error?.let { error -> item {
@@ -935,6 +945,28 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
         }
         if (details && state.lastTurnFileCount > state.lastTurnFiles.size)
             Text("Showing the first ${state.lastTurnFiles.size} files", style = MaterialTheme.typography.bodySmall)
+    }
+}
+
+@Composable
+private fun InterruptedTurnRow(onRetry: () -> Unit, onDismiss: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(6.dp)) {
+        Row(
+            Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween,
+        ) {
+            Text(
+                ChatViewModel.INTERRUPTED_TURN_PROMPT,
+                modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurface,
+                style = MaterialTheme.typography.bodyMedium,
+            )
+            Row {
+                TextButton(onClick = onRetry) { Text("Retry") }
+                TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_error_dismiss)) }
+            }
+        }
     }
 }
 

@@ -92,6 +92,7 @@ data class ChatUiState(
     val undoing: Boolean = false,
     val notice: String? = null,
     val acceptedMessageCount: Long = 0,
+    val interruptedTurn: Boolean = false,
 )
 
 enum class ChatErrorAction { OpenSettings, RetryProjectChanges }
@@ -198,6 +199,7 @@ class ChatViewModel private constructor(
     @Volatile private var titleRenameRevision = 0L
     private var sendJob: Job? = null
     private var generation = 0L
+    @Volatile private var userCancelledTicket = 0L
     private val runtimeController = RuntimeController(app, workspaceSelection, managedProcesses) {
         _uiState.value.projectName
     }
@@ -228,6 +230,8 @@ class ChatViewModel private constructor(
                     activeMessages = restored.messages
                     activeSummary = restored.summary
                     val visible = restored.id?.let { sessions?.recent(it) } ?: restored.messages
+                    val interruptedTurn = restored.interrupted &&
+                        (visible.isNotEmpty() || restored.messages.isNotEmpty())
                     _uiState.update { state ->
                         state.copy(
                             messages = visible,
@@ -237,10 +241,9 @@ class ChatViewModel private constructor(
                             currentSessionTitle = restored.title,
                             currentSessionWorkspaceId = restored.workspaceId,
                             usage = usage,
-                            error = if (restored.interrupted) "The previous task was interrupted. Any saved project changes remain." else state.error,
+                            interruptedTurn = interruptedTurn,
                         )
                     }
-                    if (restored.interrupted) sessionStore.markInterrupted(false)
                 } catch (e: CancellationException) { throw e
                 } catch (_: Exception) {
                     _uiState.update { it.copy(ready = true, error = "Could not load conversation history. Restart Rivet or check available storage.") }
@@ -301,7 +304,8 @@ class ChatViewModel private constructor(
                         _uiState.update { it.copy(messages = emptyList(), sessions = store.list(),
                             currentSessionId = selected.id, currentSessionTitle = selected.title,
                             currentSessionWorkspaceId = identity, usage = null, contextEstimate = null,
-                            lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null) }
+                            lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
+                            interruptedTurn = false) }
                     }
                 }
                 _uiState.update { it.copy(projectLoading = false, error = null) }
@@ -326,9 +330,38 @@ class ChatViewModel private constructor(
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready ||
             _uiState.value.recoveringProjectChanges) return
+        startTurn(trimmed, retryingInterrupted = false)
+    }
+
+    fun retryInterruptedTurn() {
+        if (_uiState.value.streaming || !_uiState.value.ready ||
+            _uiState.value.recoveringProjectChanges || !_uiState.value.interruptedTurn) return
+        val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
+        if (lastUser.isEmpty() && activeMessages.isEmpty()) return
+        startTurn(lastUser, retryingInterrupted = true)
+    }
+
+    fun dismissInterruptedTurn() {
+        if (_uiState.value.streaming) return
+        _uiState.update { state ->
+            state.copy(interruptedTurn = false)
+        }
+        viewModelScope.launch {
+            try {
+                sessionStore.markInterrupted(false)
+                val history = sessions?.list()
+                if (history != null) _uiState.update { it.copy(sessions = history) }
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) { }
+        }
+    }
+
+    private fun startTurn(trimmed: String, retryingInterrupted: Boolean) {
+        val wasInterrupted = _uiState.value.interruptedTurn
         val ticket = ++generation
         _uiState.update { it.copy(streaming = true, streamingText = "", activity = "Getting ready…",
-            toolLifecycle = emptyList(), error = null, errorAction = null, notice = null) }
+            toolLifecycle = emptyList(), error = null, errorAction = null, notice = null,
+            interruptedTurn = false) }
         val previous = sendJob
         sendJob = viewModelScope.launch {
             var turnToken: String? = null
@@ -344,6 +377,7 @@ class ChatViewModel private constructor(
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) {
                         _uiState.update { it.copy(streaming = false, activity = null,
+                            interruptedTurn = wasInterrupted,
                             error = "Could not recover the previous task. Check available storage and try again.") }
                         return@launch
                     }
@@ -351,13 +385,14 @@ class ChatViewModel private constructor(
                         it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty()
                     } == true) {
                     _uiState.update { it.copy(streaming = false, activity = null,
+                        interruptedTurn = wasInterrupted,
                         error = "Could not recover the previous task. Restart Rivet before continuing.") }
                     return@launch
                 }
                 activeMessages = restored.messages
                 activeSummary = restored.summary
             }
-            val snapshot = providerSnapshot() ?: return@launch
+            val snapshot = providerSnapshot(wasInterrupted) ?: return@launch
             val autonomyMode = try { autonomyStore.mode.first() }
                 catch (e: CancellationException) { throw e }
                 catch (_: Exception) { AutonomyMode.Ask }
@@ -389,11 +424,13 @@ class ChatViewModel private constructor(
                     projectError = if (current.currentSessionWorkspaceId != null) null
                     else "Rivet couldn't open this project. Choose the folder again.",
                     streaming = false, activity = null,
+                    interruptedTurn = wasInterrupted,
                     error = if (current.currentSessionWorkspaceId != null) PROJECT_ACCESS_LOST_MESSAGE else null) }
                 return@launch
             }
             if (sessions != null && binding == ProjectBindingState.Mismatch) {
                 _uiState.update { it.copy(streaming = false, activity = null,
+                    interruptedTurn = wasInterrupted,
                     error = PROJECT_BINDING_MISMATCH_MESSAGE) }
                 return@launch
             }
@@ -445,7 +482,11 @@ class ChatViewModel private constructor(
                     tools = tools,
                 )
             }
-            if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + AgentMessage.user(trimmed), 0)) {
+            val lastNonContext = activeMessages.lastOrNull { it.role != AgentRole.Context && it.internalContext == null }
+            val reuseExistingTail = retryingInterrupted &&
+                (lastNonContext?.role == AgentRole.User || lastNonContext?.role == AgentRole.Tool)
+            val pendingUser = if (reuseExistingTail) emptyList() else listOf(AgentMessage.user(trimmed))
+            if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
                 try {
                     val reduced = context.prepare(activeMessages, force = true, reason = "storage_pressure")
                     if (reduced != activeMessages) {
@@ -456,17 +497,19 @@ class ChatViewModel private constructor(
                 catch (e: CancellationException) { throw e
                 } catch (_: Exception) {
                     _uiState.update { it.copy(streaming = false, activity = null,
+                        interruptedTurn = wasInterrupted,
                         error = "Rivet could not shorten this session's context. The conversation was kept.") }
                     return@launch
                 }
             }
-            val durable = (activeMessages + initialContext(activeMessages) + AgentMessage.user(trimmed)).toMutableList()
+            val durable = (activeMessages + initialContext(activeMessages) + pendingUser).toMutableList()
             try {
                 sessionStore.save(durable, interrupted = true)
             } catch (_: AgentSessionLimitException) {
                 if (ticket == generation) {
                     _uiState.update {
                         it.copy(streaming = false, pendingApproval = null, activity = null,
+                            interruptedTurn = wasInterrupted,
                             error = CONTEXT_LIMIT_ERROR)
                     }
                 }
@@ -474,14 +517,19 @@ class ChatViewModel private constructor(
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
                 _uiState.update { it.copy(streaming = false, pendingApproval = null, activity = null,
+                    interruptedTurn = wasInterrupted,
                     error = "Could not save the conversation. Check available storage and try again.") }
                 return@launch
             }
             _uiState.update {
-                it.copy(messages = (it.messages + durable.last()).takeLast(100), streaming = true,
+                it.copy(
+                    messages = if (reuseExistingTail) it.messages else (it.messages + durable.last()).takeLast(100),
+                    streaming = true,
                     error = null, errorAction = null, notice = null, activity = "Working on it…",
                     lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
-                    acceptedMessageCount = it.acceptedMessageCount + 1)
+                    acceptedMessageCount = if (reuseExistingTail) it.acceptedMessageCount else it.acceptedMessageCount + 1,
+                    interruptedTurn = false,
+                )
             }
             activeMessages = durable.toList()
             var lastSystem = ""
@@ -706,14 +754,16 @@ class ChatViewModel private constructor(
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     if (ticket == generation) {
-                        sessionStore.save(durable, interrupted = false)
+                        val userCancelled = userCancelledTicket == ticket
+                        sessionStore.save(durable, interrupted = !userCancelled)
                         val blocker = try { runtimeController.commandBlocker() }
                             catch (error: CancellationException) { throw error }
                             catch (error: MirrorFailure) { error.code }
                             catch (_: Exception) { null }
                         val pendingProjectChanges = blocker != null && blocker in SYNC_RECOVERY_CODES
-                    _uiState.update { it.copy(streaming = false, streamingText = "", pendingApproval = null, activity = null,
-                        toolLifecycle = emptyList(),
+                        _uiState.update { it.copy(streaming = false, streamingText = "", pendingApproval = null, activity = null,
+                            toolLifecycle = emptyList(),
+                            interruptedTurn = !userCancelled && durable.isNotEmpty(),
                             error = if (pendingProjectChanges) "Rivet stopped before it could save the command's project changes." else it.error,
                             errorAction = if (pendingProjectChanges) ChatErrorAction.RetryProjectChanges else it.errorAction,
                             notice = if (pendingProjectChanges) null else "Stopped. Any saved project changes remain.") }
@@ -758,11 +808,22 @@ class ChatViewModel private constructor(
                     }
                 }
             }
-            } catch (e: CancellationException) { throw e
+            } catch (e: CancellationException) {
+                if (wasInterrupted && ticket == generation) {
+                    val userCancelled = userCancelledTicket == ticket
+                    if (userCancelled) {
+                        withContext(NonCancellable) {
+                            try { sessionStore.markInterrupted(false) } catch (_: Exception) { }
+                        }
+                    } else {
+                        _uiState.update { it.copy(interruptedTurn = true) }
+                    }
+                }
+                throw e
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent setup failed: ${e.javaClass.simpleName}")
                 if (ticket == generation) _uiState.update { it.copy(streaming = false, streamingText = "",
-                    activity = null, pendingApproval = null,
+                    activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
                 runtimeController.finishTurn(turnToken)
@@ -935,21 +996,24 @@ class ChatViewModel private constructor(
         }
     }
 
-    private suspend fun providerSnapshot(): ProviderRuntimeResult.Ready? {
+    private suspend fun providerSnapshot(interruptedTurn: Boolean = false): ProviderRuntimeResult.Ready? {
         val loaded = try { providerSource.load() }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) {
-                return failBeforeStart("Rivet couldn't load the model settings. Open Settings and try again.")
+                return failBeforeStart(
+                    "Rivet couldn't load the model settings. Open Settings and try again.",
+                    interruptedTurn,
+                )
             }
         return when (val result = loaded) {
             is ProviderRuntimeResult.Ready -> result
-            is ProviderRuntimeResult.Failure -> failBeforeStart(result.message)
+            is ProviderRuntimeResult.Failure -> failBeforeStart(result.message, interruptedTurn)
         }
     }
 
-    private fun failBeforeStart(message: String): Nothing? {
+    private fun failBeforeStart(message: String, interruptedTurn: Boolean = false): Nothing? {
         _uiState.update { it.copy(streaming = false, activity = null, error = message,
-            errorAction = ChatErrorAction.OpenSettings) }
+            errorAction = ChatErrorAction.OpenSettings, interruptedTurn = interruptedTurn) }
         return null
     }
 
@@ -962,6 +1026,7 @@ class ChatViewModel private constructor(
     }
 
     fun cancel() {
+        userCancelledTicket = generation
         approvals.cancel()
         sendJob?.cancel()
     }
@@ -1072,6 +1137,8 @@ class ChatViewModel private constructor(
                 activeMessages = selected.messages
                 activeSummary = selected.summary
                 val visible = selected.id?.let { store.recent(it) } ?: selected.messages
+                val interruptedTurn = selected.interrupted &&
+                    (visible.isNotEmpty() || selected.messages.isNotEmpty())
                 val project = _uiState.value
                 if (ticket == generation) _uiState.value = ChatUiState(
                     messages = visible, ready = true, sessions = history,
@@ -1080,8 +1147,7 @@ class ChatViewModel private constructor(
                     usage = usage,
                     projectName = project.projectName, projectIdentity = project.projectIdentity,
                     projectLoading = project.projectLoading, projectError = project.projectError,
-                    error = if (selected.interrupted) "The previous task was interrupted. Any saved project changes remain." else null)
-                if (selected.interrupted) store.markInterrupted(false)
+                    interruptedTurn = interruptedTurn)
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
                 if (ticket == generation) _uiState.update { it.copy(error = "Could not open the session.") }
@@ -1092,6 +1158,8 @@ class ChatViewModel private constructor(
     companion object {
         internal const val CONTEXT_LIMIT_ERROR =
             "This conversation is too long to continue here. Start a new conversation."
+        internal const val INTERRUPTED_TURN_PROMPT =
+            "This turn was interrupted — Retry?"
         private const val MAX_LIVE_TOOL_EVENTS = 64
         private val SYNC_RECOVERY_CODES = setOf(
             "sync_required", "sync_conflict", "sync_failed", "sync_interrupted", "interrupted", "mirror_dirty",

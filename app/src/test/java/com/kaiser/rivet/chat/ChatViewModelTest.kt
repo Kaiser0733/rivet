@@ -1122,6 +1122,67 @@ class ChatViewModelTest {
         controller.destroy()
     }
 
+    @Test fun deadTurnBeforeFirstAssistantReplyRestoresInterruptedStateAndRetriesWithoutDuplicatingPrompt() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val started = CompletableDeferred<Unit>()
+        val dyingProvider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+                started.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val first = newChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> dyingProvider })
+        await(first) { it.ready && !it.projectLoading }
+
+        first.send("Write hello.txt")
+        withTimeout(5_000) { started.await() }
+        first.viewModelScope.coroutineContext[Job]?.cancelAndJoin()
+        models.remove(first)
+
+        assertTrue(CodingSessions(app).load().interrupted)
+        assertEquals("This turn was interrupted — Retry?", ChatViewModel.INTERRUPTED_TURN_PROMPT)
+
+        val retryProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Created hello.txt"))))
+        val restored = newChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> retryProvider })
+        val restoredState = await(restored) { it.ready && !it.projectLoading }
+        assertTrue(restoredState.interruptedTurn)
+        assertEquals(listOf("Write hello.txt"), restoredState.messages.map { it.text })
+
+        restored.retryInterruptedTurn()
+        val completed = await(restored) { !it.streaming && it.messages.lastOrNull()?.text == "Created hello.txt" }
+        assertFalse(completed.interruptedTurn)
+        assertEquals(listOf("Write hello.txt", "Created hello.txt"), completed.messages.map { it.text })
+        assertEquals(1, retryProvider.requests.size)
+        assertEquals(1, retryProvider.requests.single().messages.count { it.text == "Write hello.txt" })
+        assertFalse(CodingSessions(app).load().interrupted)
+    }
+
+    @Test fun dismissingInterruptedTurnClearsMarkerInUiAndStorage() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        sessions.save(listOf(AgentMessage.user("Unfinished request")), interrupted = true)
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        val restored = await(viewModel) { it.ready && !it.projectLoading }
+        assertTrue(restored.interruptedTurn)
+
+        viewModel.dismissInterruptedTurn()
+        val dismissed = await(viewModel) { !it.interruptedTurn && it.sessions.none { row -> row.interrupted } }
+        assertFalse(dismissed.interruptedTurn)
+        assertFalse(CodingSessions(app).load().interrupted)
+    }
+
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withTimeout(5_000) { viewModel.uiState.first(predicate) }
 
