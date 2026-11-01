@@ -640,6 +640,12 @@ private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewM
     }
 }
 
+private data class TimelineDisplayEntry(
+    val item: AgentConversationItem,
+    val messageIndex: Int? = null,
+    val standaloneThinking: String? = null,
+)
+
 @Composable
 private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
@@ -648,14 +654,53 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onDismissInterruptedTurn: () -> Unit,
                         onRetryTurn: () -> Unit,
                         modifier: Modifier = Modifier) {
-    val timeline = remember(state.messages, state.toolLifecycle) {
-        AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
+    val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning) {
+        val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
+        var cursor = 0
+        raw.map { item ->
+            when (item) {
+                is AgentConversationItem.Message -> {
+                    var matched: Int? = null
+                    while (cursor < state.messages.size) {
+                        val m = state.messages[cursor]
+                        cursor++
+                        if (m.internalContext != null && m.role != AgentRole.Context) continue
+                        if (m.role == AgentRole.User || (m.role == AgentRole.Assistant && m.text.isNotBlank())) {
+                            matched = cursor - 1
+                            break
+                        }
+                    }
+                    TimelineDisplayEntry(item, matched)
+                }
+                is AgentConversationItem.Activity -> {
+                    var matched: Int? = null
+                    for (idx in cursor until state.messages.size) {
+                        val m = state.messages[idx]
+                        if (m.internalContext != null && m.role != AgentRole.Context) continue
+                        if (m.role == AgentRole.Assistant && m.toolCalls.isNotEmpty()) {
+                            val groupId = com.kaiser.rivet.agent.AgentToolLifecycle.groupKeyFor(
+                                m.toolCalls.asSequence().map { it.id },
+                            )
+                            if (groupId == item.group.id) {
+                                matched = idx
+                                if (m.text.isBlank()) cursor = idx + 1
+                                break
+                            }
+                        }
+                    }
+                    val standalone = matched?.takeIf { state.messages[it].text.isBlank() }
+                        ?.let { state.messageReasoning[it] }
+                    TimelineDisplayEntry(item, matched, standalone)
+                }
+            }
+        }
     }
     val liveOperation = state.toolLifecycle.lastOrNull { it.stage in setOf(
         AgentToolLifecycleStage.Queued, AgentToolLifecycleStage.AwaitingApproval,
         AgentToolLifecycleStage.Started,
     ) }
     val streamingText = state.streamingText
+    val streamingReasoning = state.streamingReasoning
     val streaming = state.streaming
     // While a turn runs the status line is always shown, so a long tool call and a
     // stalled stream never look the same. Outside a turn the plain activity text is
@@ -671,6 +716,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     val showActivity = !streaming && state.activity != null
     val showInterruptedTurn = state.interruptedTurn && !state.streaming
     val totalItems = timeline.size +
+        (if (streamingReasoning.isNotBlank()) 1 else 0) +
         (if (streamingText.isNotBlank()) 1 else 0) +
         (if (showLiveStatus) 1 else 0) +
         (if (showActivity) 1 else 0) +
@@ -695,7 +741,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 if (scrolling && !programmatic) followBottom = near
             }
     }
-    LaunchedEffect(timeline.size, streamingText.length, state.streaming, state.activity,
+    LaunchedEffect(timeline.size, streamingReasoning.length, streamingText.length, state.streaming, state.activity,
         state.toolLifecycle, state.interruptedTurn, state.error, state.notice) {
         if (followBottom && totalItems > 0) {
             programmaticScroll = true
@@ -710,11 +756,30 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
-        items(timeline) { item ->
-            when (item) {
-                is AgentConversationItem.Message -> MessageRow(item.message)
-                is AgentConversationItem.Activity -> ActivityRow(item.group)
+        items(timeline) { entry ->
+            when (val item = entry.item) {
+                is AgentConversationItem.Message -> MessageRow(
+                    message = item.message,
+                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
+                    messageKey = entry.messageIndex ?: 0,
+                )
+                is AgentConversationItem.Activity -> Column(
+                    Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp),
+                ) {
+                    if (!entry.standaloneThinking.isNullOrBlank()) {
+                        ThinkingBlock(
+                            displaySafeText(entry.standaloneThinking),
+                            streaming = false,
+                            id = "thinking-${entry.messageIndex ?: item.group.id}",
+                        )
+                    }
+                    ActivityRow(item.group)
+                }
             }
+        }
+        if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
+            ThinkingBlock(displaySafeText(streamingReasoning), streaming = true, id = "streaming")
         }
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
@@ -843,31 +908,91 @@ private suspend fun scrollToConversationBottom(state: androidx.compose.foundatio
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(message: AgentMessage) {
+private fun MessageRow(message: AgentMessage, reasoning: String? = null, messageKey: Int = 0) {
     val context = LocalContext.current
     val copyText = if (message.role == AgentRole.User) message.text else displaySafeText(message.text)
-    Box(Modifier.fillMaxWidth().combinedClickable(
-        onClick = {},
-        onLongClickLabel = "Copy message",
-        onLongClick = { copyToClipboard(context, copyText) },
-    )) {
-        if (message.role == AgentRole.User) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                Column(Modifier.fillMaxWidth(0.86f), horizontalAlignment = Alignment.End,
-                    verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                    Text("You", style = MaterialTheme.typography.labelLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Surface(color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp,
-                            bottomStart = 16.dp, bottomEnd = 4.dp),
-                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f))) {
-                        Text(message.text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                            style = MaterialTheme.typography.bodyMedium)
+    Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+        if (message.role == AgentRole.Assistant && !reasoning.isNullOrBlank()) {
+            ThinkingBlock(displaySafeText(reasoning), streaming = false, id = "thinking-$messageKey")
+        }
+        Box(Modifier.fillMaxWidth().combinedClickable(
+            onClick = {},
+            onLongClickLabel = "Copy message",
+            onLongClick = { copyToClipboard(context, copyText) },
+        )) {
+            if (message.role == AgentRole.User) {
+                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                    Column(Modifier.fillMaxWidth(0.86f), horizontalAlignment = Alignment.End,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                        Text("You", style = MaterialTheme.typography.labelLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Surface(color = MaterialTheme.colorScheme.surfaceContainer,
+                            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp,
+                                bottomStart = 16.dp, bottomEnd = 4.dp),
+                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f))) {
+                            Text(message.text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                                style = MaterialTheme.typography.bodyMedium)
+                        }
                     }
                 }
+            } else {
+                AssistantMessage(displaySafeText(message.text), streaming = false)
             }
-        } else {
-            AssistantMessage(displaySafeText(message.text), streaming = false)
+        }
+    }
+}
+
+@Composable
+private fun ThinkingBlock(text: String, streaming: Boolean, id: String) {
+    if (streaming) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(0.94f),
+            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f),
+            shape = RoundedCornerShape(8.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
+        ) {
+            Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
+                verticalArrangement = Arrangement.spacedBy(5.dp)) {
+                Text("Thinking", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(text, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
+    } else {
+        var expanded by rememberSaveable(id) { mutableStateOf(false) }
+        val summary = remember(text) {
+            text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
+        }
+        Column(Modifier.fillMaxWidth(0.94f)) {
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 36.dp).clickable(role = Role.Button) { expanded = !expanded }
+                    .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text("Thinking", style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(summary, Modifier.weight(1f).padding(start = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    maxLines = 1, overflow = TextOverflow.Ellipsis)
+                Text(if (expanded) "Hide" else "Show", Modifier.padding(start = 8.dp),
+                    style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            if (expanded) {
+                Surface(
+                    modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f),
+                    shape = RoundedCornerShape(6.dp),
+                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
+                ) {
+                    Text(text, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
     }
 }
