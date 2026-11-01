@@ -906,7 +906,11 @@ class ChatViewModelTest {
         await(viewModel) { it.ready }
 
         viewModel.send("Continue")
-        val stopped = await(viewModel) { !it.streaming && it.error?.contains("make room") == true }
+        // The turn stops with the last-resort copy: it says the chat was compacted and
+        // still did not fit, not that Rivet never tried.
+        val stopped = await(viewModel) {
+            !it.streaming && it.error?.contains("compacted this chat as far as it could") == true
+        }
 
         assertNull(stopped.pendingApproval)
         assertEquals(67, sessions.fullEventCount(id))
