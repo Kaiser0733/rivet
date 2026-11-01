@@ -570,4 +570,37 @@ class WorkspaceMirrorTest {
         assertFalse(mirror.worktree.exists())
         assertEquals("base", File(mirror.prepare().worktree, "file.txt").readText())
     }
+
+    // A command that creates symlinks (npm install, python -m venv) must not make
+    // the project permanently unsyncable.
+    @Test fun symlinkInTheWorktreeDoesNotBlockTheRestOfTheSync() = runBlocking {
+        source("keep.txt", "keep".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, "keep.txt").writeText("changed")
+        val link = File(root, "node_modules/.bin/tool")
+        link.parentFile!!.mkdirs()
+        Files.createSymbolicLink(link.toPath(), File(root, "keep.txt").toPath())
+
+        val result = mirror.sync()
+
+        assertEquals(MirrorSync.Ok, result.state)
+        assertTrue(result.skipped.contains("node_modules/.bin/tool"))
+        assertArrayEquals("changed".toByteArray(), bytes("keep.txt"))
+        assertFalse(mirror.hasLocalChanges())
+    }
+
+    @Test fun symlinkDoesNotStopTheCheckpointForTheRestOfTheProject() = runBlocking {
+        source("keep.txt", "keep".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        Files.createSymbolicLink(File(root, "link").toPath(), File(root, "keep.txt").toPath())
+        val store = TurnCheckpoint(File(files, "checkpoints"), tree.toString())
+
+        val id = store.begin(root)
+
+        assertTrue(store.latest()!!.skipped.contains("link"))
+        File(root, "keep.txt").writeText("changed")
+        assertTrue(store.finish(id, root))
+    }
 }

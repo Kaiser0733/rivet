@@ -34,7 +34,8 @@ val MirrorSync.code: String get() = when (this) {
     MirrorSync.Conflict -> "conflict"
     MirrorSync.Failed -> "failed"
 }
-data class MirrorSyncResult(val state: MirrorSync, val path: String? = null)
+data class MirrorSyncResult(val state: MirrorSync, val path: String? = null,
+                            val skipped: List<String> = emptyList())
 data class MirrorReady(val worktree: File, val dirty: Boolean)
 
 @Serializable
@@ -97,7 +98,8 @@ class WorkspaceMirror(
             recover()
             if (!current.exists()) materialize()
             val before = baseline()
-            val local = localSnapshot()
+            val skipped = mutableListOf<String>()
+            val local = localSnapshot(skipped = skipped)
             val pendingCreate = readPartialCreate()
             if (local == before.entries) {
                 if (pendingCreate != null) clearPartialCreate()
@@ -130,7 +132,7 @@ class WorkspaceMirror(
                 external[it] != before.entries[it] && external[it] != local[it] &&
                     !(it == partial?.path && external[it] == emptyFile)
             }
-            if (difference != null) return@withLock MirrorSyncResult(MirrorSync.Conflict, difference)
+            if (difference != null) return@withLock MirrorSyncResult(MirrorSync.Conflict, difference, skipped)
             try {
                 val removed = before.entries.keys.filter { it.isNotEmpty() &&
                     (it !in local || local[it]?.directory != before.entries[it]?.directory) }
@@ -196,7 +198,7 @@ class WorkspaceMirror(
                 if (mismatch != null) return@withLock MirrorSyncResult(MirrorSync.Failed, mismatch)
                 writeBaseline(current, MirrorBaseline(workspace.tree.toString(), verified))
                 clearPartialCreate()
-                MirrorSyncResult(MirrorSync.Ok)
+                MirrorSyncResult(MirrorSync.Ok, skipped = skipped)
             } catch (e: CancellationException) { throw e
             } catch (e: MirrorFailure) { throw e
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
@@ -360,7 +362,11 @@ class WorkspaceMirror(
         return entries
     }
 
-    private suspend fun localSnapshot(root: File = worktree): Map<String, MirrorEntry> {
+    // Symlinks and special files are not project content Rivet can mirror: commands
+    // create them (node_modules/.bin, venv/bin). Skipping the entry instead of
+    // throwing keeps the rest of the tree syncable; the caller reports the paths.
+    private suspend fun localSnapshot(root: File = worktree,
+                                      skipped: MutableList<String>? = null): Map<String, MirrorEntry> {
         if (Files.isSymbolicLink(root.toPath())) throw MirrorFailure("unsafe_entry")
         if (!Files.isDirectory(root.toPath(), LinkOption.NOFOLLOW_LINKS)) throw MirrorFailure("mirror_missing")
         val entries = linkedMapOf("" to MirrorEntry(directory = true))
@@ -371,7 +377,7 @@ class WorkspaceMirror(
                     val path = relative.child(child.fileName.toString())
                     val name = path.value
                     when {
-                        Files.isSymbolicLink(child) -> throw MirrorFailure("unsafe_entry", name)
+                        Files.isSymbolicLink(child) -> skipped?.add(name)
                         Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS) -> {
                             entries[name] = MirrorEntry(directory = true)
                             visit(child, path)
@@ -391,7 +397,7 @@ class WorkspaceMirror(
                             }
                             entries[name] = MirrorEntry(false, length, digest.digest().toHex())
                         }
-                        else -> throw MirrorFailure("unsafe_entry", name)
+                        else -> skipped?.add(name)
                     }
                 }
             }

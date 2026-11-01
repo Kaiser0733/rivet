@@ -466,6 +466,9 @@ class AgentToolExecutor(
             put("cwd", result.cwd)
             put("sync", result.sync)
             result.syncPath?.let { put("sync_path", it) }
+            if (result.syncSkipped.isNotEmpty()) put("sync_skipped", buildJsonArray {
+                result.syncSkipped.take(20).forEach { add(JsonPrimitive(it)) }
+            })
         }
         var encoded = value()
         while (encoded.toString().toByteArray(Charsets.UTF_8).size > AgentLoop.MAX_TOOL_RESULT_BYTES) {

@@ -36,6 +36,9 @@ data class CheckpointRecord(
     val after: Map<String, CheckpointEntry>? = null,
     val complete: Boolean = false,
     val undone: Boolean = false,
+    // Paths Undo cannot cover because they are not regular project content
+    // (symlinks, sockets). Recorded so the gap is visible instead of implied.
+    val skipped: List<String> = emptyList(),
 )
 
 data class CheckpointChange(val path: String, val kind: String, val beforeSize: Long?, val afterSize: Long?)
@@ -50,17 +53,19 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         if (!staging.mkdirs()) throw CheckpointFailure("storage")
         try {
             val archive = File(staging, "before.zip")
+            val skipped = mutableListOf<String>()
             val before = FileOutputStream(archive).use { file ->
                 ZipOutputStream(file).use { zip ->
                     zip.setLevel(1)
-                    val snapshot = scan(worktree, zip)
+                    val snapshot = scan(worktree, zip, skipped)
                     zip.finish()
                     zip.flush()
                     file.fd.sync()
                     snapshot
                 }
             }
-            writeRecord(staging, CheckpointRecord(id, workspace, System.currentTimeMillis(), before))
+            writeRecord(staging, CheckpointRecord(id, workspace, System.currentTimeMillis(), before,
+                skipped = skipped))
             Files.move(staging.toPath(), File(directory, id).toPath(), StandardCopyOption.ATOMIC_MOVE)
             id
         } catch (error: Exception) {
@@ -157,7 +162,8 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         removeTree(File(folder(id), "restore-worktree"))
     }
 
-    private suspend fun scan(root: File, zip: ZipOutputStream? = null): Map<String, CheckpointEntry> {
+    private suspend fun scan(root: File, zip: ZipOutputStream? = null,
+                             skipped: MutableList<String>? = null): Map<String, CheckpointEntry> {
         if (!root.isDirectory || Files.isSymbolicLink(root.toPath())) throw CheckpointFailure("unsafe_entry")
         val entries = linkedMapOf<String, CheckpointEntry>()
         val context = currentCoroutineContext()
@@ -165,7 +171,10 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         Files.walkFileTree(root.toPath(), object : SimpleFileVisitor<Path>() {
             override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
                 context.ensureActive()
-                if (Files.isSymbolicLink(dir)) throw CheckpointFailure("unsafe_entry")
+                if (Files.isSymbolicLink(dir)) {
+                    if (dir != root.toPath()) skipped?.add(relative(root, dir))
+                    return FileVisitResult.SKIP_SUBTREE
+                }
                 if (dir != root.toPath() && dir.fileName.toString() == ".git") return FileVisitResult.SKIP_SUBTREE
                 if (dir != root.toPath()) {
                     val path = relative(root, dir)
@@ -180,7 +189,12 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
             override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                 context.ensureActive()
                 if (file.fileName.toString() == ".git") return FileVisitResult.CONTINUE
-                if (!attrs.isRegularFile || Files.isSymbolicLink(file)) throw CheckpointFailure("unsafe_entry")
+                if (!attrs.isRegularFile || Files.isSymbolicLink(file)) {
+                    // Commands leave these behind (node_modules/.bin, venv/bin).
+                    // Undo cannot cover them, so record the gap and checkpoint the rest.
+                    skipped?.add(relative(root, file))
+                    return FileVisitResult.CONTINUE
+                }
                 val path = relative(root, file)
                 bytes += attrs.size()
                 if (bytes > MAX_CONTENT_BYTES || entries.size >= MAX_ENTRIES) throw CheckpointFailure("checkpoint_limit")
