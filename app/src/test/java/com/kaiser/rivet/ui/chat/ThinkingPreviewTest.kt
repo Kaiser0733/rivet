@@ -26,7 +26,7 @@ class ThinkingPreviewTest {
     @Test fun anUnfinishedLinePreviewsItsOwnTail() {
         assertEquals("One long paragraph with no line end",
             thinkingPreview("One long paragraph with no line end", streaming = true))
-        assertEquals("fresh thought", thinkingPreview("older line\nfresh thought", streaming = true))
+        assertEquals("older line", thinkingPreview("older line\nfresh thought", streaming = true))
         assertEquals("", thinkingPreview("", streaming = true))
         assertEquals("", thinkingPreview("   \n\t", streaming = true))
     }

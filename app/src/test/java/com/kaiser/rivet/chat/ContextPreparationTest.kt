@@ -236,7 +236,7 @@ class ContextPreparationTest {
     }
 
     private fun preparation(sessions: CodingSessions, id: String, limit: Int,
-                            provider: SummaryProvider, priorSummary: String = ""): ContextPreparation {
+                            provider: ProviderClient, priorSummary: String = ""): ContextPreparation {
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
             modelContextLimit = ModelContextLimit("small", endpoint, limit))
         return ContextPreparation(sessions, id, provider, config, "turn-$limit", priorSummary) { messages, _ ->
