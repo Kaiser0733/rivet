@@ -151,7 +151,11 @@ class WorkspaceMirrorTest {
         assertEquals("file.txt", result.path)
         assertArrayEquals("outside work".toByteArray(), bytes("file.txt"))
         assertEquals("mirror work", local.readText())
-        assertTrue(mirror.hasLocalChanges())
+        // F12: the blocked path must not mark the whole tree dirty, or reads stop too.
+        assertFalse(mirror.hasLocalChanges())
+        // ...and the next prepare() must not reload SAF over the blocked local copy.
+        val ready = mirror.prepare()
+        assertEquals("mirror work", File(ready.worktree, "file.txt").readText())
         assertEquals(MirrorSync.Conflict, mirror.sync().state)
         assertArrayEquals("outside work".toByteArray(), bytes("file.txt"))
         assertEquals("mirror work", local.readText())
