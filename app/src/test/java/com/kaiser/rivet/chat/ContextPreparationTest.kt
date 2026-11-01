@@ -230,7 +230,9 @@ class ContextPreparationTest {
         sessions.save(history, interrupted = true)
         val provider = SummaryProvider()
         val config = ProviderConfig("test", ProviderType.OpenAiCompatible, "Test", endpoint, "big")
-        val preparation = ContextPreparation(sessions, id, provider, config, "turn-big") { messages, _ ->
+        // A fresh turn has no stored summary; the parameter stays required because a real
+        // session's summary must never be silently dropped.
+        val preparation = ContextPreparation(sessions, id, provider, config, "turn-big", "") { messages, _ ->
             AgentRequest("big", com.kaiser.rivet.agent.modelMessages(messages),
                 "S".repeat(6000), ReasoningLevel.Default, emptyList())
         }
