@@ -27,7 +27,11 @@ interface ProviderClient {
 
     suspend fun testConnection(): TestResult
 
-    suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse
+    suspend fun streamAgent(
+        request: AgentRequest,
+        onReasoning: (String) -> Unit = {},
+        onDelta: (String) -> Unit,
+    ): AgentResponse
 }
 
 fun providerClient(config: ProviderConfig, apiKey: String): ProviderClient =

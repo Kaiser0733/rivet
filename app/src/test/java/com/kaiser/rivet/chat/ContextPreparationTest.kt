@@ -159,7 +159,11 @@ class ContextPreparationTest {
         val requests = mutableListOf<AgentRequest>()
         override suspend fun listModels(): List<ModelInfo> = emptyList()
         override suspend fun testConnection() = TestResult(true, "ok")
-        override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+        override suspend fun streamAgent(
+            request: AgentRequest,
+            onReasoning: (String) -> Unit,
+            onDelta: (String) -> Unit,
+        ): AgentResponse {
             requests += request
             return AgentResponse(text = """{"objective":"Continue the current fix","nextStep":"Inspect"}""")
         }

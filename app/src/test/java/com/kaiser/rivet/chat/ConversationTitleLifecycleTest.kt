@@ -70,7 +70,11 @@ class ConversationTitleLifecycleTest {
         val client = object : ProviderClient {
             override suspend fun listModels() = emptyList<ModelInfo>()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
                 requests += request
                 return if (requests.size == 1) AgentResponse("Here is the fix.")
                     else AgentResponse("Fix Login Crash", usage = AgentUsage(12, 3))
@@ -100,7 +104,11 @@ class ConversationTitleLifecycleTest {
         val client = object : ProviderClient {
             override suspend fun listModels() = emptyList<ModelInfo>()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit) = stream(request)
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ) = stream(request)
         }
         val vm = newChatViewModel(app, store,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> client })
@@ -197,7 +205,11 @@ class ConversationTitleLifecycleTest {
         val client = object : ProviderClient {
             override suspend fun listModels() = emptyList<ModelInfo>()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
                 calls++; return AgentResponse("Done")
             }
         }
