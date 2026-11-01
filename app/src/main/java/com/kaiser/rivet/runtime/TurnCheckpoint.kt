@@ -36,6 +36,9 @@ data class CheckpointRecord(
     val after: Map<String, CheckpointEntry>? = null,
     val complete: Boolean = false,
     val undone: Boolean = false,
+    // Set when Undo restored Rivet's copy but could not write it back to the
+    // project. Not a success, so it is not recorded as `undone`.
+    val desynced: Boolean = false,
     // Paths Undo cannot cover because they are not regular project content
     // (symlinks, sockets). Recorded so the gap is visible instead of implied.
     val skipped: List<String> = emptyList(),
@@ -105,7 +108,8 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         directory.listFiles()?.mapNotNull { folder ->
             if (!folder.isDirectory || folder.name.startsWith('.')) null
             else try { readRecord(folder) } catch (_: Exception) { null }
-        }?.filter { it.complete && it.after != null && !it.undone }?.maxByOrNull { it.createdAt }
+        }?.filter { it.complete && it.after != null && !it.undone && !it.desynced }
+            ?.maxByOrNull { it.createdAt }
     }
 
     suspend fun changes(record: CheckpointRecord): List<CheckpointChange> = withContext(Dispatchers.IO) {
@@ -160,6 +164,12 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
 
     suspend fun discardStagedUndo(id: String) = withContext(Dispatchers.IO) {
         removeTree(File(folder(id), "restore-worktree"))
+    }
+
+    suspend fun markDesynced(id: String) = withContext(Dispatchers.IO) {
+        val folder = folder(id)
+        val record = readRecord(folder)
+        writeRecord(folder, record.copy(desynced = true))
     }
 
     private suspend fun scan(root: File, zip: ZipOutputStream? = null,

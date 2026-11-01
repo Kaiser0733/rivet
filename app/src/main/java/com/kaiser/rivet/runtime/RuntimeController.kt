@@ -156,7 +156,16 @@ class RuntimeController(
             catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
             throw failure
         }
-        val sync = active.sync()
+        val sync = try { active.sync() }
+        catch (e: CancellationException) { throw e }
+        catch (failure: Exception) {
+            // Rivet's copy is restored but the project still holds the newer files.
+            // Stop offering this Undo instead of repeating the same half-applied turn.
+            try { withContext(NonCancellable) { store.markDesynced(record.id) } }
+            catch (cleanup: CancellationException) { throw cleanup }
+            catch (cleanup: Exception) { failure.addSuppressed(cleanup) }
+            throw CheckpointFailure("undo_desync")
+        }
         if (sync.state == MirrorSync.Ok || sync.state == MirrorSync.NoChanges) store.markUndone(record.id)
         sync
     }
