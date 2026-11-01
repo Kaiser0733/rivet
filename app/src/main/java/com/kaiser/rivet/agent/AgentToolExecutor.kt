@@ -442,7 +442,7 @@ class AgentToolExecutor(
     } catch (e: AgentWorkspaceFailure) {
         failure(call, e.code)
     } catch (e: MirrorFailure) {
-        failure(call, e.code)
+        failure(call, e.code, subject = e.path)
     } catch (e: DownloadFailure) {
         failure(call, e.code, e.statusCode)
     } catch (_: Exception) {
@@ -452,9 +452,10 @@ class AgentToolExecutor(
     private fun invalid(call: AgentToolCall, code: String) =
         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) { failure(call, code) }
 
-    private fun failure(call: AgentToolCall, code: String, statusCode: Int? = null) = AgentToolResult(
+    private fun failure(call: AgentToolCall, code: String, statusCode: Int? = null,
+                        subject: String? = null) = AgentToolResult(
         call.id, call.name, if (code == "output_limit") AgentLoop.OUTPUT_LIMIT_CONTENT
-        else AgentToolError.content(code, statusCode), true, "Failed  ${call.name}",
+        else AgentToolError.content(code, statusCode, subject), true, "Failed  ${call.name}",
     )
 
     private fun success(call: AgentToolCall, value: JsonObject, summary: String) =
