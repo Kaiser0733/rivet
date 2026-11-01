@@ -986,13 +986,14 @@ class ChatViewModel private constructor(
                         toolLifecycle = emptyList(), commandRunning = false,
                         notice = "Stopped. Any completed changes remain in the project.") }
                 }
-            }
-            // The turn is over, so the conversation the user picked mid-reply can open now.
-            val queued = _uiState.value.queuedSessionId
-            if (queued != null && ticket == generation && !_uiState.value.streaming) {
-                _uiState.update { it.copy(queuedSessionId = null, notice = null) }
-                if (queued != _uiState.value.currentSessionId) {
-                    changeSession { store -> store.select(queued) }
+                // The conversation picked mid-reply opens now that the turn is over,
+                // whether it finished, failed or was stopped.
+                val queued = _uiState.value.queuedSessionId
+                if (queued != null && ticket == generation && !_uiState.value.streaming) {
+                    _uiState.update { it.copy(queuedSessionId = null, notice = null) }
+                    if (queued != _uiState.value.currentSessionId) {
+                        changeSession { store -> store.select(queued) }
+                    }
                 }
             }
         }
