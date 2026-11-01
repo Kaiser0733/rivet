@@ -31,6 +31,7 @@ import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
+import com.kaiser.rivet.provider.resolvedContextWindowTokens
 import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.runtime.ManagedProcesses
 import com.kaiser.rivet.runtime.ProjectDownloader
@@ -775,7 +776,7 @@ class ChatViewModel private constructor(
                     }
                 }
                 if (ticket == generation) {
-                    finish(result, durable)
+                    finish(result, durable, snapshot.config)
                     if (titleEligible && result.stopReason == AgentStopReason.Completed &&
                         _uiState.value.error == null) {
                         val answer = result.messages.lastOrNull()?.takeIf {
@@ -936,7 +937,9 @@ class ChatViewModel private constructor(
         }
     }
 
-    private suspend fun finish(result: AgentRunResult, durable: List<AgentMessage>) {
+    private suspend fun finish(result: AgentRunResult, durable: List<AgentMessage>, config: ProviderConfig) {
+        val windowTokens = java.lang.String.format(java.util.Locale.US, "%,d",
+            config.resolvedContextWindowTokens())
         val error = when (result.stopReason) {
             AgentStopReason.Completed -> {
                 val last = result.messages.lastOrNull()
@@ -954,8 +957,8 @@ class ChatViewModel private constructor(
                     "Rivet stopped after an attempted change could not be confirmed. Project changes may remain; safe Undo is unavailable."
                 else -> "Rivet couldn't prepare a safe Undo, so it stopped before changing files."
             } + CHECKPOINT_LIMITS_HINT
-            AgentStopReason.ContextUnavailable -> "Rivet couldn't make room to continue this conversation. Your messages were kept. Try again or start a new conversation."
-            AgentStopReason.ContextTooSmall -> "This model's context capacity is too small for this request. Choose a model with a larger context window or shorten the request."
+            AgentStopReason.ContextUnavailable -> "Rivet couldn't make room within the $windowTokens-token context window to continue this conversation. Your messages were kept. Try again or start a new conversation."
+            AgentStopReason.ContextTooSmall -> "This model's context capacity is too small ($windowTokens-token context window) for this request. Choose a model with a larger context window or shorten the request."
             AgentStopReason.NoProgress -> "Rivet couldn't get past the same problem. Check the last message, then tell it what to try next."
             AgentStopReason.RuntimeBlocked -> runtimeFailureMessage(result.failureCode)
             AgentStopReason.CapabilityBlocked -> when (result.failureCode) {

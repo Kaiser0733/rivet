@@ -1,10 +1,13 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.provider.AgentRequest
+import com.kaiser.rivet.provider.DEFAULT_CONTEXT_WINDOW_TOKENS
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.anthropicOutputCeiling
 import com.kaiser.rivet.provider.openRouterOutputCeiling
+import com.kaiser.rivet.provider.resolvedContextWindowTokens
+import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
 import com.kaiser.rivet.provider.trustedInputLimitTokens
 
 enum class TokenEstimateSource { Reported, Estimated, Unknown }
@@ -25,8 +28,7 @@ internal class ContextCapacityTooSmall : Exception("context_capacity_too_small")
 
 /** Estimates request occupancy, while keeping unverified capacity explicitly unknown. */
 internal object ContextBudget {
-    // Unknown capacity is a planning threshold, not a claimed model limit.
-    private const val UNKNOWN_PLANNING_LIMIT = 64_000
+    private const val DEFAULT_PLANNING_LIMIT = DEFAULT_CONTEXT_WINDOW_TOKENS
     private const val UNKNOWN_RESERVE = 16_000
 
     fun estimateRequestTokens(request: AgentRequest): Long {
@@ -44,13 +46,17 @@ internal object ContextBudget {
 
     fun assess(config: ProviderConfig, inputTokens: Long?, source: TokenEstimateSource): ContextAssessment {
         val known = config.trustedInputLimitTokens()
+        val resolvedWindow = config.resolvedContextWindowTokens().takeIf { it > 0 } ?: DEFAULT_PLANNING_LIMIT
+        val manualMaxOutput = config.resolvedManualMaxOutputTokens()
         val reserve = when {
+            manualMaxOutput != null -> minOf(resolvedWindow, manualMaxOutput)
             known == null -> UNKNOWN_RESERVE
             config.type == ProviderType.Gemini -> 0 // Gemini publishes a separate input limit.
             config.type == ProviderType.Anthropic -> minOf(known, anthropicOutputCeiling(config))
-            else -> config.openRouterOutputCeiling() ?: UNKNOWN_RESERVE
+            config.type == ProviderType.OpenRouter -> config.openRouterOutputCeiling() ?: UNKNOWN_RESERVE
+            else -> minOf(known, minOf(UNKNOWN_RESERVE, maxOf(2048, known / 4)))
         }
-        val target = ((known ?: UNKNOWN_PLANNING_LIMIT) - reserve).coerceAtLeast(0)
+        val target = (resolvedWindow - reserve).coerceAtLeast(0)
         return ContextAssessment(inputTokens, source, known,
             if (known == null) CapacitySource.Unknown else CapacitySource.ProviderMetadata,
             target, reserve)

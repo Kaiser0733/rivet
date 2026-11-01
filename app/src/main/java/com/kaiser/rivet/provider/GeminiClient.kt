@@ -49,6 +49,7 @@ internal class GeminiClient(
                     val id = name.removePrefix("models/")
                     models.putIfAbsent(id, ModelInfo(
                         id, model["displayName"]?.str() ?: name, model["inputTokenLimit"].positiveInt(),
+                        outputLimitTokens = model["outputTokenLimit"].positiveInt(),
                     ))
                 }
                 if (models.size >= MAX_RETAINED_MODELS) {
@@ -101,6 +102,11 @@ internal class GeminiClient(
                     }) }
                 }) })
             })
+            config.resolvedManualMaxOutputTokens(request.model)?.let { maxOutput ->
+                put("generationConfig", buildJsonObject {
+                    put("maxOutputTokens", maxOutput)
+                })
+            }
         }
         val httpRequest = base(Endpoints.geminiChat(config.baseUrl, request.model))
             .post(body.toString().toRequestBody("application/json".toMediaType()))

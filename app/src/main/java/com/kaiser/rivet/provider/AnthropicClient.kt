@@ -118,6 +118,8 @@ internal class AnthropicClient(
             model = request.model,
             anthropicModelMetadata = null,
             modelContextLimit = null,
+            manualContextWindowTokens = config.manualContextWindowForModel(request.model),
+            manualMaxOutputTokens = config.resolvedManualMaxOutputTokens(request.model),
         )
         val turnConfig = modelConfig.copy(reasoning = request.reasoning)
         val thinkingMode = if (request.reasoning == ReasoningLevel.Default) {
@@ -339,6 +341,7 @@ private val ReasoningLevel.anthropicEffort: String
     }
 
 internal fun anthropicOutputCeiling(config: ProviderConfig): Int {
+    config.resolvedManualMaxOutputTokens()?.let { return it }
     val mode = anthropicThinkingMode(config)
     val legacyCeiling = when {
         mode == AnthropicThinkingMode.Adaptive ->

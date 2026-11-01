@@ -30,31 +30,78 @@ internal object AgentContext {
     fun serializedBytes(messages: List<AgentMessage>): Int =
         Json.encodeToString(serializer, messages).toByteArray(Charsets.UTF_8).size
 
-    fun pruneOldResults(messages: List<AgentMessage>, protectedTailBytes: Int): List<AgentMessage>? {
+    fun pruneOldResults(
+        messages: List<AgentMessage>,
+        protectedTailBytes: Int,
+        minimumSavingsBytes: Int = 4096,
+        protectLatestToolGroup: Boolean = true,
+    ): List<AgentMessage>? {
         require(protectedTailBytes >= 0)
+        require(minimumSavingsBytes >= 0)
         val groups = completeGroups(messages) ?: return null
         if (groups.size < 2) return null
         val sizes = groups.map { serializedBytes(it) - 2 }
-        val protected = mutableSetOf(groups.lastIndex)
+        val protected = mutableSetOf<Int>()
+        if (protectLatestToolGroup || groups.last().size != 2) {
+            protected += groups.lastIndex
+        }
         val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
         if (latestUser >= 0) protected += latestUser
-        var tailBytes = sizes.last()
+        var tailBytes = if (groups.lastIndex in protected) sizes.last() else 0
         for (index in groups.lastIndex - 1 downTo 0) {
             if (tailBytes + sizes[index] > protectedTailBytes) break
             protected += index
             tailBytes += sizes[index]
         }
         val projected = groups.flatMapIndexed { index, group ->
-            if (index in protected || group.size != 2) group else {
-                val tool = group[1]
-                listOf(group[0], tool.copy(toolResults = tool.toolResults.map { result ->
-                    if (result.error || result.content.toByteArray(Charsets.UTF_8).size < 2048 ||
-                        result.name == "run_command" && !runCommandCanPrune(result)) result
-                    else result.copy(content = prunedContent(result))
-                }))
-            }
+            if (index in protected || group.size != 2) group else pruneToolGroup(group)
         }
-        return projected.takeIf { serializedBytes(messages) - serializedBytes(it) >= 4096 }
+        return projected.takeIf {
+            it != messages && serializedBytes(messages) - serializedBytes(it) >= minimumSavingsBytes
+        }
+    }
+
+    fun canStubAggressively(messages: List<AgentMessage>): Boolean {
+        val userTurns = messages.count { it.role == AgentRole.User }
+        if (userTurns <= 20) return true
+        return messages.any { message ->
+            message.toolCalls.any { it.arguments.toByteArray(Charsets.UTF_8).size >= 2048 } ||
+                message.toolResults.any { result ->
+                    result.summary.isNotBlank() || parseObject(result.content) != null
+                }
+        }
+    }
+
+    private fun pruneToolGroup(group: List<AgentMessage>): List<AgentMessage> {
+        val assistant = group[0]
+        val tool = group[1]
+        val prunedCalls = assistant.toolCalls.zip(tool.toolResults).map { (call, result) ->
+            if (result.error || call.arguments.toByteArray(Charsets.UTF_8).size < 2048 ||
+                call.name == "run_command" && !runCommandCanPrune(result)) call
+            else call.copy(arguments = prunedArguments(call))
+        }
+        val prunedResults = tool.toolResults.map { result ->
+            if (result.error || result.content.toByteArray(Charsets.UTF_8).size < 2048 ||
+                result.name == "run_command" && !runCommandCanPrune(result)) result
+            else result.copy(content = prunedContent(result))
+        }
+        return listOf(
+            if (prunedCalls == assistant.toolCalls) assistant else assistant.copy(toolCalls = prunedCalls),
+            if (prunedResults == tool.toolResults) tool else tool.copy(toolResults = prunedResults),
+        )
+    }
+
+    private fun prunedArguments(call: AgentToolCall): String {
+        val old = parseObject(call.arguments)
+        return buildJsonObject {
+            put("arguments_pruned", true)
+            put("original_bytes", call.arguments.toByteArray(Charsets.UTF_8).size)
+            for (key in listOf("path", "destination", "cwd", "expected_sha256", "create_parents",
+                    "overwrite", "offset", "limit", "query", "glob")) {
+                val value = old?.get(key) as? JsonPrimitive ?: continue
+                if (value.isString) put(key, clipped(value.content, 200)) else put(key, value)
+            }
+        }.toString()
     }
 
     private fun prunedContent(result: AgentToolResult): String {
@@ -114,8 +161,11 @@ internal object AgentContext {
         if (groups.isEmpty()) return ProjectContext.projection(messages, emptyList())
         val newest = groups.lastIndex
         val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
-        return ProjectContext.projection(messages,
-            (setOfNotNull(latestUser.takeIf { it >= 0 }, newest).sorted()).flatMap(groups::get))
+        val retained = (setOfNotNull(latestUser.takeIf { it >= 0 }, newest).sorted()).flatMap { index ->
+            val group = groups[index]
+            if (group.size == 2) pruneToolGroup(group) else group
+        }
+        return ProjectContext.projection(messages, retained)
     }
 
     private fun completeGroups(messages: List<AgentMessage>): List<List<AgentMessage>>? {

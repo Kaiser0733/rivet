@@ -75,7 +75,7 @@ internal class ContextPreparation(
         val minimum = (AgentContext.minimumProjection(messages)
             ?: throw IllegalStateException("context_headroom_unavailable")).filterNot { it.internalContext?.kind == "summary" }
         val minimumTokens = ContextBudget.estimateRequestTokens(request(minimum, ""))
-        if (budget.knownInputLimitTokens != null && minimumTokens >= budget.allowedInputTokens) {
+        if (minimumTokens >= budget.allowedInputTokens) {
             throw ContextCapacityTooSmall()
         }
         if (!force && !budget.needsReduction) return messages
@@ -98,8 +98,26 @@ internal class ContextPreparation(
             return commit(durableStore, messages, pruned, summary,
                 attempt.copy(afterTokens = ContextBudget.estimateRequestTokens(projectedRequest(messages, pruned, summary))))
         }
+        var aggressivePruned: List<AgentMessage>? = null
+        if (AgentContext.canStubAggressively(messages)) {
+            for ((tailBytes, protectLatest) in listOf(16 * 1024 to true, 0 to true, 0 to false)) {
+                val stubbed = AgentContext.pruneOldResults(
+                    messages,
+                    protectedTailBytes = tailBytes,
+                    minimumSavingsBytes = 256,
+                    protectLatestToolGroup = protectLatest,
+                )
+                if (stubbed != null) {
+                    aggressivePruned = stubbed
+                    if (fits(stubbed, targetTokens, baseline, force)) {
+                        return commit(durableStore, messages, stubbed, summary,
+                            attempt.copy(afterTokens = ContextBudget.estimateRequestTokens(projectedRequest(messages, stubbed, summary))))
+                    }
+                }
+            }
+        }
 
-        val basis = pruned ?: messages
+        val basis = aggressivePruned ?: pruned ?: messages
         val inputLimitBytes = minOf(96 * 1024L, budget.allowedInputTokens.toLong() * 2).toInt()
         val summaryLimitBytes = (summaryBudgetTokens * 3).toInt()
         val plan = if (targetBytes > 0 && summaryBudgetTokens > 0) {
@@ -108,10 +126,20 @@ internal class ContextPreparation(
         if (plan == null) {
             if (summary.isNotBlank() && summaryLimitBytes > 0) {
                 val shortened = taskState(emptyList(), id, inputLimitBytes, summaryLimitBytes).encode()
-                val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, messages, shortened))
+                val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, basis, shortened))
                 if (shortened != summary && after < targetTokens && after < baseline &&
                     (!force || after < baseline * 9 / 10)) {
-                    return commit(durableStore, messages, messages, shortened,
+                    return commit(durableStore, messages, basis, shortened,
+                        attempt.copy(afterTokens = after))
+                }
+            }
+            val fallbackStubbed = aggressivePruned
+                ?: AgentContext.pruneOldResults(messages, protectedTailBytes = 0, minimumSavingsBytes = 256, protectLatestToolGroup = false)
+                ?: pruned
+            if (fallbackStubbed != null) {
+                val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, fallbackStubbed, summary))
+                if (after < budget.allowedInputTokens && after < baseline && (!force || after < baseline * 9 / 10)) {
+                    return commit(durableStore, messages, fallbackStubbed, summary,
                         attempt.copy(afterTokens = after))
                 }
             }

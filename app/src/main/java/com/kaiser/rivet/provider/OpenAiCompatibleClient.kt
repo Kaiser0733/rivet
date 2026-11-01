@@ -33,13 +33,8 @@ internal class OpenAiCompatibleClient(
             return data.asSequence().mapNotNull { el ->
                 val model = el.obj() ?: return@mapNotNull null
                 val id = model["id"]?.str() ?: return@mapNotNull null
-                val inputLimit = if (config.type == ProviderType.OpenRouter) {
-                    listOfNotNull(model["context_length"].positiveInt(),
-                        model["top_provider"]?.obj()?.get("context_length").positiveInt()).minOrNull()
-                } else null
-                val outputLimit = if (config.type == ProviderType.OpenRouter) {
-                    model["top_provider"]?.obj()?.get("max_completion_tokens").positiveInt()
-                } else null
+                val inputLimit = extractModelContextWindow(model)
+                val outputLimit = extractModelOutputLimit(model)
                 ModelInfo(id, id, inputLimit, outputLimitTokens = outputLimit)
             }.take(MAX_RETAINED_MODELS).sortedBy { it.id.lowercase() }.toList()
         }
@@ -68,7 +63,9 @@ internal class OpenAiCompatibleClient(
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)
-            config.openRouterOutputCeiling()?.let { put("max_completion_tokens", it) }
+            (config.resolvedManualMaxOutputTokens(request.model) ?: config.openRouterOutputCeiling())?.let {
+                put("max_completion_tokens", it)
+            }
             if (config.type == ProviderType.OpenAi || config.type == ProviderType.OpenRouter) {
                 put("stream_options", buildJsonObject { put("include_usage", true) })
             }
@@ -240,3 +237,31 @@ private val ReasoningLevel.wireEffort: String
         ReasoningLevel.Max -> "xhigh"
         ReasoningLevel.Default -> "high"
     }
+
+internal fun extractModelContextWindow(model: JsonObject): Int? =
+    listOfNotNull(
+        model["context_length"].positiveInt(),
+        model["top_provider"]?.obj()?.get("context_length").positiveInt(),
+    ).minOrNull()
+        ?: model["context_window"].positiveInt()
+        ?: model["max_context_length"].positiveInt()
+        ?: model["max_model_len"].positiveInt()
+        ?: model["max_input_tokens"].positiveInt()
+        ?: model["input_token_limit"].positiveInt()
+        ?: model["limits"]?.obj()?.let { limits ->
+            limits["context_length"].positiveInt()
+                ?: limits["context_window"].positiveInt()
+                ?: limits["max_input_tokens"].positiveInt()
+        }
+        ?: model["architecture"]?.obj()?.get("context_length").positiveInt()
+
+internal fun extractModelOutputLimit(model: JsonObject): Int? =
+    model["top_provider"]?.obj()?.get("max_completion_tokens").positiveInt()
+        ?: model["max_completion_tokens"].positiveInt()
+        ?: model["max_output_tokens"].positiveInt()
+        ?: model["output_token_limit"].positiveInt()
+        ?: model["max_tokens"].positiveInt()
+        ?: model["limits"]?.obj()?.let { limits ->
+            limits["max_output_tokens"].positiveInt()
+                ?: limits["max_completion_tokens"].positiveInt()
+        }

@@ -4,6 +4,8 @@ import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.manualContextWindowForModel
+import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
 import java.util.Locale
 
 internal const val MODEL_RESULTS_LIMIT = 30
@@ -67,6 +69,8 @@ data class ProviderEditorState(
     val keyPresent: Boolean = false,
     val keyInput: String = "",
     val headersText: String = "",
+    val contextWindowInput: String = "",
+    val maxOutputTokensInput: String = "",
     val busy: Boolean = false,
     val fetching: Boolean = false,
     val test: TestUi? = null,
@@ -86,8 +90,15 @@ internal fun ProviderEditorState.withConfigUpdate(
 ): ProviderEditorState {
     val next = transform(config)
     val endpointChanged = next.type != config.type || next.baseUrl != config.baseUrl
+    val modelChanged = next.model != config.model
     return copy(
         config = next,
+        contextWindowInput = if (modelChanged) {
+            next.manualContextWindowForModel()?.toString().orEmpty()
+        } else contextWindowInput,
+        maxOutputTokensInput = if (modelChanged) {
+            next.resolvedManualMaxOutputTokens()?.toString().orEmpty()
+        } else maxOutputTokensInput,
         test = null,
         fetchError = null,
         models = if (endpointChanged) emptyList() else models,

@@ -12,12 +12,19 @@ import com.kaiser.rivet.provider.revokeChatGptRefreshToken
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.detectedContextWindowForModel
+import com.kaiser.rivet.provider.manualContextWindowForModel
 import com.kaiser.rivet.provider.parseHeaders
+import com.kaiser.rivet.provider.parseTokenCount
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
 import com.kaiser.rivet.provider.resolveSignInClientId
+import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
 import com.kaiser.rivet.provider.runSignIn
 import com.kaiser.rivet.provider.selectListedModel
+import com.kaiser.rivet.provider.withManualContextWindow
+import com.kaiser.rivet.provider.withManualMaxOutputTokens
+import com.kaiser.rivet.provider.withModelId
 import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
@@ -136,6 +143,8 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             isNew = false,
             keyPresent = secrets.hasApiKey(id),
             headersText = config.headers.joinToString("\n") { "${it.name}: ${it.value}" },
+            contextWindowInput = config.manualContextWindowForModel()?.toString().orEmpty(),
+            maxOutputTokensInput = config.resolvedManualMaxOutputTokens()?.toString().orEmpty(),
             chatGptEmail = email,
         )
     }
@@ -510,6 +519,28 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         _editorState.update { it.withConfigUpdate(transform) }
     }
 
+    fun setContextWindowInput(value: String) {
+        cancelEditorRequests()
+        _editorState.update { state ->
+            state.copy(
+                contextWindowInput = value,
+                config = state.config.withManualContextWindow(parseTokenCount(value)),
+                test = null,
+            )
+        }
+    }
+
+    fun setMaxOutputTokensInput(value: String) {
+        cancelEditorRequests()
+        _editorState.update { state ->
+            state.copy(
+                maxOutputTokensInput = value,
+                config = state.config.withManualMaxOutputTokens(parseTokenCount(value)),
+                test = null,
+            )
+        }
+    }
+
     // Blank means "keep the existing stored key" for an edit; only a
     // non-empty value replaces it.
     fun setKeyInput(value: String) {
@@ -528,7 +559,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         cancelEditorRequests()
         viewModelScope.launch {
             val state = _editorState.value
-            val config = state.config
+            val config = state.config.withModelId(state.config.model, state.models)
             if (config.model.isBlank()) return@launch
             if (state.keyInput.isNotBlank() &&
                 !secrets.saveApiKey(config.id, state.keyInput.trim())
@@ -554,8 +585,12 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             _listState.update { list ->
                 if (list.activeId == null) list.copy(activeId = config.id) else list
             }
+            val needsAutoDetect = config.detectedContextWindowForModel() == null && state.models.isEmpty()
             _editorState.value = ProviderEditorState()
             onSaved()
+            if (needsAutoDetect) {
+                autoDetectSavedModelMetadata(config.id, config.model)
+            }
         }
     }
 
@@ -646,15 +681,34 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                     val credential = resolveEditorCredential(state.config, state.keyInput)
                     val models = providerClient(state.config, credential).listModels()
                     if (isCurrent(ticket)) {
+                        var refreshedExisting: ProviderConfig? = null
                         _editorState.update {
+                            val nextConfig = when {
+                                it.config.model.isBlank() && models.isNotEmpty() ->
+                                    it.config.selectListedModel(models.first())
+                                it.config.model.isNotBlank() ->
+                                    models.firstOrNull { m -> m.id == it.config.model }?.let { matched ->
+                                        it.config.selectListedModel(matched)
+                                    } ?: it.config
+                                else -> it.config
+                            }
+                            if (!it.isNew && nextConfig != it.config) {
+                                refreshedExisting = nextConfig
+                            }
+                            val modelChanged = nextConfig.model != it.config.model
                             it.copy(
                                 models = models,
-                                // Keep a manually entered model; suggest the
-                                // first fetched id only when the field is empty.
-                                config = if (it.config.model.isBlank() && models.isNotEmpty()) {
-                                    it.config.selectListedModel(models.first())
-                                } else it.config,
+                                config = nextConfig,
+                                contextWindowInput = if (modelChanged) {
+                                    nextConfig.manualContextWindowForModel()?.toString().orEmpty()
+                                } else it.contextWindowInput,
+                                maxOutputTokensInput = if (modelChanged) {
+                                    nextConfig.resolvedManualMaxOutputTokens()?.toString().orEmpty()
+                                } else it.maxOutputTokensInput,
                             )
+                        }
+                        refreshedExisting?.let { updated ->
+                            try { store.save(updated) } catch (_: Exception) { }
                         }
                     }
                 } catch (e: CancellationException) {
@@ -703,6 +757,27 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     private fun isCurrent(ticket: ProviderEditorRequests.Ticket): Boolean =
         editorRequests.isCurrent(ticket, _editorState.value.config.id)
+
+    private suspend fun autoDetectSavedModelMetadata(providerId: String, targetModel: String) {
+        try {
+            val saved = store.configSnapshot().firstOrNull { it.id == providerId && it.model == targetModel }
+                ?: return
+            val credential = resolveEditorCredential(saved, "")
+            if (saved.type != ProviderType.ChatGptPlan && credential.isEmpty()) return
+            val models = providerClient(saved, credential).listModels()
+            val matched = models.firstOrNull { it.id == targetModel } ?: return
+            val latest = store.configSnapshot().firstOrNull { it.id == providerId && it.model == targetModel }
+                ?: return
+            val updated = latest.selectListedModel(matched)
+            if (updated != latest) {
+                store.save(updated)
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // Best-effort background auto-detection; fallback window applies if unreachable.
+        }
+    }
 
     // ChatGPT plan providers authenticate with an OAuth access token (refreshed
     // when expired); every other type uses the API-key slot.

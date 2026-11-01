@@ -71,8 +71,49 @@ class OpenAiCompatibleClientTest {
 
         server.enqueue(MockResponse().setBody(listing))
         val custom = OpenAiCompatibleClient(config(ProviderType.OpenAiCompatible), "key").listModels().single()
-        assertEquals(null, custom.inputLimitTokens)
-        assertEquals(null, custom.outputLimitTokens)
+        assertEquals(16000, custom.inputLimitTokens)
+        assertEquals(1000, custom.outputLimitTokens)
+        val customSelected = config(ProviderType.OpenAiCompatible).selectListedModel(custom)
+        assertEquals(16000, customSelected.resolvedContextWindowTokens())
+        assertEquals(null, customSelected.openRouterOutputCeiling())
+    }
+
+    @Test
+    fun listModelsDetectsContextLengthFromCompatibleModelPayloads() = runTest {
+        val listing = """{"data":[
+            {"id":"glm-5.1","context_window":200000,"max_output_tokens":16384},
+            {"id":"local-vllm","max_model_len":131072},
+            {"id":"nested","limits":{"context_length":65536,"max_completion_tokens":8192}}
+        ]}"""
+        server.enqueue(MockResponse().setBody(listing))
+        val models = OpenAiCompatibleClient(config(ProviderType.OpenAiCompatible), "key").listModels()
+            .associateBy { it.id }
+        assertEquals(200000, models.getValue("glm-5.1").inputLimitTokens)
+        assertEquals(16384, models.getValue("glm-5.1").outputLimitTokens)
+        assertEquals(131072, models.getValue("local-vllm").inputLimitTokens)
+        assertEquals(65536, models.getValue("nested").inputLimitTokens)
+        assertEquals(8192, models.getValue("nested").outputLimitTokens)
+    }
+
+    @Test
+    fun manualMaxOutputTokensSentOnlyWhenSetOnCompatibleProvider() = runTest {
+        val unset = config(ProviderType.OpenAiCompatible)
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n"))
+        OpenAiCompatibleClient(unset, "key").streamAgent(
+            AgentRequest(unset.model, emptyList(), "", ReasoningLevel.Default, emptyList())) {}
+        val unsetBody = server.takeRequest().body.readUtf8()
+        assertEquals(false, unsetBody.contains("max_completion_tokens"))
+
+        val withManualCap = unset.withManualMaxOutputTokens(4096)
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
+            "data: {\"choices\":[{\"delta\":{\"content\":\"ok\"},\"finish_reason\":\"stop\"}]}\n\n" +
+                "data: [DONE]\n\n"))
+        OpenAiCompatibleClient(withManualCap, "key").streamAgent(
+            AgentRequest(withManualCap.model, emptyList(), "", ReasoningLevel.Default, emptyList())) {}
+        val manualBody = server.takeRequest().body.readUtf8()
+        assertTrue(manualBody.contains("\"max_completion_tokens\":4096"))
     }
 
     @Test fun trustedOpenRouterOutputReserveMatchesTheSentCompletionCap() = runTest {
