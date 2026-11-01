@@ -756,6 +756,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 if (scrolling && !programmatic) followBottom = near
             }
     }
+    // Sending a message is an explicit request to see it: after reading back through the
+    // conversation, the reply and the user's own message must not land off-screen.
+    LaunchedEffect(state.acceptedMessageCount) { followBottom = true }
     LaunchedEffect(timeline.size, streamingReasoning.length, streamingText.length, state.streaming, state.activity,
         state.toolLifecycle, state.interruptedTurn, state.error, state.notice) {
         if (followBottom && totalItems > 0) {
