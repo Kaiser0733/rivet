@@ -16,6 +16,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import okio.Timeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -187,6 +188,31 @@ class HttpBridgeTest {
                 assertEquals("progress", e.stage)
                 assertEquals(listOf("{\"delta\":1}"), events)
             }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    // A model that thinks longer than the progress budget and then answers must not have
+    // that first token thrown away: the payload is progress, so it is accepted before the
+    // deadline is judged.
+    @Test
+    fun aPayloadAfterALongSilenceIsAcceptedInsteadOfTimingOut() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("data: {\"delta\":1}\n")
+            .setHeader("Content-Type", "text/event-stream"))
+        server.start()
+        try {
+            val request = Request.Builder().url(server.url("/stream")).build()
+            var now = 0L
+            val events = mutableListOf<String>()
+            val completed = OkHttpClient().sse(
+                request = request,
+                progressDeadlineMs = SSE_PROGRESS_DEADLINE_MS,
+                clockMillis = { now.also { now += 150_000L } },
+            ) { events += it }
+            assertEquals(listOf("{\"delta\":1}"), events)
+            assertFalse("no [DONE] was sent", completed)
         } finally {
             server.shutdown()
         }

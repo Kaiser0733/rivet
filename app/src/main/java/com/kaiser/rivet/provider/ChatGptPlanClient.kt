@@ -358,9 +358,6 @@ internal suspend fun OkHttpClient.responsesSse(
                                 break
                             }
                             val now = clockMillis()
-                            if (now - lastProgressAt > progressDeadlineMs) {
-                                throw ProviderError.Timeout("progress")
-                            }
                             responseBytes += line.toByteArray(Charsets.UTF_8).size + 2
                             if (responseBytes > MAX_SSE_RESPONSE_BYTES) {
                                 throw ProviderError.ResponseTooLarge()
@@ -368,10 +365,16 @@ internal suspend fun OkHttpClient.responsesSse(
                             if (line.startsWith("data:")) {
                                 val payload = line.removePrefix("data:").trim()
                                 if (payload == "[DONE]") break
-                                if (!terminal.get() && payload.isNotEmpty()) {
+                                if (payload.isNotEmpty()) {
+                                    // Same rule as http.sse: a real payload is progress and
+                                    // is accepted before the deadline is judged.
                                     lastProgressAt = now
-                                    onEvent(payload)
+                                    if (!terminal.get()) onEvent(payload)
+                                    continue
                                 }
+                            }
+                            if (now - lastProgressAt > progressDeadlineMs) {
+                                throw ProviderError.Timeout("progress")
                             }
                         }
                         if (terminal.compareAndSet(false, true)) cont.resume(Unit)
