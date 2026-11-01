@@ -218,7 +218,6 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         onSaved: () -> Unit = {},
         onError: (String) -> Unit = {},
     ) {
-        val res = getApplication<Application>().resources
         val id = UUID.randomUUID().toString()
         val encoded = try {
             Json.encodeToString(ChatGptBundle.serializer(), bundle)
@@ -226,7 +225,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             null
         }
         if (encoded == null || !secrets.saveOAuthBundle(id, encoded)) {
-            onError(res.getString(R.string.free_key_save_failed))
+            onError("Rivet couldn't save your key securely. Try again.")
             return
         }
         val hadProviders = _listState.value.configs.isNotEmpty()
@@ -243,7 +242,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            onError(res.getString(R.string.free_provider_save_failed))
+            onError("Rivet couldn't save this provider. Try again.")
             return
         }
         if (activate) {
@@ -278,7 +277,6 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         }
         val launched = viewModelScope.launch {
             val app = getApplication<Application>()
-            val res = app.resources
             try {
                 val hostIds = HostIdStore(app)
                 val result = signInRunner(
@@ -317,21 +315,12 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                             updateChatGptPlanBundleInternal(editorId, result.bundle)
                         }
                     }
-                    ChatGptSignInResult.UserCancelled -> { }
-                    ChatGptSignInResult.PlanNotGranted ->
-                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_plan_not_granted)) }
-                    is ChatGptSignInResult.NetworkError ->
-                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_signin_network)) }
-                    ChatGptSignInResult.InvalidCallback ->
-                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_signin_failed)) }
-                    ChatGptSignInResult.NeedsReauth ->
-                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_signin_expired)) }
-                    ChatGptSignInResult.TimedOut ->
-                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_signin_timeout)) }
-                    is ChatGptSignInResult.ServerRejected ->
-                        _editorState.update {
-                            it.copy(signInError = res.getString(R.string.chatgpt_signin_server_error, result.code))
+                    else -> {
+                        val message = chatGptSignInErrorMessage(result)
+                        if (message != null) {
+                            _editorState.update { it.copy(signInError = message) }
                         }
+                    }
                 }
             } finally {
                 if (chatGptSession === session) {
@@ -371,7 +360,6 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         accessToken: String,
         onError: (String) -> Unit,
     ): Boolean {
-        val res = getApplication<Application>().resources
         val existing = try {
             store.configSnapshot().firstOrNull { it.id == providerId }
         } catch (e: CancellationException) {
@@ -380,13 +368,13 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             null
         }
         if (existing == null) {
-            onError(res.getString(R.string.free_provider_save_failed))
+            onError("Rivet couldn't save this provider. Try again.")
             return false
         }
         return try {
             val models = providerClient(existing, accessToken).listModels()
             if (models.isEmpty()) {
-                onError(res.getString(R.string.chatgpt_models_none))
+                onError("ChatGPT didn't return any models right now. Try again in a bit.")
                 return false
             }
             store.save(existing.selectListedModel(models.first()))
@@ -398,10 +386,10 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                 is ProviderError.RateLimited,
                 is ProviderError.ResourceExhausted,
                 is ProviderError.UsageLimit,
-                is ProviderError.Server -> res.getString(R.string.chatgpt_models_busy)
+                is ProviderError.Server -> "ChatGPT is busy right now. Try again in a bit."
                 is ProviderError.Network,
-                is ProviderError.Timeout -> res.getString(R.string.chatgpt_models_unreachable)
-                else -> res.getString(R.string.chatgpt_models_failed)
+                is ProviderError.Timeout -> "Rivet couldn't reach ChatGPT. Check your connection and try again."
+                else -> "Rivet couldn't load ChatGPT's models. Try again."
             }
             onError(message)
             false
@@ -721,9 +709,9 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     private class ChatGptReauthRequired : Exception()
 
-        private fun editorError(error: Exception): String = when (error) {
+    private fun editorError(error: Exception): String = when (error) {
         is ChatGptReauthRequired ->
-            getApplication<Application>().resources.getString(R.string.chatgpt_signin_expired)
+            "ChatGPT sign-in expired. Sign in again."
         is ProviderError -> error.text()
         is IllegalArgumentException -> "Provider configuration contains an invalid header or value."
         is SecurityException -> ProviderError.Network("permission").text()

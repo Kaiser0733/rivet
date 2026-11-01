@@ -2,7 +2,6 @@ package com.kaiser.rivet.ui.provider
 
 import android.app.Application
 import androidx.lifecycle.viewModelScope
-import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderConfig
@@ -32,9 +31,11 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
+import org.robolectric.annotation.Config
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
+@Config(manifest = Config.NONE, sdk = [28])
 class ProviderEditorRequestsTest {
     private val app: Application get() = RuntimeEnvironment.getApplication()
     private val viewModels = mutableListOf<ProvidersViewModel>()
@@ -221,7 +222,8 @@ class ProviderEditorRequestsTest {
             viewModel.editorState.first { !it.signingIn }
         }
         assertFalse(finished.signingIn)
-        assertEquals(app.resources.getString(R.string.chatgpt_signin_timeout), finished.signInError)
+        assertEquals(chatGptSignInErrorMessage(ChatGptSignInResult.TimedOut), finished.signInError)
+        assertEquals("ChatGPT sign-in timed out. Try again.", finished.signInError)
     }
 
     @Test

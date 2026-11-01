@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
@@ -36,6 +37,22 @@ internal fun providerDefaultName(type: ProviderType): String = when (type) {
     ProviderType.Gemini -> "Gemini"
     ProviderType.OpenRouter -> "OpenRouter"
     ProviderType.ChatGptPlan -> "ChatGPT plan"
+}
+
+internal fun chatGptSignInErrorMessage(result: ChatGptSignInResult): String? = when (result) {
+    is ChatGptSignInResult.Success, ChatGptSignInResult.UserCancelled -> null
+    ChatGptSignInResult.PlanNotGranted ->
+        "ChatGPT plan usage wasn't granted. Try again or use another provider."
+    is ChatGptSignInResult.NetworkError ->
+        "Rivet couldn't reach ChatGPT. Check your connection and try again."
+    ChatGptSignInResult.InvalidCallback ->
+        "ChatGPT sign-in didn't complete. Try again."
+    ChatGptSignInResult.NeedsReauth ->
+        "ChatGPT sign-in expired. Sign in again."
+    ChatGptSignInResult.TimedOut ->
+        "ChatGPT sign-in timed out. Try again."
+    is ChatGptSignInResult.ServerRejected ->
+        "ChatGPT sign-in didn't complete (error: ${result.code}). Try again."
 }
 
 data class ProviderEditorState(
