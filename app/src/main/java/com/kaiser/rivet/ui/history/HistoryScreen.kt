@@ -61,6 +61,9 @@ private fun HistoryContent(viewModel: ChatViewModel, modifier: Modifier, onClose
     val state by viewModel.uiState.collectAsState()
     val actionsEnabled = state.ready && !state.projectLoading && !state.streaming &&
         !state.undoing && !state.recoveringProjectChanges
+    // Opening a conversation is safe during a turn: the switch waits for it to finish.
+    val openEnabled = state.ready && !state.projectLoading &&
+        !state.undoing && !state.recoveringProjectChanges
     var renameId by rememberSaveable { mutableStateOf<String?>(null) }
     var deleteId by rememberSaveable { mutableStateOf<String?>(null) }
     var title by rememberSaveable { mutableStateOf("") }
@@ -132,7 +135,8 @@ private fun HistoryContent(viewModel: ChatViewModel, modifier: Modifier, onClose
                     HistoryRow(
                         session = session,
                         current = session.id == state.currentSessionId,
-                        enabled = actionsEnabled,
+                        enabled = openEnabled,
+                        actionsEnabled = actionsEnabled,
                         compact = embedded,
                         onOpen = { viewModel.resumeSession(session.id); onClose?.invoke() },
                         onPin = { viewModel.setSessionPinned(session.id, !session.pinned) },
@@ -159,6 +163,7 @@ private fun HistoryRow(
     onPin: () -> Unit,
     onRename: () -> Unit,
     onDelete: () -> Unit,
+    actionsEnabled: Boolean = enabled,
 ) {
     Column(Modifier.fillMaxWidth()
         .then(if (session.pinned) Modifier.background(
@@ -168,12 +173,12 @@ private fun HistoryRow(
         if (compact) {
             HistoryTitle(session, current, Modifier.fillMaxWidth())
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                HistoryActions(session.pinned, enabled, onPin, onRename, onDelete)
+                HistoryActions(session.pinned, actionsEnabled, onPin, onRename, onDelete)
             }
         } else {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 HistoryTitle(session, current, Modifier.weight(1f))
-                HistoryActions(session.pinned, enabled, onPin, onRename, onDelete)
+                HistoryActions(session.pinned, actionsEnabled, onPin, onRename, onDelete)
             }
         }
     }

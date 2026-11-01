@@ -392,8 +392,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
                     if (landscape) Spacer(Modifier.width(96.dp))
                     else {
+                        // Opening history never touches the running turn, so it stays
+                        // available while the model works.
                         IconButton(onClick = onOpenHistory, modifier = Modifier.size(48.dp),
-                            enabled = state.ready && !state.projectLoading && !state.streaming &&
+                            enabled = state.ready && !state.projectLoading &&
                                 !state.undoing && !state.recoveringProjectChanges) {
                             Icon(painterResource(R.drawable.ic_history), "Conversation history",
                                 tint = MaterialTheme.colorScheme.onBackground)

@@ -48,6 +48,7 @@ import kotlinx.coroutines.withTimeout
 import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -1293,6 +1294,51 @@ class ChatViewModelTest {
         assertEquals(ReasoningLevel.Low, provider.requests[1].reasoning)
         assertEquals("Write the game",
             provider.requests[1].messages.last { it.role == com.kaiser.rivet.agent.AgentRole.User }.text)
+    }
+
+    // A conversation picked while a reply is streaming must not fight the running turn
+    // for the storage pointer: the choice waits, then opens when the turn is done.
+    @Test fun conversationPickedDuringATurnOpensWhenTheTurnFinishes() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        val other = sessions.create(null).id!!
+        sessions.select(first)
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "model-a")
+        val release = CompletableDeferred<Unit>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                release.await()
+                onDelta("Done")
+                return AgentResponse(text = "Done")
+            }
+        }
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && it.currentSessionId == first }
+
+        viewModel.send("Keep working")
+        await(viewModel) { it.streaming }
+
+        viewModel.resumeSession(other)
+
+        val queued = await(viewModel) { it.queuedSessionId != null }
+        assertEquals(first, queued.currentSessionId)
+        assertTrue("the running turn must keep going", queued.streaming)
+        assertEquals(other, queued.queuedSessionId)
+        assertNotNull("the user must see that the switch is waiting", queued.notice)
+        assertEquals(first, sessions.load().id)
+
+        release.complete(Unit)
+        val switched = await(viewModel) { !it.streaming && it.currentSessionId == other }
+        assertNull(switched.queuedSessionId)
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
