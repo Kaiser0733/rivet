@@ -140,7 +140,7 @@ class AgentToolExecutor(
                     readOnly(call) {
                         var length = MAX_READ_CHUNK_BYTES
                         var region = workspace.readRegion(path, args.offset.toLong(), length)
-                        if (args.offset > region.size || region.start != args.offset) {
+                        if (args.offset > region.size || region.start != args.offset.toLong()) {
                             throw AgentWorkspaceFailure("invalid_offset")
                         }
                         var value = readRegionValue(path, region)
@@ -148,7 +148,7 @@ class AgentToolExecutor(
                             if (length <= 1) throw AgentWorkspaceFailure("output_limit")
                             length /= 2
                             region = workspace.readRegion(path, args.offset.toLong(), length)
-                            if (region.start != args.offset) throw AgentWorkspaceFailure("invalid_offset")
+                            if (region.start != args.offset.toLong()) throw AgentWorkspaceFailure("invalid_offset")
                             value = readRegionValue(path, region)
                         }
                         success(call, value, "Read  $path")
