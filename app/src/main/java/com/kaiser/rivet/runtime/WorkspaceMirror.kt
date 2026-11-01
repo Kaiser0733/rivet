@@ -191,7 +191,14 @@ class WorkspaceMirror(
                             emptyFile.sha256!!
                         } else {
                             val created = workspace.createFile(relative)
-                            if (created.path.value != path) return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value)
+                            if (created.path.value != path) {
+                                // The provider gave the document a different name, so this
+                                // path can never be written. Keep the receipt: it is what
+                                // stops the next sync creating a second copy of it.
+                                writePartialCreate(PartialCreate(workspace.tree.toString(), path,
+                                    created.documentId, local[path]!!))
+                                return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value)
+                            }
                             val fingerprint = workspace.fingerprint(created.path)
                             if (fingerprint.size != emptyFile.size || fingerprint.sha256 != emptyFile.sha256) {
                                 return@withLock MirrorSyncResult(MirrorSync.Conflict, path)
