@@ -120,6 +120,26 @@ class ChatGptPlanClientTest {
         }
     }
 
+    @Test fun topLevelErrorEventMapsThroughProviderMessage() {
+        val flat = ResponsesAgentStream {}
+        flat.accept("""{"type":"error","code":"server_is_overloaded","message":"Overloaded"}""")
+        try {
+            flat.response()
+            fail("expected ProviderMessage")
+        } catch (e: ProviderError.ProviderMessage) {
+            assertTrue(e.message!!.contains("Overloaded"))
+        }
+
+        val nestedOverflow = ResponsesAgentStream {}
+        nestedOverflow.accept("""{"type":"error","error":{"code":"context_length_exceeded","message":"prompt is too long"}}""")
+        try {
+            nestedOverflow.response()
+            fail("expected ContextOverflow")
+        } catch (_: ProviderError.ContextOverflow) {
+            // mapped via providerMessage
+        }
+    }
+
     @Test fun streamIncompleteIsTerminal() {
         val stream = ResponsesAgentStream {}
         stream.accept("""{"type":"response.incomplete","response":{
