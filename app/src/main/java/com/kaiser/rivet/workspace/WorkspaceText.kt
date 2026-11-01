@@ -44,11 +44,14 @@ object WorkspaceText {
             "ttf", "otf", "woff", "woff2", "pdf", "zip", "gz", "jar", "apk")
     }
 
+    // The control bytes no text file legitimately carries. A region read applies the
+    // same rule to its slice, so paging cannot turn a binary file into text.
+    fun isBinaryText(bytes: ByteArray): Boolean =
+        bytes.any { (it.toInt() and 255) in 0..8 || (it.toInt() and 255) in 14..31 || it == 127.toByte() }
+
     fun decode(bytes: ByteArray): String {
         if (bytes.size > MAX_BYTES) throw WorkspaceFailure(WorkspaceFailure.Reason.TOO_LARGE)
-        if (bytes.any { (it.toInt() and 255) in 0..8 || (it.toInt() and 255) in 14..31 || it == 127.toByte() }) {
-            throw WorkspaceFailure(WorkspaceFailure.Reason.BINARY)
-        }
+        if (isBinaryText(bytes)) throw WorkspaceFailure(WorkspaceFailure.Reason.BINARY)
         return try {
             Charsets.UTF_8.newDecoder().onMalformedInput(CodingErrorAction.REPORT)
                 .onUnmappableCharacter(CodingErrorAction.REPORT).decode(ByteBuffer.wrap(bytes)).toString()
