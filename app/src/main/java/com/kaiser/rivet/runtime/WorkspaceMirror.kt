@@ -35,14 +35,24 @@ val MirrorSync.code: String get() = when (this) {
     MirrorSync.Failed -> "failed"
 }
 data class MirrorSyncResult(val state: MirrorSync, val path: String? = null,
-                            val skipped: List<String> = emptyList())
+                            val skipped: List<String> = emptyList(),
+                            val conflicts: List<String> = emptyList())
+
+// One conflicted file must not read as "the whole project is dirty", so every
+// comparison drops the paths the baseline recorded as unresolvable.
+private fun Map<String, MirrorEntry>.withoutExcluded(excluded: Set<String>): Map<String, MirrorEntry> =
+    if (excluded.isEmpty()) this else filterKeys { it !in excluded }
 data class MirrorReady(val worktree: File, val dirty: Boolean)
 
 @Serializable
 private data class MirrorEntry(val directory: Boolean, val size: Long? = null, val sha256: String? = null)
 
 @Serializable
-private data class MirrorBaseline(val tree: String, val entries: Map<String, MirrorEntry>)
+private data class MirrorBaseline(val tree: String, val entries: Map<String, MirrorEntry>,
+                                  // Paths where the project and this mirror disagree and
+                                  // neither side may be overwritten. Comparisons skip
+                                  // them so one blocked file cannot lock the whole tree.
+                                  val excluded: Set<String> = emptySet())
 
 @Serializable
 private data class PartialCreate(
@@ -80,15 +90,21 @@ class WorkspaceMirror(
             if (!current.exists()) materialize()
             val baseline = baseline()
             val local = localSnapshot()
-            val dirty = local != baseline.entries || readPartialCreate() != null
-            if (!dirty && safSnapshot() != baseline.entries) materialize()
+            val dirty = local.withoutExcluded(baseline.excluded) !=
+                baseline.entries.withoutExcluded(baseline.excluded) || readPartialCreate() != null
+            if (!dirty && safSnapshot().withoutExcluded(baseline.excluded) !=
+                baseline.entries.withoutExcluded(baseline.excluded)) materialize()
             MirrorReady(worktree, dirty)
         }
     }
 
     suspend fun hasLocalChanges(): Boolean = withContext(Dispatchers.IO) {
         mutex.withLock {
-            if (!current.exists()) false else localSnapshot() != baseline().entries || readPartialCreate() != null
+            if (!current.exists()) false else {
+                val baseline = baseline()
+                localSnapshot().withoutExcluded(baseline.excluded) !=
+                    baseline.entries.withoutExcluded(baseline.excluded) || readPartialCreate() != null
+            }
         }
     }
 
@@ -101,11 +117,14 @@ class WorkspaceMirror(
             val skipped = mutableListOf<String>()
             val local = localSnapshot(skipped = skipped)
             val pendingCreate = readPartialCreate()
-            if (local == before.entries) {
+            // Fast path only when nothing is blocked: a recorded conflict has to go
+            // through the full pass below so it is re-checked and can clear.
+            if (before.excluded.isEmpty() && local == before.entries) {
                 if (pendingCreate != null) clearPartialCreate()
                 return@withLock MirrorSyncResult(
                     if (pendingCreate == null) MirrorSync.NoChanges else MirrorSync.Conflict,
                     pendingCreate?.path,
+                    skipped,
                 )
             }
             val external = safSnapshot()
@@ -126,15 +145,18 @@ class WorkspaceMirror(
                     partial = null
                 }
             }
-            // Resume only when every SAF entry is still at the baseline or already
-            // matches this mirror's exact target; third-party content blocks writes.
-            val difference = (external.keys + before.entries.keys + local.keys).firstOrNull {
+            // Paths the project and this mirror both moved away from: neither side
+            // may be overwritten, so they are reported and skipped. Everything else
+            // syncs. A path whose two sides now agree is no longer blocked.
+            val excluded = before.excluded.toMutableSet()
+            excluded.removeAll { path -> external[path] == local[path] }
+            excluded.addAll((external.keys + before.entries.keys + local.keys).filter {
                 external[it] != before.entries[it] && external[it] != local[it] &&
                     !(it == partial?.path && external[it] == emptyFile)
-            }
-            if (difference != null) return@withLock MirrorSyncResult(MirrorSync.Conflict, difference, skipped)
+            })
             try {
                 val removed = before.entries.keys.filter { it.isNotEmpty() &&
+                    it !in excluded &&
                     (it !in local || local[it]?.directory != before.entries[it]?.directory) }
                     .sortedByDescending { it.count { char -> char == '/' } }
                 for (path in removed) {
@@ -147,7 +169,8 @@ class WorkspaceMirror(
                             old.sha256 ?: throw MirrorFailure("baseline_invalid", path)))
                 }
                 val addedDirs = local.filter { (path, entry) -> path.isNotEmpty() && entry.directory &&
-                    before.entries[path] != entry }.keys.sortedBy { it.count { char -> char == '/' } }
+                    path !in excluded && before.entries[path] != entry }
+                    .keys.sortedBy { it.count { char -> char == '/' } }
                 for (path in addedDirs) {
                     selected()
                     if (external[path]?.directory == true) continue
@@ -155,7 +178,7 @@ class WorkspaceMirror(
                     if (created.path.value != path) return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value)
                 }
                 val changedFiles = local.filter { (path, entry) -> !entry.directory &&
-                    entry != before.entries[path] }.keys.sorted()
+                    path !in excluded && entry != before.entries[path] }.keys.sorted()
                 for (path in changedFiles) {
                     selected()
                     if (external[path] == local[path]) continue
@@ -194,11 +217,19 @@ class WorkspaceMirror(
                     }
                 }
                 val verified = safSnapshot()
-                val mismatch = (verified.keys + local.keys).firstOrNull { verified[it] != local[it] }
-                if (mismatch != null) return@withLock MirrorSyncResult(MirrorSync.Failed, mismatch)
-                writeBaseline(current, MirrorBaseline(workspace.tree.toString(), verified))
+                val mismatch = (verified.keys + local.keys).firstOrNull {
+                    it !in excluded && verified[it] != local[it]
+                }
+                if (mismatch != null) return@withLock MirrorSyncResult(MirrorSync.Failed, mismatch, skipped)
+                writeBaseline(current, MirrorBaseline(workspace.tree.toString(), verified,
+                    excluded.toSet()))
                 clearPartialCreate()
-                MirrorSyncResult(MirrorSync.Ok, skipped = skipped)
+                MirrorSyncResult(
+                    if (excluded.isEmpty()) MirrorSync.Ok else MirrorSync.Conflict,
+                    excluded.sorted().firstOrNull(),
+                    skipped,
+                    excluded.sorted(),
+                )
             } catch (e: CancellationException) { throw e
             } catch (e: MirrorFailure) { throw e
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
@@ -222,8 +253,10 @@ class WorkspaceMirror(
             recover()
             if (!replacement.isDirectory || Files.isSymbolicLink(replacement.toPath())) throw MirrorFailure("unsafe_entry")
             val before = baseline()
-            if (localSnapshot() != before.entries) throw MirrorFailure("mirror_dirty")
-            if (safSnapshot() != before.entries) throw MirrorFailure("conflict")
+            if (localSnapshot().withoutExcluded(before.excluded) !=
+                before.entries.withoutExcluded(before.excluded)) throw MirrorFailure("mirror_dirty")
+            if (safSnapshot().withoutExcluded(before.excluded) !=
+                before.entries.withoutExcluded(before.excluded)) throw MirrorFailure("conflict")
             if (!checkpointStaging.mkdirs()) throw MirrorFailure("storage")
             try {
                 Files.move(replacement.toPath(), File(checkpointStaging, "worktree").toPath(),
@@ -317,7 +350,8 @@ class WorkspaceMirror(
             if (current.exists()) {
                 val local = localSnapshot()
                 val before = baseline()
-                if (!discardPending && local != before.entries) throw MirrorFailure("mirror_dirty")
+                if (!discardPending && local.withoutExcluded(before.excluded) !=
+                    before.entries.withoutExcluded(before.excluded)) throw MirrorFailure("mirror_dirty")
                 Files.move(current.toPath(), previous.toPath(), StandardCopyOption.ATOMIC_MOVE)
             }
             try {

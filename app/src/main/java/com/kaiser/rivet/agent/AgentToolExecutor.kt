@@ -469,6 +469,9 @@ class AgentToolExecutor(
             if (result.syncSkipped.isNotEmpty()) put("sync_skipped", buildJsonArray {
                 result.syncSkipped.take(20).forEach { add(JsonPrimitive(it)) }
             })
+            if (result.syncConflicts.isNotEmpty()) put("sync_conflict_paths", buildJsonArray {
+                result.syncConflicts.take(20).forEach { add(JsonPrimitive(it)) }
+            })
         }
         var encoded = value()
         while (encoded.toString().toByteArray(Charsets.UTF_8).size > AgentLoop.MAX_TOOL_RESULT_BYTES) {
