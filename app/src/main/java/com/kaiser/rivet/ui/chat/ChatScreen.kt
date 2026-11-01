@@ -781,7 +781,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 ) {
                     if (!entry.standaloneThinking.isNullOrBlank()) {
                         ThinkingBlock(
-                            displaySafeText(entry.standaloneThinking),
+                            entry.standaloneThinking,
                             streaming = false,
                             id = "thinking-${entry.messageIndex ?: item.group.id}",
                         )
@@ -791,7 +791,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
         }
         if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
-            ThinkingBlock(displaySafeText(streamingReasoning), streaming = true, id = "streaming")
+            ThinkingBlock(streamingReasoning, streaming = true, id = "streaming")
         }
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
@@ -955,7 +955,7 @@ private fun MessageRow(message: AgentMessage, reasoning: String? = null, message
     var selectingText by remember(messageKey) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (message.role == AgentRole.Assistant && !reasoning.isNullOrBlank()) {
-            ThinkingBlock(displaySafeText(reasoning), streaming = false, id = "thinking-$messageKey")
+            ThinkingBlock(reasoning, streaming = false, id = "thinking-$messageKey")
         }
         val bubble: @Composable () -> Unit = {
             if (message.role == AgentRole.User) {
@@ -1003,56 +1003,43 @@ private fun MessageRow(message: AgentMessage, reasoning: String? = null, message
     }
 }
 
+// One thinking row for the whole turn, modelled on dsh: the header always toggles,
+// collapsed by default, and while the chain streams the header previews one cheap line
+// instead of laying out the whole text. The full chain renders only when expanded.
 @Composable
 private fun ThinkingBlock(text: String, streaming: Boolean, id: String) {
-    if (streaming) {
-        Surface(
-            modifier = Modifier.fillMaxWidth(0.94f),
-            color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f),
-            shape = RoundedCornerShape(8.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
+    var expanded by rememberSaveable(id) { mutableStateOf(false) }
+    val preview = remember(text, streaming) {
+        displaySafeText(thinkingPreview(text, streaming))
+    }
+    Column(Modifier.fillMaxWidth(0.94f)) {
+        Row(
+            Modifier.fillMaxWidth().heightIn(min = 36.dp).clickable(role = Role.Button) { expanded = !expanded }
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
+                .padding(horizontal = 8.dp, vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically,
         ) {
-            Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
-                verticalArrangement = Arrangement.spacedBy(5.dp)) {
-                Text("Thinking", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(text, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            Text("Thinking", style = MaterialTheme.typography.labelMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (preview.isEmpty()) Spacer(Modifier.weight(1f))
+            else Text(preview, Modifier.weight(1f).padding(start = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(if (expanded) "Hide" else "Show", Modifier.padding(start = 8.dp),
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-    } else {
-        var expanded by rememberSaveable(id) { mutableStateOf(false) }
-        val summary = remember(text) {
-            text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty()
-        }
-        Column(Modifier.fillMaxWidth(0.94f)) {
-            Row(
-                Modifier.fillMaxWidth().heightIn(min = 36.dp).clickable(role = Role.Button) { expanded = !expanded }
-                    .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                verticalAlignment = Alignment.CenterVertically,
+        if (expanded) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f),
+                shape = RoundedCornerShape(6.dp),
+                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
             ) {
-                Text("Thinking", style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(summary, Modifier.weight(1f).padding(start = 8.dp),
+                Text(displaySafeText(text), modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
-                Text(if (expanded) "Hide" else "Show", Modifier.padding(start = 8.dp),
-                    style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            if (expanded) {
-                Surface(
-                    modifier = Modifier.fillMaxWidth(),
-                    color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f),
-                    shape = RoundedCornerShape(6.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
-                ) {
-                    Text(text, modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
             }
         }
     }

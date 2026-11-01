@@ -31,6 +31,35 @@ internal fun displayModelName(modelId: String): String {
     return tail
 }
 
+// One cheap line for a collapsed thinking row, modelled on dsh: a finished chain shows
+// its first line, a streaming one shows the first line of the last paragraph that has
+// finished a line, so the preview does not change on every token.
+internal fun thinkingPreview(text: String, streaming: Boolean): String =
+    if (streaming) lastFinishedParagraphFirstLine(text) else firstLine(text)
+
+private const val PREVIEW_CHARS = 160
+
+private val BLANK_LINE = Regex("\r?\n(?:[\t ]*\r?\n)+")
+
+private fun firstLine(text: String): String =
+    text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty().take(PREVIEW_CHARS)
+
+private fun lastFinishedParagraphFirstLine(text: String): String {
+    var summary = ""
+    var paragraphStart = 0
+    while (true) {
+        val next = BLANK_LINE.find(text, paragraphStart)
+        val paragraphEnd = next?.let { it.range.first + it.value.indexOf('\n') } ?: text.length
+        val newline = text.indexOf('\n', paragraphStart)
+        if (newline != -1 && newline <= paragraphEnd) {
+            val candidate = text.substring(paragraphStart, newline).trim()
+            if (candidate.isNotEmpty()) summary = candidate
+        }
+        if (next == null) return summary.take(PREVIEW_CHARS)
+        paragraphStart = next.range.last + 1
+    }
+}
+
 private val BIDI_FORMATTING_CONTROLS = setOf(
     0x061C, 0x200E, 0x200F, 0x202A, 0x202B, 0x202C, 0x202D, 0x202E,
     0x2066, 0x2067, 0x2068, 0x2069,
