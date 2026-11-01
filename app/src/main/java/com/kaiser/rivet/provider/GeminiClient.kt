@@ -96,10 +96,10 @@ internal class GeminiClient(
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         val stream = GeminiAgentStream(onDelta)
-        http.sse(httpRequest) { payload ->
+        val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
-        return stream.response()
+        return stream.response(completed)
     }
 
     private fun base(url: String): Request.Builder {
@@ -200,10 +200,12 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
         }
     }
 
-    fun response(): AgentResponse {
-        if (!finished) throw ProviderError.InvalidResponse("incomplete stream")
-        if (finishReason != "STOP") {
+    fun response(completed: Boolean = false): AgentResponse {
+        if (!finished || finishReason != "STOP") {
             throw ProviderError.IncompleteGeneration(finishReason ?: "missing finish reason")
+        }
+        if (!completed && text.isEmpty() && calls.isEmpty() && textSignature == null) {
+            throw ProviderError.IncompleteGeneration("incomplete stream")
         }
         return AgentResponse(
             text.toString(),

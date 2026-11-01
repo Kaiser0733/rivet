@@ -400,7 +400,7 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun toolCallIsRejectedWhenStreamEndsBeforeDoneMarker() = runTest {
+    fun toolCallWithoutFinishReasonAndWithoutDoneMarkerIsIncompleteGeneration() = runTest {
         val payload = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[" +
             "{\"index\":0,\"id\":\"call-1\",\"function\":{" +
             "\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"A.kt\\\"}\"}}]}}]}\n\n"
@@ -410,9 +410,9 @@ class OpenAiCompatibleClientTest {
             OpenAiCompatibleClient(config(), "key").streamAgent(
                 AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
             ) {}
-            fail("Expected an incomplete stream to be rejected")
-        } catch (error: ProviderError.InvalidResponse) {
-            assertTrue(error.detail.contains("incomplete"))
+            fail("Expected a truncated stream without finish_reason to be rejected")
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("missing finish reason", error.reason)
         }
     }
 
@@ -436,20 +436,25 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun textAtTransportEofWithoutDoneMarkerRemainsIncomplete() = runTest {
+    fun terminalFinishReasonWithContentBeatsMissingDoneMarker() = runTest {
         server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
-            "data: {\"choices\":[{\"delta\":{\"content\":\"partial\"}," +
+            "data: {\"choices\":[{\"delta\":{\"content\":\"complete answer\"}," +
                 "\"finish_reason\":\"stop\"}]}\n\n",
         ))
+        val textResponse = OpenAiCompatibleClient(config(), "key").streamAgent(
+            AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+        ) {}
+        assertEquals("complete answer", textResponse.text)
 
-        try {
-            OpenAiCompatibleClient(config(), "key").streamAgent(
-                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
-            ) {}
-            fail("semantic finish reason without SSE [DONE] must remain transport-incomplete")
-        } catch (error: ProviderError.InvalidResponse) {
-            assertTrue(error.detail.contains("incomplete"))
-        }
+        val toolSse = "data: {\"choices\":[{\"delta\":{\"tool_calls\":[" +
+            "{\"index\":0,\"id\":\"call-1\",\"function\":{" +
+            "\"name\":\"read_file\",\"arguments\":\"{\\\"path\\\":\\\"A.kt\\\"}\"}}]}," +
+            "\"finish_reason\":\"tool_calls\"}]}\n\n"
+        server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(toolSse))
+        val toolResponse = OpenAiCompatibleClient(config(), "key").streamAgent(
+            AgentRequest("test-model", emptyList(), "", ReasoningLevel.Default, emptyList()),
+        ) {}
+        assertEquals(listOf(AgentToolCall("call-1", "read_file", "{\"path\":\"A.kt\"}")), toolResponse.toolCalls)
     }
 
     @Test

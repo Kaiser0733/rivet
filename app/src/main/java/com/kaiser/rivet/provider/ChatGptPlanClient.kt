@@ -164,6 +164,7 @@ internal class ResponsesAgentStream(private val onDelta: (String) -> Unit) {
     private var usage: AgentUsage? = null
     private var terminalError: ProviderError? = null
     private var completed = false
+    private var itemDone = false
 
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
@@ -173,7 +174,10 @@ internal class ResponsesAgentStream(private val onDelta: (String) -> Unit) {
                     text.append(value); onDelta(value)
                 }
             }
-            "response.completed" -> {
+            "response.output_text.done", "response.function_call_arguments.done" -> {
+                itemDone = true
+            }
+            "response.completed", "response.done" -> {
                 completed = true
                 root["response"]?.obj()?.get("usage")?.obj()?.let { usage = responsesUsage(it) }
             }
@@ -202,6 +206,24 @@ internal class ResponsesAgentStream(private val onDelta: (String) -> Unit) {
                 pending.name = item["name"]?.str()
                 item["arguments"]?.str()?.let { pending.arguments.append(it) }
             }
+            "response.output_item.done" -> {
+                val item = root["item"]?.obj() ?: return
+                val type = item["type"]?.str()
+                if (type == "function_call") {
+                    val index = root["output_index"]?.jsonPrimitive?.intOrNull
+                    if (index != null) {
+                        val pending = toolCalls.getOrPut(index) { PendingCall() }
+                        if (pending.id == null) pending.id = item["call_id"]?.str() ?: item["id"]?.str()
+                        if (pending.name == null) pending.name = item["name"]?.str()
+                        if (pending.arguments.isEmpty()) {
+                            item["arguments"]?.str()?.let { pending.arguments.append(it) }
+                        }
+                    }
+                }
+                if (type == "message" || type == "function_call") {
+                    itemDone = true
+                }
+            }
             "response.function_call_arguments.delta" -> {
                 val index = root["output_index"]?.jsonPrimitive?.intOrNull ?: return
                 val pending = toolCalls.getOrPut(index) { PendingCall() }
@@ -212,7 +234,8 @@ internal class ResponsesAgentStream(private val onDelta: (String) -> Unit) {
 
     fun response(): AgentResponse {
         terminalError?.let { throw it }
-        if (!completed) throw ProviderError.InvalidResponse("incomplete stream")
+        val finishedCleanly = completed || (itemDone && (text.isNotEmpty() || toolCalls.isNotEmpty()))
+        if (!finishedCleanly) throw ProviderError.IncompleteGeneration("incomplete stream")
         return AgentResponse(
             text = text.toString(),
             toolCalls = toolCalls.values.map { pending ->
@@ -288,6 +311,7 @@ internal suspend fun OkHttpClient.responsesSse(
                             }
                             if (line.startsWith("data:")) {
                                 val payload = line.removePrefix("data:").trim()
+                                if (payload == "[DONE]") break
                                 if (!terminal.get() && payload.isNotEmpty()) {
                                     lastProgressAt = now
                                     onEvent(payload)
