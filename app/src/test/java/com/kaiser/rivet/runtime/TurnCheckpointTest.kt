@@ -2,6 +2,9 @@ package com.kaiser.rivet.runtime
 
 import java.io.File
 import kotlinx.coroutines.test.runTest
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.jsonObject
 import org.junit.Assert.assertArrayEquals
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -121,5 +124,27 @@ class TurnCheckpointTest {
 
         assertNotNull(first.latest())
         assertEquals(null, second.latest())
+    }
+
+    // A record written before `desynced`/`skipped` existed must still decode, and a
+    // desynced Undo must not be offered again.
+    @Test fun desyncedUndoIsNotOfferedAgainAndOlderRecordsStillDecode() = runTest {
+        val root = temp.newFolder("worktree")
+        File(root, "file.txt").writeText("original")
+        val storage = temp.newFolder("private-checkpoints")
+        val store = TurnCheckpoint(storage, "workspace-A")
+        val id = store.begin(root)
+        File(root, "file.txt").writeText("changed")
+        assertTrue(store.finish(id, root))
+
+        val recordFile = storage.walkTopDown().first { it.name == "checkpoint.json" }
+        val legacy = JsonObject(Json.parseToJsonElement(recordFile.readText()).jsonObject
+            .filterKeys { it != "desynced" && it != "skipped" })
+        recordFile.writeText(legacy.toString())
+        assertNotNull(store.latest())
+
+        store.markDesynced(id)
+
+        assertEquals(null, store.latest())
     }
 }

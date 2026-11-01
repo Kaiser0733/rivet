@@ -97,6 +97,8 @@ data class ChatUiState(
 enum class ChatErrorAction { OpenSettings, RetryProjectChanges }
 
 internal fun undoFailureMessage(error: Throwable?): String = when {
+    error is CheckpointFailure && error.code == "undo_desync" ->
+        "Rivet restored its copy but could not write it back to the project, so the two may differ. Check the files before continuing."
     error is CheckpointFailure && error.code == "undo_conflict" ||
         error is MirrorFailure && error.code == "conflict" ->
         "The project changed after Rivet's edits, so Undo stopped before overwriting newer work."
