@@ -124,16 +124,23 @@ class ChatGptPlanClientTest {
         }
     }
 
-    @Test fun eofWithoutTerminalIsInvalidResponse() {
+    @Test fun eofWithoutTerminalIsIncompleteGeneration() {
         val stream = ResponsesAgentStream {}
         stream.accept("""{"type":"response.output_text.delta","delta":"partial"}""")
         try {
             stream.response()
-            fail("expected InvalidResponse")
-        } catch (e: ProviderError.InvalidResponse) {
-            // no [DONE] sentinel on this stream; EOF without completed/failed
-            // must not silently return a partial response
+            fail("expected IncompleteGeneration")
+        } catch (e: ProviderError.IncompleteGeneration) {
+            assertTrue(e.reason.contains("incomplete"))
         }
+    }
+
+    @Test fun itemDoneWithContentAcceptsResponseWithoutCompletedEvent() {
+        val stream = ResponsesAgentStream {}
+        stream.accept("""{"type":"response.output_text.delta","delta":"complete answer"}""")
+        stream.accept("""{"type":"response.output_text.done","text":"complete answer"}""")
+        val response = stream.response()
+        assertEquals("complete answer", response.text)
     }
 
     @Test fun streamAccumulatesFunctionCalls() {

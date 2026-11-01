@@ -95,8 +95,7 @@ internal class OpenAiCompatibleClient(
         val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
-        if (!completed) throw ProviderError.InvalidResponse("incomplete stream")
-        return stream.response()
+        return stream.response(completed)
     }
 
     private fun base(url: String): Request.Builder {
@@ -165,11 +164,14 @@ private class OpenAiAgentStream(
         }
     }
 
-    fun response(): AgentResponse {
+    fun response(completed: Boolean = true): AgentResponse {
         val reason = finishReason
         val expectedReason = if (tools.isEmpty()) "stop" else "tool_calls"
         if (reason != expectedReason) {
             throw ProviderError.IncompleteGeneration(reason ?: "missing finish reason")
+        }
+        if (!completed && text.isEmpty() && tools.isEmpty()) {
+            throw ProviderError.IncompleteGeneration("incomplete stream")
         }
         return AgentResponse(
         text = text.toString(),

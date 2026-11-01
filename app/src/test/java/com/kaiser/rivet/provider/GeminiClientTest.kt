@@ -204,8 +204,8 @@ class GeminiClientTest {
                 "gemini-x", emptyList(), "sys", ReasoningLevel.Default, emptyList(),
             )) {}
             throw AssertionError("Expected an incomplete stream to be rejected")
-        } catch (error: ProviderError.InvalidResponse) {
-            assertTrue(error.detail.contains("incomplete"))
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("missing finish reason", error.reason)
         }
     }
 

@@ -332,7 +332,7 @@ class AnthropicClientTest {
     }
 
     @Test
-    fun toolUseIsRejectedWhenStreamEndsBeforeMessageStop() = runTest {
+    fun toolUseWithoutStopReasonIsIncompleteGeneration() = runTest {
         val sse = listOf(
             """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"read_file","input":{}}}""",
             """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{}"}}""",
@@ -343,10 +343,33 @@ class AnthropicClientTest {
             AnthropicClient(config(), "key").streamAgent(AgentRequest(
                 "claude-x", emptyList(), "sys", ReasoningLevel.Default, emptyList(),
             )) {}
-            throw AssertionError("Expected an incomplete stream to be rejected")
-        } catch (error: ProviderError.InvalidResponse) {
-            assertTrue(error.detail.contains("incomplete"))
+            throw AssertionError("Expected a truncated stream to be rejected")
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("missing stop reason", error.reason)
         }
+    }
+
+    @Test
+    fun terminalStopReasonWithContentBeatsMissingMessageStop() = runTest {
+        val textSse = listOf(
+            """{"type":"content_block_delta","index":0,"delta":{"type":"text_delta","text":"Complete answer"}}""",
+            """{"type":"message_delta","delta":{"stop_reason":"end_turn"}}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(textSse).setHeader("Content-Type", "text/event-stream"))
+        val textResponse = AnthropicClient(config(), "key").streamAgent(AgentRequest(
+            "claude-x", emptyList(), "sys", ReasoningLevel.Default, emptyList(),
+        )) {}
+        assertEquals("Complete answer", textResponse.text)
+
+        val toolSse = listOf(
+            """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"read_file","input":{"path":"A.kt"}}}""",
+            """{"type":"message_delta","delta":{"stop_reason":"tool_use"}}""",
+        ).joinToString("") { "data: $it\n\n" }
+        server.enqueue(MockResponse().setBody(toolSse).setHeader("Content-Type", "text/event-stream"))
+        val toolResponse = AnthropicClient(config(), "key").streamAgent(AgentRequest(
+            "claude-x", emptyList(), "sys", ReasoningLevel.Default, emptyList(),
+        )) {}
+        assertEquals(listOf(AgentToolCall("tool-1", "read_file", "{\"path\":\"A.kt\"}")), toolResponse.toolCalls)
     }
 
     @Test

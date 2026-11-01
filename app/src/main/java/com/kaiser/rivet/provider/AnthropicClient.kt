@@ -92,10 +92,10 @@ internal class AnthropicClient(
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         val stream = AnthropicAgentStream(onDelta)
-        http.sse(httpRequest) { payload ->
+        val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
-        return stream.response()
+        return stream.response(completed)
     }
 
     internal fun requestBody(request: AgentRequest): JsonObject = buildJsonObject {
@@ -265,12 +265,14 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
         }
     }
 
-    fun response(): AgentResponse {
-        if (!messageStopped) throw ProviderError.InvalidResponse("incomplete stream")
+    fun response(completed: Boolean = false): AgentResponse {
         val reason = stopReason
         if (tools.isNotEmpty() && reason != "tool_use" ||
             tools.isEmpty() && reason !in setOf("end_turn", "stop_sequence", "refusal")) {
             throw ProviderError.IncompleteGeneration(reason ?: "missing stop reason")
+        }
+        if (!messageStopped && !completed && text.isEmpty() && tools.isEmpty()) {
+            throw ProviderError.IncompleteGeneration("incomplete stream")
         }
         val calls = tools.values.map { tool ->
             val arguments = tool.fragments.toString().ifEmpty { tool.initial.toString() }
