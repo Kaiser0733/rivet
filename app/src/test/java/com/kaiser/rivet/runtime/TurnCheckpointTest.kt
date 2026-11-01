@@ -147,4 +147,32 @@ class TurnCheckpointTest {
 
         assertEquals(null, store.latest())
     }
+
+    // Generated trees must not push a project past the entry cap, and must stay out
+    // of the archive so Undo does not try to restore them.
+    @Test fun ignoredFoldersStayOutOfTheCheckpoint() = runTest {
+        val root = temp.newFolder("worktree")
+        File(root, "src").mkdirs()
+        File(root, "src/main.kt").writeText("val a = 1\n")
+        File(root, "node_modules/pkg").mkdirs()
+        File(root, "node_modules/pkg/index.js").writeText("module.exports = 1\n")
+        File(root, "dist-out").mkdirs()
+        File(root, "dist-out/bundle.js").writeText("x\n")
+        File(root, "build").mkdirs()
+        File(root, "build/out.js").writeText("x\n")
+        File(root, ".gitignore").writeText("node_modules/\nbuild\n# keep src\n")
+        File(root, ".rivetignore").writeText("dist*\n")
+        val store = TurnCheckpoint(temp.newFolder("private-checkpoints"), "workspace-A")
+
+        val id = store.begin(root)
+
+        File(root, "src/main.kt").writeText("val a = 2\n")
+        assertTrue(store.finish(id, root))
+        val before = store.latest()!!.before.keys
+        assertTrue(before.none { it.startsWith("node_modules") })
+        assertTrue(before.none { it.startsWith("build") })
+        assertTrue(before.none { it.startsWith("dist") })
+        assertTrue(before.contains("src/main.kt"))
+        assertTrue(before.contains(".gitignore"))
+    }
 }
