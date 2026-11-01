@@ -27,9 +27,10 @@ internal object ConversationTitle {
             .trim().trim('"', '\'', '`', '“', '”', '‘', '’', '*', '_').trim()
             .trimEnd('.', '!', '?', ':', ';', ',').trim()
             .replace(Regex("\\s+"), " ")
-        if (Regex("^[\"'`](?:title|name|arguments|function)[\"'`]\\s*:", RegexOption.IGNORE_CASE)
-                .containsMatchIn(clean) ||
-            Regex("^(?:name|arguments|function)\\s*:", RegexOption.IGNORE_CASE).containsMatchIn(clean)) return null
+        // A JSON-style key ("title": "Bad") is structured output, not a title. By this
+        // point the surrounding quote may already be trimmed, so both quotes are optional.
+        if (Regex("^[\"'`]?(?:title|name|arguments|function)[\"'`]?\\s*:", RegexOption.IGNORE_CASE)
+                .containsMatchIn(clean)) return null
         if (clean.isBlank() || clean.any { it.isISOControl() || it in "{}[]<>" } ||
             Regex("(?i)^(?:tool[_ ]?(?:call|result)|function[_ ]?call|assistant\\s*:|system\\s*:|json\\s*:)")
                 .containsMatchIn(clean)) return null
