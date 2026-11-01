@@ -17,6 +17,7 @@ import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
 import org.junit.After
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
 import org.junit.Before
@@ -649,6 +650,27 @@ class OpenAiCompatibleClientTest {
         val customBody = server.takeRequest().body.readUtf8()
         assertTrue(!customBody.contains("stream_options"))
         assertTrue(!customBody.contains("max_completion_tokens"))
+    }
+
+    // An endpoint can answer 200 and put the refusal inside the stream. That error has no
+    // HTTP status, which is why effort detection cannot depend on one (round 4, Phase 1b).
+    @Test
+    fun streamErrorKeepsTheProviderTextAndCarriesNoHttpStatus() = runTest {
+        server.enqueue(MockResponse().setBody(
+            "data: {\"error\":{\"message\":\"Invalid inference request. Check the model's " +
+                "supported parameters and input limits.\",\"code\":\"invalid_request_error\"}}\n\n",
+        ).setHeader("Content-Type", "text/event-stream"))
+
+        try {
+            OpenAiCompatibleClient(config(), "key").streamAgent(
+                AgentRequest("test-model", emptyList(), "", ReasoningLevel.Ultra, emptyList()),
+            ) {}
+            throw AssertionError("expected ProviderMessage")
+        } catch (e: ProviderError.ProviderMessage) {
+            assertEquals("Invalid inference request. Check the model's supported parameters and input limits.",
+                e.text)
+            assertNull("an in-stream refusal says nothing about the HTTP status", e.statusCode)
+        }
     }
 
     @Test

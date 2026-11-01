@@ -193,9 +193,15 @@ internal fun isUnsupportedReasoningError(error: ProviderError, requested: Reason
     // the model's supported parameters and input limits."). Only a client-side rejection on
     // an effort that was actually sent may be read that way; a size problem or a complaint
     // about another field we send must not be blamed on the effort.
+    //
+    // The refusal can arrive twice as a ProviderMessage: from a non-2xx response, carrying
+    // its status, and from an error event inside a 200 stream (providerMessage below), which
+    // carries no status at all. The device showed the second shape, so a rule that demands a
+    // 400 is blind exactly where it is needed.
     if (!effortWasSent) return false
     val status = (error as ProviderError.ProviderMessage).statusCode
-    return status in setOf(400, 422) && looksLikeParameterRejection(value)
+    val clientSide = status == null || status in setOf(400, 422)
+    return clientSide && looksLikeParameterRejection(value)
 }
 
 private val PARAMETER_REJECTION = listOf(

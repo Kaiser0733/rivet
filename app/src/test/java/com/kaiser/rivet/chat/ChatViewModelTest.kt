@@ -1296,6 +1296,37 @@ class ChatViewModelTest {
             provider.requests[1].messages.last { it.role == com.kaiser.rivet.agent.AgentRole.User }.text)
     }
 
+    // The device path for an ultra send on River: the refusal arrives inside the stream,
+    // so it has no HTTP status. The ladder must still come back, with Max recommended.
+    @Test fun anEffortRefusedInsideTheStreamStillOffersTheStepDown() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val config = ProviderConfig(id = "river", type = ProviderType.OpenAiCompatible, name = "River",
+            baseUrl = "https://example.invalid/v1", model = "deepseek", reasoning = ReasoningLevel.Ultra)
+        var saved = config
+        val source = object : ProviderRuntimeSource {
+            override suspend fun load() = ProviderRuntimeResult.Ready(saved, "key")
+            override suspend fun updateReasoning(providerId: String, level: ReasoningLevel) {
+                saved = saved.copy(reasoning = level)
+            }
+        }
+        val provider = RejectingReasoningProvider(ProviderError.ProviderMessage(
+            "Invalid inference request. Check the model's supported parameters and input limits."))
+        val viewModel = newChatViewModel(app, AgentSessionStore(app), source, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.send("How are you?")
+
+        val notice = await(viewModel) { it.unsupportedReasoning != null }.unsupportedReasoning!!
+        assertEquals(ReasoningLevel.Ultra, notice.failedLevel)
+        assertEquals(ReasoningLevel.Max, notice.recommendedLevel)
+
+        viewModel.chooseReasoningLevel(notice.recommendedLevel)
+        await(viewModel) { !it.streaming && it.unsupportedReasoning == null && provider.calls >= 2 }
+        assertEquals(ReasoningLevel.Max, saved.reasoning)
+        assertEquals(ReasoningLevel.Ultra, provider.requests[0].reasoning)
+    }
+
     // A conversation picked while a reply is streaming must not fight the running turn
     // for the storage pointer: the choice waits, then opens when the turn is done.
     @Test fun conversationPickedDuringATurnOpensWhenTheTurnFinishes() = runBlocking {
