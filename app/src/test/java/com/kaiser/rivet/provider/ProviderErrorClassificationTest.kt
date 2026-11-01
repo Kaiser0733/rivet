@@ -56,6 +56,14 @@ class ProviderErrorClassificationTest {
         assertTrue(httpError(429, """{"error":{"message":"slow down"}}""") is ProviderError.RateLimited)
     }
 
+    // Google says "Quota exceeded … per minute" for a limit that clears by itself. Reading
+    // that as the billing limit tells the user to check their plan when waiting is the fix.
+    @Test fun aPerMinuteRateLimitIsNotABillingProblem() {
+        val error = httpError(429, """{"error":{"code":429,"status":"RESOURCE_EXHAUSTED","message":"Quota exceeded for quota metric 'Generate Content API requests per minute' and limit 'GenerateContentRequestsPerMinutePerProjectPerModel-FreeTier' of 15 per minute per project."}}""")
+        assertTrue(error is ProviderError.ResourceExhausted)
+        assertFalse(error.text().contains("billing"))
+    }
+
     @Test fun exhaustedAccountQuotaDoesNotSuggestWaiting() {
         val error = httpError(429, """{"error":{"code":"insufficient_quota","message":"quota exceeded"}}""")
         assertTrue(error is ProviderError.UsageLimit)

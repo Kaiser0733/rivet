@@ -97,7 +97,11 @@ private fun errorBodyText(body: String?): String? = try {
 
 private fun errorBodyCode(body: String?): String? = try {
     val error = parseJsonObject(body ?: return null)?.get("error")?.jsonObject
-    error?.get("code")?.jsonPrimitive?.content ?: error?.get("type")?.jsonPrimitive?.content
+    // Providers disagree on where the machine-readable code lives, and a numeric HTTP code
+    // says nothing that the status line did not: prefer the first value that is a word.
+    val values = listOf("status", "type", "code")
+        .mapNotNull { key -> error?.get(key)?.jsonPrimitive?.content }
+    values.firstOrNull { value -> value.any(Char::isLetter) } ?: values.firstOrNull()
 } catch (e: IllegalArgumentException) {
     null
 }
@@ -109,8 +113,12 @@ fun httpError(code: Int, body: String?): ProviderError {
         code == 401 -> ProviderError.Unauthorized()
         code == 403 -> ProviderError.Forbidden()
         code in setOf(400, 413, 422) && isContextOverflow(body.orEmpty()) -> ProviderError.ContextOverflow()
+        // Resource exhaustion is the per-minute capacity signal, so it must be read before
+        // the billing words: Google says "Quota exceeded … per minute" for a limit that
+        // clears on its own, and "check your billing" is the wrong advice for it.
+        code == 429 && isResourceExhausted(providerCode.orEmpty() + " " + detail.orEmpty()) ->
+            ProviderError.ResourceExhausted()
         code == 429 && isUsageLimit(providerCode.orEmpty() + " " + detail.orEmpty()) -> ProviderError.UsageLimit()
-        code == 429 && isResourceExhausted(detail.orEmpty()) -> ProviderError.ResourceExhausted()
         code == 429 -> ProviderError.RateLimited()
         code in 500..599 -> ProviderError.Server(code)
         // Wrong-model bodies arrive as 400 or 404 depending on the service
