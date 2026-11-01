@@ -599,9 +599,10 @@ class WorkspaceMirrorTest {
 
         val id = store.begin(root)
 
-        assertTrue(store.latest()!!.skipped.contains("link"))
+        // latest() only offers a finished checkpoint, so the record is read afterwards.
         File(root, "keep.txt").writeText("changed")
         assertTrue(store.finish(id, root))
+        assertTrue(store.latest()!!.skipped.contains("link"))
     }
 
     // One file edited on both sides must not stop the rest of the project syncing,
