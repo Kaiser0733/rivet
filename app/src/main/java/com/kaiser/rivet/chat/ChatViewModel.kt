@@ -406,7 +406,8 @@ class ChatViewModel private constructor(
 
     fun retryInterruptedTurn() {
         if (_uiState.value.streaming || !_uiState.value.ready ||
-            _uiState.value.recoveringProjectChanges || !_uiState.value.interruptedTurn) return
+            _uiState.value.recoveringProjectChanges || _uiState.value.undoing ||
+            !_uiState.value.interruptedTurn) return
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
         if (lastUser.isEmpty() && activeMessages.isEmpty()) return
         startTurn(lastUser, retryingInterrupted = true)
@@ -417,7 +418,7 @@ class ChatViewModel private constructor(
     // second copy.
     fun retryFailedTurn() {
         val state = _uiState.value
-        if (state.streaming || !state.ready || state.recoveringProjectChanges) return
+        if (state.streaming || !state.ready || state.recoveringProjectChanges || state.undoing) return
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
         if (lastUser.isEmpty()) return
         startTurn(lastUser, retryingInterrupted = true)
@@ -1198,8 +1199,11 @@ class ChatViewModel private constructor(
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { durable.takeLast(100) }
         _uiState.update {
+            // The turn is over, so nothing is running: leaving these set shows "a command is
+            // running" and disables the Retry button on the row that just appeared.
             it.copy(messages = visible, streaming = false, streamingText = "", streamingReasoning = "",
                 pendingApproval = null, activity = null,
+                toolLifecycle = emptyList(), commandRunning = false,
                 error = if (persistenceError) "Could not update conversation storage. Check available space before continuing." else message,
                 errorAction = if (persistenceError) null else action,
                 unsupportedReasoning = if (persistenceError) null else reasoningNotice)
