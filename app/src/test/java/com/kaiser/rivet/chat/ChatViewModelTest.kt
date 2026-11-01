@@ -1089,7 +1089,7 @@ class ChatViewModelTest {
         assertEquals(1, provider.requests.size)
     }
 
-    @Test fun turnRunsUnderForegroundServiceWithOngoingNotificationAndStopsOnEnd() = runBlocking {
+    @Test fun turnRunsUnderForegroundServiceWithOngoingNotificationAndStopsOnEnd() = runBlocking<Unit> {
         val started = CompletableDeferred<Unit>()
         val finish = CompletableDeferred<Unit>()
         val provider = object : ProviderClient {
