@@ -24,6 +24,7 @@ import com.kaiser.rivet.provider.ModelContextLimit
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
+import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.TestResult
 import com.kaiser.rivet.runtime.CheckpointFailure
@@ -1258,6 +1259,42 @@ class ChatViewModelTest {
         assertEquals("Analyzing constraints", completed.messageReasoning[assistantIndex])
     }
 
+    // A refused effort must cost the user one tap: the ladder comes back, and the
+    // level they pick sends the same message again.
+    @Test fun aRejectedEffortOffersTheNextStepDownAndResendsTheSameMessage() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val config = ProviderConfig(id = "river", type = ProviderType.OpenAiCompatible, name = "River",
+            baseUrl = "https://example.invalid/v1", model = "deepseek", reasoning = ReasoningLevel.Medium)
+        var saved = config
+        val source = object : ProviderRuntimeSource {
+            override suspend fun load() = ProviderRuntimeResult.Ready(saved, "key")
+            override suspend fun updateReasoning(providerId: String, level: ReasoningLevel) {
+                saved = saved.copy(reasoning = level)
+            }
+        }
+        val provider = RejectingReasoningProvider(ProviderError.ProviderMessage(
+            "Invalid reasoning_effort: medium is not supported by this model"))
+        val viewModel = newChatViewModel(app, AgentSessionStore(app), source, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.send("Write the game")
+
+        val notice = await(viewModel) { it.unsupportedReasoning != null }.unsupportedReasoning!!
+        assertEquals(ReasoningLevel.Medium, notice.failedLevel)
+        assertEquals(ReasoningLevel.Low, notice.recommendedLevel)
+        assertTrue(notice.alternativeLevels.contains(ReasoningLevel.Ultra))
+
+        viewModel.chooseReasoningLevel(notice.recommendedLevel)
+
+        await(viewModel) { !it.streaming && it.unsupportedReasoning == null && provider.calls >= 2 }
+        assertEquals(ReasoningLevel.Low, saved.reasoning)
+        assertEquals(ReasoningLevel.Medium, provider.requests[0].reasoning)
+        assertEquals(ReasoningLevel.Low, provider.requests[1].reasoning)
+        assertEquals("Write the game",
+            provider.requests[1].messages.last { it.role == com.kaiser.rivet.agent.AgentRole.User }.text)
+    }
+
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withTimeout(5_000) { viewModel.uiState.first(predicate) }
 
@@ -1293,6 +1330,25 @@ class ChatViewModelTest {
         override suspend fun clear() {
             messages = emptyList()
             interrupted = false
+        }
+    }
+
+    // Refuses the first request with the given error, then answers normally.
+    private class RejectingReasoningProvider(private val rejection: ProviderError) : ProviderClient {
+        val requests = mutableListOf<AgentRequest>()
+        var calls = 0
+        override suspend fun listModels(): List<ModelInfo> = emptyList()
+        override suspend fun testConnection() = TestResult(true, "ok")
+        override suspend fun streamAgent(
+            request: AgentRequest,
+            onReasoning: (String) -> Unit,
+            onDelta: (String) -> Unit,
+        ): AgentResponse {
+            requests += request
+            calls++
+            if (calls == 1) throw rejection
+            onDelta("done")
+            return AgentResponse(text = "done")
         }
     }
 

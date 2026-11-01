@@ -25,11 +25,15 @@ import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.ProjectInstructions
 import com.kaiser.rivet.agent.SafAgentWorkspace
 import com.kaiser.rivet.provider.AgentRequest
+import com.kaiser.rivet.provider.ALL_REASONING_LEVELS
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.ReasoningLevel
+import com.kaiser.rivet.provider.isUnsupportedReasoningError
 import com.kaiser.rivet.provider.providerClient
+import com.kaiser.rivet.provider.recommendedFallbackReasoning
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
 import com.kaiser.rivet.runtime.RuntimeController
@@ -66,6 +70,13 @@ import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import java.util.UUID
 
+data class UnsupportedReasoningNotice(
+    val providerId: String,
+    val failedLevel: ReasoningLevel,
+    val recommendedLevel: ReasoningLevel,
+    val alternativeLevels: List<ReasoningLevel>,
+)
+
 data class ChatUiState(
     val messages: List<AgentMessage> = emptyList(),
     val ready: Boolean = false,
@@ -76,6 +87,7 @@ data class ChatUiState(
     val pendingApproval: AgentApprovalRequest? = null,
     val error: String? = null,
     val errorAction: ChatErrorAction? = null,
+    val unsupportedReasoning: UnsupportedReasoningNotice? = null,
     val sessions: List<CodingSessionHeader> = emptyList(),
     val currentSessionId: String? = null,
     val currentSessionTitle: String? = null,
@@ -146,6 +158,7 @@ internal sealed interface ProviderRuntimeResult {
 
 internal fun interface ProviderRuntimeSource {
     suspend fun load(): ProviderRuntimeResult
+    suspend fun updateReasoning(providerId: String, level: ReasoningLevel) {}
 }
 
 private class StoredProviderRuntimeSource(app: Application) : ProviderRuntimeSource {
@@ -168,6 +181,13 @@ private class StoredProviderRuntimeSource(app: Application) : ProviderRuntimeSou
         val apiKey = secrets.apiKey(config.id)
             ?: return ProviderRuntimeResult.Failure("No API key stored for \"${config.name}\".")
         return ProviderRuntimeResult.Ready(config, apiKey)
+    }
+
+    override suspend fun updateReasoning(providerId: String, level: ReasoningLevel) {
+        val current = providerStore.configSnapshot().firstOrNull { it.id == providerId } ?: return
+        if (current.reasoning != level) {
+            providerStore.save(current.copy(reasoning = level))
+        }
     }
 }
 
@@ -355,6 +375,29 @@ class ChatViewModel private constructor(
         if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready ||
             _uiState.value.recoveringProjectChanges) return
         startTurn(trimmed, retryingInterrupted = false)
+    }
+
+    // The model refused an effort. Saving the chosen level and running the same prompt
+    // again is the whole recovery: the user never retypes the message.
+    fun chooseReasoningLevel(level: ReasoningLevel) {
+        val notice = _uiState.value.unsupportedReasoning ?: return
+        if (_uiState.value.streaming) return
+        val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
+        if (lastUser.isEmpty()) return
+        _uiState.update { it.copy(unsupportedReasoning = null, error = null, errorAction = null) }
+        viewModelScope.launch {
+            try {
+                providerSource.updateReasoning(notice.providerId, level)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _uiState.update {
+                    it.copy(error = "Rivet couldn't save that reasoning level. Try again.")
+                }
+                return@launch
+            }
+            startTurn(lastUser, retryingInterrupted = true)
+        }
     }
 
     fun retryInterruptedTurn() {
@@ -563,7 +606,8 @@ class ChatViewModel private constructor(
                 it.copy(
                     messages = if (reuseExistingTail) it.messages else (it.messages + durable.last()).takeLast(100),
                     streaming = true,
-                    error = null, errorAction = null, notice = null, activity = "Working on it…",
+                    error = null, errorAction = null, notice = null, unsupportedReasoning = null,
+                    activity = "Working on it…",
                     lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
                     acceptedMessageCount = if (reuseExistingTail) it.acceptedMessageCount else it.acceptedMessageCount + 1,
                     interruptedTurn = false,
@@ -857,6 +901,16 @@ class ChatViewModel private constructor(
                 throw e
             } catch (e: ProviderError) {
                 Log.w("RivetChat", "agent request failed: ${e.javaClass.simpleName}")
+                val requested = snapshot.config.reasoning
+                val recommended = recommendedFallbackReasoning(requested)
+                if (recommended != null && isUnsupportedReasoningError(e, requested)) {
+                    // The model refused this effort. Offer the way down instead of a
+                    // dead end, and keep the prompt so the user never retypes it.
+                    stableFailure(ticket, durable, UNSUPPORTED_REASONING_ERROR, null,
+                        UnsupportedReasoningNotice(snapshot.config.id, requested, recommended,
+                            ALL_REASONING_LEVELS.filter { it != requested && it != recommended }))
+                    return@launch
+                }
                 // A provider that explains itself gets to say so, in its own words.
                 val detail = (e as? ProviderError.ProviderMessage)?.let { providerMessageText(it.text) }
                 stableFailure(ticket, durable, detail ?: e.text(),
@@ -1103,7 +1157,8 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun stableFailure(ticket: Long, durable: List<AgentMessage>, message: String,
-                                      action: ChatErrorAction? = null) {
+                                      action: ChatErrorAction? = null,
+                                      reasoningNotice: UnsupportedReasoningNotice? = null) {
         if (ticket != generation) return
         val persistenceError = try { sessionStore.markInterrupted(false); false }
             catch (e: CancellationException) { throw e }
@@ -1116,7 +1171,8 @@ class ChatViewModel private constructor(
             it.copy(messages = visible, streaming = false, streamingText = "", streamingReasoning = "",
                 pendingApproval = null, activity = null,
                 error = if (persistenceError) "Could not update conversation storage. Check available space before continuing." else message,
-                errorAction = if (persistenceError) null else action)
+                errorAction = if (persistenceError) null else action,
+                unsupportedReasoning = if (persistenceError) null else reasoningNotice)
         }
     }
 
@@ -1156,7 +1212,7 @@ class ChatViewModel private constructor(
     }
 
     fun clearError() {
-        _uiState.update { it.copy(error = null, errorAction = null) }
+        _uiState.update { it.copy(error = null, errorAction = null, unsupportedReasoning = null) }
     }
 
     fun undoLastTurn() {
@@ -1281,6 +1337,9 @@ class ChatViewModel private constructor(
     }
 
     companion object {
+        internal const val UNSUPPORTED_REASONING_ERROR =
+            "This model does not support that reasoning effort. Choose another level to send the same message again."
+
         internal const val CONTEXT_LIMIT_ERROR =
             "This conversation is too long to continue here. Start a new conversation."
         internal const val INTERRUPTED_TURN_PROMPT =

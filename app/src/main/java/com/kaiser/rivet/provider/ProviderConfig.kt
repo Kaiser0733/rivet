@@ -14,7 +14,35 @@ enum class ProviderType(val defaultBaseUrl: String) {
 }
 
 @Serializable
-enum class ReasoningLevel { Default, Low, Medium, High, Max }
+enum class ReasoningLevel(val wireName: String) {
+    Default("off"),
+    Low("low"),
+    Medium("medium"),
+    High("high"),
+    XHigh("xhigh"),
+    Max("max"),
+    Ultra("ultra"),
+}
+
+val ALL_REASONING_LEVELS: List<ReasoningLevel> = listOf(
+    ReasoningLevel.Default,
+    ReasoningLevel.Low,
+    ReasoningLevel.Medium,
+    ReasoningLevel.High,
+    ReasoningLevel.XHigh,
+    ReasoningLevel.Max,
+    ReasoningLevel.Ultra,
+)
+
+fun recommendedFallbackReasoning(failed: ReasoningLevel): ReasoningLevel? = when (failed) {
+    ReasoningLevel.Ultra -> ReasoningLevel.Max
+    ReasoningLevel.XHigh -> ReasoningLevel.Max
+    ReasoningLevel.Max -> ReasoningLevel.High
+    ReasoningLevel.High -> ReasoningLevel.Medium
+    ReasoningLevel.Medium -> ReasoningLevel.Low
+    ReasoningLevel.Low -> ReasoningLevel.Default
+    ReasoningLevel.Default -> null
+}
 
 const val DEFAULT_CONTEXT_WINDOW_TOKENS = 262_144
 
@@ -188,26 +216,21 @@ fun ProviderConfig.withModelId(newModel: String, listedModels: List<ModelInfo> =
     )
 }
 
-private val standardReasoning = listOf(
-    ReasoningLevel.Default,
-    ReasoningLevel.Low,
-    ReasoningLevel.Medium,
-    ReasoningLevel.High,
-)
-
 internal enum class AnthropicThinkingMode { Unsupported, Manual, Adaptive }
 
+// Every provider offers the full ladder; the request carries the level in the form
+// that provider accepts. The two exceptions are models known not to think at all:
+// offering them an effort can only produce the rejection this ladder exists to avoid.
 fun offeredReasoning(type: ProviderType, model: String): List<ReasoningLevel> = when (type) {
-    ProviderType.OpenAiCompatible, ProviderType.Gemini -> listOf(ReasoningLevel.Default)
-    // The Responses API accepts low/medium/high only. Max maps to the
-    // OpenRouter-only "xhigh" value, so it is never offered for the plan path.
-    ProviderType.ChatGptPlan -> standardReasoning
-    ProviderType.OpenRouter -> ReasoningLevel.entries
-    ProviderType.OpenAi -> if (openAiSupportsReasoning(model)) standardReasoning else listOf(ReasoningLevel.Default)
-    ProviderType.Anthropic -> when (anthropicThinkingMode(model)) {
-        AnthropicThinkingMode.Manual, AnthropicThinkingMode.Adaptive -> standardReasoning
-        AnthropicThinkingMode.Unsupported -> listOf(ReasoningLevel.Default)
-    }
+    // Gemini's transport emits no reasoning configuration, so a level here would be
+    // a control that changes nothing when it is chosen.
+    ProviderType.Gemini -> listOf(ReasoningLevel.Default)
+    ProviderType.Anthropic ->
+        if (anthropicThinkingMode(model) == AnthropicThinkingMode.Unsupported)
+            listOf(ReasoningLevel.Default) else ALL_REASONING_LEVELS
+    ProviderType.OpenAi ->
+        if (openAiSupportsReasoning(model)) ALL_REASONING_LEVELS else listOf(ReasoningLevel.Default)
+    else -> ALL_REASONING_LEVELS
 }
 
 internal fun offeredReasoning(config: ProviderConfig): List<ReasoningLevel> =
@@ -215,8 +238,8 @@ internal fun offeredReasoning(config: ProviderConfig): List<ReasoningLevel> =
         when (anthropicThinkingMode(config)) {
             AnthropicThinkingMode.Manual -> if (
                 anthropicThinkingBudget(config.copy(reasoning = ReasoningLevel.Low)) >= 1024
-            ) standardReasoning else listOf(ReasoningLevel.Default)
-            AnthropicThinkingMode.Adaptive -> standardReasoning
+            ) ALL_REASONING_LEVELS else listOf(ReasoningLevel.Default)
+            AnthropicThinkingMode.Adaptive -> ALL_REASONING_LEVELS
             AnthropicThinkingMode.Unsupported -> listOf(ReasoningLevel.Default)
         }
     } else offeredReasoning(config.type, config.model)

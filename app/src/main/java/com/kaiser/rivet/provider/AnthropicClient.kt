@@ -336,7 +336,7 @@ private val ReasoningLevel.anthropicEffort: String
     get() = when (this) {
         ReasoningLevel.Low -> "low"
         ReasoningLevel.Medium -> "medium"
-        ReasoningLevel.High, ReasoningLevel.Max -> "high"
+        ReasoningLevel.High, ReasoningLevel.XHigh, ReasoningLevel.Max, ReasoningLevel.Ultra -> "high"
         ReasoningLevel.Default -> "high"
     }
 
@@ -378,7 +378,9 @@ private val ReasoningLevel.anthropicBudget: Int
     get() = when (this) {
         ReasoningLevel.Low -> 2048
         ReasoningLevel.Medium -> 8192
-        ReasoningLevel.High, ReasoningLevel.Max -> 32768
+        ReasoningLevel.High -> 32768
+        ReasoningLevel.XHigh -> 49152
+        ReasoningLevel.Max, ReasoningLevel.Ultra -> 65536
         ReasoningLevel.Default -> 8192
     }
 

@@ -113,13 +113,16 @@ internal class ChatGptPlanClient(
 }
 
 // Responses API reasoning shape is a nested object, not the chat-completions
-// `reasoning_effort` string. "xhigh" is an OpenRouter-only value, so Max is
-// dropped rather than sent. Default omits the key entirely.
+// `reasoning_effort` string. Every level now has its own value; Default omits the
+// key entirely. A value this endpoint refuses comes back through the effort ladder.
 private fun responsesEffort(level: ReasoningLevel): String? = when (level) {
     ReasoningLevel.Low -> "low"
     ReasoningLevel.Medium -> "medium"
     ReasoningLevel.High -> "high"
-    ReasoningLevel.Default, ReasoningLevel.Max -> null
+    ReasoningLevel.XHigh -> "xhigh"
+    ReasoningLevel.Max -> "max"
+    ReasoningLevel.Ultra -> "ultra"
+    ReasoningLevel.Default -> null
 }
 
 // SIWC model list shape: {"models": [{slug, display_name, visibility}]}.
