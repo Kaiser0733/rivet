@@ -10,6 +10,9 @@ import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderHeader
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.Flow
+import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.emitAll
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.flow
@@ -37,8 +40,11 @@ class ProviderStore(
 
     val configs: Flow<List<ProviderConfig>> = flow {
         migrateLegacyHeaderValues()
-        emitAll(dataStore.data.map { prefs -> decodeForUse(prefs[configsKey]) }
-            .flowOn(Dispatchers.IO))
+        emitAll(dataStore.data.map { prefs ->
+            val (configs, lost) = decodeForUse(prefs[configsKey])
+            dropped.value = lost
+            configs
+        }.flowOn(Dispatchers.IO))
     }
 
     val activeId: Flow<String?> = dataStore.data.map { it[activeKey] }
@@ -49,6 +55,11 @@ class ProviderStore(
     } catch (e: Exception) {
         emptyList() // unreadable store degrades to empty, never crashes the shell
     }
+
+    // One unreadable custom header must not hide every configured provider, so it is
+    // dropped and counted instead. The count lets the UI say plainly what happened.
+    private val dropped = MutableStateFlow(0)
+    val droppedHeaders: StateFlow<Int> = dropped.asStateFlow()
 
     suspend fun save(config: ProviderConfig) {
         migrateLegacyHeaderValues()
@@ -87,20 +98,23 @@ class ProviderStore(
     private suspend fun migrateLegacyHeaderValues() {
         dataStore.edit { prefs ->
             val current = decode(prefs[configsKey])
+            var rewrite = false
             val migrated = current.map { config -> config.copy(
-                headers = config.headers.mapIndexed { index, header ->
+                headers = config.headers.mapIndexedNotNull { index, header ->
                     if (secrets.isTaggedProviderHeader(header.value)) {
-                        check(secrets.decryptProviderHeader(config.id, index, header.value) != null) {
-                            "provider header decryption failed"
-                        }
+                        // Kept even when it will not decrypt: the ciphertext is harmless
+                        // at rest and stays recoverable if the key comes back.
                         header
                     } else {
-                        header.copy(value = secrets.encryptProviderHeader(config.id, index, header.value)
-                            ?: throw IllegalStateException("provider header encryption failed"))
+                        val encrypted = secrets.encryptProviderHeader(config.id, index, header.value)
+                        rewrite = true
+                        // A plaintext value that cannot be encrypted is removed rather
+                        // than left readable on disk.
+                        if (encrypted != null) header.copy(value = encrypted) else null
                     }
                 },
             ) }
-            if (migrated != current) {
+            if (rewrite) {
                 prefs[configsKey] = json.encodeToString(ListSerializer(ProviderConfig.serializer()), migrated)
             }
         }
@@ -113,11 +127,15 @@ class ProviderStore(
         },
     )
 
-    private fun decodeForUse(raw: String?): List<ProviderConfig> = decode(raw).map { config ->
-        config.copy(headers = config.headers.mapIndexed { index, header ->
-            val value = secrets.decryptProviderHeader(config.id, index, header.value)
-                ?: throw IllegalStateException("provider header decryption failed")
-            ProviderHeader(header.name, value)
-        })
+    private fun decodeForUse(raw: String?): Pair<List<ProviderConfig>, Int> {
+        var lost = 0
+        val configs = decode(raw).map { config ->
+            config.copy(headers = config.headers.mapIndexedNotNull { index, header ->
+                secrets.decryptProviderHeader(config.id, index, header.value)
+                    ?.let { ProviderHeader(header.name, it) }
+                    ?: run { lost++; null }
+            })
+        }
+        return configs to lost
     }
 }

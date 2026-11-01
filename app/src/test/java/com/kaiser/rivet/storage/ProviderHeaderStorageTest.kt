@@ -18,7 +18,7 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertThrows
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.Before
 import org.junit.After
@@ -104,7 +104,7 @@ class ProviderHeaderStorageTest {
     }
 
     @Test
-    fun wrongKeyCannotRewriteTaggedHeadersAsPlaintext() = runBlocking {
+    fun anUnreadableHeaderIsDroppedWithoutLosingTheProviderOrTheCiphertext() = runBlocking {
         val id = UUID.randomUUID().toString()
         val wrongKey = SecretKeySpec(ByteArray(32) { (it + 1).toByte() }, "AES")
         val original = store()
@@ -122,12 +122,16 @@ class ProviderHeaderStorageTest {
         original.save(config)
         val before = file.readBytes()
 
-        assertThrows(IllegalStateException::class.java) {
-            runBlocking { store(SecretStore(context, wrongKey)).configSnapshot() }
-        }
+        val damaged = store(SecretStore(context, wrongKey))
 
+        // The provider still loads; only the headers Rivet cannot read are gone.
+        assertEquals(config.copy(headers = emptyList()),
+            damaged.configSnapshot().single { it.id == id })
+        assertEquals(2, damaged.droppedHeaders.value)
+        // Nothing is rewritten, so the values stay recoverable with the right key.
         assertEquals(before.toList(), file.readBytes().toList())
         assertEquals(config, original.configSnapshot().single { it.id == id })
+        assertEquals(0, original.droppedHeaders.value)
     }
 
     @Test
@@ -148,29 +152,34 @@ class ProviderHeaderStorageTest {
     }
 
     @Test
-    fun corruptedTaggedHeaderLeavesPreviouslyStoredBytesUntouched() = runBlocking {
+    fun corruptedTaggedHeaderIsSkippedAndLeavesStoredBytesUntouched() = runBlocking {
         val config = config(listOf(ProviderHeader("X-Bad", "rivet-encrypted:v1:broken")))
         raw(listOf(config))
         val before = file.readBytes()
+        val store = store()
 
-        assertThrows(IllegalStateException::class.java) {
-            runBlocking { store().configSnapshot() }
-        }
+        val loaded = store.configSnapshot().single()
+
+        assertEquals(emptyList<ProviderHeader>(), loaded.headers)
+        assertEquals(1, store.droppedHeaders.value)
         assertEquals(before.toList(), file.readBytes().toList())
     }
 
     @Test
-    fun partiallyCorruptedHeaderListDoesNotPartiallyMigrate() = runBlocking {
+    fun aBrokenHeaderDoesNotBlockMigrationOfTheGoodOne() = runBlocking {
         val config = config(listOf(
             ProviderHeader("X-Legacy", "still-plaintext"),
             ProviderHeader("X-Bad", "rivet-encrypted:v1:broken"),
         ))
         raw(listOf(config))
-        val before = file.readBytes()
 
-        assertThrows(IllegalStateException::class.java) {
-            runBlocking { store().configSnapshot() }
-        }
-        assertEquals(before.toList(), file.readBytes().toList())
+        val loaded = store().configSnapshot().single()
+
+        // The readable header survives and its plaintext no longer sits on disk;
+        // the unreadable one stays encrypted and is skipped.
+        assertEquals(listOf(ProviderHeader("X-Legacy", "still-plaintext")), loaded.headers)
+        val stored = String(file.readBytes(), Charsets.ISO_8859_1)
+        assertFalse(stored.contains("still-plaintext"))
+        assertTrue(stored.contains("rivet-encrypted:v1:broken"))
     }
 }
