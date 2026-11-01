@@ -1,5 +1,6 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.workspace.WorkspaceFailure
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -7,7 +8,18 @@ import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 internal object AgentToolError {
-    private val actions = mapOf(
+    // Every WorkspaceFailure.Reason already carries a complete explanation. Derive
+    // the entries from the reason itself so a new reason cannot reach the model as a
+    // bare code, which is what made the model retry the same edit until the runaway
+    // guard fired.
+    private val workspaceActions = WorkspaceFailure.Reason.entries.associate {
+        it.name.lowercase() to it.message
+    }
+    // A genuine retry can clear these. Everything else describes the identical call
+    // failing in the identical way, which is what the no-progress guard catches.
+    private val transientWorkspaceCodes = setOf("provider", "write")
+
+    private val actions = workspaceActions + mapOf(
         "sync_required" to "Rivet could not safely reconcile project changes. Stop and review the project before retrying.",
         "workspace_unavailable" to "Choose the project again before retrying the command.",
         "workspace_changed" to "The selected project changed. Start a new request in the current project.",
@@ -16,7 +28,6 @@ internal object AgentToolError {
         "checkpoint_unavailable" to "Resolve workspace or storage changes before retrying the mutation.",
         "interrupted" to "Inspect workspace state before retrying; the operation outcome is unknown.",
         "unsafe_entry" to "Rivet found a project item it could not safely access. Remove or rename it before retrying.",
-        "stale_target" to "This project item changed during approval. Inspect it before requesting a new approval.",
         "unsupported_system_management" to "Rivet cannot install apps, packages, or other Android system software.",
         "approval_unavailable" to "Rivet could not safely request confirmation for this operation, so it stopped.",
         "process_limit" to "Rivet already has the maximum number of active project operations. Stop one in Processes and retry.",
@@ -31,8 +42,11 @@ internal object AgentToolError {
         "download_failed" to "The server could not provide this file. Check the address and try again.",
         "network_error" to "Rivet couldn't reach the download server. Check the address and connection, then try again.",
         "invalid_checksum" to "Use a 64-character SHA-256 checksum or leave the checksum blank.",
+        "invalid_offset" to "Read the file from a different offset. This one is past the end or splits a character.",
+        "output_limit" to "Ask for a smaller part of this file. The requested range is too large for one result.",
     )
-    private val deterministic = setOf("sync_required", "workspace_unavailable",
+    private val deterministic = (workspaceActions.keys - transientWorkspaceCodes) + setOf(
+        "sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "denied", "checkpoint_unavailable",
         "invalid_arguments", "invalid_path", "unknown_tool", "unsafe_entry", "stale_target",
         "unsupported_system_management", "approval_unavailable", "process_limit",
