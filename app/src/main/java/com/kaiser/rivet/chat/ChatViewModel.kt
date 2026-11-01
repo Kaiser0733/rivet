@@ -409,7 +409,9 @@ class ChatViewModel private constructor(
             _uiState.value.recoveringProjectChanges || _uiState.value.undoing ||
             !_uiState.value.interruptedTurn) return
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
-        if (lastUser.isEmpty() && activeMessages.isEmpty()) return
+        // A compacted transcript can end without a user message; retrying then would send
+        // an empty prompt. Match the sibling retry: without a prompt there is nothing to run.
+        if (lastUser.isEmpty()) return
         startTurn(lastUser, retryingInterrupted = true)
     }
 
