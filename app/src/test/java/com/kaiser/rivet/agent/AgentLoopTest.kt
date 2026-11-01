@@ -992,6 +992,33 @@ class AgentLoopTest {
     }
 
     @Test
+    fun providerErrorMidStreamPersistsPartialTextBeforeRethrowing() = runTest {
+        val completed = mutableListOf<AgentMessage>()
+        val loop = AgentLoop(
+            requestModel = { _, _, onText ->
+                onText("Half-written ")
+                onText("answer")
+                throw ProviderError.Network("reset")
+            },
+            prepareTool = { error("No complete tool call exists") },
+            requestApproval = { error("No approval should be requested") },
+        )
+
+        try {
+            loop.run(
+                listOf(AgentMessage.user("Explain")),
+                emptyList(),
+                onMessage = { completed += it },
+            )
+            error("Expected network error to propagate")
+        } catch (_: ProviderError.Network) {
+            // expected
+        }
+
+        assertEquals(listOf(AgentMessage.assistant("Half-written answer")), completed)
+    }
+
+    @Test
     fun workspaceReplacementRejectsEveryUnstartedCall() = runTest {
         val calls = listOf(
             AgentToolCall("one", "read_file", """{"path":"A.kt"}"""),
