@@ -22,7 +22,7 @@ import okhttp3.RequestBody.Companion.toRequestBody
 
 // Anthropic Messages API in its native shape. Selected model metadata controls
 // manual versus adaptive reasoning; legacy official-provider configs retain
-// their documented model-family defaults. Thinking deltas are not rendered.
+// their documented model-family defaults.
 internal class AnthropicClient(
     private val config: ProviderConfig,
     private val apiKey: String,
@@ -96,7 +96,7 @@ internal class AnthropicClient(
         val httpRequest = base(Endpoints.anthropicChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val stream = AnthropicAgentStream(onDelta)
+        val stream = AnthropicAgentStream(onReasoning, onDelta)
         val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
@@ -198,7 +198,10 @@ private fun anthropicMessage(message: AgentMessage): JsonObject = when (message.
     }
 }
 
-private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
+internal class AnthropicAgentStream(
+    private val onReasoning: (String) -> Unit = {},
+    private val onDelta: (String) -> Unit,
+) {
     private data class Tool(
         val id: String,
         val name: String,
@@ -248,12 +251,18 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
                         block["name"]?.str() ?: throw ProviderError.InvalidResponse("tool name missing"),
                         block["input"]?.obj() ?: buildJsonObject {},
                     )
-                    "thinking", "redacted_thinking" -> thinking[index] = Thinking(
-                        type,
-                        thinking = StringBuilder(block["thinking"]?.str().orEmpty()),
-                        signature = block["signature"]?.str(),
-                        data = block["data"]?.str(),
-                    )
+                    "thinking", "redacted_thinking" -> {
+                        val initial = block["thinking"]?.str().orEmpty()
+                        thinking[index] = Thinking(
+                            type,
+                            thinking = StringBuilder(initial),
+                            signature = block["signature"]?.str(),
+                            data = block["data"]?.str(),
+                        )
+                        if (type == "thinking" && initial.isNotEmpty()) {
+                            onReasoning(initial)
+                        }
+                    }
                 }
             }
             "content_block_delta" -> {
@@ -263,7 +272,10 @@ private class AnthropicAgentStream(private val onDelta: (String) -> Unit) {
                 when (delta["type"]?.str()) {
                     "text_delta" -> delta["text"]?.str()?.let { value -> text.append(value); onDelta(value) }
                     "input_json_delta" -> delta["partial_json"]?.str()?.let { tools[index]?.fragments?.append(it) }
-                    "thinking_delta" -> delta["thinking"]?.str()?.let { thinking[index]?.thinking?.append(it) }
+                    "thinking_delta" -> delta["thinking"]?.str()?.let { value ->
+                        thinking[index]?.thinking?.append(value)
+                        if (value.isNotEmpty()) onReasoning(value)
+                    }
                     "signature_delta" -> thinking[index]?.signature = delta["signature"]?.str()
                 }
             }

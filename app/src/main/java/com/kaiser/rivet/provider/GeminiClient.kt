@@ -6,7 +6,9 @@ import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
+import kotlinx.serialization.json.booleanOrNull
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -103,7 +105,7 @@ internal class GeminiClient(
         val httpRequest = base(Endpoints.geminiChat(config.baseUrl, request.model))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val stream = GeminiAgentStream(onDelta)
+        val stream = GeminiAgentStream(onReasoning, onDelta)
         val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
@@ -165,7 +167,10 @@ private fun geminiMessage(message: AgentMessage): JsonObject {
     }
 }
 
-private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
+internal class GeminiAgentStream(
+    private val onReasoning: (String) -> Unit = {},
+    private val onDelta: (String) -> Unit,
+) {
     private val text = StringBuilder()
     private val calls = mutableListOf<AgentToolCall>()
     private val signatures = linkedMapOf<String, String>()
@@ -188,8 +193,12 @@ private class GeminiAgentStream(private val onDelta: (String) -> Unit) {
         val parts = candidate?.get("content")?.obj()?.get("parts")?.arr() ?: return
         parts.forEach { element ->
             val part = element.obj() ?: throw ProviderError.InvalidResponse("invalid response part")
+            val isThought = (part["thought"] as? JsonPrimitive)?.booleanOrNull == true
             part["text"]?.str()?.let { value ->
-                if (value.isNotEmpty()) { text.append(value); onDelta(value) }
+                if (value.isNotEmpty()) {
+                    if (isThought) onReasoning(value)
+                    else { text.append(value); onDelta(value) }
+                }
             }
             val function = part["functionCall"]?.obj()
             if (function == null) {
