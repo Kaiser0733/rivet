@@ -106,6 +106,33 @@ class ManagedProcessesTest {
         assertTrue(processes.processes.value.single { it.id == previewId }.finishedAtMillis != null)
     }
 
+    @Test fun turnLifecycleTracksForegroundWorkAndStopAllCancelsActiveTurn() {
+        val processes = ManagedProcesses()
+        assertFalse(processes.hasForegroundWork())
+        assertEquals(0, processes.activeTurnCount())
+        var turnStops = 0
+        val turnId = processes.startTurn { turnStops++ }
+        assertTrue(processes.hasForegroundWork())
+        assertEquals(1, processes.activeTurnCount())
+        assertEquals(1, processes.foregroundState.value.activeTurns)
+        assertTrue(processes.processes.value.isEmpty())
+        assertFalse(processes.stopForegroundServiceIfIdle())
+
+        processes.finishTurn(turnId)
+        assertFalse(processes.hasForegroundWork())
+        assertEquals(0, processes.activeTurnCount())
+        assertTrue(processes.stopForegroundServiceIfIdle())
+        assertEquals(0, turnStops)
+
+        val secondTurn = processes.startTurn { turnStops++ }
+        assertTrue(processes.hasForegroundWork())
+        processes.stopAll()
+        assertEquals(1, turnStops)
+        assertFalse(processes.hasForegroundWork())
+        processes.finishTurn(secondTurn)
+        assertEquals(0, processes.activeTurnCount())
+    }
+
     @Test fun stoppingActiveCommandCancelsItsAgentTurnWithoutSuccessResult() = runTest {
         val processes = ManagedProcesses()
         val call = AgentToolCall("cmd", "run_command", """{"command":"sleep 60"}""")

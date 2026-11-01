@@ -188,7 +188,7 @@ class ChatViewModel private constructor(
 
     private val approvals = AgentApprovalGate()
     private val autonomyStore = AutonomyStore(app)
-    val managedProcesses: ManagedProcesses = (app as? RivetApplication)?.managedProcesses ?: ManagedProcesses()
+    val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
     private val projectDownloader = ProjectDownloader(app.cacheDir)
     private val sessions get() = sessionStore as? CodingSessions
 
@@ -331,8 +331,10 @@ class ChatViewModel private constructor(
             toolLifecycle = emptyList(), error = null, errorAction = null, notice = null) }
         val previous = sendJob
         sendJob = viewModelScope.launch {
+            var turnToken: String? = null
             try {
             previous?.join()
+            turnToken = runtimeController.startTurn(::cancel)
             // A failed result write can leave a committed mutation without durable
             // outcome evidence. Recover it before a new user event can bury the call.
             if (activeMessages.lastOrNull()?.let {
@@ -763,6 +765,7 @@ class ChatViewModel private constructor(
                     activity = null, pendingApproval = null,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
+                runtimeController.finishTurn(turnToken)
                 if (ticket == generation && _uiState.value.streaming) {
                     _uiState.update { it.copy(streaming = false, streamingText = "", activity = null, pendingApproval = null,
                         toolLifecycle = emptyList(),
