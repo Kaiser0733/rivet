@@ -84,14 +84,22 @@ internal class ContextPreparation(
         }
         if (!force && !budget.shouldCompact) return messages
         val baseline = attempt.beforeTokens
-        // Aim below the trigger, not at the ceiling, so the compacted request is sent
-        // and the same turn continues instead of re-compacting on the next step.
-        val targetTokens = if (force) minOf(budget.compactToTokens.toLong(), baseline / 2)
-            else budget.compactToTokens.toLong()
         val fixedTokens = (minimumTokens - AgentContext.serializedBytes(minimum) / 3L)
             .coerceAtLeast(0)
         val summaryEnvelopeTokens = (ContextBudget.estimateRequestTokens(projectedRequest(messages, minimum, "{}")) - minimumTokens)
             .coerceAtLeast(0)
+        // A compaction can only free the room above the request's own floor: its fixed
+        // text, the newest message, the summary envelope round it and a little slack.
+        // A margin bigger than half that room plans below what any request can cost, which
+        // is what made a small window fail instead of compacting.
+        val ceilingTokens = budget.allowedInputTokens.toLong()
+        val floorTokens = minimumTokens + summaryEnvelopeTokens + 256L
+        val usableTokens = (ceilingTokens - floorTokens).coerceAtLeast(0L)
+        val idealTarget = if (force) minOf(budget.compactToTokens.toLong(), baseline / 2)
+            else budget.compactToTokens.toLong()
+        val marginTokens = minOf((ceilingTokens - idealTarget).coerceAtLeast(0L), usableTokens / 2)
+        // Below the ceiling by a whole margin, and reachable even when fixed costs dominate.
+        val targetTokens = ceilingTokens - marginTokens
         val roomAfterMinimum = targetTokens - minimumTokens - summaryEnvelopeTokens - 256L
         val summaryBudgetTokens = minOf(TaskState.MAX_BYTES / 3L, roomAfterMinimum / 2)
             .coerceAtLeast(0)
@@ -144,7 +152,7 @@ internal class ContextPreparation(
                 ?: pruned
             if (fallbackStubbed != null) {
                 val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, fallbackStubbed, summary))
-                if (after < budget.compactAtTokens && after < baseline && (!force || after < baseline * 9 / 10)) {
+                if (after < targetTokens && after < baseline && (!force || after < baseline * 9 / 10)) {
                     return commit(durableStore, messages, fallbackStubbed, summary,
                         attempt.copy(afterTokens = after))
                 }
@@ -155,7 +163,7 @@ internal class ContextPreparation(
             inputLimitBytes, summaryLimitBytes)
         val encoded = next.encode()
         val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, plan.retained, encoded))
-        if (after >= budget.compactAtTokens ||
+        if (after >= targetTokens ||
             (force && after >= baseline * 9 / 10) ||
             after >= baseline || plan.retained == messages) {
             return noHeadroom(durableStore, id, attempt, messages, force)
