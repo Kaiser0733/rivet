@@ -283,4 +283,66 @@ class ConversationTitleLifecycleTest {
         assertEquals(0, store.usage(vm.uiState.value.currentSessionId!!).titleRequests)
     }
 
+    @Test fun generatedTitlePersistsAcrossSaveAndReloadIntoNewViewModel() = runBlocking {
+        val requests = mutableListOf<AgentRequest>()
+        val store = CodingSessions(app)
+        val client = object : ProviderClient {
+            override suspend fun listModels() = emptyList<ModelInfo>()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                requests += request
+                return if (requests.size == 1) AgentResponse("Here is the fix.")
+                    else AgentResponse("<think>Need a short title</think>\nTitle: Fix Login Crash")
+            }
+        }
+        val vm = newChatViewModel(app, store,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> client })
+        withTimeout(5000) { vm.uiState.first { it.ready && !it.projectLoading } }
+        val oldId = vm.uiState.value.currentSessionId
+        vm.newSession()
+        val id = withTimeout(5000) { vm.uiState.first { it.currentSessionId != oldId } }.currentSessionId!!
+        vm.send("Fix the login crash")
+        withTimeout(5000) { vm.uiState.first { it.currentSessionTitle == "Fix Login Crash" } }
+
+        val reloadedStore = CodingSessions(app)
+        assertEquals("Fix Login Crash", reloadedStore.load().title)
+        assertEquals("Fix Login Crash", reloadedStore.list().first { it.id == id }.title)
+
+        val reloadedVm = newChatViewModel(app, reloadedStore,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> client })
+        withTimeout(5000) { reloadedVm.uiState.first { it.ready && !it.projectLoading } }
+        assertEquals("Fix Login Crash", reloadedVm.uiState.value.currentSessionTitle)
+        assertEquals("Fix Login Crash", reloadedVm.uiState.value.sessions.first { it.id == id }.title)
+    }
+
+    @Test fun blockedOrFailedFirstTurnStillTitlesSessionWhenRetriedOrContinued() = runBlocking {
+        val requests = mutableListOf<AgentRequest>()
+        var call = 0
+        val (vm, store) = conversation { request ->
+            requests += request
+            when (++call) {
+                1 -> AgentResponse(toolCalls = listOf(
+                    com.kaiser.rivet.agent.AgentToolCall("blocked", "run_command", "{\"command\":\"echo test\"}")))
+                2 -> AgentResponse("Completed without running a command.")
+                else -> AgentResponse("Fix Login Crash")
+            }
+        }
+        val id = vm.uiState.value.currentSessionId!!
+        vm.send("Fix the login crash")
+        withTimeout(5000) { vm.uiState.first { !it.streaming && it.error != null } }
+        assertEquals(1, call)
+        assertEquals("New session", store.load().title)
+
+        vm.send("Continue")
+        withTimeout(5000) { vm.uiState.first { it.currentSessionTitle == "Fix Login Crash" } }
+        assertEquals(3, call)
+        assertEquals("Fix Login Crash", store.load().title)
+        assertEquals("Fix Login Crash", store.list().first { it.id == id }.title)
+        assertTrue(requests.last().messages.single().text.startsWith("First user message:\nFix the login crash\n"))
+    }
+
 }

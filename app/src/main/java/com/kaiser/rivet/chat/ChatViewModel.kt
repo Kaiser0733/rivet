@@ -250,6 +250,23 @@ class ChatViewModel private constructor(
                             interruptedTurn = interruptedTurn,
                         )
                     }
+                    val restoredId = restored.id
+                    if (restoredId != null && !restored.interrupted && restored.title == "New session") {
+                        val pendingTitle = try { sessions?.hasPendingAutoTitle(restoredId) == true }
+                            catch (e: CancellationException) { throw e }
+                            catch (_: Exception) { false }
+                        if (pendingTitle) {
+                            val firstUser = restored.messages.firstOrNull {
+                                it.role == AgentRole.User && it.text.isNotBlank()
+                            }?.text?.trim()
+                            val answer = restored.messages.lastOrNull {
+                                it.role == AgentRole.Assistant && it.toolCalls.isEmpty() && it.text.isNotBlank()
+                            }?.text
+                            if (!firstUser.isNullOrEmpty() && answer != null) {
+                                generateTitle(restoredId, UUID.randomUUID().toString(), firstUser, answer)
+                            }
+                        }
+                    }
                 } catch (e: CancellationException) { throw e
                 } catch (_: Exception) {
                     _uiState.update { it.copy(ready = true, error = "Could not load conversation history. Restart Rivet or check available storage.") }
@@ -488,9 +505,11 @@ class ChatViewModel private constructor(
             val client = clientFactory(snapshot.config, snapshot.apiKey)
             val sessionId = _uiState.value.currentSessionId
             val turnId = UUID.randomUUID().toString()
-            val titleEligible = try { sessionId != null && sessions?.claimAutoTitle(sessionId) == true }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { false }
+            val titleEligible = try {
+                sessionId != null &&
+                    (sessions?.claimAutoTitle(sessionId) == true || sessions?.hasPendingAutoTitle(sessionId) == true)
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { false }
             val context = ContextPreparation(sessions, sessionId, client, snapshot.config,
                 turnId, activeSummary, workspaceId) { messages, _ ->
                 AgentRequest(
@@ -779,10 +798,13 @@ class ChatViewModel private constructor(
                     finish(result, durable, snapshot.config)
                     if (titleEligible && result.stopReason == AgentStopReason.Completed &&
                         _uiState.value.error == null) {
+                        val firstUser = durable.firstOrNull {
+                            it.role == AgentRole.User && it.text.isNotBlank()
+                        }?.text?.trim()?.takeIf { it.isNotEmpty() } ?: trimmed
                         val answer = result.messages.lastOrNull()?.takeIf {
                             it.role == AgentRole.Assistant && it.toolCalls.isEmpty() && it.text.isNotBlank()
                         }?.text
-                        if (answer != null && sessionId != null) generateTitle(sessionId, turnId, trimmed, answer)
+                        if (answer != null && sessionId != null) generateTitle(sessionId, turnId, firstUser, answer)
                     }
                     if (sessionId != null && lastSystem.isNotEmpty()) {
                         try {
@@ -814,6 +836,9 @@ class ChatViewModel private constructor(
                 withContext(NonCancellable) {
                     if (ticket == generation) {
                         val userCancelled = userCancelledTicket == ticket
+                        if (userCancelled && sessionId != null) {
+                            try { sessions?.clearAutoTitle(sessionId) } catch (_: Exception) { }
+                        }
                         sessionStore.save(durable, interrupted = !userCancelled)
                         val blocker = try { runtimeController.commandBlocker() }
                             catch (error: CancellationException) { throw error }
@@ -912,28 +937,41 @@ class ChatViewModel private constructor(
                 // The coding request's reasoning and context never enter this call.
                 val config = snapshot.config.copy(reasoning = com.kaiser.rivet.provider.ReasoningLevel.Default)
                 val request = ConversationTitle.request(config.model, firstUser, answer)
-                val response = kotlinx.coroutines.withTimeout(30_000) {
-                    clientFactory(config, snapshot.apiKey).streamAgent(request) {}
+                val response = try {
+                    kotlinx.coroutines.withTimeout(30_000) {
+                        clientFactory(config, snapshot.apiKey).streamAgent(request) {}
+                    }
+                } catch (e: ProviderError.IncompleteGeneration) {
+                    if (e.partialText.isNotBlank()) com.kaiser.rivet.agent.AgentResponse(text = e.partialText)
+                    else throw e
                 }
-                store.recordUsage(sessionId, "title-$turnId", config.id, config.model, response.usage,
-                    request.messages, request.system, request.tools, config.baseUrl, config.type, request.reasoning)
-                if (response.toolCalls.isEmpty()) {
-                    ConversationTitle.sanitize(response.text)?.let {
-                        store.renameIfCurrentTitle(sessionId, "New session", it)
+                withContext(NonCancellable) {
+                    store.recordUsage(sessionId, "title-$turnId", config.id, config.model, response.usage,
+                        request.messages, request.system, request.tools, config.baseUrl, config.type, request.reasoning)
+                    val clean = if (response.toolCalls.isEmpty()) ConversationTitle.sanitize(response.text) else null
+                    if (clean != null) {
+                        store.renameIfCurrentTitle(sessionId, "New session", clean)
+                    } else {
+                        store.clearAutoTitle(sessionId)
+                    }
+                    val history = store.list()
+                    val current = _uiState.value.currentSessionId
+                    val usage = current?.let { store.usage(it) }
+                    _uiState.update { state ->
+                        val unchanged = renameRevision == titleRenameRevision
+                        state.copy(sessions = if (unchanged) history else state.sessions,
+                            currentSessionTitle = if (unchanged) history.firstOrNull {
+                                it.id == state.currentSessionId }?.title ?: state.currentSessionTitle
+                            else state.currentSessionTitle,
+                            usage = if (state.currentSessionId == current) usage else state.usage)
                     }
                 }
-                val history = store.list()
-                val current = _uiState.value.currentSessionId
-                val usage = current?.let { store.usage(it) }
-                _uiState.update { state ->
-                    val unchanged = renameRevision == titleRenameRevision
-                    state.copy(sessions = if (unchanged) history else state.sessions,
-                        currentSessionTitle = if (unchanged) history.firstOrNull {
-                            it.id == state.currentSessionId }?.title else state.currentSessionTitle,
-                        usage = if (state.currentSessionId == current) usage else state.usage)
-                }
             } catch (e: CancellationException) { throw e
-            } catch (_: Exception) { /* Auxiliary title failure leaves the coding turn untouched. */ }
+            } catch (_: Exception) {
+                withContext(NonCancellable) {
+                    try { store.clearAutoTitle(sessionId) } catch (_: Exception) { }
+                }
+            }
         }
     }
 
@@ -969,6 +1007,7 @@ class ChatViewModel private constructor(
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
         sessionStore.save(persisted, interrupted = false)
         activeMessages = persisted
+        val renameRevision = titleRenameRevision
         val history = sessions?.list()
         val usage = _uiState.value.currentSessionId?.let { sessions?.usage(it) }
         val visible = _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: persisted
@@ -984,10 +1023,15 @@ class ChatViewModel private constructor(
             val nextReasoning = if (error == ProviderError.EmptyResponse.text() && state.messages.isNotEmpty()) {
                 state.messageReasoning - (state.messages.size - 1)
             } else state.messageReasoning
+            val unchanged = renameRevision == titleRenameRevision
             state.copy(messages = visible, streaming = false, streamingText = "", streamingReasoning = "",
                 messageReasoning = nextReasoning, pendingApproval = null,
                 toolLifecycle = emptyList(), commandRunning = false,
-                sessions = history ?: state.sessions, usage = usage, error = error,
+                sessions = if (unchanged && history != null) history else state.sessions,
+                currentSessionTitle = if (unchanged && history != null) history.firstOrNull {
+                    it.id == state.currentSessionId }?.title ?: state.currentSessionTitle
+                else state.currentSessionTitle,
+                usage = usage, error = error,
                 errorAction = errorAction, activity = null)
         }
     }
@@ -1176,7 +1220,7 @@ class ChatViewModel private constructor(
 
     fun renameSession(id: String, title: String) {
         val store = sessions ?: return
-        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges || sendJob?.isActive == true) return
+        if (_uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
         titleRenameRevision++
         viewModelScope.launch {
             try {
@@ -1191,8 +1235,7 @@ class ChatViewModel private constructor(
 
     fun setSessionPinned(id: String, pinned: Boolean) {
         val store = sessions ?: return
-        if (_uiState.value.streaming || _uiState.value.undoing ||
-            _uiState.value.recoveringProjectChanges || sendJob?.isActive == true) return
+        if (_uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
         viewModelScope.launch {
             try {
                 store.setPinned(id, pinned)
@@ -1206,11 +1249,13 @@ class ChatViewModel private constructor(
 
     private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
         val store = sessions ?: return
-        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges || sendJob?.isActive == true) return
+        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
         val ticket = ++generation
         approvals.cancel()
         viewModelScope.launch {
             try {
+                sendJob?.join()
+                if (ticket != generation) return@launch
                 val selected = action(store)
                 val history = store.list()
                 val usage = selected.id?.let { store.usage(it) }

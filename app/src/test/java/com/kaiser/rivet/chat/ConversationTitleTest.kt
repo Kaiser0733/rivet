@@ -26,6 +26,7 @@ class ConversationTitleTest {
         assertEquals("Fix Login Crash", ConversationTitle.sanitize("- `Fix Login Crash!`"))
         assertEquals("Fix Login Crash", ConversationTitle.sanitize("1. Fix Login Crash"))
         assertEquals("Fix Login Crash", ConversationTitle.sanitize("\"# Fix Login Crash\""))
+        assertEquals("Fix Login Crash", ConversationTitle.sanitize("<think>\nThinking about title...\n</think>\nTitle: **Fix Login Crash**"))
         assertEquals("These Seven Useful Words Still Make A Title",
             ConversationTitle.sanitize("These Seven Useful Words Still Make A Title"))
     }
