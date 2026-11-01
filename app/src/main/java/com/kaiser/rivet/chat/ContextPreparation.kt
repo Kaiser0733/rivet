@@ -10,6 +10,7 @@ import com.kaiser.rivet.agent.TokenEstimateSource
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
+import com.kaiser.rivet.storage.AgentSessionCodec
 import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.storage.ContextEstimate
 import com.kaiser.rivet.storage.ContextAttempt
@@ -82,7 +83,14 @@ internal class ContextPreparation(
         if (minimumTokens >= budget.allowedInputTokens) {
             throw ContextCapacityTooSmall()
         }
-        if (!force && !budget.shouldCompact) return messages
+        // The stored projection has its own 512 KB cap, which is reached long before a big
+        // window's token trigger: a 524,288-byte projection cannot estimate above ~175 k
+        // tokens, so a 256 k window's trigger would never fire and the save would throw
+        // instead. Compact on whichever comes first.
+        val projectionTriggerTokens = AgentSessionCodec.MAX_SERIALIZED_BYTES / 3L * 7 / 8
+        if (!force && !budget.shouldCompact && attempt.beforeTokens < projectionTriggerTokens) {
+            return messages
+        }
         val baseline = attempt.beforeTokens
         val fixedTokens = (minimumTokens - AgentContext.serializedBytes(minimum) / 3L)
             .coerceAtLeast(0)
