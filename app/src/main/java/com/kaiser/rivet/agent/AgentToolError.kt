@@ -59,13 +59,15 @@ internal object AgentToolError {
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",
         "foreground_service_unavailable", "preview_unavailable")
 
-    fun content(code: String, statusCode: Int? = null): String = buildJsonObject {
+    fun content(code: String, statusCode: Int? = null, subject: String? = null): String = buildJsonObject {
         put("error", code)
         actions[code]?.let {
             put("retryable", false)
             put("required_action", it)
         }
         statusCode?.let { put("status_code", it) }
+        // The path that blocked the call, when the failure has one.
+        subject?.let { put("path", it) }
     }.toString()
 
     fun noProgress(code: String): String = buildJsonObject {

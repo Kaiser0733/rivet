@@ -655,4 +655,48 @@ class WorkspaceMirrorTest {
         assertTrue(again.conflicts.isEmpty())
         assertFalse(mirror.hasLocalChanges())
     }
+
+    // A copy left pending by an older build must go through the current reconciliation
+    // instead of greeting the user with a dead end, even when a command left symlinks.
+    @Test fun inheritedPendingCopyWithSymlinkJunkSettlesBeforeToolsAreBlocked() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val runtimeContext = pendingRuntimeContext()
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, "file.txt").writeText("pending")
+        val bin = File(root, "node_modules/.bin").apply { mkdirs() }
+        Files.createSymbolicLink(File(bin, "tool").toPath(), File(root, "file.txt").toPath())
+
+        val runtime = RuntimeController(runtimeContext, pendingSelection(runtimeContext))
+
+        runtime.requireSafCurrent()
+        assertEquals("pending", String(bytes("file.txt")))
+    }
+
+    @Test fun aPendingCopyThatCannotSyncNamesTheBlockingPath() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val runtimeContext = pendingRuntimeContext()
+        val mirror = mirror()
+        File(mirror.prepare().worktree, "file.txt").writeText("pending")
+        provider.rejectWriteOnceFor = "file.txt"
+
+        val runtime = RuntimeController(runtimeContext, pendingSelection(runtimeContext))
+
+        try { runtime.requireSafCurrent(); fail("Expected a blocked sync") }
+        catch (failure: MirrorFailure) {
+            assertEquals("sync_required", failure.code)
+            assertEquals("file.txt", failure.path)
+        }
+    }
+
+    private fun pendingRuntimeContext() = object : ContextWrapper(app) {
+        override fun getApplicationContext(): Context = this
+        override fun getFilesDir(): File = files
+    }
+
+    private fun pendingSelection(context: Context) =
+        com.kaiser.rivet.workspace.WorkspaceSelection(context).also {
+            context.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+                .putString("tree", tree.toString()).commit()
+        }
 }

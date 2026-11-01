@@ -88,7 +88,13 @@ class RuntimeController(
 
     suspend fun requireSafCurrent() = operations.withLock {
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        if (active.hasLocalChanges()) throw MirrorFailure("sync_required")
+        if (!active.hasLocalChanges()) return@withLock
+        // A pending copy can be left over from a build that gave up on entries this one
+        // skips (symlinks, special files). Settle it instead of re-presenting the dead
+        // end: only a sync that could not finish blocks work, and it names its path.
+        val settled = active.sync()
+        if (settled.state != MirrorSync.Failed) return@withLock
+        throw MirrorFailure("sync_required", settled.path ?: settled.conflicts.firstOrNull())
     }
 
     suspend fun gitStatus(): RepositoryStatus = operations.withLock {

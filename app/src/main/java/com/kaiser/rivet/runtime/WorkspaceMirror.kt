@@ -216,7 +216,9 @@ class WorkspaceMirror(
                             if (createdId != null) clearPartialCreate()
                             return@withLock MirrorSyncResult(MirrorSync.Conflict, path)
                         }
-                        throw failure
+                        // Name the file that could not be written; a bare "failed" tells
+                        // the user nothing about which path needs attention.
+                        return@withLock MirrorSyncResult(MirrorSync.Failed, path)
                     }
                     if (partial?.path == path) {
                         clearPartialCreate()
