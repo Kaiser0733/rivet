@@ -169,12 +169,12 @@ internal class ResponsesAgentStream(private val onDelta: (String) -> Unit) {
     fun accept(payload: String) {
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
         when (root["type"]?.str()) {
-            "response.output_text.delta" -> {
+            "response.output_text.delta", "response.refusal.delta" -> {
                 root["delta"]?.str()?.takeIf { it.isNotEmpty() }?.let { value ->
                     text.append(value); onDelta(value)
                 }
             }
-            "response.output_text.done", "response.function_call_arguments.done" -> {
+            "response.output_text.done", "response.refusal.done", "response.function_call_arguments.done" -> {
                 itemDone = true
             }
             "response.completed", "response.done" -> {
@@ -190,6 +190,18 @@ internal class ResponsesAgentStream(private val onDelta: (String) -> Unit) {
                 terminalError = when (code) {
                     "subscription_sharing_usage_limit_exceeded" -> ProviderError.UsageLimit()
                     else -> providerMessage(message ?: "request failed", code)
+                }
+            }
+            "error" -> {
+                val error = root["error"]?.obj()
+                val code = error?.get("code")?.str()
+                    ?: error?.get("type")?.str()
+                    ?: root["code"]?.str()
+                val message = error?.get("message")?.str()
+                    ?: root["message"]?.str()
+                terminalError = when (code) {
+                    "subscription_sharing_usage_limit_exceeded" -> ProviderError.UsageLimit()
+                    else -> providerMessage(message ?: "stream error", code)
                 }
             }
             "response.incomplete" -> {
