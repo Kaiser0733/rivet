@@ -53,7 +53,7 @@ sealed class ProviderError(message: String) : Exception(message) {
         is Timeout -> "The provider took too long to respond."
         is InvalidResponse -> "The provider returned a response Rivet could not parse."
         is IncompleteGeneration -> "The model stopped before finishing its response. Try again or choose another model."
-        is ResponseTooLarge -> "The provider sent more data than Rivet can safely process. Try again or choose another model."
+        is ResponseTooLarge -> "This reply hit Rivet's 16 MB response limit. Ask the model to write or edit the file in smaller parts."
         is Server -> "Provider server error (HTTP $status)."
         EmptyResponse -> "The provider returned an empty response."
         is ProviderMessage -> "The model provider couldn't complete this request. Try again or check its settings."

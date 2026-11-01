@@ -53,6 +53,14 @@ class ChatGptPlanClientTest {
         assertEquals("o4 mini", models[1].label)
     }
 
+    @Test fun listModelsCapsRetainedCount() {
+        val entries = (1..(MAX_RETAINED_MODELS + 25)).joinToString(",") { i ->
+            """{"slug":"m-$i","display_name":"Model $i","visibility":"list"}"""
+        }
+        val models = parseChatGptModels("""{"models":[$entries]}""")
+        assertEquals(MAX_RETAINED_MODELS, models.size)
+    }
+
     @Test fun listModelsRejectsDataShape() {
         try {
             parseChatGptModels("""{"data":[{"id":"x"}]}""")

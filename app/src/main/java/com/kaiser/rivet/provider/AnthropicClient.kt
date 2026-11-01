@@ -45,6 +45,7 @@ internal class AnthropicClient(
                 data.forEach { element ->
                     val model = element.obj() ?: return@forEach
                     val id = model["id"]?.str() ?: return@forEach
+                    if (models.size >= MAX_RETAINED_MODELS && id !in models) return@forEach
                     val thinking = model["capabilities"]?.obj()?.get("thinking")?.obj()
                     val types = thinking?.get("types")?.obj()
                     models[id] = ModelInfo(id, model["display_name"]?.str() ?: id,
@@ -59,7 +60,7 @@ internal class AnthropicClient(
                                 ?.get("supported").booleanValue(),
                         ))
                 }
-                if (page["has_more"]?.jsonPrimitive?.booleanOrNull != true) {
+                if (models.size >= MAX_RETAINED_MODELS || page["has_more"]?.jsonPrimitive?.booleanOrNull != true) {
                     return models.values.sortedBy { it.id.lowercase() }
                 }
                 val next = page["last_id"]?.str()

@@ -120,12 +120,12 @@ private fun responsesEffort(level: ReasoningLevel): String? = when (level) {
 internal fun parseChatGptModels(text: String): List<ModelInfo> {
     val models = parseJsonObject(text)?.get("models")?.arr()
         ?: throw ProviderError.InvalidResponse("not a JSON object")
-    return models.mapNotNull { el ->
+    return models.asSequence().mapNotNull { el ->
         val model = el.obj() ?: return@mapNotNull null
         if (model["visibility"]?.str() != "list") return@mapNotNull null
         val slug = model["slug"]?.str() ?: return@mapNotNull null
         ModelInfo(slug, model["display_name"]?.str() ?: slug)
-    }.sortedBy { it.id.lowercase() }
+    }.take(MAX_RETAINED_MODELS).sortedBy { it.id.lowercase() }.toList()
 }
 
 private fun responsesInputItems(message: AgentMessage): List<JsonObject> = when (message.role) {

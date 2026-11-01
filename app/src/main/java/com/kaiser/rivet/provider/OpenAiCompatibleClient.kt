@@ -30,7 +30,7 @@ internal class OpenAiCompatibleClient(
             if (!r.isSuccessful) throw httpError(r.code, r.errorText())
             val text = r.readBoundedBody() ?: throw ProviderError.InvalidResponse("no body")
             val data = parseJsonObject(text)?.get("data")?.arr() ?: throw ProviderError.InvalidResponse("not a JSON object")
-            return data.mapNotNull { el ->
+            return data.asSequence().mapNotNull { el ->
                 val model = el.obj() ?: return@mapNotNull null
                 val id = model["id"]?.str() ?: return@mapNotNull null
                 val inputLimit = if (config.type == ProviderType.OpenRouter) {
@@ -41,7 +41,7 @@ internal class OpenAiCompatibleClient(
                     model["top_provider"]?.obj()?.get("max_completion_tokens").positiveInt()
                 } else null
                 ModelInfo(id, id, inputLimit, outputLimitTokens = outputLimit)
-            }.sortedBy { it.id.lowercase() }
+            }.take(MAX_RETAINED_MODELS).sortedBy { it.id.lowercase() }.toList()
         }
     }
 

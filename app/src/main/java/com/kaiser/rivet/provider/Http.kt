@@ -44,10 +44,12 @@ internal fun OkHttpClient.quick(): OkHttpClient =
 // Providers should return compact streamed deltas. These ceilings prevent a
 // malformed endpoint from retaining an unbounded event or response on-device.
 internal const val MAX_SSE_LINE_BYTES = 128 * 1024
-internal const val MAX_SSE_RESPONSE_BYTES = 1024 * 1024
+internal const val MAX_SSE_RESPONSE_BYTES = 16 * 1024 * 1024
 internal const val SSE_PROGRESS_DEADLINE_MS = 120_000L
-// Model-list metadata is small; cap it at the same aggregate size as streamed replies.
-internal const val MAX_PROVIDER_JSON_BODY_BYTES = 1024 * 1024
+// Large gateways (such as OpenRouter) return multi-megabyte model catalogs;
+// allow up to 16 MiB on the wire and cap the retained model count in memory.
+internal const val MAX_PROVIDER_JSON_BODY_BYTES = 16 * 1024 * 1024
+internal const val MAX_RETAINED_MODELS = 2000
 private const val MAX_ERROR_BODY_BYTES = 64 * 1024
 
 internal fun monotonicMillis(): Long = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
