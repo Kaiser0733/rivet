@@ -99,6 +99,7 @@ import com.kaiser.rivet.chat.commandBusyReason
 import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
 import com.kaiser.rivet.chat.liveStatusLine
+import com.kaiser.rivet.chat.liveStatusShowsClock
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.ui.provider.labelRes
@@ -717,13 +718,17 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // stalled stream never look the same. Outside a turn the plain activity text is
     // still used for recovery messages.
     val showLiveStatus = streaming
+    val toolRunning = liveOperation != null
+    val writing = streamingText.isNotBlank()
+    val waitingForApproval = state.pendingApproval != null || liveOperation?.stage ==
+        AgentToolLifecycleStage.AwaitingApproval
     val statusLabel = liveStatusLabel(
         activity = state.activity,
-        toolRunning = liveOperation != null,
-        writing = streamingText.isNotBlank(),
-        waitingForApproval = state.pendingApproval != null || liveOperation?.stage ==
-            AgentToolLifecycleStage.AwaitingApproval,
+        toolRunning = toolRunning,
+        writing = writing,
+        waitingForApproval = waitingForApproval,
     )
+    val statusShowsClock = liveStatusShowsClock(toolRunning, writing, waitingForApproval)
     val showActivity = !streaming && state.activity != null
     val showInterruptedTurn = state.interruptedTurn && !state.streaming
     val totalItems = timeline.size +
@@ -796,7 +801,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
         }
-        if (showLiveStatus) item(key = "live-status") { LiveStatusRow(statusLabel) }
+        if (showLiveStatus) item(key = "live-status") {
+            LiveStatusRow(statusLabel, statusShowsClock)
+        }
         if (showActivity) state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
@@ -855,11 +862,12 @@ private fun ReasoningFallbackRow(notice: UnsupportedReasoningNotice,
 
 // Ticks once a second from the moment the turn started. The label is recomputed by the
 // caller, so a new step ("Writing", a tool name) shows up without restarting the clock.
+// The reasoning state has no clock at all: see liveStatusShowsClock.
 @Composable
-private fun LiveStatusRow(label: String) {
+private fun LiveStatusRow(label: String, showsClock: Boolean) {
     val startedAt = remember { SystemClock.elapsedRealtime() }
     var elapsed by remember { mutableStateOf(0L) }
-    LaunchedEffect(startedAt) {
+    if (showsClock) LaunchedEffect(startedAt) {
         while (true) {
             elapsed = ((SystemClock.elapsedRealtime() - startedAt) / 1000).coerceAtLeast(0)
             delay(1000)
@@ -867,7 +875,8 @@ private fun LiveStatusRow(label: String) {
     }
     Row(Modifier.fillMaxWidth().heightIn(min = 24.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Text(liveStatusLine(label, elapsed), style = MaterialTheme.typography.bodySmall,
+        Text(if (showsClock) liveStatusLine(label, elapsed) else label,
+            style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
