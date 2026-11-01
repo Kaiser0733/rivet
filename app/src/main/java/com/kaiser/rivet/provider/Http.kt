@@ -313,9 +313,6 @@ internal suspend fun OkHttpClient.sse(
                                 break
                             }
                             val now = clockMillis()
-                            if (now - lastProgressAt > progressDeadlineMs) {
-                                throw ProviderError.Timeout("progress")
-                            }
                             responseBytes += line.toByteArray(Charsets.UTF_8).size + 2
                             if (responseBytes > MAX_SSE_RESPONSE_BYTES) {
                                 throw ProviderError.ResponseTooLarge()
@@ -326,10 +323,20 @@ internal suspend fun OkHttpClient.sse(
                                     completed = true
                                     break
                                 }
-                                if (!terminal.get() && payload.isNotEmpty()) {
+                                if (payload.isNotEmpty()) {
+                                    // A real payload is progress, so it is accepted before
+                                    // the deadline is judged: a model that thought for
+                                    // longer than the budget and then answered must not
+                                    // have that first token thrown away.
                                     lastProgressAt = now
-                                    onEvent(payload)
+                                    if (!terminal.get()) onEvent(payload)
+                                    continue
                                 }
+                            }
+                            // Bytes that are not a payload (comments, empty events) keep a
+                            // dead stream looking alive, which is what the budget is for.
+                            if (now - lastProgressAt > progressDeadlineMs) {
+                                throw ProviderError.Timeout("progress")
                             }
                         }
                         if (terminal.compareAndSet(false, true)) cont.resume(completed)
