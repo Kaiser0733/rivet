@@ -288,6 +288,10 @@ internal class ContextPreparation(
             val safe = value.take(end).dropLastWhile { it.isHighSurrogate() }
             val size = safe.toByteArray(Charsets.UTF_8).size
             if (size <= maxBytes) return safe
+            // A prefix made only of lone high surrogates encodes to nothing; dividing by that
+            // size threw, and the same input every turn meant the session could never
+            // compact again.
+            if (size == 0) return ""
             end = (end.toLong() * maxBytes / size).toInt().coerceAtMost(end - 1)
         }
         return ""
