@@ -231,7 +231,7 @@ fun networkError(e: IOException): ProviderError = when {
     e.cause is SecurityException -> ProviderError.Network("permission")
     e is UnknownHostException -> ProviderError.Network("dns")
     e is ConnectException -> ProviderError.Network("connect")
-    e is SocketTimeoutException -> ProviderError.Timeout()
+    e is SocketTimeoutException -> ProviderError.Timeout("socket")
     e is SSLException -> ProviderError.Network("tls")
     else -> ProviderError.Network(e.javaClass.simpleName)
 }
@@ -314,7 +314,7 @@ internal suspend fun OkHttpClient.sse(
                             }
                             val now = clockMillis()
                             if (now - lastProgressAt > progressDeadlineMs) {
-                                throw ProviderError.Timeout()
+                                throw ProviderError.Timeout("progress")
                             }
                             responseBytes += line.toByteArray(Charsets.UTF_8).size + 2
                             if (responseBytes > MAX_SSE_RESPONSE_BYTES) {

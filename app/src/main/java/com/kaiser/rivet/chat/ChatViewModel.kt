@@ -917,7 +917,8 @@ class ChatViewModel private constructor(
                 }
                 throw e
             } catch (e: ProviderError) {
-                Log.w("RivetChat", "agent request failed: ${e.javaClass.simpleName}")
+                Log.w("RivetChat", "agent request failed: " +
+                    if (e is ProviderError.Timeout) "Timeout(${e.stage})" else e.javaClass.simpleName)
                 val requested = snapshot.config.reasoning
                 val recommended = recommendedFallbackReasoning(requested)
                 // Only an effort this provider actually sends can be refused by it.

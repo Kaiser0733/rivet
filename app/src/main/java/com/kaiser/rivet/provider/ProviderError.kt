@@ -14,7 +14,10 @@ sealed class ProviderError(message: String) : Exception(message) {
     class UnsupportedConfiguration : ProviderError("unsupported generation configuration")
     class MalformedUrl(val url: String) : ProviderError("malformed url")
     class Network(val reason: String) : ProviderError("network: $reason")
-    class Timeout : ProviderError("timeout")
+    // "socket" = nothing arrived at all (transport idle timeout); "progress" = lines
+    // arrived but no data payload for the progress budget. They read the same to the
+    // user, so the difference has to be recorded here to be diagnosable at all.
+    class Timeout(val stage: String = "idle") : ProviderError("timeout")
     class InvalidResponse(val detail: String) : ProviderError("invalid response: $detail")
     class IncompleteGeneration(
         val reason: String,
