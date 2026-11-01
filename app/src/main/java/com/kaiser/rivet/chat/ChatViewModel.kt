@@ -93,6 +93,9 @@ data class ChatUiState(
     val notice: String? = null,
     val acceptedMessageCount: Long = 0,
     val interruptedTurn: Boolean = false,
+    // A shell command holds the project lock for as long as it runs, so Undo and
+    // retry cannot complete until it ends. The UI says so instead of ignoring taps.
+    val commandRunning: Boolean = false,
 )
 
 enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn }
@@ -371,7 +374,7 @@ class ChatViewModel private constructor(
         val wasInterrupted = _uiState.value.interruptedTurn
         val ticket = ++generation
         _uiState.update { it.copy(streaming = true, streamingText = "", activity = "Getting ready…",
-            toolLifecycle = emptyList(), error = null, errorAction = null, notice = null,
+            toolLifecycle = emptyList(), commandRunning = false, error = null, errorAction = null, notice = null,
             interruptedTurn = false) }
         val previous = sendJob
         sendJob = viewModelScope.launch {
@@ -699,7 +702,11 @@ class ChatViewModel private constructor(
                                         it.correlationKey in completedToolKeys
                                     },
                                     activity = message.toolCalls.firstOrNull()?.let { call -> activityFor(call.name) }
-                                        ?: if (message.role == AgentRole.Tool) "Working on it…" else state.activity) }
+                                        ?: if (message.role == AgentRole.Tool) "Working on it…" else state.activity,
+                                    // Calls are executed as one batch, so a tool result means
+                                    // that batch is done; a new batch may request another command.
+                                    commandRunning = if (message.toolResults.isNotEmpty()) false
+                                        else message.toolCalls.any { it.name == RUN_COMMAND_TOOL }) }
                                 val id = checkpointId
                                 if (message.role == AgentRole.Tool && mutationStartedSincePost && id != null && workspaceId != null && !checkpointBroken) {
                                     try {
@@ -756,7 +763,7 @@ class ChatViewModel private constructor(
                                 streamingText = "",
                                 pendingApproval = null,
                                 activity = null,
-                                toolLifecycle = emptyList(),
+                                toolLifecycle = emptyList(), commandRunning = false,
                                 error = CONTEXT_LIMIT_ERROR,
                             )
                         }
@@ -773,7 +780,7 @@ class ChatViewModel private constructor(
                             catch (_: Exception) { null }
                         val pendingProjectChanges = blocker != null && blocker in SYNC_RECOVERY_CODES
                         _uiState.update { it.copy(streaming = false, streamingText = "", pendingApproval = null, activity = null,
-                            toolLifecycle = emptyList(),
+                            toolLifecycle = emptyList(), commandRunning = false,
                             interruptedTurn = !userCancelled && durable.isNotEmpty(),
                             error = if (pendingProjectChanges) "Rivet stopped before it could save the command's project changes." else it.error,
                             errorAction = if (pendingProjectChanges) ChatErrorAction.RetryProjectChanges else it.errorAction,
@@ -845,7 +852,7 @@ class ChatViewModel private constructor(
                 runtimeController.finishTurn(turnToken)
                 if (ticket == generation && _uiState.value.streaming) {
                     _uiState.update { it.copy(streaming = false, streamingText = "", activity = null, pendingApproval = null,
-                        toolLifecycle = emptyList(),
+                        toolLifecycle = emptyList(), commandRunning = false,
                         notice = "Stopped. Any completed changes remain in the project.") }
                 }
             }
@@ -929,7 +936,7 @@ class ChatViewModel private constructor(
         }
         _uiState.update {
             it.copy(messages = visible, streaming = false, streamingText = "", pendingApproval = null,
-                toolLifecycle = emptyList(),
+                toolLifecycle = emptyList(), commandRunning = false,
                 sessions = history ?: it.sessions, usage = usage, error = error,
                 errorAction = errorAction, activity = null)
         }
@@ -1194,6 +1201,7 @@ class ChatViewModel private constructor(
             else -> "Updating the project…"
         }
 
+        private const val RUN_COMMAND_TOOL = "run_command"
         private val MUTATION_TOOLS = setOf("write_file", "apply_patch", "create_file", "create_directory",
             "rename_path", "move_path", "delete_path", "run_command", "download_file")
         internal fun systemInstruction(workspace: Boolean): String = if (workspace) {

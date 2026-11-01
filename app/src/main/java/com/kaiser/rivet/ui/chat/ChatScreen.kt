@@ -81,6 +81,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
+import com.kaiser.rivet.chat.commandBusyReason
 import com.kaiser.rivet.chat.liveStatusLabel
 import com.kaiser.rivet.chat.liveStatusLine
 import com.kaiser.rivet.agent.AgentApprovalRequest
@@ -725,7 +726,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                     ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
                     ChatErrorAction.RetryTurn -> onRetryTurn
                     null -> null
-                }, onDiscard = onDiscardProjectChanges.takeIf {
+                }, blockedReason = commandBusyReason(state.commandRunning), onDiscard = onDiscardProjectChanges.takeIf {
                     state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
                         !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
                         state.projectIdentity != null &&
@@ -980,6 +981,10 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
             TextButton(onClick = onUndo, enabled = !state.streaming && !state.undoing &&
                 state.undoCheckpointId != null) { Text(if (state.undoing) "Undoing…" else "Undo") }
         }
+        commandBusyReason(state.commandRunning)?.let { reason ->
+            Text(reason, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (details) state.lastTurnFiles.forEach { path ->
             Text(displaySafeText(path), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1013,14 +1018,17 @@ private fun InterruptedTurnRow(onRetry: () -> Unit, onDismiss: () -> Unit) {
 
 @Composable
 private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?, onAction: (() -> Unit)?,
-                     onDiscard: (() -> Unit)? = null) {
+                     onDiscard: (() -> Unit)? = null, blockedReason: String? = null) {
     Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(6.dp)) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             Text(error, color = MaterialTheme.colorScheme.onErrorContainer,
                 style = MaterialTheme.typography.bodyMedium)
             if (onDiscard != null) TextButton(onClick = onDiscard) { Text("Discard pending changes") }
+            if (blockedReason != null) Text(blockedReason, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onErrorContainer)
             Row {
-                if (onAction != null && actionLabel != null) TextButton(onClick = onAction) { Text(actionLabel) }
+                if (onAction != null && actionLabel != null)
+                    TextButton(onClick = onAction, enabled = blockedReason == null) { Text(actionLabel) }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_error_dismiss)) }
             }
         }
