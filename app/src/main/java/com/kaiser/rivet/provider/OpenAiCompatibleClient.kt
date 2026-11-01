@@ -223,6 +223,10 @@ private fun reasoningEffort(
 ): String? {
     if (level == ReasoningLevel.Default) return null
     if (type == ProviderType.OpenAi && !openAiSupportsReasoning(model)) return null
+    // OpenRouter's accepted efforts stop at xhigh, so the two top steps of the ladder
+    // share that value instead of being dropped or sent as names it refuses.
+    if (type == ProviderType.OpenRouter &&
+        (level == ReasoningLevel.Max || level == ReasoningLevel.Ultra)) return "xhigh"
     return level.wireEffort
 }
 
