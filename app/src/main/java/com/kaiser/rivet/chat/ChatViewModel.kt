@@ -88,6 +88,9 @@ data class ChatUiState(
     val error: String? = null,
     val errorAction: ChatErrorAction? = null,
     val unsupportedReasoning: UnsupportedReasoningNotice? = null,
+    // A conversation picked while a turn still runs. The storage layer has one active
+    // session, so the switch waits for the turn instead of racing its writes.
+    val queuedSessionId: String? = null,
     val sessions: List<CodingSessionHeader> = emptyList(),
     val currentSessionId: String? = null,
     val currentSessionTitle: String? = null,
@@ -979,6 +982,14 @@ class ChatViewModel private constructor(
                         notice = "Stopped. Any completed changes remain in the project.") }
                 }
             }
+            // The turn is over, so the conversation the user picked mid-reply can open now.
+            val queued = _uiState.value.queuedSessionId
+            if (queued != null && ticket == generation && !_uiState.value.streaming) {
+                _uiState.update { it.copy(queuedSessionId = null, notice = null) }
+                if (queued != _uiState.value.currentSessionId) {
+                    changeSession { store -> store.select(queued) }
+                }
+            }
         }
     }
 
@@ -1270,7 +1281,25 @@ class ChatViewModel private constructor(
         store.create(workspaceSelection.currentIdentity())
     }
 
-    fun resumeSession(id: String) = changeSession { store -> store.select(id) }
+    fun resumeSession(id: String) {
+        val state = _uiState.value
+        if (!state.streaming) {
+            changeSession { store -> store.select(id) }
+            return
+        }
+        // A turn writes to the active session's events; moving the pointer under it
+        // would file this reply into the other conversation. Wait for the turn.
+        if (id == state.currentSessionId) {
+            if (state.queuedSessionId != null) {
+                _uiState.update { it.copy(queuedSessionId = null, notice = null) }
+            }
+            return
+        }
+        _uiState.update {
+            it.copy(queuedSessionId = id,
+                notice = "Rivet will open that conversation when this reply finishes.")
+        }
+    }
 
     fun deleteSession(id: String) = changeSession { store -> store.delete(id) }
 
