@@ -94,6 +94,7 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
                     position = to
                 }
                 val bytes = slice.toByteArray()
+                if (WorkspaceText.isBinaryText(bytes)) fail(WorkspaceFailure.Reason.BINARY)
                 // A slice can start or end inside a character. Move the edges in by at
                 // most three bytes rather than emitting half of one.
                 var begin = 0
