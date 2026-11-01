@@ -8,6 +8,7 @@ import com.kaiser.rivet.agent.AgentStopReason
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolExecutor
 import com.kaiser.rivet.agent.AgentToolExecutorTest
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
@@ -186,5 +187,33 @@ class CommandToolTest {
         assertTrue(text.contains("start"))
         assertTrue(text.endsWith("end"))
         assertTrue(text.contains('\uFFFD'))
+    }
+
+    @Test fun completedExitWinsOverExpiredTimeoutWindowWithoutTerminating() = runTest {
+        val exited = CompletableDeferred<Int>().apply { complete(0) }
+        var terminated = false
+
+        val outcome = awaitExitOrTimeout(exited, timeoutMs = 0L) {
+            terminated = true
+            -9
+        }
+
+        assertFalse(terminated)
+        assertFalse(outcome.timedOut)
+        assertEquals(0, outcome.exitCode)
+    }
+
+    @Test fun incompleteExitAfterTimeoutTerminatesAndReportsTimedOut() = runTest {
+        val exited = CompletableDeferred<Int>()
+        var terminated = false
+
+        val outcome = awaitExitOrTimeout(exited, timeoutMs = 10L) {
+            terminated = true
+            -9
+        }
+
+        assertTrue(terminated)
+        assertTrue(outcome.timedOut)
+        assertEquals(-9, outcome.exitCode)
     }
 }
