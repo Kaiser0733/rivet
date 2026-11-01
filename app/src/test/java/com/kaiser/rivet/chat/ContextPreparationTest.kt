@@ -214,6 +214,34 @@ class ContextPreparationTest {
         assertEquals("one summary call is enough", 1, provider.requests.size)
     }
 
+    // A stored projection cannot grow past its own cap, so the window's token trigger is
+    // unreachable on a big window. Compaction must fire on the projection pressure first,
+    // or the save fails and the conversation dead-stops with the tool result lost.
+    @Test fun aBigWindowCompactsBeforeTheStoredProjectionHitsItsCap() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        // ~168k tokens of transcript: far under a 256k window's trigger (215k) but close
+        // to the 512 KB projection cap that would make the next save throw.
+        val big = "x".repeat(500_000)
+        val history = listOf(AgentMessage.user("Old dump " + big),
+            AgentMessage.assistant("Noted"), AgentMessage.user("Continue the fix"))
+        sessions.save(history, interrupted = true)
+        val provider = SummaryProvider()
+        val config = ProviderConfig("test", ProviderType.OpenAiCompatible, "Test", endpoint, "big")
+        val preparation = ContextPreparation(sessions, id, provider, config, "turn-big") { messages, _ ->
+            AgentRequest("big", com.kaiser.rivet.agent.modelMessages(messages),
+                "S".repeat(6000), ReasoningLevel.Default, emptyList())
+        }
+
+        val retained = preparation.prepare(history)
+
+        assertTrue("the old dump must be compacted away", retained.count { it.internalContext == null } < history.size)
+        assertTrue(retained.contains(history.last()))
+        assertEquals(1, provider.requests.size)
+    }
+
     // A request that still fits the window must be sent even when there is nothing left to
     // compact: refusing it is a dead stop for a request the provider would have accepted.
     @Test fun aRequestThatStillFitsIsSentWhenNothingCanBeCompacted() = runBlocking {
