@@ -35,7 +35,7 @@ internal fun displayModelName(modelId: String): String {
 // its first line, a streaming one shows the first line of the last paragraph that has
 // finished a line, so the preview does not change on every token.
 internal fun thinkingPreview(text: String, streaming: Boolean): String =
-    if (streaming) lastFinishedParagraphFirstLine(text) else firstLine(text)
+    if (!streaming) firstLine(text) else lastFinishedParagraphFirstLine(text).ifEmpty { tailOfLastLine(text) }
 
 private const val PREVIEW_CHARS = 160
 
@@ -43,6 +43,15 @@ private val BLANK_LINE = Regex("\r?\n(?:[\t ]*\r?\n)+")
 
 private fun firstLine(text: String): String =
     text.lineSequence().map { it.trim() }.firstOrNull { it.isNotEmpty() }.orEmpty().take(PREVIEW_CHARS)
+
+// Before the first line ends there is no finished paragraph to preview, and a blank
+// header makes the thinking state look stuck. Show the end of the line being written.
+private fun tailOfLastLine(text: String): String {
+    val end = text.indexOfLast { !it.isWhitespace() }
+    if (end < 0) return ""
+    val start = text.lastIndexOf('\n', end - 1).let { if (it < 0) 0 else it + 1 }
+    return text.substring(start, end + 1).trim().takeLast(PREVIEW_CHARS).trimStart()
+}
 
 private fun lastFinishedParagraphFirstLine(text: String): String {
     var summary = ""
