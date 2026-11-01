@@ -537,7 +537,7 @@ class OpenAiCompatibleClientTest {
         val durableMessages = mutableListOf<AgentMessage>()
         val loop = AgentLoop(
             requestModel = { messages, tools, onText ->
-                client.streamAgent(AgentRequest("test-model", messages, "", ReasoningLevel.Default, tools), onText)
+                client.streamAgent(AgentRequest("test-model", messages, "", ReasoningLevel.Default, tools), onDelta = onText)
             },
             prepareTool = { call ->
                 prepared++

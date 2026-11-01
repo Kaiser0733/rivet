@@ -82,7 +82,7 @@ class ChatGptPlanClientTest {
 
     @Test fun streamAccumulatesTextDeltas() {
         val deltas = mutableListOf<String>()
-        val stream = ResponsesAgentStream(deltas::add)
+        val stream = ResponsesAgentStream(onDelta = deltas::add)
         stream.accept("""{"type":"response.output_text.delta","delta":"Hello"}""")
         stream.accept("""{"type":"response.output_text.delta","delta":" world"}""")
         stream.accept("""{"type":"response.completed","response":{"usage":{
@@ -230,7 +230,7 @@ class ChatGptPlanClientTest {
             tools = emptyList(),
         )
         val deltas = mutableListOf<String>()
-        val response = client().streamAgent(request, deltas::add)
+        val response = client().streamAgent(request, onDelta = deltas::add)
         assertEquals("hi", response.text)
         assertEquals(listOf("hi"), deltas)
 
