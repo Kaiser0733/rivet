@@ -6,6 +6,8 @@ import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.ChatGptBundle
+import com.kaiser.rivet.provider.ChatGptSignInResult
+import com.kaiser.rivet.provider.ChatGptSignInSession
 import com.kaiser.rivet.provider.revokeChatGptRefreshToken
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
@@ -13,10 +15,14 @@ import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.parseHeaders
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
+import com.kaiser.rivet.provider.resolveSignInClientId
+import com.kaiser.rivet.provider.runSignIn
 import com.kaiser.rivet.provider.selectListedModel
+import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -46,6 +52,23 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     val editorState: StateFlow<ProviderEditorState> = _editorState.asStateFlow()
 
     private val editorRequests = ProviderEditorRequests(viewModelScope)
+    private var chatGptSession: ChatGptSignInSession? = null
+    private var signInJob: Job? = null
+    internal var signInRunner: suspend (
+        String,
+        (String) -> Unit,
+        String,
+        ChatGptSignInSession,
+        HostIdStore,
+    ) -> ChatGptSignInResult = { hostId, onAuthorizeUrl, clientId, session, hostIds ->
+        runSignIn(
+            hostId = hostId,
+            onAuthorizeUrl = onAuthorizeUrl,
+            clientId = clientId,
+            session = session,
+            hostIds = hostIds,
+        )
+    }
 
     init {
         viewModelScope.launch {
@@ -80,6 +103,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun startNewProvider(type: ProviderType) {
+        cancelChatGptSignIn()
         cancelEditorRequests()
         _editorState.value = ProviderEditorState(
             config = ProviderConfig(
@@ -96,6 +120,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     fun startEdit(id: String) {
         val config = _listState.value.configs.firstOrNull { it.id == id } ?: return
+        cancelChatGptSignIn()
         cancelEditorRequests()
         val email = if (config.type == ProviderType.ChatGptPlan) {
             decodeChatGptBundle(id)?.email
@@ -110,6 +135,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun closeEditor() {
+        cancelChatGptSignIn()
         cancelEditorRequests()
         _editorState.value = ProviderEditorState()
     }
@@ -183,48 +209,159 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         onError: (String) -> Unit = {},
     ) {
         viewModelScope.launch {
-            val res = getApplication<Application>().resources
-            val id = UUID.randomUUID().toString()
-            val encoded = try {
-                Json.encodeToString(ChatGptBundle.serializer(), bundle)
-            } catch (e: Exception) {
-                null
-            }
-            if (encoded == null || !secrets.saveOAuthBundle(id, encoded)) {
-                onError(res.getString(R.string.free_key_save_failed))
-                return@launch
-            }
-            val hadProviders = _listState.value.configs.isNotEmpty()
-            val activate = !hadProviders
-            val config = ProviderConfig(
-                id = id,
-                type = ProviderType.ChatGptPlan,
-                name = "ChatGPT plan",
-                baseUrl = ProviderType.ChatGptPlan.defaultBaseUrl,
-                model = "",
-            )
+            saveChatGptPlanProviderInternal(bundle, onSaved, onError)
+        }
+    }
+
+    private suspend fun saveChatGptPlanProviderInternal(
+        bundle: ChatGptBundle,
+        onSaved: () -> Unit = {},
+        onError: (String) -> Unit = {},
+    ) {
+        val res = getApplication<Application>().resources
+        val id = UUID.randomUUID().toString()
+        val encoded = try {
+            Json.encodeToString(ChatGptBundle.serializer(), bundle)
+        } catch (e: Exception) {
+            null
+        }
+        if (encoded == null || !secrets.saveOAuthBundle(id, encoded)) {
+            onError(res.getString(R.string.free_key_save_failed))
+            return
+        }
+        val hadProviders = _listState.value.configs.isNotEmpty()
+        val activate = !hadProviders
+        val config = ProviderConfig(
+            id = id,
+            type = ProviderType.ChatGptPlan,
+            name = "ChatGPT plan",
+            baseUrl = ProviderType.ChatGptPlan.defaultBaseUrl,
+            model = "",
+        )
+        try {
+            store.save(config)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            onError(res.getString(R.string.free_provider_save_failed))
+            return
+        }
+        if (activate) {
             try {
-                store.save(config)
+                store.setActive(id)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                onError(res.getString(R.string.free_provider_save_failed))
-                return@launch
+                // Keep the saved provider; active selection can be fixed later.
             }
-            if (activate) {
-                try {
-                    store.setActive(id)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    // Keep the saved provider; active selection can be fixed later.
+        }
+        _listState.update { list ->
+            if (list.activeId == null || activate) list.copy(activeId = id) else list
+        }
+        if (resolveChatGptPlanModel(id, bundle.accessToken, onError)) onSaved()
+    }
+
+    fun startChatGptSignIn(onAuthorizeUrl: (String) -> Unit) {
+        val initial = _editorState.value
+        if (initial.signingIn || signInJob?.isActive == true) return
+        val editorId = initial.config.id
+        val isNew = initial.isNew
+        val session = ChatGptSignInSession()
+        chatGptSession = session
+        _editorState.update {
+            it.copy(
+                signingIn = true,
+                signInError = null,
+                showChatGptIntro = false,
+                signInCompleted = false,
+            )
+        }
+        val launched = viewModelScope.launch {
+            val app = getApplication<Application>()
+            val res = app.resources
+            try {
+                val hostIds = HostIdStore(app)
+                val result = signInRunner(
+                    hostIds.getOrCreateHostId(),
+                    onAuthorizeUrl,
+                    resolveSignInClientId(
+                        bundleClientId = chatGptClientId(editorId),
+                        pendingClientId = hostIds.pendingClientId(),
+                    ),
+                    session,
+                    hostIds,
+                )
+                if (_editorState.value.config.id != editorId) return@launch
+                when (result) {
+                    is ChatGptSignInResult.Success -> {
+                        if (isNew) {
+                            saveChatGptPlanProviderInternal(
+                                bundle = result.bundle,
+                                onSaved = {
+                                    if (_editorState.value.config.id == editorId) {
+                                        if (shouldShowChatGptPlanIntro()) {
+                                            markChatGptPlanIntroSeen()
+                                            _editorState.update { it.copy(showChatGptIntro = true) }
+                                        } else {
+                                            _editorState.update { it.copy(signInCompleted = true) }
+                                        }
+                                    }
+                                },
+                                onError = { msg ->
+                                    if (_editorState.value.config.id == editorId) {
+                                        _editorState.update { it.copy(signInError = msg) }
+                                    }
+                                },
+                            )
+                        } else {
+                            updateChatGptPlanBundleInternal(editorId, result.bundle)
+                        }
+                    }
+                    ChatGptSignInResult.UserCancelled -> { }
+                    ChatGptSignInResult.PlanNotGranted ->
+                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_plan_not_granted)) }
+                    is ChatGptSignInResult.NetworkError ->
+                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_signin_network)) }
+                    ChatGptSignInResult.InvalidCallback ->
+                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_signin_failed)) }
+                    ChatGptSignInResult.NeedsReauth ->
+                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_signin_expired)) }
+                    ChatGptSignInResult.TimedOut ->
+                        _editorState.update { it.copy(signInError = res.getString(R.string.chatgpt_signin_timeout)) }
+                    is ChatGptSignInResult.ServerRejected ->
+                        _editorState.update {
+                            it.copy(signInError = res.getString(R.string.chatgpt_signin_server_error, result.code))
+                        }
+                }
+            } finally {
+                if (chatGptSession === session) {
+                    chatGptSession = null
+                }
+                if (_editorState.value.config.id == editorId) {
+                    _editorState.update { it.copy(signingIn = false) }
                 }
             }
-            _listState.update { list ->
-                if (list.activeId == null || activate) list.copy(activeId = id) else list
-            }
-            if (resolveChatGptPlanModel(id, bundle.accessToken, onError)) onSaved()
         }
+        signInJob = launched
+        launched.invokeOnCompletion {
+            if (signInJob === launched) signInJob = null
+        }
+    }
+
+    fun cancelChatGptSignIn() {
+        chatGptSession?.cancel()
+        chatGptSession = null
+        signInJob?.cancel()
+        signInJob = null
+        _editorState.update { it.copy(signingIn = false) }
+    }
+
+    fun dismissChatGptPlanIntro() {
+        _editorState.update { it.copy(showChatGptIntro = false) }
+    }
+
+    fun consumeChatGptSignInCompleted() {
+        _editorState.update { it.copy(signInCompleted = false) }
     }
 
     // Resolve a real model for the freshly saved ChatGPT plan provider and
@@ -335,16 +472,19 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     fun updateChatGptPlanBundle(bundle: ChatGptBundle, onDone: () -> Unit = {}) {
         viewModelScope.launch {
-            val id = _editorState.value.config.id
-            val encoded = try {
-                Json.encodeToString(ChatGptBundle.serializer(), bundle)
-            } catch (_: Exception) {
-                null
-            }
-            if (encoded != null && secrets.saveOAuthBundle(id, encoded)) {
-                _editorState.update { it.copy(chatGptEmail = bundle.email) }
-            }
+            updateChatGptPlanBundleInternal(_editorState.value.config.id, bundle)
             onDone()
+        }
+    }
+
+    private fun updateChatGptPlanBundleInternal(id: String, bundle: ChatGptBundle) {
+        val encoded = try {
+            Json.encodeToString(ChatGptBundle.serializer(), bundle)
+        } catch (_: Exception) {
+            null
+        }
+        if (encoded != null && secrets.saveOAuthBundle(id, encoded) && _editorState.value.config.id == id) {
+            _editorState.update { it.copy(chatGptEmail = bundle.email) }
         }
     }
 
@@ -581,12 +721,17 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     private class ChatGptReauthRequired : Exception()
 
-    private fun editorError(error: Exception): String = when (error) {
+        private fun editorError(error: Exception): String = when (error) {
         is ChatGptReauthRequired ->
             getApplication<Application>().resources.getString(R.string.chatgpt_signin_expired)
         is ProviderError -> error.text()
         is IllegalArgumentException -> "Provider configuration contains an invalid header or value."
         is SecurityException -> ProviderError.Network("permission").text()
         else -> "Rivet couldn't connect to this provider. Check its settings and try again."
+    }
+
+    override fun onCleared() {
+        cancelChatGptSignIn()
+        super.onCleared()
     }
 }

@@ -1,18 +1,55 @@
 package com.kaiser.rivet.ui.provider
 
+import android.app.Application
+import androidx.lifecycle.viewModelScope
+import com.kaiser.rivet.R
+import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.awaitCancellation
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.advanceUntilIdle
+import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.test.setMain
+import kotlinx.coroutines.withTimeout
+import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
+import org.junit.Before
 import org.junit.Test
+import org.junit.runner.RunWith
+import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 
+@OptIn(ExperimentalCoroutinesApi::class)
+@RunWith(RobolectricTestRunner::class)
 class ProviderEditorRequestsTest {
+    private val app: Application get() = RuntimeEnvironment.getApplication()
+    private val viewModels = mutableListOf<ProvidersViewModel>()
+
+    @Before
+    fun setup() {
+        Dispatchers.setMain(UnconfinedTestDispatcher())
+    }
+
+    @After
+    fun tearDown() = runBlocking {
+        viewModels.forEach { it.viewModelScope.coroutineContext[Job]?.cancelAndJoin() }
+        viewModels.clear()
+        Dispatchers.resetMain()
+    }
 
     @Test
     fun fetchedModelListIsBoundedAndSearchMatchesIdsAndLabelsCaseInsensitively() {
@@ -155,5 +192,54 @@ class ProviderEditorRequestsTest {
         val changed = state.withConfigUpdate { it.copy(model = "model-b") }
 
         assertTrue(changed.models === models)
+    }
+
+    @Test
+    fun chatGptSignInStateAndErrorLiveInViewModelAcrossRecomposition() = runBlocking {
+        val viewModel = ProvidersViewModel(app).also { viewModels += it }
+        viewModel.startNewProvider(ProviderType.ChatGptPlan)
+        val signInResult = CompletableDeferred<ChatGptSignInResult>()
+        var launchedUrl: String? = null
+        viewModel.signInRunner = { _, onAuthorizeUrl, _, _, _ ->
+            onAuthorizeUrl("https://auth.openai.com/authorize?state=test")
+            signInResult.await()
+        }
+
+        viewModel.startChatGptSignIn { url -> launchedUrl = url }
+
+        assertEquals("https://auth.openai.com/authorize?state=test", launchedUrl)
+        assertTrue(viewModel.editorState.value.signingIn)
+        assertNull(viewModel.editorState.value.signInError)
+
+        // Simulating a configuration change: a newly composed collector reads the same
+        // ViewModel state while the sign-in coroutine continues running in viewModelScope.
+        val afterRotation = viewModel.editorState.value
+        assertTrue(afterRotation.signingIn)
+
+        signInResult.complete(ChatGptSignInResult.TimedOut)
+        val finished = withTimeout(5_000) {
+            viewModel.editorState.first { !it.signingIn }
+        }
+        assertFalse(finished.signingIn)
+        assertEquals(app.resources.getString(R.string.chatgpt_signin_timeout), finished.signInError)
+    }
+
+    @Test
+    fun cancellingChatGptSignInInViewModelCancelsSessionAndClearsSigningIn() = runBlocking {
+        val viewModel = ProvidersViewModel(app).also { viewModels += it }
+        viewModel.startNewProvider(ProviderType.ChatGptPlan)
+        var capturedSession: com.kaiser.rivet.provider.ChatGptSignInSession? = null
+        viewModel.signInRunner = { _, _, _, session, _ ->
+            capturedSession = session
+            awaitCancellation()
+        }
+
+        viewModel.startChatGptSignIn {}
+        assertTrue(viewModel.editorState.value.signingIn)
+        assertNotNull(capturedSession)
+
+        viewModel.cancelChatGptSignIn()
+        assertFalse(viewModel.editorState.value.signingIn)
+        assertNull(viewModel.editorState.value.signInError)
     }
 }

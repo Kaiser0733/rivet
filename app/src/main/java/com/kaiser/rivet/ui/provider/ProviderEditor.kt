@@ -36,8 +36,7 @@ import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
-import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -55,16 +54,10 @@ import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.provider.ReasoningLevel
-import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.provider.ProviderType
-import com.kaiser.rivet.provider.resolveSignInClientId
-import com.kaiser.rivet.provider.runSignIn
-import com.kaiser.rivet.provider.ChatGptSignInSession
-import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.chat.displaySafeText
-import kotlinx.coroutines.launch
 
 private val MAX_WIDTH = 640.dp
 
@@ -80,25 +73,13 @@ fun ProviderEditor(
     var showKey by remember(config.id) { mutableStateOf(false) }
     var modelSearch by remember(config.id, state.models) { mutableStateOf("") }
     val context = LocalContext.current
-    val scope = rememberCoroutineScope()
-    var signingIn by remember(config.id) { mutableStateOf(false) }
-    var signInError by remember(config.id) { mutableStateOf<String?>(null) }
-    var showIntroDialog by remember(config.id) { mutableStateOf(false) }
-    // In-flight sign-in handle: the Cancel button aborts it immediately
-    // instead of leaving the loopback listener until the await timeout.
-    var chatGptSession by remember(config.id) { mutableStateOf<ChatGptSignInSession?>(null) }
-    // Cancel sign-in on system back or if the composable is torn down
-    // before the coroutine clears the reference.
-    BackHandler(enabled = signingIn) { chatGptSession?.cancel() }
-    DisposableEffect(chatGptSession) {
-        val session = chatGptSession
-        onDispose { session?.cancel() }
+    BackHandler(enabled = state.signingIn) { viewModel.cancelChatGptSignIn() }
+    LaunchedEffect(state.signInCompleted) {
+        if (state.signInCompleted) {
+            viewModel.consumeChatGptSignInCompleted()
+            onDone()
+        }
     }
-    val planNotGrantedMsg = stringResource(R.string.chatgpt_plan_not_granted)
-    val networkMsg = stringResource(R.string.chatgpt_signin_network)
-    val failedMsg = stringResource(R.string.chatgpt_signin_failed)
-    val expiredMsg = stringResource(R.string.chatgpt_signin_expired)
-    val timeoutMsg = stringResource(R.string.chatgpt_signin_timeout)
     val filteredModels = remember(state.models, config.model, modelSearch) {
         filterModels(state.models, config.model, modelSearch)
     }
@@ -162,71 +143,20 @@ fun ProviderEditor(
                 }
                 RivetOutlinedButton(
                     onClick = {
-                        if (signingIn) return@RivetOutlinedButton
-                        scope.launch {
-                            val session = ChatGptSignInSession()
-                            chatGptSession = session
-                            signingIn = true
-                            signInError = null
+                        viewModel.startChatGptSignIn { url ->
                             try {
-                                val hostIds = HostIdStore(context)
-                                val result = runSignIn(
-                                    hostId = hostIds.getOrCreateHostId(),
-                                    onAuthorizeUrl = { url ->
-                                        try {
-                                            context.startActivity(
-                                                Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                            )
-                                        } catch (_: Exception) { }
-                                    },
-                                    clientId = resolveSignInClientId(
-                                        bundleClientId = viewModel.chatGptClientId(config.id),
-                                        pendingClientId = hostIds.pendingClientId(),
-                                    ),
-                                    session = session,
-                                    hostIds = hostIds,
+                                context.startActivity(
+                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
                                 )
-                                when (result) {
-                                    is ChatGptSignInResult.Success -> {
-                                        if (state.isNew) {
-                                            viewModel.saveChatGptPlanProvider(
-                                                result.bundle,
-                                                onSaved = {
-                                                    if (viewModel.shouldShowChatGptPlanIntro()) {
-                                                        viewModel.markChatGptPlanIntroSeen()
-                                                        showIntroDialog = true
-                                                    } else {
-                                                        onDone()
-                                                    }
-                                                },
-                                                onError = { msg -> signInError = msg },
-                                            )
-                                        } else {
-                                            viewModel.updateChatGptPlanBundle(result.bundle)
-                                        }
-                                    }
-                                    ChatGptSignInResult.UserCancelled -> { }
-                                    ChatGptSignInResult.PlanNotGranted -> signInError = planNotGrantedMsg
-                                    is ChatGptSignInResult.NetworkError -> signInError = networkMsg
-                                    ChatGptSignInResult.InvalidCallback -> signInError = failedMsg
-                                    ChatGptSignInResult.NeedsReauth -> signInError = expiredMsg
-                                    ChatGptSignInResult.TimedOut -> signInError = timeoutMsg
-                                    is ChatGptSignInResult.ServerRejected ->
-                                        signInError = context.getString(
-                                            R.string.chatgpt_signin_server_error, result.code)
-                                }
-                            } finally {
-                                signingIn = false
-                                if (chatGptSession === session) chatGptSession = null
-                            }
+                            } catch (_: Exception) { }
                         }
                     },
-                    enabled = !signingIn && !state.busy && !state.fetching,
+                    enabled = !state.signingIn && !state.busy && !state.fetching,
                 ) {
                     Text(stringResource(R.string.continue_with_chatgpt))
                 }
-                if (signingIn) {
+                if (state.signingIn) {
                     Row(
                         verticalAlignment = Alignment.CenterVertically,
                         modifier = Modifier.padding(top = 8.dp),
@@ -235,7 +165,7 @@ fun ProviderEditor(
                             Modifier.size(16.dp),
                             strokeWidth = 2.dp,
                         )
-                        TextButton(onClick = { chatGptSession?.cancel() }) {
+                        TextButton(onClick = viewModel::cancelChatGptSignIn) {
                             Text(stringResource(R.string.cancel))
                         }
                     }
@@ -245,7 +175,7 @@ fun ProviderEditor(
                         Text(stringResource(R.string.sign_out))
                     }
                 }
-                signInError?.let { msg ->
+                state.signInError?.let { msg ->
                     Text(
                         msg,
                         color = MaterialTheme.colorScheme.error,
@@ -435,15 +365,15 @@ fun ProviderEditor(
             }
         }
     }
-    if (showIntroDialog) {
+    if (state.showChatGptIntro) {
         AlertDialog(
-            onDismissRequest = { showIntroDialog = false; onDone() },
+            onDismissRequest = { viewModel.dismissChatGptPlanIntro(); onDone() },
             title = { Text(stringResource(R.string.chatgpt_plan_intro_title),
                 style = MaterialTheme.typography.titleMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
             text = { Text(stringResource(R.string.chatgpt_plan_intro_body),
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
             confirmButton = {
-                RivetOutlinedButton(onClick = { showIntroDialog = false; onDone() }) {
+                RivetOutlinedButton(onClick = { viewModel.dismissChatGptPlanIntro(); onDone() }) {
                     Text(stringResource(R.string.got_it))
                 }
             },
