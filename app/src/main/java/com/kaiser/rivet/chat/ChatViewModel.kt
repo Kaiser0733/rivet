@@ -70,6 +70,8 @@ data class ChatUiState(
     val ready: Boolean = false,
     val streaming: Boolean = false,
     val streamingText: String = "",
+    val streamingReasoning: String = "",
+    val messageReasoning: Map<Int, String> = emptyMap(),
     val pendingApproval: AgentApprovalRequest? = null,
     val error: String? = null,
     val errorAction: ChatErrorAction? = null,
@@ -304,7 +306,8 @@ class ChatViewModel private constructor(
                         val selected = store.create(identity)
                         activeMessages = selected.messages
                         activeSummary = selected.summary
-                        _uiState.update { it.copy(messages = emptyList(), sessions = store.list(),
+                        _uiState.update { it.copy(messages = emptyList(), messageReasoning = emptyMap(),
+                            sessions = store.list(),
                             currentSessionId = selected.id, currentSessionTitle = selected.title,
                             currentSessionWorkspaceId = identity, usage = null, contextEstimate = null,
                             lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
@@ -373,7 +376,8 @@ class ChatViewModel private constructor(
     private fun startTurn(trimmed: String, retryingInterrupted: Boolean) {
         val wasInterrupted = _uiState.value.interruptedTurn
         val ticket = ++generation
-        _uiState.update { it.copy(streaming = true, streamingText = "", activity = "Getting ready…",
+        _uiState.update { it.copy(streaming = true, streamingText = "", streamingReasoning = "",
+            activity = "Getting ready…",
             toolLifecycle = emptyList(), commandRunning = false, error = null, errorAction = null, notice = null,
             interruptedTurn = false) }
         val previous = sendJob
@@ -548,6 +552,7 @@ class ChatViewModel private constructor(
             activeMessages = durable.toList()
             var lastSystem = ""
             val streamPreview = StringBuilder()
+            val reasoningPreview = StringBuilder()
             var lastPreviewNanos = 0L
             var checkpointId: String? = null
             var checkpointBroken = false
@@ -558,7 +563,19 @@ class ChatViewModel private constructor(
                 requestModel = { messages, _, onText ->
                     val request = context.requestFor(messages)
                     lastSystem = request.system
-                    val response = client.streamAgent(request, onText)
+                    val response = client.streamAgent(
+                        request = request,
+                        onReasoning = { delta ->
+                            if (delta.isNotEmpty()) {
+                                reasoningPreview.append(delta)
+                                if (ticket == generation) {
+                                    val preview = reasoningPreview.toString()
+                                    _uiState.update { it.copy(streamingReasoning = preview) }
+                                }
+                            }
+                        },
+                        onDelta = onText,
+                    )
                     if (sessionId != null) {
                         try { sessions?.recordUsage(sessionId, turnId, snapshot.config.id, snapshot.config.model,
                             response.usage, request.messages, request.system, request.tools,
@@ -693,20 +710,42 @@ class ChatViewModel private constructor(
                                 durable += message
                                 activeMessages = durable.toList()
                                 streamPreview.setLength(0)
+                                val finishedReasoning = if (message.role == AgentRole.Assistant) {
+                                    reasoningPreview.toString().also { reasoningPreview.setLength(0) }
+                                } else ""
                                 val completedToolKeys = message.toolResults.mapTo(mutableSetOf()) {
                                     AgentToolLifecycle.keyFor(it.callId)
                                 }
-                                _uiState.update { state -> state.copy(messages = (state.messages + message).takeLast(100),
-                                    streamingText = "",
-                                    toolLifecycle = state.toolLifecycle.filterNot {
-                                        it.correlationKey in completedToolKeys
-                                    },
-                                    activity = message.toolCalls.firstOrNull()?.let { call -> activityFor(call.name) }
-                                        ?: if (message.role == AgentRole.Tool) "Working on it…" else state.activity,
-                                    // Calls are executed as one batch, so a tool result means
-                                    // that batch is done; a new batch may request another command.
-                                    commandRunning = if (message.toolResults.isNotEmpty()) false
-                                        else message.toolCalls.any { it.name == RUN_COMMAND_TOOL }) }
+                                _uiState.update { state ->
+                                    val appended = state.messages + message
+                                    val dropCount = (appended.size - 100).coerceAtLeast(0)
+                                    val nextMessages = appended.takeLast(100)
+                                    val shiftedReasoning = if (dropCount == 0) state.messageReasoning
+                                        else state.messageReasoning.mapNotNull { (idx, text) ->
+                                            val nextIdx = idx - dropCount
+                                            if (nextIdx >= 0) nextIdx to text else null
+                                        }.toMap()
+                                    val nextReasoning = if (message.role == AgentRole.Assistant &&
+                                        finishedReasoning.isNotBlank()) {
+                                        shiftedReasoning + ((nextMessages.size - 1) to finishedReasoning)
+                                    } else shiftedReasoning
+                                    state.copy(
+                                        messages = nextMessages,
+                                        streamingText = "",
+                                        streamingReasoning = if (message.role == AgentRole.Assistant) ""
+                                            else state.streamingReasoning,
+                                        messageReasoning = nextReasoning,
+                                        toolLifecycle = state.toolLifecycle.filterNot {
+                                            it.correlationKey in completedToolKeys
+                                        },
+                                        activity = message.toolCalls.firstOrNull()?.let { call -> activityFor(call.name) }
+                                            ?: if (message.role == AgentRole.Tool) "Working on it…" else state.activity,
+                                        // Calls are executed as one batch, so a tool result means
+                                        // that batch is done; a new batch may request another command.
+                                        commandRunning = if (message.toolResults.isNotEmpty()) false
+                                            else message.toolCalls.any { it.name == RUN_COMMAND_TOOL },
+                                    )
+                                }
                                 val id = checkpointId
                                 if (message.role == AgentRole.Tool && mutationStartedSincePost && id != null && workspaceId != null && !checkpointBroken) {
                                     try {
@@ -761,6 +800,7 @@ class ChatViewModel private constructor(
                                 messages = durable.toList(),
                                 streaming = false,
                                 streamingText = "",
+                                streamingReasoning = "",
                                 pendingApproval = null,
                                 activity = null,
                                 toolLifecycle = emptyList(), commandRunning = false,
@@ -779,7 +819,8 @@ class ChatViewModel private constructor(
                             catch (error: MirrorFailure) { error.code }
                             catch (_: Exception) { null }
                         val pendingProjectChanges = blocker != null && blocker in SYNC_RECOVERY_CODES
-                        _uiState.update { it.copy(streaming = false, streamingText = "", pendingApproval = null, activity = null,
+                        _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
+                            pendingApproval = null, activity = null,
                             toolLifecycle = emptyList(), commandRunning = false,
                             interruptedTurn = !userCancelled && durable.isNotEmpty(),
                             error = if (pendingProjectChanges) "Rivet stopped before it could save the command's project changes." else it.error,
@@ -846,12 +887,14 @@ class ChatViewModel private constructor(
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent setup failed: ${e.javaClass.simpleName}")
                 if (ticket == generation) _uiState.update { it.copy(streaming = false, streamingText = "",
+                    streamingReasoning = "",
                     activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
                 runtimeController.finishTurn(turnToken)
                 if (ticket == generation && _uiState.value.streaming) {
-                    _uiState.update { it.copy(streaming = false, streamingText = "", activity = null, pendingApproval = null,
+                    _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
+                        activity = null, pendingApproval = null,
                         toolLifecycle = emptyList(), commandRunning = false,
                         notice = "Stopped. Any completed changes remain in the project.") }
                 }
@@ -934,10 +977,14 @@ class ChatViewModel private constructor(
                 ChatErrorAction.RetryTurn
             else -> null
         }
-        _uiState.update {
-            it.copy(messages = visible, streaming = false, streamingText = "", pendingApproval = null,
+        _uiState.update { state ->
+            val nextReasoning = if (error == ProviderError.EmptyResponse.text() && state.messages.isNotEmpty()) {
+                state.messageReasoning - (state.messages.size - 1)
+            } else state.messageReasoning
+            state.copy(messages = visible, streaming = false, streamingText = "", streamingReasoning = "",
+                messageReasoning = nextReasoning, pendingApproval = null,
                 toolLifecycle = emptyList(), commandRunning = false,
-                sessions = history ?: it.sessions, usage = usage, error = error,
+                sessions = history ?: state.sessions, usage = usage, error = error,
                 errorAction = errorAction, activity = null)
         }
     }
@@ -1019,7 +1066,8 @@ class ChatViewModel private constructor(
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { durable.takeLast(100) }
         _uiState.update {
-            it.copy(messages = visible, streaming = false, streamingText = "", pendingApproval = null, activity = null,
+            it.copy(messages = visible, streaming = false, streamingText = "", streamingReasoning = "",
+                pendingApproval = null, activity = null,
                 error = if (persistenceError) "Could not update conversation storage. Check available space before continuing." else message,
                 errorAction = if (persistenceError) null else action)
         }
