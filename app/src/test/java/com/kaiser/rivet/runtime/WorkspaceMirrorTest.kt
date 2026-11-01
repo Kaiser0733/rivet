@@ -317,9 +317,12 @@ class WorkspaceMirrorTest {
         val outside = File(files, "outside-secret").apply { writeText("secret") }
         Files.createSymbolicLink(File(root, "link").toPath(), outside.toPath())
 
-        try { mirror.sync(); fail("Expected unsafe entry") }
-        catch (error: MirrorFailure) { assertEquals("unsafe_entry", error.code) }
+        val result = mirror.sync()
+
+        // F11: the link is skipped and named, never followed into the project.
+        assertTrue(result.skipped.contains("link"))
         assertTrue(workspace.listDirectory(WorkspacePath.ROOT).isEmpty())
+        assertEquals("secret", outside.readText())
     }
 
     @Test fun deselectedWorkspaceCannotReceiveMirrorChanges() = runBlocking {
