@@ -621,10 +621,10 @@ class ChatViewModel private constructor(
             var lastSystem = ""
             val streamPreview = StringBuilder()
             val reasoningPreview = StringBuilder()
-            // Reasoning used to publish on every delta, which copies and re-lays out the
-            // whole chain hundreds of times a second. Both streams now share one window.
+            // The answer stream publishes at most once per window: a preview that trails
+            // a few tens of milliseconds is invisible while text keeps arriving. Reasoning
+            // cannot be held back that way, see its handler below.
             val textWindow = PreviewWindow()
-            val reasoningWindow = PreviewWindow()
             var checkpointId: String? = null
             var checkpointBroken = false
             var needsPostCheck = false
@@ -639,8 +639,11 @@ class ChatViewModel private constructor(
                         onReasoning = { delta ->
                             if (delta.isNotEmpty()) {
                                 reasoningPreview.append(delta)
-                                if (ticket == generation &&
-                                    reasoningWindow.shouldPublish(System.nanoTime())) {
+                                // Reasoning ends before the answer starts, so anything a
+                                // window held back would sit invisible for the whole answer
+                                // phase. Publish every delta; the collapsed row keeps the
+                                // cost of showing it small.
+                                if (ticket == generation) {
                                     val preview = reasoningPreview.toString()
                                     _uiState.update { it.copy(streamingReasoning = preview) }
                                 }
@@ -648,6 +651,14 @@ class ChatViewModel private constructor(
                         },
                         onDelta = onText,
                     )
+                    // Whatever the answer window held back must be visible the moment the
+                    // stream stops, not when the next delta or the turn happens to arrive.
+                    if (ticket == generation) {
+                        val text = streamPreview.toString()
+                        if (text.isNotEmpty() && _uiState.value.streamingText != text) {
+                            _uiState.update { it.copy(streamingText = text) }
+                        }
+                    }
                     if (sessionId != null) {
                         try { sessions?.recordUsage(sessionId, turnId, snapshot.config.id, snapshot.config.model,
                             response.usage, request.messages, request.system, request.tools,
