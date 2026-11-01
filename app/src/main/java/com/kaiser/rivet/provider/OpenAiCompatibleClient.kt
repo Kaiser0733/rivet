@@ -60,7 +60,11 @@ internal class OpenAiCompatibleClient(
         }
     }
 
-    override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+    override suspend fun streamAgent(
+        request: AgentRequest,
+        onReasoning: (String) -> Unit,
+        onDelta: (String) -> Unit,
+    ): AgentResponse {
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)

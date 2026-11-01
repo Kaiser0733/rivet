@@ -87,7 +87,11 @@ internal class AnthropicClient(
         }
     }
 
-    override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+    override suspend fun streamAgent(
+        request: AgentRequest,
+        onReasoning: (String) -> Unit,
+        onDelta: (String) -> Unit,
+    ): AgentResponse {
         val body = requestBody(request)
         val httpRequest = base(Endpoints.anthropicChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))

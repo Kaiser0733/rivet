@@ -394,7 +394,11 @@ class ChatViewModelTest {
         val provider = object : ProviderClient {
             override suspend fun listModels(): List<ModelInfo> = emptyList()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
                 onDelta("# Finished")
                 deltaSent.complete(Unit)
                 finishResponse.await()
@@ -431,7 +435,11 @@ class ChatViewModelTest {
         val provider = object : ProviderClient {
             override suspend fun listModels(): List<ModelInfo> = emptyList()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
                 throw ProviderError.Unauthorized()
             }
         }
@@ -921,7 +929,11 @@ class ChatViewModelTest {
         val provider = object : ProviderClient {
             override suspend fun listModels(): List<ModelInfo> = emptyList()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
                 entered.complete(request)
                 awaitCancellation()
             }
@@ -1083,7 +1095,11 @@ class ChatViewModelTest {
         val provider = object : ProviderClient {
             override suspend fun listModels(): List<ModelInfo> = emptyList()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
                 started.complete(Unit)
                 finish.await()
                 return AgentResponse(text = "Done")
@@ -1129,7 +1145,11 @@ class ChatViewModelTest {
         val dyingProvider = object : ProviderClient {
             override suspend fun listModels(): List<ModelInfo> = emptyList()
             override suspend fun testConnection() = TestResult(true, "ok")
-            override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
                 started.complete(Unit)
                 awaitCancellation()
             }
@@ -1225,7 +1245,11 @@ class ChatViewModelTest {
         val requests = mutableListOf<AgentRequest>()
         override suspend fun listModels(): List<ModelInfo> = emptyList()
         override suspend fun testConnection() = TestResult(true, "ok")
-        override suspend fun streamAgent(request: AgentRequest, onDelta: (String) -> Unit): AgentResponse {
+        override suspend fun streamAgent(
+            request: AgentRequest,
+            onReasoning: (String) -> Unit,
+            onDelta: (String) -> Unit,
+        ): AgentResponse {
             requests += request
             return responses.removeFirst()
         }
