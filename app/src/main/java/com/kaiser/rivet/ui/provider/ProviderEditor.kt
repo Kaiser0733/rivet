@@ -435,5 +435,7 @@ internal fun ReasoningLevel.labelRes(): Int = when (this) {
     ReasoningLevel.Low -> R.string.reasoning_low
     ReasoningLevel.Medium -> R.string.reasoning_medium
     ReasoningLevel.High -> R.string.reasoning_high
+    ReasoningLevel.XHigh -> R.string.reasoning_xhigh
     ReasoningLevel.Max -> R.string.reasoning_max
+    ReasoningLevel.Ultra -> R.string.reasoning_ultra
 }

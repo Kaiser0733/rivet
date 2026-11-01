@@ -222,11 +222,8 @@ private fun reasoningEffort(
     level: ReasoningLevel,
 ): String? {
     if (level == ReasoningLevel.Default) return null
-    if (type == ProviderType.OpenRouter) return level.wireEffort
-    if (type == ProviderType.OpenAi && openAiSupportsReasoning(model)) {
-        return if (level == ReasoningLevel.Max) null else level.wireEffort
-    }
-    return null
+    if (type == ProviderType.OpenAi && !openAiSupportsReasoning(model)) return null
+    return level.wireEffort
 }
 
 private val ReasoningLevel.wireEffort: String
@@ -234,8 +231,10 @@ private val ReasoningLevel.wireEffort: String
         ReasoningLevel.Low -> "low"
         ReasoningLevel.Medium -> "medium"
         ReasoningLevel.High -> "high"
-        ReasoningLevel.Max -> "xhigh"
-        ReasoningLevel.Default -> "high"
+        ReasoningLevel.XHigh -> "xhigh"
+        ReasoningLevel.Max -> "max"
+        ReasoningLevel.Ultra -> "ultra"
+        ReasoningLevel.Default -> "off"
     }
 
 internal fun extractModelContextWindow(model: JsonObject): Int? =

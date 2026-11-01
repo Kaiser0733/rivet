@@ -170,6 +170,26 @@ private fun extractModelName(detail: String): String {
     return detail.take(60)
 }
 
+internal fun isUnsupportedReasoningError(error: ProviderError, requested: ReasoningLevel): Boolean {
+    if (requested == ReasoningLevel.Default) return false
+    if (error is ProviderError.UnsupportedConfiguration) return true
+    val message = (error as? ProviderError.ProviderMessage)?.text ?: return false
+    val value = message.lowercase(java.util.Locale.ROOT)
+    val mentionsReasoning = listOf(
+        "reasoning_effort", "reasoning effort", "reasoning.effort", "reasoning_level",
+        "thinking_budget", "thinking budget", "thinking_config", "thinkingconfig",
+        "budget_tokens", "output_config",
+    ).any { it in value } ||
+        (("reasoning" in value || "thinking" in value || "effort" in value) &&
+            ("unsupported" in value || "not support" in value || "doesn't support" in value ||
+                "does not support" in value || "invalid" in value || "unrecognized" in value ||
+                "unknown" in value || "not allowed" in value || "allowed values" in value ||
+                "valid values" in value || "must be one of" in value || "cannot be set" in value))
+    if (mentionsReasoning) return true
+    val wire = requested.wireName.lowercase(java.util.Locale.ROOT)
+    return wire in value && ("effort" in value || "reasoning" in value || "thinking" in value)
+}
+
 fun networkError(e: IOException): ProviderError = when {
     e.cause is SecurityException -> ProviderError.Network("permission")
     e is UnknownHostException -> ProviderError.Network("dns")

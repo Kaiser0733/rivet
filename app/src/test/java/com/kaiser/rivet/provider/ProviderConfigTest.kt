@@ -169,25 +169,14 @@ class ProviderConfigTest {
     }
 
     @Test
-    fun genericAndGeminiExposeNoReasoningControl() {
-        assertEquals(
-            listOf(ReasoningLevel.Default),
-            offeredReasoning(ProviderType.OpenAiCompatible, "custom-model"),
-        )
-        assertEquals(
-            listOf(ReasoningLevel.Default),
-            offeredReasoning(ProviderType.Gemini, "gemini-2.5-pro"),
-        )
-    }
-
-    @Test
-    fun chatGptPlanExposesLowThroughHighButNotMax() {
-        // The Responses API accepts low/medium/high only. Max maps to the
-        // OpenRouter-only "xhigh" value, so the plan path must never offer it.
-        assertEquals(
-            listOf(ReasoningLevel.Default, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High),
-            offeredReasoning(ProviderType.ChatGptPlan, "gpt-5"),
-        )
+    fun everyProviderOffersTheWholeEffortLadder() {
+        // Custom OpenAI-compatible endpoints decide what they accept per model, so the
+        // selector must not hide levels from them.
+        assertEquals(ALL_REASONING_LEVELS, offeredReasoning(ProviderType.OpenAiCompatible, "custom-model"))
+        assertEquals(ALL_REASONING_LEVELS, offeredReasoning(ProviderType.OpenRouter, "any-model"))
+        assertEquals(ALL_REASONING_LEVELS, offeredReasoning(ProviderType.ChatGptPlan, "gpt-5"))
+        // Gemini sends no reasoning configuration at all, so it keeps Off rather than
+        // offering levels that would silently change nothing.
         assertEquals(
             listOf(ReasoningLevel.Default),
             offeredReasoning(ProviderType.Gemini, "gemini-2.5-pro"),
@@ -195,26 +184,44 @@ class ProviderConfigTest {
     }
 
     @Test
-    fun documentedOpenAiPresetsExposeReasoning() {
+    fun theLadderRunsOffLowMediumHighXHighMaxUltra() {
         assertEquals(
-            listOf(ReasoningLevel.Default, ReasoningLevel.Low, ReasoningLevel.Medium, ReasoningLevel.High),
-            offeredReasoning(ProviderType.OpenAi, "gpt-5"),
+            listOf("off", "low", "medium", "high", "xhigh", "max", "ultra"),
+            ALL_REASONING_LEVELS.map { it.wireName },
         )
+    }
+
+    @Test
+    fun aRejectedEffortRecommendsTheNextStepDown() {
+        assertEquals(ReasoningLevel.Max, recommendedFallbackReasoning(ReasoningLevel.Ultra))
+        assertEquals(ReasoningLevel.Max, recommendedFallbackReasoning(ReasoningLevel.XHigh))
+        assertEquals(ReasoningLevel.High, recommendedFallbackReasoning(ReasoningLevel.Max))
+        assertEquals(ReasoningLevel.Medium, recommendedFallbackReasoning(ReasoningLevel.High))
+        assertEquals(ReasoningLevel.Low, recommendedFallbackReasoning(ReasoningLevel.Medium))
+        assertEquals(ReasoningLevel.Default, recommendedFallbackReasoning(ReasoningLevel.Low))
+        assertNull(recommendedFallbackReasoning(ReasoningLevel.Default))
+    }
+
+    @Test
+    fun chatGptPlanOffersTheWholeLadderIncludingMaxAndUltra() {
+        // Max and Ultra now carry their own effort values instead of borrowing xhigh.
+        assertEquals(ALL_REASONING_LEVELS, offeredReasoning(ProviderType.ChatGptPlan, "gpt-5"))
+    }
+
+    @Test
+    fun documentedOpenAiPresetsExposeTheWholeLadder() {
+        assertEquals(ALL_REASONING_LEVELS, offeredReasoning(ProviderType.OpenAi, "gpt-5"))
+        // A preset that does not think keeps only Off: an effort it cannot take would
+        // only earn the rejection this ladder exists to recover from.
         assertEquals(
             listOf(ReasoningLevel.Default),
             offeredReasoning(ProviderType.OpenAi, "gpt-4o"),
         )
-        assertTrue(offeredReasoning(ProviderType.OpenRouter, "any-model").contains(ReasoningLevel.Max))
     }
 
     @Test
     fun anthropicReasoningUsesOnlyDocumentedCurrentModelIds() {
-        val reasoning = listOf(
-            ReasoningLevel.Default,
-            ReasoningLevel.Low,
-            ReasoningLevel.Medium,
-            ReasoningLevel.High,
-        )
+        val reasoning = ALL_REASONING_LEVELS
         listOf(
             "claude-opus-4-5",
             "claude-opus-4-5-20251101",

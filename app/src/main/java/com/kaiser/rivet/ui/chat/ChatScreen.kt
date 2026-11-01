@@ -90,11 +90,14 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
+import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
 import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
 import com.kaiser.rivet.chat.liveStatusLine
 import com.kaiser.rivet.agent.AgentApprovalRequest
+import com.kaiser.rivet.provider.ReasoningLevel
+import com.kaiser.rivet.ui.provider.labelRes
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentConversationItem
@@ -570,6 +573,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                             onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
                             onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
                             onRetryTurn = chatViewModel::retryFailedTurn,
+                            onChooseReasoning = chatViewModel::chooseReasoningLevel,
                             modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
                     }
                 }
@@ -653,6 +657,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onRetryInterruptedTurn: () -> Unit,
                         onDismissInterruptedTurn: () -> Unit,
                         onRetryTurn: () -> Unit,
+                        onChooseReasoning: (ReasoningLevel) -> Unit,
                         modifier: Modifier = Modifier) {
     val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning) {
         val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
@@ -722,7 +727,8 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         (if (showActivity) 1 else 0) +
         (if (showInterruptedTurn) 1 else 0) +
         (if (state.notice != null) 1 else 0) +
-        (if (state.error != null) 1 else 0)
+        (if (state.error != null) 1 else 0) +
+        (if (state.unsupportedReasoning != null) 1 else 0)
     val listState = rememberLazyListState()
     // Saved, not just remembered: a rotation must not yank a reader back to the end,
     // and must not drop a user who was following the reply.
@@ -812,6 +818,32 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
                 })
         } }
+        state.unsupportedReasoning?.let { notice -> item(key = "reasoning-choice") {
+            ReasoningFallbackRow(notice, onChooseReasoning)
+        } }
+    }
+}
+
+// The model refused an effort. The next step down is offered first, then the rest of
+// the ladder; every choice sends the same message again.
+@Composable
+@OptIn(ExperimentalLayoutApi::class)
+private fun ReasoningFallbackRow(notice: UnsupportedReasoningNotice,
+                                 onChoose: (ReasoningLevel) -> Unit) {
+    Column(Modifier.fillMaxWidth()) {
+        Text("Send the same message again with:", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            RivetOutlinedButton(onClick = { onChoose(notice.recommendedLevel) }) {
+                Text("Recommended: ${stringResource(notice.recommendedLevel.labelRes())}")
+            }
+            notice.alternativeLevels.forEach { level ->
+                TextButton(onClick = { onChoose(level) }) {
+                    Text(stringResource(level.labelRes()))
+                }
+            }
+        }
     }
 }
 
