@@ -73,4 +73,13 @@ class ProviderErrorClassificationTest {
         assertTrue(text.contains("Check your connection and try again"))
         assertTrue(text.contains("check the base URL"))
     }
+
+    @Test fun responseTooLargeNamesRivetAndGivesActionableStep() {
+        val text = ProviderError.ResponseTooLarge().text()
+        assertTrue(text.contains("Rivet"))
+        assertFalse(text.contains("The provider sent"))
+        assertTrue(text.contains("smaller parts"))
+        assertTrue(MAX_SSE_RESPONSE_BYTES == 16 * 1024 * 1024)
+        assertTrue(MAX_PROVIDER_JSON_BODY_BYTES == 16 * 1024 * 1024)
+    }
 }

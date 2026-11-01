@@ -39,6 +39,7 @@ internal class GeminiClient(
                 val page = parseJsonObject(text) ?: throw ProviderError.InvalidResponse("not a JSON object")
                 val entries = page["models"]?.arr() ?: throw ProviderError.InvalidResponse("missing models")
                 entries.forEach { element ->
+                    if (models.size >= MAX_RETAINED_MODELS) return@forEach
                     val model = element.obj() ?: return@forEach
                     if ("generateContent" !in (model["supportedGenerationMethods"]?.arr()
                             ?.mapNotNull { it.str() } ?: emptyList())) return@forEach
@@ -47,6 +48,9 @@ internal class GeminiClient(
                     models.putIfAbsent(id, ModelInfo(
                         id, model["displayName"]?.str() ?: name, model["inputTokenLimit"].positiveInt(),
                     ))
+                }
+                if (models.size >= MAX_RETAINED_MODELS) {
+                    return models.values.sortedBy { it.id.lowercase() }
                 }
                 val next = page["nextPageToken"] ?: return models.values.sortedBy { it.id.lowercase() }
                 val nextToken = next.str()?.takeIf { it.isNotBlank() }

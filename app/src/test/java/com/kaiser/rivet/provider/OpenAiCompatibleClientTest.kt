@@ -119,6 +119,20 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
+    fun listModelsAcceptsMultiMegabyteCatalogAndCapsRetainedCount() = runTest {
+        val padding = "p".repeat(600)
+        val entries = (1..(MAX_RETAINED_MODELS + 50)).joinToString(",") { i ->
+            """{"id":"model-$i","context_length":32000,"description":"$padding"}"""
+        }
+        val body = """{"data":[$entries]}"""
+        assertTrue(body.length > 1024 * 1024)
+        server.enqueue(MockResponse().setBody(body))
+        val models = OpenAiCompatibleClient(config(ProviderType.OpenRouter), "key").listModels()
+        assertEquals(MAX_RETAINED_MODELS, models.size)
+        assertEquals(32000, models.first().inputLimitTokens)
+    }
+
+    @Test
     fun customTextStopReasonAllowsAccumulatedDeltas() = runTest {
         val sse = "data: {\"choices\":[{\"delta\":{\"content\":\"Hel\"}}]}\n\n" +
             "data: {\"choices\":[{\"delta\":{\"content\":\"lo\"}}]}\n\n" +
