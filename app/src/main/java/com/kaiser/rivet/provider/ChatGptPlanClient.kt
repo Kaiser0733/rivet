@@ -91,7 +91,9 @@ internal class ChatGptPlanClient(
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
         val stream = ResponsesAgentStream(onDelta)
-        http.responsesSse(httpRequest, stream::accept)
+        http.responsesSse(httpRequest) { payload ->
+            stream.accept(payload)
+        }
         return stream.response()
     }
 
@@ -240,7 +242,12 @@ private fun responsesUsage(usage: JsonObject): AgentUsage? {
 // SSE reader for the Responses API: same structure, bounds, and cancellation
 // semantics as http.sse(), but terminal state is event-driven (the
 // accumulator records completed/failed) instead of a [DONE] sentinel.
-private suspend fun OkHttpClient.responsesSse(request: Request, onEvent: (String) -> Unit) {
+internal suspend fun OkHttpClient.responsesSse(
+    request: Request,
+    progressDeadlineMs: Long = SSE_PROGRESS_DEADLINE_MS,
+    clockMillis: () -> Long = ::monotonicMillis,
+    onEvent: (String) -> Unit,
+) {
     suspendCancellableCoroutine<Unit> { cont ->
         val call = newCall(request)
         val terminal = AtomicBoolean(false)
@@ -261,6 +268,7 @@ private suspend fun OkHttpClient.responsesSse(request: Request, onEvent: (String
                         if (!it.isSuccessful) throw httpError(it.code, it.errorText())
                         val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
                         var responseBytes = 0
+                        var lastProgressAt = clockMillis()
                         while (!terminal.get()) {
                             val line = try {
                                 source.readUtf8LineStrict(MAX_SSE_LINE_BYTES.toLong())
@@ -270,6 +278,10 @@ private suspend fun OkHttpClient.responsesSse(request: Request, onEvent: (String
                                 }
                                 break
                             }
+                            val now = clockMillis()
+                            if (now - lastProgressAt > progressDeadlineMs) {
+                                throw ProviderError.Timeout()
+                            }
                             responseBytes += line.toByteArray(Charsets.UTF_8).size + 2
                             if (responseBytes > MAX_SSE_RESPONSE_BYTES) {
                                 throw ProviderError.ResponseTooLarge()
@@ -277,6 +289,7 @@ private suspend fun OkHttpClient.responsesSse(request: Request, onEvent: (String
                             if (line.startsWith("data:")) {
                                 val payload = line.removePrefix("data:").trim()
                                 if (!terminal.get() && payload.isNotEmpty()) {
+                                    lastProgressAt = now
                                     onEvent(payload)
                                 }
                             }

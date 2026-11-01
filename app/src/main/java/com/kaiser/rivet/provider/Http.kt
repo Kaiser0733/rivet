@@ -45,9 +45,12 @@ internal fun OkHttpClient.quick(): OkHttpClient =
 // malformed endpoint from retaining an unbounded event or response on-device.
 internal const val MAX_SSE_LINE_BYTES = 128 * 1024
 internal const val MAX_SSE_RESPONSE_BYTES = 1024 * 1024
+internal const val SSE_PROGRESS_DEADLINE_MS = 120_000L
 // Model-list metadata is small; cap it at the same aggregate size as streamed replies.
 internal const val MAX_PROVIDER_JSON_BODY_BYTES = 1024 * 1024
 private const val MAX_ERROR_BODY_BYTES = 64 * 1024
+
+internal fun monotonicMillis(): Long = TimeUnit.NANOSECONDS.toMillis(System.nanoTime())
 
 internal fun Response.readBoundedBody(limitBytes: Int = MAX_PROVIDER_JSON_BODY_BYTES): String? {
     require(limitBytes > 0)
@@ -213,7 +216,12 @@ internal suspend fun Call.await(): Response =
 // Reads an SSE body, invoking onEvent for each non-empty data payload.
 // Coroutine cancellation cancels the OkHttp call and remains a
 // CancellationException; callback completion can never resume twice.
-internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Unit): Boolean =
+internal suspend fun OkHttpClient.sse(
+    request: Request,
+    progressDeadlineMs: Long = SSE_PROGRESS_DEADLINE_MS,
+    clockMillis: () -> Long = ::monotonicMillis,
+    onEvent: (String) -> Unit,
+): Boolean =
     suspendCancellableCoroutine { cont ->
         val call = newCall(request)
         val terminal = AtomicBoolean(false)
@@ -235,6 +243,7 @@ internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Uni
                         val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
                         var completed = false
                         var responseBytes = 0
+                        var lastProgressAt = clockMillis()
                         while (!terminal.get()) {
                             val line = try {
                                 source.readUtf8LineStrict(MAX_SSE_LINE_BYTES.toLong())
@@ -243,6 +252,10 @@ internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Uni
                                     throw ProviderError.ResponseTooLarge()
                                 }
                                 break
+                            }
+                            val now = clockMillis()
+                            if (now - lastProgressAt > progressDeadlineMs) {
+                                throw ProviderError.Timeout()
                             }
                             responseBytes += line.toByteArray(Charsets.UTF_8).size + 2
                             if (responseBytes > MAX_SSE_RESPONSE_BYTES) {
@@ -255,6 +268,7 @@ internal suspend fun OkHttpClient.sse(request: Request, onEvent: (String) -> Uni
                                     break
                                 }
                                 if (!terminal.get() && payload.isNotEmpty()) {
+                                    lastProgressAt = now
                                     onEvent(payload)
                                 }
                             }

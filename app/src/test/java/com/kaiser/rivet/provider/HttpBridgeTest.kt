@@ -160,6 +160,62 @@ class HttpBridgeTest {
         }
     }
 
+    @Test
+    fun heartbeatOnlySseStreamTimesOutAfterProgressDeadline() = runBlocking {
+        val server = MockWebServer()
+        val body = buildString {
+            append("data: {\"delta\":1}\n\n")
+            repeat(5) { append(": ping\n\n") }
+            append("data: [DONE]\n\n")
+        }
+        server.enqueue(MockResponse().setBody(body).setHeader("Content-Type", "text/event-stream"))
+        server.start()
+        try {
+            val request = Request.Builder().url(server.url("/stream")).build()
+            var now = 0L
+            val events = mutableListOf<String>()
+            try {
+                OkHttpClient().sse(
+                    request = request,
+                    progressDeadlineMs = SSE_PROGRESS_DEADLINE_MS,
+                    clockMillis = { now.also { now += 25_000L } },
+                ) { events += it }
+                throw AssertionError("expected stalled heartbeat stream to time out")
+            } catch (_: ProviderError.Timeout) {
+                assertEquals(listOf("{\"delta\":1}"), events)
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
+
+    @Test
+    fun realDataPayloadsRefreshSseProgressDeadline() = runBlocking {
+        val server = MockWebServer()
+        val body = buildString {
+            repeat(4) { index ->
+                append("data: {\"delta\":$index}\n\n")
+            }
+            append("data: [DONE]\n\n")
+        }
+        server.enqueue(MockResponse().setBody(body).setHeader("Content-Type", "text/event-stream"))
+        server.start()
+        try {
+            val request = Request.Builder().url(server.url("/stream")).build()
+            var now = 0L
+            val events = mutableListOf<String>()
+            val completed = OkHttpClient().sse(
+                request = request,
+                progressDeadlineMs = SSE_PROGRESS_DEADLINE_MS,
+                clockMillis = { now.also { now += 40_000L } },
+            ) { events += it }
+            assertTrue(completed)
+            assertEquals(4, events.size)
+        } finally {
+            server.shutdown()
+        }
+    }
+
     private fun response(): Response {
         val request = Request.Builder().url("https://localhost/").build()
         return Response.Builder()
