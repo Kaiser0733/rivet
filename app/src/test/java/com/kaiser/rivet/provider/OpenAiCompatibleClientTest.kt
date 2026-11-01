@@ -189,7 +189,7 @@ class OpenAiCompatibleClientTest {
     }
 
     @Test
-    fun customIncompleteTextIsNotAddedToDurableAgentHistory() = runTest {
+    fun customIncompleteTextPersistsPartialAndFailsTurn() = runTest {
         server.enqueue(MockResponse().setHeader("Content-Type", "text/event-stream").setBody(
             "data: {\"choices\":[{\"delta\":{\"content\":\"partial answer\"}}]}\n\n" +
                 "data: [DONE]\n\n",
@@ -229,7 +229,7 @@ class OpenAiCompatibleClientTest {
         }
 
         assertEquals("partial answer", streamedText.toString())
-        assertTrue(durableMessages.isEmpty())
+        assertEquals(listOf(AgentMessage.assistant("partial answer")), durableMessages)
         assertEquals(0, prepared)
         assertEquals(0, approvals)
         assertEquals(0, executions)

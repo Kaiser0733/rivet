@@ -140,7 +140,7 @@ class AgentLoop(
                     if (contextFootprint(messages.toList()) >= before * 9 / 10) throw overflow
                     requestOnce()
                 }
-            } catch (e: CancellationException) {
+            } catch (e: Throwable) {
                 val partial = streamed.toString()
                 if (partial.isNotBlank()) {
                     val assistant = AgentMessage.assistant(partial)
