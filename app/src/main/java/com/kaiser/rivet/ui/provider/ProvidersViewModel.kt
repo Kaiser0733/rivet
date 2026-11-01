@@ -29,6 +29,8 @@ data class ProviderListUiState(
     val configs: List<ProviderConfig> = emptyList(),
     val activeId: String? = null,
     val loadError: String? = null,
+    // Set when Rivet had to remove custom headers it could not read.
+    val headerNotice: String? = null,
 )
 
 // List + editor state for the provider screens. API keys enter through
@@ -62,6 +64,17 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         viewModelScope.launch {
             store.activeId.collect { id ->
                 _listState.update { it.copy(activeId = id) }
+            }
+        }
+        viewModelScope.launch {
+            store.droppedHeaders.collect { count ->
+                _listState.update {
+                    it.copy(headerNotice = when {
+                        count <= 0 -> null
+                        count == 1 -> "Rivet could not read a custom header and removed it. Add it again in Settings if you still need it."
+                        else -> "Rivet could not read $count custom headers and removed them. Add them again in Settings if you still need them."
+                    })
+                }
             }
         }
     }
