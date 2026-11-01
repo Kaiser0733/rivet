@@ -7,6 +7,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
@@ -40,7 +41,9 @@ class AppearanceStoreTest {
         first.setRoseIntensity(Int.MAX_VALUE)
         assertEquals(MAX_ROSE_INTENSITY, first.appearance.first().roseIntensity)
         first.setRoseIntensity(82)
-        firstScope.cancel()
+        // Join, not just cancel: DataStore releases the file when its scope finishes, and
+        // the second store below opens the same file.
+        firstScope.coroutineContext[Job]!!.cancelAndJoin()
 
         val secondScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val secondDataStore = PreferenceDataStoreFactory.create(scope = secondScope, produceFile = { file })
