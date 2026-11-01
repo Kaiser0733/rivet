@@ -4,6 +4,7 @@ import android.app.Activity
 import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
+import android.widget.Toast
 import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
@@ -30,6 +31,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -52,6 +54,8 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -943,15 +947,15 @@ private suspend fun scrollToConversationBottom(state: androidx.compose.foundatio
 private fun MessageRow(message: AgentMessage, reasoning: String? = null, messageKey: Int = 0) {
     val context = LocalContext.current
     val copyText = if (message.role == AgentRole.User) message.text else displaySafeText(message.text)
+    // Long-press opens a visible menu. Copying used to happen with nothing on screen,
+    // so nothing showed that it had worked.
+    var menuOpen by remember(messageKey) { mutableStateOf(false) }
+    var selectingText by remember(messageKey) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (message.role == AgentRole.Assistant && !reasoning.isNullOrBlank()) {
             ThinkingBlock(displaySafeText(reasoning), streaming = false, id = "thinking-$messageKey")
         }
-        Box(Modifier.fillMaxWidth().combinedClickable(
-            onClick = {},
-            onLongClickLabel = "Copy message",
-            onLongClick = { copyToClipboard(context, copyText) },
-        )) {
+        val bubble: @Composable () -> Unit = {
             if (message.role == AgentRole.User) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
                     Column(Modifier.fillMaxWidth(0.86f), horizontalAlignment = Alignment.End,
@@ -970,6 +974,29 @@ private fun MessageRow(message: AgentMessage, reasoning: String? = null, message
             } else {
                 AssistantMessage(displaySafeText(message.text), streaming = false)
             }
+        }
+        Box(Modifier.fillMaxWidth().then(
+            if (selectingText) Modifier else Modifier.combinedClickable(
+                onClick = {},
+                onLongClickLabel = "Copy or select text",
+                onLongClick = { menuOpen = true },
+            ),
+        )) {
+            if (selectingText) SelectionContainer { bubble() } else bubble()
+            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                DropdownMenuItem(text = { Text("Copy message") }, onClick = {
+                    menuOpen = false
+                    copyToClipboard(context, copyText)
+                    Toast.makeText(context, "Message copied.", Toast.LENGTH_SHORT).show()
+                })
+                DropdownMenuItem(text = { Text("Select text") }, onClick = {
+                    menuOpen = false
+                    selectingText = true
+                })
+            }
+        }
+        if (selectingText) {
+            TextButton(onClick = { selectingText = false }) { Text("Done selecting") }
         }
     }
 }
