@@ -94,7 +94,7 @@ internal class ChatGptPlanClient(
         val httpRequest = base(Endpoints.openAiResponses(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val stream = ResponsesAgentStream(onDelta)
+        val stream = ResponsesAgentStream(onReasoning, onDelta)
         http.responsesSse(httpRequest) { payload ->
             stream.accept(payload)
         }
@@ -156,7 +156,10 @@ private fun responsesInputItems(message: AgentMessage): List<JsonObject> = when 
 // Accumulates Responses API SSE events into an AgentResponse. Terminal state
 // comes from the events themselves (completed/failed/incomplete) — this
 // stream has no [DONE] sentinel, so EOF without a terminal event is a failure.
-internal class ResponsesAgentStream(private val onDelta: (String) -> Unit) {
+internal class ResponsesAgentStream(
+    private val onReasoning: (String) -> Unit = {},
+    private val onDelta: (String) -> Unit,
+) {
     private data class PendingCall(
         var id: String? = null,
         var name: String? = null,
@@ -176,6 +179,12 @@ internal class ResponsesAgentStream(private val onDelta: (String) -> Unit) {
             "response.output_text.delta", "response.refusal.delta" -> {
                 root["delta"]?.str()?.takeIf { it.isNotEmpty() }?.let { value ->
                     text.append(value); onDelta(value)
+                }
+            }
+            "response.reasoning_summary_text.delta", "response.reasoning_text.delta", "response.reasoning.delta" -> {
+                (root["delta"]?.str()?.takeIf { it.isNotEmpty() }
+                    ?: root["delta"]?.obj()?.get("text")?.str()?.takeIf { it.isNotEmpty() })?.let { value ->
+                    onReasoning(value)
                 }
             }
             "response.output_text.done", "response.refusal.done", "response.function_call_arguments.done" -> {

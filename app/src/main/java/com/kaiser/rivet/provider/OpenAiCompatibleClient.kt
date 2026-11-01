@@ -95,7 +95,11 @@ internal class OpenAiCompatibleClient(
         val httpRequest = base(Endpoints.openAiChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
-        val stream = OpenAiAgentStream(onDelta, documentedCacheWrites = config.type == ProviderType.OpenRouter)
+        val stream = OpenAiAgentStream(
+            onReasoning = onReasoning,
+            onDelta = onDelta,
+            documentedCacheWrites = config.type == ProviderType.OpenRouter,
+        )
         val completed = http.sse(httpRequest) { payload ->
             stream.accept(payload)
         }
@@ -127,7 +131,8 @@ private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (mess
     } }
 }
 
-private class OpenAiAgentStream(
+internal class OpenAiAgentStream(
+    private val onReasoning: (String) -> Unit = {},
     private val onDelta: (String) -> Unit,
     private val documentedCacheWrites: Boolean = false,
 ) {
@@ -152,6 +157,10 @@ private class OpenAiAgentStream(
         val choice = root["choices"]?.arr()?.firstOrNull()?.obj() ?: return
         choice["finish_reason"]?.str()?.let { finishReason = it }
         val delta = choice["delta"]?.obj() ?: return
+        (delta["reasoning_content"]?.str()?.takeIf { it.isNotEmpty() }
+            ?: delta["reasoning"]?.str()?.takeIf { it.isNotEmpty() })?.let { value ->
+            onReasoning(value)
+        }
         delta["content"]?.str()?.takeIf { it.isNotEmpty() }?.let { value ->
             text.append(value); onDelta(value)
         }
