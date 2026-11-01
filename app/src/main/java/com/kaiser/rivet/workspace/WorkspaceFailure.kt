@@ -11,7 +11,7 @@ class WorkspaceFailure(val reason: Reason) : Exception(reason.message) {
         UNSUPPORTED("This document provider does not support this operation."),
         ROOT("The workspace root cannot be deleted, renamed, or moved."),
         BINARY("Binary or non-UTF-8 content cannot be edited."),
-        TOO_LARGE("This file exceeds the 1 MiB editable-file limit."),
+        TOO_LARGE("This file is larger than Rivet's 1 MiB editing limit. Read it by offset and next_offset, and change it outside Rivet."),
         CONFLICT("The file changed outside this editor. Your changes were not saved. Reopen it to review the current version."),
         STALE_TARGET("This file or folder changed while approval was pending. Inspect it before requesting a new approval."),
         PATCH("Each patch must match exactly once. No changes were written."),

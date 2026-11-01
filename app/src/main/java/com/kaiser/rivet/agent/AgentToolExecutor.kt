@@ -27,6 +27,10 @@ import kotlinx.serialization.json.put
 
 data class AgentWorkspaceEntry(val path: String, val directory: Boolean, val size: Long?)
 data class AgentFileSnapshot(val path: String, val text: String, val sha256: String, val size: Long)
+// `start`/`end` are absolute byte offsets in the document, so a caller can resume
+// from `end` and can tell a mid-character offset from a real one.
+data class AgentFileRegion(val path: String, val text: String, val sha256: String, val size: Long,
+                           val start: Long, val end: Long)
 data class AgentCreatedFile(val path: String, val sha256: String? = null, val size: Long? = null,
     val inspectionError: String? = null)
 data class AgentSearchHit(val path: String, val line: Int?, val context: String)
@@ -47,6 +51,19 @@ interface AgentWorkspace {
     suspend fun observeStructural(path: String, recursive: Boolean): WorkspaceStructuralStamp
     suspend fun list(path: String): List<AgentWorkspaceEntry>
     suspend fun read(path: String): AgentFileSnapshot
+    // Bounded region read so a document larger than Rivet's in-memory edit bound can
+    // still be paged by offset. Implementations that can stream override this; the
+    // default keeps the whole-file behaviour for everyone else.
+    suspend fun readRegion(path: String, offset: Long, maxBytes: Int): AgentFileRegion {
+        val file = read(path)
+        val bytes = file.text.toByteArray(Charsets.UTF_8)
+        val size = bytes.size.toLong()
+        val start = offset.coerceAtMost(size).toInt()
+        var end = minOf(start.toLong() + maxBytes, size).toInt()
+        while (end > start && end < bytes.size && bytes[end].toInt() and 0xC0 == 0x80) end--
+        return AgentFileRegion(path, bytes.copyOfRange(start, end).toString(Charsets.UTF_8),
+            file.sha256, size, start.toLong(), end.toLong())
+    }
     suspend fun search(path: String, query: String): AgentSearchReport
     suspend fun write(path: String, content: String, expectedHash: String): AgentFileSnapshot
     suspend fun writeDownloaded(path: String, input: InputStream, expectedExistingHash: String?): AgentFileSnapshot =
@@ -121,19 +138,18 @@ class AgentToolExecutor(
                     val path = path(args.path)
                     require(args.offset >= 0)
                     readOnly(call) {
-                        val file = workspace.read(path)
-                        val source = file.text.toByteArray(Charsets.UTF_8)
-                        if (args.offset > source.size || !isUtf8Boundary(source, args.offset)) {
+                        var length = MAX_READ_CHUNK_BYTES
+                        var region = workspace.readRegion(path, args.offset.toLong(), length)
+                        if (args.offset > region.size || region.start != args.offset) {
                             throw AgentWorkspaceFailure("invalid_offset")
                         }
-                        var end = minOf(args.offset + MAX_READ_CHUNK_BYTES, source.size)
-                        while (!isUtf8Boundary(source, end)) end--
-                        var value = readValue(file, source, args.offset, end)
+                        var value = readRegionValue(path, region)
                         while (value.toString().toByteArray(Charsets.UTF_8).size > AgentLoop.MAX_TOOL_RESULT_BYTES) {
-                            if (end == args.offset) throw AgentWorkspaceFailure("output_limit")
-                            end = args.offset + (end - args.offset) / 2
-                            while (!isUtf8Boundary(source, end)) end--
-                            value = readValue(file, source, args.offset, end)
+                            if (length <= 1) throw AgentWorkspaceFailure("output_limit")
+                            length /= 2
+                            region = workspace.readRegion(path, args.offset.toLong(), length)
+                            if (region.start != args.offset) throw AgentWorkspaceFailure("invalid_offset")
+                            value = readRegionValue(path, region)
                         }
                         success(call, value, "Read  $path")
                     }
@@ -559,19 +575,15 @@ class AgentToolExecutor(
 
     private fun hash(value: String) = require(HASH.matches(value))
 
-    private fun isUtf8Boundary(bytes: ByteArray, offset: Int) =
-        offset == bytes.size || bytes[offset].toInt() and 0xC0 != 0x80
-
-    private fun readValue(file: AgentFileSnapshot, source: ByteArray, offset: Int, end: Int) = buildJsonObject {
-        val bytes = source.copyOfRange(offset, end)
-        put("path", file.path)
-        put("text", bytes.toString(Charsets.UTF_8))
-        put("sha256", file.sha256)
-        put("size", file.size)
-        put("offset", offset)
-        put("bytes", bytes.size)
-        put("eof", end == source.size)
-        if (end < source.size) put("next_offset", end)
+    private fun readRegionValue(path: String, region: AgentFileRegion) = buildJsonObject {
+        put("path", path)
+        put("text", region.text)
+        put("sha256", region.sha256)
+        put("size", region.size)
+        put("offset", region.start)
+        put("bytes", region.end - region.start)
+        put("eof", region.end == region.size)
+        if (region.end < region.size) put("next_offset", region.end)
     }
 
     private fun boundedSearchValue(report: AgentSearchReport): JsonObject {

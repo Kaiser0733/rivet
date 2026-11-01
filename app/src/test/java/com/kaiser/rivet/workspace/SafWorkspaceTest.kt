@@ -557,4 +557,46 @@ class SafWorkspaceTest {
         app.contentResolver.releasePersistableUriPermission(tree, grantFlags)
         failure(WorkspaceFailure.Reason.PERMISSION) { restored.first.stat(WorkspacePath.ROOT) }
     }
+
+    // A document past the editable limit must still be readable by offset, without
+    // loading it whole. Editing stays bounded.
+    @Test fun regionReadPagesFilesPastTheEditingLimit() = runBlocking {
+        val entry = workspace.createFile(path("big.txt"))
+        provider.nodes[entry.documentId]!!.bytes.writeBytes(ByteArray(1_500_000) { 'a'.code.toByte() })
+        failure(WorkspaceFailure.Reason.TOO_LARGE) { workspace.readTextFile(path("big.txt")) }
+
+        val head = workspace.readTextRegion(path("big.txt"), 0, 8192)
+        assertEquals(1_500_000L, head.size)
+        assertEquals(0L, head.start)
+        assertEquals(8192L, head.end)
+        assertEquals(8192, head.text.length)
+
+        val tail = workspace.readTextRegion(path("big.txt"), 1_499_990, 8192)
+        assertEquals(1_499_990L, tail.start)
+        assertEquals(1_500_000L, tail.end)
+        assertEquals(10, tail.text.length)
+    }
+
+    @Test fun regionReadSnapsToCharacterEdges() = runBlocking {
+        val entry = workspace.createFile(path("wide.txt"))
+        provider.nodes[entry.documentId]!!.bytes.writeBytes("日本語日本語".toByteArray())
+
+        val region = workspace.readTextRegion(path("wide.txt"), 1, 8)
+
+        assertEquals(18L, region.size)
+        assertEquals(3L, region.start)
+        assertEquals(9L, region.end)
+        assertEquals("本語", region.text)
+    }
+
+    @Test fun readFileStillRejectsAnOffsetInsideACharacter() = runBlocking {
+        val entry = workspace.createFile(path("wide.txt"))
+        provider.nodes[entry.documentId]!!.bytes.writeBytes("日本語".toByteArray())
+
+        val result = AgentToolExecutor(SafAgentWorkspace(workspace)).prepare(
+            AgentToolCall("read", "read_file", """{"path":"wide.txt","offset":1}""")).execute()
+
+        assertTrue(result.content, result.error)
+        assertTrue(result.content, result.content.contains("invalid_offset"))
+    }
 }
