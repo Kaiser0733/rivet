@@ -224,6 +224,12 @@ class GeminiClientTest {
                 throw AssertionError("$reason must not authorize a function call")
             } catch (error: ProviderError.IncompleteGeneration) {
                 assertEquals(reason, error.reason)
+                if (reason == "MAX_TOKENS") {
+                    assertEquals(1, error.truncatedToolCalls.size)
+                    assertEquals("g-1", error.truncatedToolCalls.single().id)
+                } else {
+                    assertTrue(error.truncatedToolCalls.isEmpty())
+                }
             }
         }
     }

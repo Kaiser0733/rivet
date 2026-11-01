@@ -233,7 +233,27 @@ internal class ResponsesAgentStream(private val onDelta: (String) -> Unit) {
     }
 
     fun response(): AgentResponse {
-        terminalError?.let { throw it }
+        terminalError?.let { err ->
+            if (err is ProviderError.IncompleteGeneration && err.isLengthCut && toolCalls.isNotEmpty()) {
+                val truncatedCalls = toolCalls.entries.mapIndexed { idx, (_, pending) ->
+                    val rawArgs = pending.arguments.toString()
+                    val safeArgs = rawArgs.takeIf {
+                        it.isNotBlank() && jsonNestingWithinLimit(it, 32) && parseJsonObject(it) != null
+                    } ?: "{}"
+                    AgentToolCall(
+                        id = pending.id?.takeIf { it.isNotBlank() } ?: "_rivet_truncated_${idx + 1}",
+                        name = pending.name?.takeIf { it.isNotBlank() } ?: "unknown_tool",
+                        arguments = safeArgs,
+                    )
+                }
+                throw ProviderError.IncompleteGeneration(
+                    reason = err.reason,
+                    partialText = text.toString(),
+                    truncatedToolCalls = truncatedCalls,
+                )
+            }
+            throw err
+        }
         val finishedCleanly = completed || (itemDone && (text.isNotEmpty() || toolCalls.isNotEmpty()))
         if (!finishedCleanly) throw ProviderError.IncompleteGeneration("incomplete stream")
         return AgentResponse(

@@ -140,6 +140,50 @@ class AgentLoop(
                     if (contextFootprint(messages.toList()) >= before * 9 / 10) throw overflow
                     requestOnce()
                 }
+            } catch (incomplete: ProviderError.IncompleteGeneration) {
+                if (!incomplete.isLengthCut || incomplete.truncatedToolCalls.isEmpty()) {
+                    val partial = streamed.toString().ifEmpty { incomplete.partialText }
+                    if (partial.isNotBlank()) {
+                        append(AgentMessage.assistant(partial))
+                    }
+                    throw incomplete
+                }
+                modelIterations++
+                val truncatedCalls = incomplete.truncatedToolCalls.mapIndexed { index, call ->
+                    val safeId = call.id.takeIf { it.isNotBlank() } ?: "_rivet_truncated_${index + 1}"
+                    val safeName = call.name.takeIf { it.isNotBlank() } ?: "unknown_tool"
+                    val safeArgs = call.arguments.takeIf {
+                        it.isNotBlank() && jsonNestingWithinLimit(it, 32)
+                    } ?: "{}"
+                    AgentToolCall(safeId, safeName, safeArgs)
+                }
+                val assistant = AgentMessage.assistant(
+                    text = streamed.toString().ifEmpty { incomplete.partialText },
+                    toolCalls = truncatedCalls,
+                    transportState = incomplete.transportState,
+                )
+                val recoveryResults = AgentMessage.tools(truncatedCalls.map { call ->
+                    AgentToolResult(
+                        callId = call.id,
+                        name = call.name,
+                        content = LENGTH_CUT_TOOL_RESULT_CONTENT,
+                        error = true,
+                        summary = "Limited  ${call.name}".take(256).dropLastWhile { it.isHighSurrogate() },
+                    )
+                })
+                if (!canPersistToolOutput(messages + assistant + recoveryResults, 0)) {
+                    return AgentRunResult(
+                        messages = messages,
+                        stopReason = AgentStopReason.SessionLimit,
+                        modelIterations = modelIterations,
+                        toolCalls = toolCalls,
+                        mutationsAttempted = mutationsAttempted,
+                        mutationsCompleted = mutationsCompleted,
+                    )
+                }
+                append(assistant)
+                append(recoveryResults)
+                continue
             } catch (e: Throwable) {
                 val partial = streamed.toString()
                 if (partial.isNotBlank()) {
@@ -440,6 +484,8 @@ class AgentLoop(
         const val MAX_TOOL_RESULT_BYTES = 24 * 1024
         const val OUTPUT_LIMIT_CONTENT =
             "{\"error\":\"output_limit\",\"scope\":\"result\",\"limit_bytes\":24576}"
+        const val LENGTH_CUT_TOOL_RESULT_CONTENT =
+            "{\"error\":\"output_token_limit\",\"retryable\":true,\"required_action\":\"The tool call was cut off because the response hit the output token limit. Write the change in smaller pieces.\"}"
     }
 
     private fun hasFileFingerprint(content: String): Boolean = try {

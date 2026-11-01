@@ -376,6 +376,7 @@ class AnthropicClientTest {
     fun completeLookingToolUseIsRejectedWhenGenerationHitsMaxTokens() = runTest {
         val sse = listOf(
             """{"type":"content_block_start","index":0,"content_block":{"type":"tool_use","id":"tool-1","name":"delete_path","input":{"path":"Max.txt"}}}""",
+            """{"type":"content_block_delta","index":0,"delta":{"type":"input_json_delta","partial_json":"{\"path\":\"truncated"}}""",
             """{"type":"content_block_stop","index":0}""",
             """{"type":"message_delta","delta":{"stop_reason":"max_tokens"}}""",
             """{"type":"message_stop"}""",
@@ -387,8 +388,9 @@ class AnthropicClientTest {
                 AgentRequest("claude-x", emptyList(), "", ReasoningLevel.Default, emptyList()),
             ) {}
             throw AssertionError("A max_tokens tool decision must not be executed")
-        } catch (_: ProviderError) {
-            // expected
+        } catch (error: ProviderError.IncompleteGeneration) {
+            assertEquals("max_tokens", error.reason)
+            assertEquals(listOf(AgentToolCall("tool-1", "delete_path", "{}")), error.truncatedToolCalls)
         }
     }
 
