@@ -870,4 +870,24 @@ class CodingSessionsTest {
         assertEquals(newer, first.recent(id))
         assertEquals("", first.load().summary)
     }
+
+    @Test fun turnInProgressMarkerSurvivesBeforeFirstAssistantReplyAndClearsOnCompletion() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val prompt = listOf(AgentMessage.user("Fix the crash"))
+        sessions.save(prompt, interrupted = true)
+
+        val restoredAfterDeath = CodingSessions(app).load()
+        assertTrue(restoredAfterDeath.interrupted)
+        assertEquals(prompt, restoredAfterDeath.messages)
+        assertTrue(CodingSessions(app).select(id).interrupted)
+        assertTrue(CodingSessions(app).list().single { it.id == id }.interrupted)
+
+        val completed = prompt + AgentMessage.assistant("Fixed the crash.")
+        sessions.save(completed, interrupted = false)
+        val afterCompletion = CodingSessions(app).load()
+        assertFalse(afterCompletion.interrupted)
+        assertEquals(completed, afterCompletion.messages)
+        assertFalse(CodingSessions(app).list().single { it.id == id }.interrupted)
+    }
 }
