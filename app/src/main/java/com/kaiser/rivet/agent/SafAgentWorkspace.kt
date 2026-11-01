@@ -28,6 +28,14 @@ class SafAgentWorkspace(private val workspace: SafWorkspace) : AgentWorkspace {
         }
     }
 
+    // Streams the requested slice instead of loading the document, so read_file can
+    // page a file larger than the in-memory edit bound.
+    override suspend fun readRegion(path: String, offset: Long, maxBytes: Int): AgentFileRegion = call {
+        workspace.readTextRegion(WorkspacePath.parse(path), offset, maxBytes).let {
+            AgentFileRegion(path, it.text, it.sha256, it.size, it.start, it.end)
+        }
+    }
+
     override suspend fun search(path: String, query: String): AgentSearchReport = call {
         workspace.search(query, WorkspacePath.parse(path)).let { report ->
             AgentSearchReport(
