@@ -47,12 +47,20 @@ class ReasoningEffortRejectionTest {
         assertFalse(isUnsupportedReasoningError(riverRejection(), ReasoningLevel.Default))
     }
 
+    // The boundary is the wording, not the status: an endpoint can deliver its refusal
+    // inside a 200 stream, where there is no status at all (round 4, Phase 1b). A message
+    // with no status that does not read like a parameter rejection still carries no blame,
+    // and a 429 or a 5xx stays out whatever it says.
     @Test fun onlyClientSideRejectionsCarryTheBlame() {
         assertFalse(isUnsupportedReasoningError(riverRejection(500), ReasoningLevel.Ultra))
         assertFalse(isUnsupportedReasoningError(riverRejection(429), ReasoningLevel.Ultra))
-        assertFalse(isUnsupportedReasoningError(
+        assertTrue(isUnsupportedReasoningError(
             ProviderError.ProviderMessage("Invalid inference request. Check the model's supported parameters."),
             ReasoningLevel.Ultra))
+        assertFalse(isUnsupportedReasoningError(
+            ProviderError.ProviderMessage("upstream connect error or disconnect/reset"), ReasoningLevel.Ultra))
+        assertFalse(isUnsupportedReasoningError(
+            ProviderError.ProviderMessage("Invalid API key provided"), ReasoningLevel.Ultra))
     }
 
     @Test fun anOversizedInputOrAnotherFieldIsNeverBlamedOnTheEffort() {
