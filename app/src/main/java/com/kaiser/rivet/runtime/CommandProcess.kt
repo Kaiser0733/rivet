@@ -33,6 +33,24 @@ internal data class CommandOutput(
     val timedOut: Boolean,
 )
 
+internal data class CommandExitOutcome(
+    val exitCode: Int,
+    val timedOut: Boolean,
+)
+
+internal suspend fun awaitExitOrTimeout(
+    exited: CompletableDeferred<Int>,
+    timeoutMs: Long,
+    onTimeout: suspend () -> Int,
+): CommandExitOutcome {
+    val completed = withTimeoutOrNull(timeoutMs) { exited.await() }
+    return when {
+        completed != null -> CommandExitOutcome(completed, timedOut = false)
+        exited.isCompleted -> CommandExitOutcome(exited.await(), timedOut = false)
+        else -> CommandExitOutcome(onTimeout(), timedOut = true)
+    }
+}
+
 internal class CommandProcess {
     suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long,
                     onOutput: ((String, String) -> Unit)? = null): CommandOutput =
@@ -75,13 +93,12 @@ internal class CommandProcess {
                     catch (_: Exception) { /* Display failures do not interrupt the command. */ }
                 }
             } }
-            var timedOut = false
             try {
-                val completed = withTimeoutOrNull(timeoutMs) { exited.await() }
-                val exitCode = if (completed == null) {
-                    timedOut = true
+                val outcome = awaitExitOrTimeout(exited, timeoutMs) {
                     terminate(pid, exited)
-                } else completed
+                }
+                val exitCode = outcome.exitCode
+                val timedOut = outcome.timedOut
                 // The foreground shell may have exited while children kept
                 // inherited output pipes open. End that process group first.
                 CommandNative.signalGroup(pid, OsConstants.SIGKILL)
