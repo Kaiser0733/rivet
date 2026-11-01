@@ -1,6 +1,9 @@
 package com.kaiser.rivet.ui.chat
 
 import android.app.Activity
+import android.content.ClipData
+import android.content.Context
+import android.content.ClipboardManager
 import android.content.Intent
 import android.net.Uri
 import android.os.SystemClock
@@ -26,6 +29,8 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.horizontalScroll
+import androidx.compose.foundation.text.KeyboardActions
+import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
@@ -36,6 +41,8 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.ExperimentalFoundationApi
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.VerticalDivider
@@ -71,6 +78,8 @@ import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontStyle
@@ -82,6 +91,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.commandBusyReason
+import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
 import com.kaiser.rivet.chat.liveStatusLine
 import com.kaiser.rivet.agent.AgentApprovalRequest
@@ -621,7 +631,8 @@ private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewM
     val active = state.configs.firstOrNull { it.id == state.activeId }
     Box(modifier) {
         TextButton(onClick = onOpen) {
-            Text(active?.let { displayModelName(it.model) } ?: "Choose model",
+            Text(active?.let { "${displaySafeText(it.name)} · ${displayModelName(it.model)}" }
+                ?: "Choose model",
                 maxLines = 1, overflow = TextOverflow.Ellipsis,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Icon(painterResource(R.drawable.ic_chevron_down), stringResource(R.string.model_switch))
@@ -667,7 +678,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         (if (state.notice != null) 1 else 0) +
         (if (state.error != null) 1 else 0)
     val listState = rememberLazyListState()
-    var followBottom by remember { mutableStateOf(true) }
+    // Saved, not just remembered: a rotation must not yank a reader back to the end,
+    // and must not drop a user who was following the reply.
+    var followBottom by rememberSaveable { mutableStateOf(true) }
     var programmaticScroll by remember { mutableStateOf(false) }
     val bottomSlop = with(LocalDensity.current) { 72.dp.toPx() }
     val nearBottom by remember(bottomSlop) { derivedStateOf {
@@ -694,7 +707,8 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         }
     }
     LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 16.dp, vertical = 8.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
         items(timeline) { item ->
             when (item) {
@@ -827,25 +841,34 @@ private suspend fun scrollToConversationBottom(state: androidx.compose.foundatio
     if (offset != 0) state.scrollToItem(index, offset)
 }
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
 private fun MessageRow(message: AgentMessage) {
-    if (message.role == AgentRole.User) {
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-            Column(Modifier.fillMaxWidth(0.86f), horizontalAlignment = Alignment.End,
-                verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                Text("You", style = MaterialTheme.typography.labelLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Surface(color = MaterialTheme.colorScheme.surfaceContainer,
-                    shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp,
-                        bottomStart = 16.dp, bottomEnd = 4.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f))) {
-                    Text(message.text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodyMedium)
+    val context = LocalContext.current
+    val copyText = if (message.role == AgentRole.User) message.text else displaySafeText(message.text)
+    Box(Modifier.fillMaxWidth().combinedClickable(
+        onClick = {},
+        onLongClickLabel = "Copy message",
+        onLongClick = { copyToClipboard(context, copyText) },
+    )) {
+        if (message.role == AgentRole.User) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Column(Modifier.fillMaxWidth(0.86f), horizontalAlignment = Alignment.End,
+                    verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    Text("You", style = MaterialTheme.typography.labelLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Surface(color = MaterialTheme.colorScheme.surfaceContainer,
+                        shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp,
+                            bottomStart = 16.dp, bottomEnd = 4.dp),
+                        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f))) {
+                        Text(message.text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodyMedium)
+                    }
                 }
             }
+        } else {
+            AssistantMessage(displaySafeText(message.text), streaming = false)
         }
-    } else {
-        AssistantMessage(displaySafeText(message.text), streaming = false)
     }
 }
 
@@ -898,18 +921,29 @@ private fun AssistantMarkdown(text: String) {
                         }
                     }
                 }
-                is ChatMarkdownBlock.Code -> Surface(
-                    color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                    shape = RoundedCornerShape(4.dp),
-                    border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
-                ) {
-                    Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
-                        .padding(horizontal = 10.dp, vertical = 9.dp)) {
-                        Text(displaySafeText(block.text), softWrap = false,
-                            style = MaterialTheme.typography.bodySmall.copy(
-                                fontFamily = FontFamily.Monospace,
-                                color = MaterialTheme.colorScheme.onSurface),
-                        )
+                is ChatMarkdownBlock.Code -> Column(Modifier.fillMaxWidth()) {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        if (block.language.isNotBlank()) Text(displaySafeText(block.language),
+                            style = MaterialTheme.typography.labelSmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.weight(1f).padding(start = 2.dp))
+                        else Spacer(Modifier.weight(1f))
+                        CopyTextButton(block.text, "Copy code")
+                    }
+                    Surface(
+                        color = MaterialTheme.colorScheme.surfaceContainerHigh,
+                        shape = RoundedCornerShape(4.dp),
+                        border = BorderStroke(1.dp,
+                            MaterialTheme.colorScheme.outline.copy(alpha = 0.55f)),
+                    ) {
+                        Row(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())
+                            .padding(horizontal = 10.dp, vertical = 9.dp)) {
+                            Text(displaySafeText(block.text), softWrap = false,
+                                style = MaterialTheme.typography.bodySmall.copy(
+                                    fontFamily = FontFamily.Monospace,
+                                    color = MaterialTheme.colorScheme.onSurface),
+                            )
+                        }
                     }
                 }
             }
@@ -1016,6 +1050,25 @@ private fun InterruptedTurnRow(onRetry: () -> Unit, onDismiss: () -> Unit) {
     }
 }
 
+// Copies through the system clipboard. The label is also the accessibility name, so a
+// screen reader says what the button does rather than repeating the code.
+private fun copyToClipboard(context: Context, text: String) {
+    val clipboard = context.getSystemService(Context.CLIPBOARD_SERVICE) as ClipboardManager
+    clipboard.setPrimaryClip(ClipData.newPlainText("Rivet", text))
+}
+
+@Composable
+private fun CopyTextButton(text: String, label: String) {
+    val context = LocalContext.current
+    var copied by remember { mutableStateOf(false) }
+    LaunchedEffect(copied) {
+        if (copied) { delay(1500); copied = false }
+    }
+    TextButton(onClick = { copyToClipboard(context, text); copied = true }) {
+        Text(if (copied) "Copied" else label, style = MaterialTheme.typography.labelSmall)
+    }
+}
+
 @Composable
 private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?, onAction: (() -> Unit)?,
                      onDiscard: (() -> Unit)? = null, blockedReason: String? = null) {
@@ -1051,6 +1104,15 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         }
     }
     val canSend = ready && draft.isNotBlank() && pendingText == null
+    // Trailing newlines and spaces are noise; the model never wanted them.
+    val submit = {
+        val text = draftToSend(draft, canSend)
+        if (text != null) {
+            pendingText = draft
+            submittedAt = acceptedMessageCount
+            onSend(text)
+        }
+    }
     Surface(
         modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
         color = MaterialTheme.colorScheme.surface,
@@ -1066,6 +1128,11 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                 placeholder = { Text("Ask Rivet…") },
                 minLines = 1,
                 maxLines = 6,
+                keyboardOptions = KeyboardOptions(
+                    capitalization = KeyboardCapitalization.Sentences,
+                    imeAction = ImeAction.Send,
+                ),
+                keyboardActions = KeyboardActions(onSend = { submit() }),
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
                     focusedBorderColor = MaterialTheme.colorScheme.surface,
@@ -1074,13 +1141,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                     unfocusedContainerColor = MaterialTheme.colorScheme.surface,
                 ),
             )
-            IconButton(onClick = {
-                if (streaming) onCancel() else {
-                    pendingText = draft
-                    submittedAt = acceptedMessageCount
-                    onSend(draft)
-                }
-            }, enabled = streaming || canSend, modifier = Modifier.size(48.dp)
+            IconButton(onClick = { if (streaming) onCancel() else submit() },
+                enabled = streaming || canSend, modifier = Modifier.size(48.dp)
                 .clip(CircleShape)
                 .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
                     else MaterialTheme.colorScheme.surfaceVariant)) {
