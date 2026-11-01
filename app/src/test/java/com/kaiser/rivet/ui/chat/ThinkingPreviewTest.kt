@@ -21,9 +21,19 @@ class ThinkingPreviewTest {
             thinkingPreview("First\n\nSecond\n\nThird has no line end yet", streaming = true))
     }
 
-    @Test fun aChainWithoutFinishedLinesHasNoPreview() {
-        assertEquals("", thinkingPreview("One long paragraph with no line end", streaming = true))
+    // A blank header while the first paragraph streams looks like a stall, so the row
+    // shows the end of the line being written instead.
+    @Test fun anUnfinishedLinePreviewsItsOwnTail() {
+        assertEquals("One long paragraph with no line end",
+            thinkingPreview("One long paragraph with no line end", streaming = true))
+        assertEquals("fresh thought", thinkingPreview("older line\nfresh thought", streaming = true))
         assertEquals("", thinkingPreview("", streaming = true))
+        assertEquals("", thinkingPreview("   \n\t", streaming = true))
+    }
+
+    @Test fun theTailPreviewStaysOneShortLine() {
+        val long = "y".repeat(500)
+        assertEquals(160, thinkingPreview(long, streaming = true).length)
     }
 
     @Test fun thePreviewStaysOneShortLine() {

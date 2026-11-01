@@ -13,13 +13,6 @@ internal fun liveStatusLabel(activity: String?, toolRunning: Boolean,
     else -> "Thinking"
 }
 
-// While a reasoning chain streams, the work that renders it starves the one-second
-// ticker, so a counter on that line sits at 0s. Show the label alone there; the states
-// that do tick (writing, a running tool, an approval prompt) keep their clock.
-internal fun liveStatusShowsClock(toolRunning: Boolean, writing: Boolean,
-                                  waitingForApproval: Boolean): Boolean =
-    toolRunning || writing || waitingForApproval
-
 internal fun liveStatusLine(label: String, elapsedSeconds: Long): String {
     val seconds = if (elapsedSeconds < 0) 0 else elapsedSeconds
     val clock = if (seconds < 60) "${seconds}s"
