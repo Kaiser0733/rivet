@@ -44,7 +44,7 @@ sealed class ProviderError(message: String) : Exception(message) {
         is ContextOverflow -> "The model's context is full. Rivet could not reduce this request enough to continue."
         is ModelNotFound -> "Model \"$model\" was not found by this provider."
         is UnsupportedEndpoint -> "This endpoint is not supported by the provider."
-        is UnsupportedConfiguration -> "This model's output limit is too small for manual thinking. Select a model with a larger output limit or set reasoning to Default."
+        is UnsupportedConfiguration -> "This model's output limit is too small for manual thinking. Select a model with a larger output limit or set reasoning to Provider default."
         is MalformedUrl -> "The base URL is not a valid URL."
         is Network -> when (reason) {
             "dns" -> "Couldn't resolve the provider host. This can be temporary. Check your connection and try again. If it keeps happening, check the base URL."
