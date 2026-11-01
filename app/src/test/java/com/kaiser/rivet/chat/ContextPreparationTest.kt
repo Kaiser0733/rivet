@@ -265,24 +265,57 @@ class ContextPreparationTest {
     }
 
     // A summariser that keeps failing must not be paid for on every step of the turn.
-    @Test fun aFailingSummariserStopsAfterBoundedAttempts() = runBlocking {
+    // A summariser that keeps failing must not be paid for on every step of the turn, and
+    // its own failure must surface. Once the attempts are spent the request is sent as it
+    // stands, because refusing a request that still fits is the dead stop dc5235a removed.
+    @Test fun aFailingSummariserIsPaidForTwiceAndThenTheTurnProceeds() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val sessions = CodingSessions(app)
         val id = sessions.load().id!!
+        // ~30 k estimated tokens against a 32 768 ceiling: over the compaction trigger, but
+        // still inside the ceiling, so the request itself is sendable.
         val history = listOf(AgentMessage.user("Old investigation " + "x".repeat(84_000)),
             AgentMessage.assistant("Found a clue"), AgentMessage.user("Continue the current fix"))
         sessions.save(history, interrupted = true)
         val provider = FailingSummaryProvider()
         val preparation = preparation(sessions, id, 32_768, provider)
 
-        repeat(3) {
-            try { preparation.prepare(history); throw AssertionError("a failed summary must not pass silently")
-            } catch (_: IllegalStateException) { /* expected: the failure surfaces */ }
+        // The bounded attempts are spent, and each one surfaces the summariser's failure.
+        repeat(2) {
+            try {
+                preparation.prepare(history)
+                throw AssertionError("a failed summary must not pass silently")
+            } catch (_: IllegalStateException) { /* expected: the provider's failure surfaces */ }
         }
+        assertEquals("summary attempts are bounded per turn", 2, provider.requests.size)
 
-        assertTrue("summary attempts are bounded per turn, got ${provider.requests.size}",
-            provider.requests.size <= 2)
+        // The next step must not buy a third summary and must not refuse the request.
+        val sent = preparation.prepare(history)
+        assertEquals("the turn proceeds with the transcript as it stands", history, sent)
+        assertEquals("no further summary was bought", 2, provider.requests.size)
+        assertEquals("nothing was committed", "", preparation.summary)
+    }
+
+    // The last resort that legitimately refuses: a request whose own minimum projection
+    // already exceeds the ceiling cannot be sent, and no summary can make room for it.
+    @Test fun aRequestTooLargeToFitIsRefusedBeforeTheProvider() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val huge = listOf(AgentMessage.user("Pasted dump " + "x".repeat(60_000)))
+        sessions.save(huge, interrupted = true)
+        val provider = SummaryProvider()
+        val preparation = preparation(sessions, id, 16_000, provider)
+
+        try {
+            preparation.prepare(huge)
+            throw AssertionError("a request whose own minimum exceeds the ceiling must be refused")
+        } catch (_: ContextCapacityTooSmall) { /* expected */ }
+
+        assertEquals("refusing costs no summary call", 0, provider.requests.size)
+        assertEquals("the transcript is kept", huge, sessions.recent(id))
     }
 
     private fun preparation(sessions: CodingSessions, id: String, limit: Int,
