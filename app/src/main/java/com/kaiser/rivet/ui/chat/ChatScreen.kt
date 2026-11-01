@@ -1281,7 +1281,10 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             pendingText = null
         }
     }
-    val canSend = ready && draft.isNotBlank() && pendingText == null
+    // While a reply runs the view model refuses a send, so the composer must not offer
+    // one: the keyboard's Send action goes through `submit`, and a refused send used to
+    // leave `pendingText` latched with no accepted message to clear it.
+    val canSend = ready && !streaming && draft.isNotBlank() && pendingText == null
     // Trailing newlines and spaces are noise; the model never wanted them.
     val submit = {
         val text = draftToSend(draft, canSend)
