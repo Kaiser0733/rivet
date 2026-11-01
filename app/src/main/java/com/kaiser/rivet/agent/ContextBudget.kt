@@ -20,8 +20,18 @@ data class ContextAssessment(
     val capacitySource: CapacitySource,
     val allowedInputTokens: Int,
     val reservedTokens: Int,
+    // Compacting exactly at the ceiling leaves no room to send the compacted request:
+    // the next step re-triggers, and any estimation slack fails the whole turn. The
+    // trigger sits a margin below the ceiling and the plan aims a margin below that,
+    // the same two-margin scheme dsh uses (thresholdRatio .8 plus a 64k headroom).
+    val compactAtTokens: Int = allowedInputTokens,
+    val compactToTokens: Int = allowedInputTokens,
 ) {
+    /** True at the hard ceiling: the request may already be too large to send. */
     val needsReduction: Boolean get() = inputTokens != null && inputTokens >= allowedInputTokens
+
+    /** True once the request is close enough to the ceiling to compact with room to spare. */
+    val shouldCompact: Boolean get() = inputTokens != null && inputTokens >= compactAtTokens
 }
 
 internal class ContextCapacityTooSmall : Exception("context_capacity_too_small")
@@ -57,8 +67,11 @@ internal object ContextBudget {
             else -> minOf(known, minOf(UNKNOWN_RESERVE, maxOf(2048, known / 4)))
         }
         val target = (resolvedWindow - reserve).coerceAtLeast(0)
+        val headroom = (target / 8).coerceAtLeast(1024)
         return ContextAssessment(inputTokens, source, known,
             if (known == null) CapacitySource.Unknown else CapacitySource.ProviderMetadata,
-            target, reserve)
+            target, reserve,
+            compactAtTokens = (target - headroom).coerceAtLeast(0),
+            compactToTokens = (target - 2 * headroom).coerceAtLeast(0))
     }
 }

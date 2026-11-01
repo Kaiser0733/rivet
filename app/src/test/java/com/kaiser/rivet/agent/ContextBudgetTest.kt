@@ -99,6 +99,35 @@ class ContextBudgetTest {
         assertFalse(default.needsReduction)
     }
 
+    // Compacting at the ceiling leaves nothing to send. The trigger sits a margin below
+    // it and the plan aims a margin below that (dsh's two-margin scheme).
+    @Test fun compactionTriggersBeforeTheCeilingAndAimsLowerStill() {
+        val wide = ProviderConfig("c", ProviderType.OpenAiCompatible, "Compat",
+            "https://api.example/v1", "glm-5.1")
+        val assessed = ContextBudget.assess(wide, 0, TokenEstimateSource.Estimated)
+        assertEquals(262_144 - 16_000, assessed.allowedInputTokens)
+        assertTrue("trigger must leave room", assessed.compactAtTokens < assessed.allowedInputTokens)
+        assertTrue("target must sit below the trigger", assessed.compactToTokens < assessed.compactAtTokens)
+
+        val justUnderCeiling = assessed.copy(inputTokens = (assessed.allowedInputTokens - 1).toLong())
+        assertFalse("a request that still fits does not hit the hard limit", justUnderCeiling.needsReduction)
+        assertTrue("but it does compact while there is room to send the result", justUnderCeiling.shouldCompact)
+
+        val underTrigger = assessed.copy(inputTokens = (assessed.compactAtTokens - 1).toLong())
+        assertFalse(underTrigger.shouldCompact)
+        assertFalse(underTrigger.needsReduction)
+    }
+
+    @Test fun aSmallWindowKeepsAUsableTrigger() {
+        val narrow = config.copy(modelContextLimit =
+            ModelContextLimit(config.model, config.baseUrl, 4096))
+        val assessed = ContextBudget.assess(narrow, 4000, TokenEstimateSource.Estimated)
+        assertEquals(4096, assessed.allowedInputTokens)
+        assertTrue(assessed.compactAtTokens in 1 until 4096)
+        assertTrue(assessed.compactToTokens in 0 until assessed.compactAtTokens)
+        assertTrue(assessed.shouldCompact)
+    }
+
     @Test fun contextWindowResolutionOrderManualBeatsDetectedBeats256kDefault() {
         val base = ProviderConfig(
             id = "compat",
