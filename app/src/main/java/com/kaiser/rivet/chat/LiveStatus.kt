@@ -19,3 +19,9 @@ internal fun liveStatusLine(label: String, elapsedSeconds: Long): String {
         else "${seconds / 60}m ${(seconds % 60).toString().padStart(2, '0')}s"
     return "$label · $clock"
 }
+
+// A command holds the project lock until it exits, so Undo and retry cannot finish
+// while one runs. Saying so is better than accepting a tap that does nothing.
+internal fun commandBusyReason(commandRunning: Boolean): String? =
+    if (commandRunning) "A command is running. Undo and retry work again when it finishes."
+    else null

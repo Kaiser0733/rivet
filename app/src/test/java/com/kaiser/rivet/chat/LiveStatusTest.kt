@@ -1,6 +1,7 @@
 package com.kaiser.rivet.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class LiveStatusTest {
@@ -45,5 +46,11 @@ class LiveStatusTest {
 
     @Test fun aNegativeClockNeverShows() {
         assertEquals("Working · 0s", liveStatusLine("Working", -5))
+    }
+
+    @Test fun aRunningCommandSaysWhyUndoIsUnavailable() {
+        assertEquals("A command is running. Undo and retry work again when it finishes.",
+            commandBusyReason(commandRunning = true))
+        assertNull(commandBusyReason(commandRunning = false))
     }
 }
