@@ -51,4 +51,12 @@ class AgentToolErrorTest {
         assertTrue(AgentToolError.content("patch").contains("\"retryable\":false"))
         assertTrue(!AgentToolError.content("something_new").contains("retryable"))
     }
+
+    @Test fun theCheckpointLimitNamesItsRealNumbersAndTheWayOut() {
+        val action = requiredAction(AgentToolError.content("checkpoint_unavailable"))
+        org.junit.Assert.assertNotNull(action)
+        assertTrue(action!!.contains("50,000"))
+        assertTrue(action.contains("1 GiB"))
+        assertTrue(action.contains(".rivetignore"))
+    }
 }

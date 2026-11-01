@@ -172,11 +172,51 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         writeRecord(folder, record.copy(desynced = true))
     }
 
+    // Deliberately small: directory patterns only, no negation, no `**`. That covers
+    // the generated trees (node_modules, build, dist, .gradle, target) that push a
+    // project past the entry cap, without a parser subtle enough to skip real source.
+    private fun ignoredDirectories(root: File): List<String> {
+        val patterns = mutableListOf<String>()
+        listOf(".rivetignore", ".gitignore").forEach { name ->
+            val file = File(root, name)
+            if (!file.isFile) return@forEach
+            file.readLines().forEach { raw ->
+                val line = raw.trim()
+                if (line.isEmpty() || line.startsWith("#") || line.startsWith("!")) return@forEach
+                val cleaned = line.trimStart('/').trimEnd('/')
+                if (cleaned.isEmpty() || cleaned.contains("**")) return@forEach
+                patterns += cleaned
+            }
+        }
+        return patterns
+    }
+
+    private fun isIgnored(path: String, patterns: List<String>): Boolean {
+        if (patterns.isEmpty()) return false
+        val segments = path.split('/')
+        return patterns.any { pattern ->
+            val wanted = pattern.split('/')
+            // A one-part pattern matches a folder name at any depth, as Git does.
+            if (wanted.size == 1) segments.any { segmentMatches(wanted[0], it) }
+            else segments.size >= wanted.size && wanted.indices.all {
+                segmentMatches(wanted[it], segments[it])
+            }
+        }
+    }
+
+    private fun segmentMatches(pattern: String, segment: String): Boolean {
+        if (pattern.isEmpty()) return false
+        if (!pattern.contains('*')) return pattern == segment
+        val regex = Regex(pattern.split('*').joinToString(".*") { Regex.escape(it) })
+        return regex.matches(segment)
+    }
+
     private suspend fun scan(root: File, zip: ZipOutputStream? = null,
                              skipped: MutableList<String>? = null): Map<String, CheckpointEntry> {
         if (!root.isDirectory || Files.isSymbolicLink(root.toPath())) throw CheckpointFailure("unsafe_entry")
         val entries = linkedMapOf<String, CheckpointEntry>()
         val context = currentCoroutineContext()
+        val ignored = ignoredDirectories(root)
         var bytes = 0L
         Files.walkFileTree(root.toPath(), object : SimpleFileVisitor<Path>() {
             override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
@@ -188,6 +228,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
                 if (dir != root.toPath() && dir.fileName.toString() == ".git") return FileVisitResult.SKIP_SUBTREE
                 if (dir != root.toPath()) {
                     val path = relative(root, dir)
+                    if (isIgnored(path, ignored)) return FileVisitResult.SKIP_SUBTREE
                     entries[path] = CheckpointEntry(true)
                     zip?.putNextEntry(ZipEntry("$path/"))
                     zip?.closeEntry()
