@@ -357,9 +357,12 @@ class WorkspaceMirrorTest {
         assertFalse(ready.dirty)
         assertFalse(mirror.hasLocalChanges())
         assertEquals("newer external change", File(ready.worktree, "file.txt").readText())
-        assertFalse(File(ready.worktree, "unsaved.txt").exists())
+        // F12 syncs what is not blocked, so the unconflicted new file is already in the
+        // project; only the blocked file keeps its pending bytes out of SAF.
+        assertEquals("only private", File(ready.worktree, "unsaved.txt").readText())
         assertEquals("newer external change", String(bytes("file.txt")))
-        assertEquals(listOf("file.txt"), workspace.listDirectory(WorkspacePath.ROOT).map { it.path.value })
+        assertEquals(listOf("file.txt", "unsaved.txt"),
+            workspace.listDirectory(WorkspacePath.ROOT).map { it.path.value }.sorted())
         assertEquals(originalCheckpointFiles, File(files, "checkpoints").walkTopDown().filter { it.isFile }
             .associate { it.relativeTo(files).path to it.readBytes().toList() })
         assertEquals(previousId, store.latest()!!.id)
