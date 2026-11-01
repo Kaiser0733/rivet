@@ -25,6 +25,7 @@ data class RuntimeCommandResult(
     val sync: String,
     val syncPath: String? = null,
     val syncSkipped: List<String> = emptyList(),
+    val syncConflicts: List<String> = emptyList(),
     val error: String? = null,
 )
 
@@ -82,7 +83,7 @@ class RuntimeController(
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
         RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
             result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
-            sync.state.code, sync.path, syncSkipped = sync.skipped)
+            sync.state.code, sync.path, syncSkipped = sync.skipped, syncConflicts = sync.conflicts)
     }
 
     suspend fun requireSafCurrent() = operations.withLock {

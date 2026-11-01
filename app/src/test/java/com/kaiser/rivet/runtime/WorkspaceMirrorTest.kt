@@ -603,4 +603,45 @@ class WorkspaceMirrorTest {
         File(root, "keep.txt").writeText("changed")
         assertTrue(store.finish(id, root))
     }
+
+    // One file edited on both sides must not stop the rest of the project syncing,
+    // and must not read as "everything is dirty" afterwards.
+    @Test fun oneConflictedFileDoesNotBlockTheRestOfTheSync() = runBlocking {
+        source("conflict-a.txt", "base".toByteArray())
+        source("conflict-b.txt", "base".toByteArray())
+        source("clean.txt", "base".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, "conflict-a.txt").writeText("agent")
+        File(root, "conflict-b.txt").writeText("agent")
+        File(root, "clean.txt").writeText("agent")
+        provider.nodes.values.first { it.name == "conflict-a.txt" }.bytes.writeBytes("user".toByteArray())
+        provider.nodes.values.first { it.name == "conflict-b.txt" }.bytes.writeBytes("user".toByteArray())
+
+        val result = mirror.sync()
+
+        assertEquals(MirrorSync.Conflict, result.state)
+        assertEquals(listOf("conflict-a.txt", "conflict-b.txt"), result.conflicts)
+        assertArrayEquals("agent".toByteArray(), bytes("clean.txt"))
+        assertEquals("user", String(bytes("conflict-a.txt")))
+        assertEquals("user", String(bytes("conflict-b.txt")))
+        assertFalse(mirror.hasLocalChanges())
+        assertFalse(mirror.prepare().dirty)
+    }
+
+    @Test fun conflictClearsOnceBothSidesAgree() = runBlocking {
+        source("both.txt", "base".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, "both.txt").writeText("agent")
+        provider.nodes.values.first { it.name == "both.txt" }.bytes.writeBytes("user".toByteArray())
+        assertEquals(MirrorSync.Conflict, mirror.sync().state)
+
+        File(root, "both.txt").writeText("user")
+
+        val again = mirror.sync()
+        assertEquals(MirrorSync.Ok, again.state)
+        assertTrue(again.conflicts.isEmpty())
+        assertFalse(mirror.hasLocalChanges())
+    }
 }
