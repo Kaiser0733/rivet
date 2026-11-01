@@ -74,10 +74,13 @@ class ProviderHeaderStorageTest {
     fun unknownStoredProviderTypeDegradesToEmptyWithoutRewritingHistory() = runBlocking {
         val payload = """[{"id":"x","type":"future_thing","name":"X","baseUrl":"https://x","model":"m"}]"""
         dataStore.edit { it[configsKey] = payload }
-        val before = file.readBytes()
 
         assertEquals(emptyList<ProviderConfig>(), store().configSnapshot())
-        assertEquals(before.toList(), file.readBytes().toList())
+
+        // F29: the stored list is kept exactly as written instead of being replaced by
+        // an empty one, and one copy is set aside for a later build to recover.
+        assertEquals(payload, dataStore.data.first()[configsKey])
+        assertEquals(payload, dataStore.data.first()[stringPreferencesKey("configs_unreadable")])
     }
 
     @Test
