@@ -95,7 +95,7 @@ data class ChatUiState(
     val interruptedTurn: Boolean = false,
 )
 
-enum class ChatErrorAction { OpenSettings, RetryProjectChanges }
+enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn }
 
 internal fun undoFailureMessage(error: Throwable?): String = when {
     error is CheckpointFailure && error.code == "undo_desync" ->
@@ -338,6 +338,17 @@ class ChatViewModel private constructor(
             _uiState.value.recoveringProjectChanges || !_uiState.value.interruptedTurn) return
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
         if (lastUser.isEmpty() && activeMessages.isEmpty()) return
+        startTurn(lastUser, retryingInterrupted = true)
+    }
+
+    // Re-runs the last prompt after a failed turn. The failed request already left its
+    // user message in the transcript, so the turn reuses that tail instead of adding a
+    // second copy.
+    fun retryFailedTurn() {
+        val state = _uiState.value
+        if (state.streaming || !state.ready || state.recoveringProjectChanges) return
+        val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
+        if (lastUser.isEmpty()) return
         startTurn(lastUser, retryingInterrupted = true)
     }
 
@@ -772,12 +783,17 @@ class ChatViewModel private constructor(
                 throw e
             } catch (e: ProviderError) {
                 Log.w("RivetChat", "agent request failed: ${e.javaClass.simpleName}")
-                stableFailure(ticket, durable, e.text(),
+                // A provider that explains itself gets to say so, in its own words.
+                val detail = (e as? ProviderError.ProviderMessage)?.let { providerMessageText(it.text) }
+                stableFailure(ticket, durable, detail ?: e.text(),
                     if (e is ProviderError.Unauthorized || e is ProviderError.Forbidden ||
-                        e is ProviderError.ModelNotFound) ChatErrorAction.OpenSettings else null)
+                        e is ProviderError.ModelNotFound) ChatErrorAction.OpenSettings
+                    else ChatErrorAction.RetryTurn)
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent turn failed: ${e.javaClass.simpleName}")
-                stableFailure(ticket, durable, "Rivet couldn't finish this request. Completed project changes remain safe.")
+                stableFailure(ticket, durable,
+                    "Rivet couldn't finish this request. Completed project changes remain safe.",
+                    ChatErrorAction.RetryTurn)
             } finally {
                 approvals.cancel()
                 val id = checkpointId
@@ -903,8 +919,14 @@ class ChatViewModel private constructor(
         val history = sessions?.list()
         val usage = _uiState.value.currentSessionId?.let { sessions?.usage(it) }
         val visible = _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: persisted
-        val errorAction = if (result.failureCode != null && result.failureCode in SYNC_RECOVERY_CODES)
-            ChatErrorAction.RetryProjectChanges else null
+        val errorAction = when {
+            result.failureCode != null && result.failureCode in SYNC_RECOVERY_CODES ->
+                ChatErrorAction.RetryProjectChanges
+            // Nothing else to recover from: offer the way back the turn deserves.
+            error != null && result.stopReason != AgentStopReason.CapabilityBlocked ->
+                ChatErrorAction.RetryTurn
+            else -> null
+        }
         _uiState.update {
             it.copy(messages = visible, streaming = false, streamingText = "", pendingApproval = null,
                 toolLifecycle = emptyList(),

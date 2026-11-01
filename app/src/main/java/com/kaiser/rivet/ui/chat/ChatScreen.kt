@@ -558,6 +558,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                             onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
                             onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
                             onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
+                            onRetryTurn = chatViewModel::retryFailedTurn,
                             modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
                     }
                 }
@@ -633,6 +634,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onDiscardProjectChanges: () -> Unit,
                         onRetryInterruptedTurn: () -> Unit,
                         onDismissInterruptedTurn: () -> Unit,
+                        onRetryTurn: () -> Unit,
                         modifier: Modifier = Modifier) {
     val timeline = remember(state.messages, state.toolLifecycle) {
         AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
@@ -715,11 +717,13 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 when (state.errorAction) {
                     ChatErrorAction.OpenSettings -> "Open Settings"
                     ChatErrorAction.RetryProjectChanges -> "Try again"
+                    ChatErrorAction.RetryTurn -> "Retry"
                     null -> null
                 },
                 when (state.errorAction) {
                     ChatErrorAction.OpenSettings -> onOpenSettings
                     ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
+                    ChatErrorAction.RetryTurn -> onRetryTurn
                     null -> null
                 }, onDiscard = onDiscardProjectChanges.takeIf {
                     state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
