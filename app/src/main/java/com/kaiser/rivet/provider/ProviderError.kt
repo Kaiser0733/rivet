@@ -28,7 +28,7 @@ sealed class ProviderError(message: String) : Exception(message) {
     class ResponseTooLarge : ProviderError("provider response exceeded Rivet's size limit")
     class Server(val status: Int) : ProviderError("server error: $status")
     object EmptyResponse : ProviderError("empty response")
-    class ProviderMessage(val text: String) : ProviderError(text)
+    class ProviderMessage(val text: String, val statusCode: Int? = null) : ProviderError(text)
 
     // Keep provider wire messages out of normal Chat; they may contain
     // implementation details or request fragments.

@@ -119,8 +119,8 @@ fun httpError(code: Int, body: String?): ProviderError {
         detail?.let { isModelNotFound(code, it) } == true ->
             ProviderError.ModelNotFound(extractModelName(detail))
         code == 404 -> ProviderError.UnsupportedEndpoint()
-        detail != null -> ProviderError.ProviderMessage(detail)
-        else -> ProviderError.ProviderMessage("HTTP $code")
+        detail != null -> ProviderError.ProviderMessage(detail, code)
+        else -> ProviderError.ProviderMessage("HTTP $code", code)
     }
 }
 
@@ -170,7 +170,8 @@ private fun extractModelName(detail: String): String {
     return detail.take(60)
 }
 
-internal fun isUnsupportedReasoningError(error: ProviderError, requested: ReasoningLevel): Boolean {
+internal fun isUnsupportedReasoningError(error: ProviderError, requested: ReasoningLevel,
+                                          effortWasSent: Boolean = true): Boolean {
     if (requested == ReasoningLevel.Default) return false
     if (error is ProviderError.UnsupportedConfiguration) return true
     val message = (error as? ProviderError.ProviderMessage)?.text ?: return false
@@ -187,8 +188,38 @@ internal fun isUnsupportedReasoningError(error: ProviderError, requested: Reason
                 "valid values" in value || "must be one of" in value || "cannot be set" in value))
     if (mentionsReasoning) return true
     val wire = requested.wireName.lowercase(java.util.Locale.ROOT)
-    return wire in value && ("effort" in value || "reasoning" in value || "thinking" in value)
+    if (wire in value && ("effort" in value || "reasoning" in value || "thinking" in value)) return true
+    // Some endpoints reject an effort without naming it ("Invalid inference request. Check
+    // the model's supported parameters and input limits."). Only a client-side rejection on
+    // an effort that was actually sent may be read that way; a size problem or a complaint
+    // about another field we send must not be blamed on the effort.
+    if (!effortWasSent) return false
+    val status = (error as ProviderError.ProviderMessage).statusCode
+    return status in setOf(400, 422) && looksLikeParameterRejection(value)
 }
+
+private val PARAMETER_REJECTION = listOf(
+    "invalid inference request", "invalid request", "invalid parameter", "invalid value",
+    "unsupported parameter", "unsupported value", "supported parameters", "bad request",
+)
+
+// An input that was too big is a size problem, not an effort problem.
+private val SIZE_REJECTION = listOf(
+    "too long", "too large", "too many tokens", "exceeds", "maximum context", "context length",
+    "token count", "payload", "out of memory",
+)
+
+// A complaint about another request field must not be blamed on the effort either.
+private val OTHER_FIELD_REJECTION = listOf(
+    "temperature", "top_p", "top_k", "max_tokens", "max_output_tokens", "stream", "messages",
+    "tools", "tool_choice", "image", "schema", "frequency_penalty", "presence_penalty",
+    "response_format", "seed", "does not exist", "not found",
+)
+
+private fun looksLikeParameterRejection(value: String): Boolean =
+    PARAMETER_REJECTION.any { it in value } &&
+        SIZE_REJECTION.none { it in value } &&
+        OTHER_FIELD_REJECTION.none { it in value }
 
 fun networkError(e: IOException): ProviderError = when {
     e.cause is SecurityException -> ProviderError.Network("permission")

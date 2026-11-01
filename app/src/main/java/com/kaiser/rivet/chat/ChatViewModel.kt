@@ -32,6 +32,7 @@ import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.isUnsupportedReasoningError
+import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.provider.recommendedFallbackReasoning
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
@@ -906,7 +907,9 @@ class ChatViewModel private constructor(
                 Log.w("RivetChat", "agent request failed: ${e.javaClass.simpleName}")
                 val requested = snapshot.config.reasoning
                 val recommended = recommendedFallbackReasoning(requested)
-                if (recommended != null && isUnsupportedReasoningError(e, requested)) {
+                // Only an effort this provider actually sends can be refused by it.
+                val effortSent = offeredReasoning(snapshot.config).contains(requested)
+                if (recommended != null && isUnsupportedReasoningError(e, requested, effortSent)) {
                     // The model refused this effort. Offer the way down instead of a
                     // dead end, and keep the prompt so the user never retypes it.
                     stableFailure(ticket, durable, UNSUPPORTED_REASONING_ERROR, null,
