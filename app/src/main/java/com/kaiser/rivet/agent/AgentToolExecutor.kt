@@ -58,9 +58,13 @@ interface AgentWorkspace {
         val file = read(path)
         val bytes = file.text.toByteArray(Charsets.UTF_8)
         val size = bytes.size.toLong()
-        val start = offset.coerceAtMost(size).toInt()
-        var end = minOf(start.toLong() + maxBytes, size).toInt()
+        // Advance past a partial character instead of silently serving from the middle
+        // of one. The caller sees start != offset and reports invalid_offset.
+        var start = offset.coerceAtMost(size).toInt()
+        while (start < bytes.size && bytes[start].toInt() and 0xC0 == 0x80) start++
+        var end = minOf(start + maxBytes, bytes.size)
         while (end > start && end < bytes.size && bytes[end].toInt() and 0xC0 == 0x80) end--
+        if (end < start) end = start
         return AgentFileRegion(path, bytes.copyOfRange(start, end).toString(Charsets.UTF_8),
             file.sha256, size, start.toLong(), end.toLong())
     }
