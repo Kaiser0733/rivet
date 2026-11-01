@@ -64,10 +64,14 @@ internal object AgentContext {
     fun canStubAggressively(messages: List<AgentMessage>): Boolean {
         val userTurns = messages.count { it.role == AgentRole.User }
         if (userTurns <= 20) return true
+        // A result's summary defaults to the tool name, so a blank check would call every
+        // result summarised and the turn count above would guard nothing. Only a summary
+        // someone actually wrote, or structured output, shows stubbing keeps its meaning.
         return messages.any { message ->
             message.toolCalls.any { it.arguments.toByteArray(Charsets.UTF_8).size >= 2048 } ||
                 message.toolResults.any { result ->
-                    result.summary.isNotBlank() || parseObject(result.content) != null
+                    (result.summary.isNotBlank() && result.summary != result.name) ||
+                        parseObject(result.content) != null
                 }
         }
     }

@@ -10,6 +10,30 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentContextTest {
+    // A result's summary defaults to the tool name, so it must not read as "this output
+    // was summarised". A long plain-text transcript keeps the turn cap in force.
+    @Test fun aggressiveStubbingNeedsARealSummaryOrStructuredOutputInLongConversations() {
+        fun turn(index: Int, summary: String, content: String = "x".repeat(8_000)) = listOf(
+            AgentMessage.user("Inspect $index"),
+            AgentMessage.assistant("", listOf(AgentToolCall("call-$index", "read_file", "{}"))),
+            AgentMessage.tools(listOf(AgentToolResult("call-$index", "read_file", content, summary = summary))),
+        )
+
+        val defaultSummaries = buildList { repeat(21) { addAll(turn(it, summary = "read_file")) } }
+        assertFalse(AgentContext.canStubAggressively(defaultSummaries))
+
+        val writtenSummary = buildList { repeat(21) { addAll(turn(it, summary = "Read index.html chunk $it")) } }
+        assertTrue(AgentContext.canStubAggressively(writtenSummary))
+
+        val structured = buildList {
+            repeat(21) { addAll(turn(it, summary = "read_file", content = """{"path":"index.html","size":10}""")) }
+        }
+        assertTrue(AgentContext.canStubAggressively(structured))
+
+        val shortChat = buildList { repeat(20) { addAll(turn(it, summary = "read_file")) } }
+        assertTrue(AgentContext.canStubAggressively(shortChat))
+    }
+
     @Test fun budgetPlanKeepsAContiguousRecentTailAndLatestUserTurns() {
         val history = buildList {
             repeat(10) { index ->
