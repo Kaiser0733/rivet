@@ -67,6 +67,27 @@ class ReasoningEffortRejectionTest {
             "Invalid request. The model 'deepseek-x' does not exist.", 400), ReasoningLevel.Ultra))
     }
 
+    // The device path: the endpoint answers 200 and puts the refusal inside the stream,
+    // so `providerMessage` builds the error with no HTTP status at all
+    // (Http.kt:133-138 via OpenAiCompatibleClient.kt:148-152). A rule that insists on a
+    // 400 status is blind exactly here, which is what the device showed.
+    @Test fun aRefusalDeliveredInsideTheStreamIsRecognised() {
+        val inStream = ProviderError.ProviderMessage(
+            "Invalid inference request. Check the model's supported parameters and input limits.")
+        assertTrue(isUnsupportedReasoningError(inStream, ReasoningLevel.Ultra))
+        assertTrue(isUnsupportedReasoningError(inStream, ReasoningLevel.Max))
+        // Nothing was sent for Off, so nothing can be blamed on it.
+        assertFalse(isUnsupportedReasoningError(inStream, ReasoningLevel.Default))
+        // The guards still hold when the status is missing.
+        assertFalse(isUnsupportedReasoningError(ProviderError.ProviderMessage(
+            "Invalid request: input token count exceeds the maximum number of tokens allowed."),
+            ReasoningLevel.Ultra))
+        assertFalse(isUnsupportedReasoningError(ProviderError.ProviderMessage(
+            "Invalid parameter: temperature must be between 0 and 2."), ReasoningLevel.Ultra))
+        assertFalse(isUnsupportedReasoningError(ProviderError.ProviderMessage(
+            "Unsupported parameter: messages"), ReasoningLevel.Ultra))
+    }
+
     @Test fun anEffortThatWasNotSentIsNotBlamed() {
         assertFalse(isUnsupportedReasoningError(riverRejection(), ReasoningLevel.Ultra,
             effortWasSent = false))
