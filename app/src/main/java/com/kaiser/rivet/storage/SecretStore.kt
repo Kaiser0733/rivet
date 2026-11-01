@@ -12,7 +12,7 @@ import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
 
-class SecretStore private constructor(context: Context, private val keyProvider: () -> SecretKey) {
+class SecretStore internal constructor(context: Context, private val keyProvider: () -> SecretKey) {
     constructor(context: Context) : this(context, { androidKey() })
 
     internal constructor(context: Context, testKey: SecretKey) : this(context, { testKey })
@@ -34,6 +34,9 @@ class SecretStore private constructor(context: Context, private val keyProvider:
         false
     } catch (e: IOException) {
         false
+    } catch (e: RuntimeException) {
+        // A keystore Rivet cannot reach must fail closed instead of taking the app down.
+        false
     }
 
     // Plaintext leaves this boundary only while constructing a provider
@@ -54,6 +57,8 @@ class SecretStore private constructor(context: Context, private val keyProvider:
             null
         } catch (e: IOException) {
             null
+        } catch (e: RuntimeException) {
+            null
         }
     }
 
@@ -68,6 +73,8 @@ class SecretStore private constructor(context: Context, private val keyProvider:
         null
     } catch (e: IOException) {
         null
+    } catch (e: RuntimeException) {
+        null
     }
 
     internal fun decryptProviderHeader(providerId: String, index: Int, value: String): String? {
@@ -81,6 +88,8 @@ class SecretStore private constructor(context: Context, private val keyProvider:
         } catch (e: GeneralSecurityException) {
             null
         } catch (e: IOException) {
+            null
+        } catch (e: RuntimeException) {
             null
         }
     }
@@ -106,6 +115,9 @@ class SecretStore private constructor(context: Context, private val keyProvider:
         false
     } catch (e: IOException) {
         false
+    } catch (e: RuntimeException) {
+        // A keystore Rivet cannot reach must fail closed instead of taking the app down.
+        false
     }
 
     fun oauthBundle(providerId: String): String? {
@@ -123,6 +135,8 @@ class SecretStore private constructor(context: Context, private val keyProvider:
         } catch (e: GeneralSecurityException) {
             null
         } catch (e: IOException) {
+            null
+        } catch (e: RuntimeException) {
             null
         }
     }
