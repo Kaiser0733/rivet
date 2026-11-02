@@ -25,7 +25,8 @@ class GitHubUpdatesTest {
     private lateinit var updates: GitHubUpdates
 
     @Before fun setup() {
-        val certificate = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
+        val certificate = HeldCertificate.Builder().addSubjectAlternativeName("localhost")
+            .addSubjectAlternativeName("127.0.0.1").build()
         server = MockWebServer()
         // Chunked framing is HTTP/1.1; HTTP/2 carries DATA frames instead.
         server.protocols = listOf(okhttp3.Protocol.HTTP_1_1)
@@ -34,7 +35,7 @@ class GitHubUpdatesTest {
         val trust = HandshakeCertificates.Builder().addTrustedCertificate(certificate.certificate).build()
         val client = OkHttpClient.Builder().sslSocketFactory(trust.sslSocketFactory(), trust.trustManager)
             .proxy(Proxy.NO_PROXY).addInterceptor { chain ->
-                chain.proceed(chain.request().newBuilder().url(server.url(chain.request().url.encodedPath)).build())
+                chain.proceed(chain.request().newBuilder().url(server.url(chain.request().url.encodedPath).newBuilder().host("127.0.0.1").build()).build())
             }.cookieJar(object : CookieJar {
                 override fun saveFromResponse(url: HttpUrl, cookies: List<Cookie>) {}
                 override fun loadForRequest(url: HttpUrl) = listOf(Cookie.Builder().name("secret").value("provider-cookie").domain("github.com").build())
