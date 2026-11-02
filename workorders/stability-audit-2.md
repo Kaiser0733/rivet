@@ -590,14 +590,21 @@ escaped; five `Text` calls now go through `displaySafeText`:
 | `SettingsScreen.kt:163` `loadError` | fixed app copy (`ProvidersViewModel.kt:90/605/623`) | no |
 | `SettingsScreen.kt:225` `autonomyError` | fixed app copy (`RivetApp.kt:156`) | no |
 | `SettingsScreen.kt:280` `appearanceError` | fixed app copy (`RivetApp.kt:135`) | no |
+| `SettingsScreen.kt:167` `headerNotice` | fixed app copy with a count (`ProvidersViewModel.kt:106-114`) | no |
 
 `test.message` is one line above the site the review named and is the same exposure — it is the
-main "Test connection" error surface — so it is included, and said so here rather than folded
-in silently. The three SettingsScreen values carry no provider text today, so escaping changes
-nothing they show; they are done anyway so the rule is "every Text that shows a stored error
-string" instead of a list of exceptions to keep current. No test: `displaySafeText` is already
-pinned (`ChatPresentationTest.bidiFormattingControlsAreVisibleInApprovalAndPathText`) and this
-source set has no `createComposeRule` to assert the wiring.
+main "Test connection" error surface — so it is included, and said so here rather than folded in
+silently. `headerNotice` came last: the broader source check recorded as `rcpt-0016` ("no bare
+`Text(<stored string>, ...)` left on the provider screens") failed on exactly that line, so the
+code was changed to satisfy the rule rather than the claim narrowed to fit the code
+(`8e4b97dc851f`).
+
+The three SettingsScreen error values and the notice carry no provider text today, so escaping
+changes nothing they show; they are done anyway so the rule is "every Text that prints a stored
+string on the provider screens" instead of a list of exceptions to keep current. No test:
+`displaySafeText` is already pinned
+(`ChatPresentationTest.bidiFormattingControlsAreVisibleInApprovalAndPathText`) and this source
+set has no `createComposeRule` to assert the wiring.
 
 **C2 — `4e677da`: the context refusal names the budget it judged against (Hermes' decision).**
 The F4 guess/measured distinction is used, not re-derived: `ContextAssessment` now carries
