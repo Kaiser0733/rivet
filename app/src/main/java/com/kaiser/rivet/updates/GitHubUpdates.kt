@@ -6,6 +6,7 @@ import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeout
@@ -23,7 +24,7 @@ import okio.Buffer
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-internal class UpdateFailure(message: String) : Exception(message)
+internal class UpdateFailure(message: String, val retryable: Boolean = false) : Exception(message)
 
 internal data class ReleaseVersion(val major: Int, val minor: Int, val patch: Int) : Comparable<ReleaseVersion> {
     override fun compareTo(other: ReleaseVersion) = compareValuesBy(this, other,
@@ -59,7 +60,8 @@ internal class GitHubUpdates(
     init { require(maxDownloadBytes in 1..MAX_APK_BYTES) }
 
     suspend fun check(installedVersion: String): ReleaseUpdate? {
-        val result = fetch(LATEST.toHttpUrlOrNull()!!, "application/vnd.github+json") { response ->
+        val result = retrying {
+            fetch(LATEST.toHttpUrlOrNull()!!, "application/vnd.github+json", CHECK_TRANSPORT) { response ->
             if (response.code == 404) return@fetch Fetch.NoRelease
             if (!response.isSuccessful) throw UpdateFailure("Rivet couldn't check GitHub for updates. Try again later.")
             val body = response.body ?: throw metadataFailure()
@@ -72,6 +74,7 @@ internal class GitHubUpdates(
                 if (buffer.size > MAX_METADATA_BYTES) throw metadataFailure()
             }
             Fetch.Body(buffer.readUtf8())
+            }
         }
         return when (result) {
             Fetch.NoRelease -> null
@@ -123,7 +126,8 @@ internal class GitHubUpdates(
                     withTimeout(10 * 60_000L) {
                         var url = release.url.toHttpUrlOrNull() ?: throw metadataFailure()
                         repeat(6) {
-                            val result = fetch(url, "application/vnd.android.package-archive", target) { response ->
+                            val result = retrying {
+                                fetch(url, "application/vnd.android.package-archive", DOWNLOAD_TRANSPORT, target) { response ->
                                 if (!response.isSuccessful) throw UpdateFailure("Rivet couldn't download the update. Try again later.")
                                 val body = response.body ?: throw UpdateFailure("GitHub returned an empty update.")
                                 val length = body.contentLength().takeIf { it >= 0 }
@@ -146,7 +150,8 @@ internal class GitHubUpdates(
                                     throw UpdateFailure("The update download was incomplete. Try again.")
                                 }
                                 Fetch.Downloaded
-                            }
+                                        }
+                                    }
                             when (result) {
                                 Fetch.Downloaded -> return@withTimeout target
                                 is Fetch.Redirect -> url = validatedRedirect(url, result.location)
@@ -170,7 +175,25 @@ internal class GitHubUpdates(
         return url
     }
 
-    private suspend fun fetch(url: HttpUrl, accept: String, staged: File? = null,
+    // Three attempts, transport failures only, with a growing pause between them. Anything else is
+    // final: a response that arrived (even a bad one) and a validation failure would fail the same
+    // way three times, and a 14 MB download that dies on one dropped connection has no business
+    // being a one-shot. OkHttp's own connection retry stays off: it cannot resume, it cannot be
+    // counted, and with both on there would be two owners of retrying. This one owner is testable.
+    private suspend fun <T> retrying(block: suspend () -> T): T {
+        var attempt = 1
+        while (true) {
+            try {
+                return block()
+            } catch (error: UpdateFailure) {
+                if (!error.retryable || attempt >= MAX_ATTEMPTS) throw error
+                delay(RETRY_PAUSE_MS * attempt)
+                attempt++
+            }
+        }
+    }
+
+    private suspend fun fetch(url: HttpUrl, accept: String, transportMessage: String, staged: File? = null,
                               read: (Response) -> Fetch): Fetch = suspendCancellableCoroutine { continuation ->
         val cancelled = AtomicBoolean(false)
         val call = client.newCall(Request.Builder().url(url).header("Accept", accept).get().build())
@@ -178,7 +201,7 @@ internal class GitHubUpdates(
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
                 if (continuation.isActive) continuation.resumeWithException(
-                    UpdateFailure("Rivet couldn't reach GitHub. Check your connection and try again."))
+                    UpdateFailure(transportMessage, retryable = true))
             }
             override fun onResponse(call: Call, response: Response) {
                 try {
@@ -209,6 +232,10 @@ internal class GitHubUpdates(
     companion object {
         const val MAX_APK_BYTES = 200L * 1024 * 1024
         private const val MAX_METADATA_BYTES = 512L * 1024
+        private const val MAX_ATTEMPTS = 3
+        private const val RETRY_PAUSE_MS = 400L
+        private const val CHECK_TRANSPORT = "Rivet couldn't reach GitHub. Check your connection and try again."
+        private const val DOWNLOAD_TRANSPORT = "Rivet couldn't reach GitHub. Check your connection and try again."
         private const val LATEST = "https://api.github.com/repos/Kaiser0733/rivet/releases/latest"
         private val ASSET_HOSTS = setOf("github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com",
             "github-releases.githubusercontent.com")
