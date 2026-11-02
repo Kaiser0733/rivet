@@ -105,17 +105,26 @@ class HttpBridgeTest {
     // correctly, and it sent ContextPreparation's summary-budget abort down AgentLoop's provider
     // branch instead of its context-unavailable one.
     //
-    // The contract pinned here, in the three parts that matter: the caller's error reaches it as
-    // itself, it is not relabelled as a provider failure, and it is not lost (a lost error would
-    // leave the continuation unresumed and fail the two-second budget below rather than passing).
+    // The contract pinned here, in the parts production actually depends on: the caller's failure
+    // arrives as its own type with its own message, it is not relabelled as a provider failure, and
+    // it is not lost (a lost error leaves the continuation unresumed and fails the two-second
+    // budget instead of passing). The abort thrown here is the real one: ContextPreparation throws
+    // IllegalStateException("context_summary_limit") from inside the delta lambda, and keys the
+    // recorded failure code on that message.
+    //
+    // Not pinned: instance identity. The coroutine library does not preserve it — kotlinx 1.9.0's
+    // stack-trace recovery copies an exception with its (Throwable) copy constructor when it is
+    // resumed across a dispatcher (recoverStackTrace -> tryCopyException), keeping type and
+    // message. Nothing downstream compares identity: AgentLoop matches by type, ContextPreparation
+    // by message.
     @Test
-    fun aCallbackFailureReachesTheCallerAsItselfAndIsNeverLost() = runBlocking {
+    fun aCallbackFailureReachesTheCallerUnrelabelledAndIsNeverLost() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setBody("data: {}\n\n").setHeader("Content-Type", "text/event-stream"))
         server.start()
         try {
             val request = Request.Builder().url(server.url("/stream")).build()
-            val abort = IllegalArgumentException("context_summary_limit")
+            val abort = IllegalStateException("context_summary_limit")
             val thrown = try {
                 withTimeout(2_000) {
                     OkHttpClient().sse(request) { throw abort }
@@ -124,7 +133,10 @@ class HttpBridgeTest {
             } catch (error: Throwable) {
                 error
             }
-            assertSame("the callback's own error must reach the caller as itself", abort, thrown)
+            assertTrue("the callback's failure must reach the caller as its own type", thrown is IllegalStateException)
+            if (thrown is IllegalStateException) {
+                assertEquals("with its own message, which is the failure code", "context_summary_limit", thrown.message)
+            }
             assertFalse("and must not be relabelled as a provider failure", thrown is ProviderError)
         } finally {
             server.shutdown()

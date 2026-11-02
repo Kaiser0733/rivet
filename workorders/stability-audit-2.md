@@ -1280,11 +1280,68 @@ the path:
    relabelling that commit removed.
 
 The test is corrected to pin the new contract in its three parts, and nothing weaker: the caller's
-error reaches it **as itself** (`assertSame` against the exact instance), it is **not relabelled**
-(`assertFalse(thrown is ProviderError)`), and it is **not lost** (a lost error leaves the
-continuation unresumed and fails the two-second budget instead of passing). The test count is
-unchanged at 746 — one test replaced, none added, none removed. No production code changed in this
-commit.
+error reaches it **as itself**, it is **not relabelled** (`assertFalse(thrown is ProviderError)`),
+and it is **not lost** (a lost error leaves the continuation unresumed and fails the two-second
+budget instead of passing). The test count is unchanged at 746 — one test replaced, none added, none
+removed. No production code changed in this commit.
+
+*Round 3 corrected the first of those three: "as itself" was pinned as `assertSame` on the instance,
+and the coroutine library does not preserve the instance. See the next entry.*
+
+**CI round 3 — run 41394255113, head `c962c77`: 746 tests, 1 failed, the corrected test, on its own
+`assertSame`. Verdict: the pin was wrong again, and the copier is named below.**
+
+```
+java.lang.AssertionError: the callback's own error must reach the caller as itself
+  expected same:<java.lang.IllegalArgumentException: context_summary_limit>
+  was not:<java.lang.IllegalArgumentException: context_summary_limit>
+```
+
+Same type, same message, different instance — so something between the throw and the caller copies
+it. Where it is, ruled from the code:
+
+- **Not the bridge.** `StreamCallbackFailure` is `Exception(cause)`, which stores the reference;
+  `e.cause ?: e` at `Http.kt:403` hands that very reference to `resumeWithException`. Nothing in the
+  chain constructs a new exception out of the original.
+- **Not OkHttp.** The failure never leaves `onResponse`: it is caught at `Http.kt:377`, resumed at
+  `:403`, and the callback returns normally.
+- **Not the fixture.** MockWebServer serves bytes; the exception is thrown by the test's own lambda.
+- **The coroutine library.** Code path: `resumeWithException` resumes a suspended coroutine with a
+  failure; when that resumption crosses a dispatcher, kotlinx resumes through `DispatchedTask` and
+  applies stack-trace recovery — `recoverStackTrace` → `tryCopyException`
+  (`kotlinx/coroutines/internal/StackTraceRecovery.kt`), which builds a **new** exception through the
+  class's `(Throwable)` copy constructor, preserving type, message and cause. `IllegalStateException`
+  and `IllegalArgumentException` both have that constructor. Recovery is on by default
+  (`kotlinx.coroutines.stacktrace.recovery`, default `true`), and this test crosses two dispatcher
+  boundaries: `runBlocking`'s event loop resuming `sse`'s `suspendCancellableCoroutine` from the
+  OkHttp thread, and `withTimeout`'s timer resuming the outer coroutine. Version in the tree:
+  `kotlinx-coroutines-test:1.9.0` (`app/build.gradle.kts:111`).
+
+So the copy is the library's, applied to every non-`CancellationException` that is resumed across a
+dispatcher — and the test demanded the one property it does not preserve.
+
+**What the contract actually needs** — the abort this exists for, with both ends:
+`ContextPreparation.kt:249` and `:260` throw `IllegalStateException("context_summary_limit")` from
+inside the delta lambda handed to `client.streamAgent`, which is the shape the test imitates.
+Downstream, `ContextPreparation.kt:62-67` catches `Exception` and keys the recorded failure code on
+`e.message` against a fixed set of codes — **the message is the contract** — and `AgentLoop.kt:106-114`
+matches by **type**, with `catch (e: ProviderError) { throw e }` ahead of `catch (_: Exception)`, so a
+relabelling is what sends the abort down the provider branch instead of `ContextUnavailable`. Nothing
+in the app stores the exception or compares identity.
+
+**Fixed on the test side, in `c962c77`'s successor:** the pin is now the honest contract — same type
+(`thrown is IllegalStateException`), same message (the failure code), **not** a `ProviderError`, and
+**not lost**. It also now throws the real production type and message instead of
+`IllegalArgumentException("bad field type")`, which exists nowhere in the app, so the test sits
+closer to the path it protects than the version it replaced. It still fails if the error is
+relabelled (type assertion and `is ProviderError` both fail) or dropped (`withTimeout` surfaces a
+`TimeoutCancellationException`, which is not an `IllegalStateException`). Test count unchanged at
+746.
+
+*What I cannot do here: print the received stack trace to show the copy's fingerprint, because a
+passing test records no trace and there is no JVM on this host. The copier is identified by mechanism
+and version, not by observing the copy — the confirming one-liner for anyone with a JVM is that
+`thrown.stackTrace` points into `kotlinx.coroutines` rather than at the throw site.*
 
 **STOP POINT — this run stopped where kaiser's standing order says to stop rather than rush.** The
 performance audit is complete and fixed. The correctness audit covered all 85 files; six findings are
