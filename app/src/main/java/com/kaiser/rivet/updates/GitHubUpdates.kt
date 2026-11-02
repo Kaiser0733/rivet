@@ -130,7 +130,7 @@ internal class GitHubUpdates(
                                 fetch(url, "application/vnd.android.package-archive", DOWNLOAD_TRANSPORT, target,
                                             rangeFrom = target.length()) { response ->
                                 if (response.code != 200 && response.code != 206) {
-                                    throw UpdateFailure("Rivet couldn't download the update. Try again later.")
+                                    throw UpdateFailure("GitHub answered, but not with the update file. Try again later.")
                                 }
                                 val body = response.body ?: throw UpdateFailure("GitHub returned an empty update.")
                                 // 206 means the server honoured the Range we asked for, so the bytes
@@ -259,8 +259,13 @@ internal class GitHubUpdates(
         private const val MAX_METADATA_BYTES = 512L * 1024
         private const val MAX_ATTEMPTS = 3
         private const val RETRY_PAUSE_MS = 400L
-        private const val CHECK_TRANSPORT = "Rivet couldn't reach GitHub. Check your connection and try again."
-        private const val DOWNLOAD_TRANSPORT = "Rivet couldn't reach GitHub. Check your connection and try again."
+        // Plain words, and honest about which server said what. "Check your connection" led nowhere
+        // for a user whose connection was fine: a transport failure here means this host could not
+        // be reached from this device, and it may well be the host.
+        private const val CHECK_TRANSPORT =
+            "Rivet couldn't reach GitHub to check for updates. Try again later."
+        private const val DOWNLOAD_TRANSPORT =
+            "Rivet couldn't download the update file. GitHub's file server could not be reached."
         private const val LATEST = "https://api.github.com/repos/Kaiser0733/rivet/releases/latest"
         private val ASSET_HOSTS = setOf("github.com", "release-assets.githubusercontent.com", "objects.githubusercontent.com",
             "github-releases.githubusercontent.com")
