@@ -18,6 +18,18 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 
+/**
+ * Whether a projected request can be sent at all.
+ *
+ * Two things are required and nothing else: it has to fit the ceiling, which is what the provider
+ * will take, and it has to be smaller than the request we would otherwise have sent, so a retry is
+ * never the same request twice. The comfortable margin below the ceiling is an aim, not a condition —
+ * treating it as one is what refused a long chat that had a sendable projection, which is the dead
+ * end kaiser hit on device.
+ */
+internal fun projectionCanBeSent(after: Long, baseline: Long, ceiling: Long): Boolean =
+    after < ceiling && after < baseline
+
 /** Builds the request that is actually sent, then changes only its durable active projection. */
 internal class ContextPreparation(
     private val store: CodingSessions?,
@@ -111,6 +123,11 @@ internal class ContextPreparation(
         val roomAfterMinimum = targetTokens - minimumTokens - summaryEnvelopeTokens - 256L
         val summaryBudgetTokens = minOf(TaskState.MAX_BYTES / 3L, roomAfterMinimum / 2)
             .coerceAtLeast(0)
+        // The same summary allowance measured against the ceiling instead of the target, so a
+        // projection that only has to fit the ceiling still gets a usable state budget.
+        val summaryBudgetCeiling = minOf(TaskState.MAX_BYTES / 3L,
+            (ceilingTokens - minimumTokens - summaryEnvelopeTokens - 256L).coerceAtLeast(0L) / 2)
+            .coerceAtLeast(0L)
         val targetBytes = ((targetTokens - fixedTokens - summaryEnvelopeTokens - summaryBudgetTokens - 256L) * 3L)
             .coerceIn(0L, 500_000L).toInt()
 
@@ -142,15 +159,26 @@ internal class ContextPreparation(
         val basis = aggressivePruned ?: pruned ?: messages
         val inputLimitBytes = minOf(96 * 1024L, budget.allowedInputTokens.toLong() * 2).toInt()
         val summaryLimitBytes = (summaryBudgetTokens * 3).toInt()
-        val plan = if (targetBytes > 0 && summaryBudgetTokens > 0 && summaryCalls < MAX_SUMMARY_CALLS) {
+        // A projection that fits the ceiling is a request the provider will take; one smaller than
+        // the baseline is progress. That is everything a sent request needs. Aiming a margin below
+        // the ceiling is comfort, not the contract — and insisting on it is what turned a long chat
+        // into a dead end on device: the transcript could be summarised into a request that fits,
+        // and the turn refused anyway. So the target-sized plan is tried first, and the ceiling-sized
+        // one — "the summary plus the most recent tail that still fits" — is the continuation.
+        val canSummarise = summaryCalls < MAX_SUMMARY_CALLS
+        val targetPlan = if (targetBytes > 0 && summaryBudgetTokens > 0 && canSummarise) {
             AgentContext.plan(basis, targetBytes, minimumSavingsBytes = 1)
         } else null
-        if (plan == null) {
-            if (summary.isNotBlank() && summaryLimitBytes > 0 && summaryCalls < MAX_SUMMARY_CALLS) {
+        val ceilingBytes = ((ceilingTokens - fixedTokens - summaryEnvelopeTokens - summaryBudgetCeiling - 256L) * 3L)
+            .coerceIn(0L, 500_000L).toInt()
+        val ceilingPlan = if (ceilingBytes > 0 && summaryBudgetCeiling > 0 && canSummarise) {
+            AgentContext.plan(basis, ceilingBytes, minimumSavingsBytes = 1)
+        } else null
+        if (targetPlan == null) {
+            if (summary.isNotBlank() && summaryLimitBytes > 0 && canSummarise) {
                 val shortened = taskState(emptyList(), id, inputLimitBytes, summaryLimitBytes).encode()
                 val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, basis, shortened))
-                if (shortened != summary && after < targetTokens && after < baseline &&
-                    (!force || after < baseline * 9 / 10)) {
+                if (shortened != summary && projectionCanBeSent(after, baseline, ceilingTokens)) {
                     return commit(durableStore, messages, basis, shortened,
                         attempt.copy(afterTokens = after))
                 }
@@ -160,24 +188,31 @@ internal class ContextPreparation(
                 ?: pruned
             if (fallbackStubbed != null) {
                 val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, fallbackStubbed, summary))
-                if (after < targetTokens && after < baseline && (!force || after < baseline * 9 / 10)) {
+                if (projectionCanBeSent(after, baseline, ceilingTokens)) {
                     return commit(durableStore, messages, fallbackStubbed, summary,
+                        attempt.copy(afterTokens = after))
+                }
+            }
+            if (ceilingPlan != null) {
+                val state = taskState(ceilingPlan.removed, id, inputLimitBytes, (summaryBudgetCeiling * 3).toInt()).encode()
+                val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, ceilingPlan.retained, state))
+                if (ceilingPlan.retained != messages && projectionCanBeSent(after, baseline, ceilingTokens)) {
+                    return commit(durableStore, messages, ceilingPlan.retained, state,
                         attempt.copy(afterTokens = after))
                 }
             }
             return noHeadroom(durableStore, id, attempt, messages, force, ceilingTokens)
         }
-        val next = taskState(plan.removed, id,
-            inputLimitBytes, summaryLimitBytes)
-        val encoded = next.encode()
-        val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, plan.retained, encoded))
-        if (after >= targetTokens ||
-            (force && after >= baseline * 9 / 10) ||
-            after >= baseline || plan.retained == messages) {
-            return noHeadroom(durableStore, id, attempt, messages, force, ceilingTokens)
+        for ((plan, budget) in listOf(targetPlan to summaryBudgetTokens, ceilingPlan to summaryBudgetCeiling)) {
+            if (plan == null || plan.retained == messages) continue
+            val state = taskState(plan.removed, id, inputLimitBytes, (budget * 3).toInt()).encode()
+            val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, plan.retained, state))
+            if (projectionCanBeSent(after, baseline, ceilingTokens)) {
+                return commit(durableStore, messages, plan.retained, state,
+                    attempt.copy(afterTokens = after))
+            }
         }
-        return commit(durableStore, messages, plan.retained, encoded,
-            attempt.copy(afterTokens = after))
+        return noHeadroom(durableStore, id, attempt, messages, force, ceilingTokens)
     }
 
     private fun fits(candidate: List<AgentMessage>, target: Long, baseline: Long, force: Boolean): Boolean {
