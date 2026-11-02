@@ -79,4 +79,58 @@ class ChatMarkdownTest {
             }
         }
     }
+
+    // A reply streams one delta at a time, and the render path keeps the blocks before the last
+    // one and re-parses only that block. This is the pin that the shortcut is invisible: every
+    // prefix a stream can pass through, and every prefix followed by more text, must equal a full
+    // parse. The documents cover each block kind, blank runs, an open fence, and CRLF.
+    @Test fun theIncrementalParserEqualsAFullParseForEveryStreamingPrefix() {
+        val documents = listOf(
+            "## A heading\n\nFirst paragraph.\nStill the same paragraph.\n\n> A quoted line",
+            "- one\n- two\n\n3. three\n4. four",
+            "```kotlin\nval answer = 42\nprintln(answer)\n```",
+            "```\nfirst\nsecond",
+            "text with **bold**, *italic* and `code`\n\n- item **b**\n\n## H3 ###\n> quote\n> more\n\nfinal",
+            "",
+            "a",
+            "\n\n\n",
+            "para\r\nwith crlf\r\n\r\n- x\r\n",
+            "```\nopen fence\n\n# not a heading inside\n```\nafter\n\n## heading\n",
+        )
+        for (document in documents) {
+            val parser = MarkdownBlocks()
+            for (end in 0..document.length) {
+                val prefix = document.take(end)
+                assertEquals("prefix $end of ${document.take(24).replace("\n", "\\n")}",
+                    parseAssistantMarkdown(prefix), parser.forText(prefix))
+            }
+            // The same prefixes, each followed by more text: the shape growth actually takes.
+            for (end in 0..document.length) {
+                val parser2 = MarkdownBlocks()
+                val prefix = document.take(end)
+                assertEquals(parseAssistantMarkdown(prefix), parser2.forText(prefix))
+                val grown = prefix + "\nmore text\n\n- extra\n"
+                assertEquals("grown at $end", parseAssistantMarkdown(grown), parser2.forText(grown))
+            }
+        }
+    }
+
+    @Test fun aReplacedTextIsParsedInFullRatherThanExtended() {
+        val parser = MarkdownBlocks()
+        assertEquals(parseAssistantMarkdown("- one\n- two"), parser.forText("- one\n- two"))
+        // A retry or an edit replaces the text instead of growing it.
+        val replacement = "## something else\n\n```\ncode\n```"
+        assertEquals(parseAssistantMarkdown(replacement), parser.forText(replacement))
+        // And a shorter text goes back through the full parse too.
+        assertEquals(parseAssistantMarkdown("## something"), parser.forText("## something"))
+    }
+
+    @Test fun anUnchangedTextIsReturnedAsItWas() {
+        val parser = MarkdownBlocks()
+        val text = "a\n\nb\n\n- c"
+        val first = parser.forText(text)
+        val again = parser.forText(text)
+        assertEquals(parseAssistantMarkdown(text), first)
+        assertTrue("the same text must not be parsed twice", first === again)
+    }
 }

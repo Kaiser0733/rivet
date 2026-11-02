@@ -1137,7 +1137,11 @@ private fun AssistantMessage(text: String, streaming: Boolean) {
 
 @Composable
 private fun AssistantMarkdown(text: String) {
-    val blocks = remember(text) { parseAssistantMarkdown(text) }
+    // The answer grows a few characters at a time while it streams. A full parse per publication
+    // re-splits and re-joins the whole reply; this keeps the blocks before the last one and
+    // re-parses only that block, with the same result (see MarkdownBlocks).
+    val parser = remember { MarkdownBlocks() }
+    val blocks = parser.forText(text)
     Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
         blocks.forEach { block ->
             when (block) {

@@ -15,9 +15,20 @@ internal data class InlineRun(
     val code: Boolean = false,
 )
 
-internal fun parseAssistantMarkdown(source: String): List<ChatMarkdownBlock> {
+internal fun parseAssistantMarkdown(source: String): List<ChatMarkdownBlock> = parseBlocks(source).first
+
+// The block parse also reports where its last block starts, which is what lets a streaming
+// answer re-parse only that block. See MarkdownBlocks below.
+private fun parseBlocks(source: String): Pair<List<ChatMarkdownBlock>, IntArray> {
     val lines = source.split('\n')
+    val lineStarts = IntArray(lines.size)
+    var offset = 0
+    for (index in lines.indices) {
+        lineStarts[index] = offset
+        offset += lines[index].length + 1
+    }
     val blocks = ArrayList<ChatMarkdownBlock>()
+    val blockStarts = ArrayList<Int>()
     var line = 0
     while (line < lines.size) {
         if (lines[line].isBlank()) {
@@ -27,6 +38,7 @@ internal fun parseAssistantMarkdown(source: String): List<ChatMarkdownBlock> {
         val current = lines[line]
         val trimmed = current.trimStart()
         if (trimmed.startsWith("```")) {
+            blockStarts += lineStarts[line]
             val language = trimmed.drop(3).trim()
             line++
             val code = ArrayList<String>()
@@ -40,11 +52,13 @@ internal fun parseAssistantMarkdown(source: String): List<ChatMarkdownBlock> {
         }
         val heading = heading(trimmed)
         if (heading != null) {
+            blockStarts += lineStarts[line]
             blocks += heading
             line++
             continue
         }
         if (trimmed.startsWith(">")) {
+            blockStarts += lineStarts[line]
             val quote = ArrayList<String>()
             while (line < lines.size) {
                 val value = lines[line].trimStart()
@@ -57,6 +71,7 @@ internal fun parseAssistantMarkdown(source: String): List<ChatMarkdownBlock> {
         }
         val firstItem = listItem(trimmed)
         if (firstItem != null) {
+            blockStarts += lineStarts[line]
             val items = ArrayList<String>()
             val ordered = firstItem.ordered
             val start = firstItem.number
@@ -69,6 +84,7 @@ internal fun parseAssistantMarkdown(source: String): List<ChatMarkdownBlock> {
             blocks += ChatMarkdownBlock.ListItems(ordered, start, items)
             continue
         }
+        blockStarts += lineStarts[line]
         val paragraph = ArrayList<String>()
         while (line < lines.size && lines[line].isNotBlank()) {
             val value = lines[line].trimStart()
@@ -77,9 +93,59 @@ internal fun parseAssistantMarkdown(source: String): List<ChatMarkdownBlock> {
             paragraph += lines[line]
             line++
         }
-        if (paragraph.isNotEmpty()) blocks += ChatMarkdownBlock.Paragraph(paragraph.joinToString("\n"))
+        // The loop only runs while the line is non-blank, so there is always one to add.
+        blocks += ChatMarkdownBlock.Paragraph(paragraph.joinToString("\n"))
     }
-    return blocks
+    return blocks to blockStarts.toIntArray()
+}
+
+/**
+ * Block parsing for one reply that grows while it streams.
+ *
+ * A streaming answer republishes its whole text every few milliseconds, and a full parse splits
+ * every line and re-joins every block each time, so a long reply costs its own length per
+ * publication. The parser is line-based, so blocks further back are a function of the lines before
+ * them and appending text cannot move them: only the last two blocks need rebuilding.
+ *
+ * Two, not one, because the last line of the text may not have settled: "- a\n-" is a list and a
+ * paragraph, and one more character ("- ") makes it a single list of two items, so the last block
+ * can be absorbed by the block before it. Everything before that pair is fixed.
+ *
+ * The result is exactly the full parse's value — the same blocks, in the same order, with the same
+ * text; `ChatMarkdownTest` checks that at every prefix of a set of documents and
+ * `round3/markdown-incremental-check.py` exhaustively. Anything else (a shorter text, or a
+ * different one, as a retry or an edit produces) falls back to a full parse.
+ */
+internal class MarkdownBlocks {
+    private var source: String = ""
+    private var blocks: List<ChatMarkdownBlock> = emptyList()
+    private var starts: IntArray = IntArray(0)
+
+    fun forText(text: String): List<ChatMarkdownBlock> {
+        if (text == source) return blocks
+        if (blocks.isNotEmpty() && text.length > source.length && text.startsWith(source)) {
+            val keep = (blocks.size - 2).coerceAtLeast(0)
+            val from = starts[keep]
+            val (tail, tailStarts) = parseBlocks(text.substring(from))
+            if (tail.isNotEmpty()) {
+                val next = ArrayList<ChatMarkdownBlock>(keep + tail.size)
+                next.addAll(blocks.subList(0, keep))
+                next.addAll(tail)
+                val nextStarts = IntArray(keep + tailStarts.size)
+                for (index in 0 until keep) nextStarts[index] = starts[index]
+                for (index in tailStarts.indices) nextStarts[keep + index] = from + tailStarts[index]
+                source = text
+                blocks = next
+                starts = nextStarts
+                return next
+            }
+        }
+        val (full, fullStarts) = parseBlocks(text)
+        source = text
+        blocks = full
+        starts = fullStarts
+        return full
+    }
 }
 
 private fun heading(line: String): ChatMarkdownBlock.Heading? {
