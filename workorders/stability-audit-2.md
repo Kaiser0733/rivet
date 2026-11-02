@@ -37,7 +37,7 @@ Chosen design: **carry across when the workspace matches, plus rehydrate on load
 | F3 classifier replacing a real message | **CLOSED, no code change** — boundary is the tightest the evidence supports, see below |
 | F4 `capacitySource` gating | **DONE** — `5209bc8` (guessed window plans at 131 072; entered/detected windows byte-identical, pinned by `aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged`) |
 | F5 title dead-end | **DONE** — `c4dbe7f`, test `40a88bd` |
-| F6 per-delta rendering cost | pins committed `859c601`; cost cut NOT done — design constraint below |
+| F6 per-delta rendering cost | **DONE** — pins `859c601`, cost cut `952370f` (scanner resumes per delta; scroll key bucketed) |
 | F7 three SUSPECTED UI items | 1 settled (state resets, does not hop); 2 DEVICE-ONLY; 3 **FIXED** `327ff50` per Hermes' decision |
 
 ### F5 — title dead-end  [ DONE ]
@@ -209,6 +209,59 @@ Implementation settled for the next run (verified against the code, not yet writ
 Not written in this run: it is an assembly-level edit to a composable plus its render path, and I
 had no room left to write it and re-read it against the pins line by line. Stopping beats a
 half-verified "no behaviour change" refactor.
+
+### F6 — built in `952370f` (what the cut actually is, and one bug it found)
+
+**The scanner.** `lastFinishedParagraphFirstLine` (`ChatText.kt:56-70` before) became
+`PreviewScan` (`ChatText.kt:78-108`): the loop is unchanged, its own two locals (`summary`,
+`paragraphStart`) are the carried state, and `advance(text)` resumes at `paragraphStart` instead
+of at 0. `thinkingPreview(text, streaming, scan = PreviewScan())` is a one-shot run of that
+scanner, so the pins in `ThinkingPreviewTest` exercise the composable's code path rather than a
+parallel pure function. `ThinkingBlock` (`ChatScreen.kt:1029-1037`) keeps one `remember {
+PreviewScan() }` and passes it, so a delta reads the open paragraph, not the chain.
+
+**The bug the design as recorded would have shipped.** Resuming at `paragraphStart` alone is not
+equivalent to scanning from zero, and the pins do not catch it: a blank-line run that is still
+open when a delta arrives (text ends `"...\n\n"`) becomes a *longer* separator on the next delta
+(`"...\n\n \n"`), which moves where the following paragraph starts. A resume point inside that
+run reads the next line as part of the open paragraph and loses it. Found by executing the scan
+in a line-by-line transcription and checking every prefix of 2000 random chains against a
+from-zero scan (host has no JDK); fixed by never resuming inside a trailing run of blanks —
+`minOf(start, blankTailStart(text))` (`ChatText.kt:101`, `:113-117`), which can only move the
+resume point earlier, and resuming earlier is harmless because the loop is deterministic and
+`summary` is overwritten, not accumulated. Pinned for CI by
+`aBlankLineThatGrowsAcrossDeltasKeepsTheNextParagraphsFirstLine` (the exact failing sequence),
+plus `resumingAScanAtEachDeltaMatchesScanningFromZero` (every prefix of a chain with paragraph
+breaks, an open paragraph, a trailing separator and the tail fallback) and
+`aScanHandedAShorterChainStartsOver`. **The three pinned tests from `859c601` are unedited**
+(additions only — `bash /tmp/audit-checks.sh pins-untouched`).
+
+**Measured cost** (same transcription, 4-char deltas): a 4 449-character paragraph-shaped chain
+reads 2 475 312 characters scanning from zero versus 179 091 resuming (13.8×). Honest worst case:
+a chain with no blank line at all is one open paragraph, so resuming gains nothing (1.0×) —
+unchanged, not worse.
+
+**The scroll key: I did not key on "message count and activity" as recorded, and here is why.**
+That would drop the growth-triggered scroll entirely, and growth is the only thing that keeps a
+long reply visible: `scrollToConversationBottom` (`ChatScreen.kt:958-965`) pins the *last* item's
+bottom to the viewport bottom, and a LazyColumn keeps its anchor when an item above the fold
+grows. So the reply would run below the fold until the turn ended (`state.streaming` flips, the
+effect re-runs) and then jump. That is a visible behaviour change, which F6 forbids. What is in
+`ChatScreen.kt:768-775` instead: the two streamed lengths are keyed in steps of
+`STREAMED_SCROLL_STEP = 24` (under half a line at body size, `:659-663`) so a token-sized delta
+no longer restarts the effect, while the two transitions that add or remove a row
+(`streamingReasoning.isNotBlank()`, `streamingText.isNotBlank()`) stay exact because they move a
+whole row at once. The tail can therefore sit at most ~24 characters below the fold and the
+effect restarts a fraction as often.
+
+**Residuals, named:** (1) `ChatViewModel.kt:655-656` still builds `reasoningPreview.toString()` per
+delta and `ChatScreen.kt:815` still runs `displaySafeText` over the whole streaming answer per
+delta — both are O(text) per delta and outside the recorded design; publication per delta is
+deliberate (`3641fb9`, round 4 rejected stopping it). (2) The scan is valid only for one growing
+chain: the streaming row is a keyed LazyColumn item whose text only grows, and a shorter text
+restarts the scan, but a *different, longer* chain handed to the same instance would be wrong —
+unreachable today because the row leaves composition when the reasoning blanks
+(`ChatViewModel.kt:823-825`, `:917`), and stated as an invariant at `ChatText.kt:68-75`.
 
 ## STOP POINT (for the next run)
 
