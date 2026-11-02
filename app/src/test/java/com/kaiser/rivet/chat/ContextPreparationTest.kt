@@ -18,6 +18,7 @@ import com.kaiser.rivet.storage.AgentSessionStore
 import com.kaiser.rivet.storage.CodingSessions
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -321,6 +322,20 @@ class ContextPreparationTest {
 
         assertEquals("refusing costs no summary call", 0, provider.requests.size)
         assertEquals("the transcript is kept", huge, sessions.recent(id))
+    }
+
+    // Kaiser's device case: a long chat whose compacted projection fit what the model would take,
+    // refused anyway because the projection did not fit the comfortable margin Rivet aims for. A
+    // request is sendable when it fits the ceiling and is smaller than what we would otherwise send,
+    // and that is all — no third condition may creep back in, or the wall comes back with it.
+    @Test fun aProjectionThatFitsTheCeilingIsSentEvenAboveTheComfortableTarget() {
+        val ceiling = 220_000L
+        assertTrue("fits the ceiling, just above the aim: this is the device dead end",
+            projectionCanBeSent(ceiling - 1, baseline = ceiling + 40_000, ceiling = ceiling))
+        assertFalse("at the ceiling is not sendable",
+            projectionCanBeSent(ceiling, baseline = ceiling + 40_000, ceiling = ceiling))
+        assertFalse("no smaller than the request it replaces is not progress",
+            projectionCanBeSent(ceiling - 1, baseline = ceiling - 1, ceiling = ceiling))
     }
 
     private fun preparation(sessions: CodingSessions, id: String, limit: Int,
