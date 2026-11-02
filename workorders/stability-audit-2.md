@@ -1238,14 +1238,30 @@ the sixth provider-screen site `8e4b97d`, the two compile breaks CI found `0b28b
 kaiser's device-feedback addition `5f68178`, the device-found clock fix `3051632`, the audit
 fix `31f0895`, the device-found scroll fix `b06145d`, then the final pre-merge audits: performance
 `4da714d` and `1e52764`, correctness `13c84e3`, `2d84400`, `24ed5e7`, `fab9c9e`, `2f16c37` and
-`88338c3`.
+`88338c3`, and the compile error CI found on `6bf3313` in the C-2 fix, repaired in `3a55247`.
+
+**CI-found fix on the audit round (`3a55247`).** The first CI run over these commits
+(Android Build 41393230961 on `6bf3313`) failed to compile, with one error in the C-2 fix:
+
+```
+app/src/main/java/com/kaiser/rivet/provider/Http.kt:398:91
+Argument type mismatch: actual type is 'kotlin.Throwable?', but 'kotlin.Throwable' was expected.
+```
+
+`resumeWithException(e.cause)` — `getCause()` is nullable, and the wrapper is only ever built with a
+cause, so the compiler was right and my type was the optimistic one. Fixed by handling the null
+instead of asserting it away: `e.cause ?: e`. The wrapper is the same failure (built from the
+thrown exception, carrying its message and stack), so the caller still gets an error rather than a
+dropped one — which is what C-2 exists to guarantee. No `!!`: a null on the path whose job is to
+stay careful must not become the crash.
 
 **STOP POINT — this run stopped where kaiser's standing order says to stop rather than rush.** The
 performance audit is complete and fixed. The correctness audit covered all 85 files; six findings are
 verified and fixed, and the ten residuals above plus the suspects are *unverified reports*, not
-cleared code. Not done in this run: verifying and fixing those residuals; and no CI has run on any of
-these eight commits (six correctness, two performance) — the compile and the 743 tests are Hermes'
-next step, and every fix above is its own commit so any one of them can be dropped.
+cleared code. Not done in this run: verifying and fixing those residuals. CI has run once over these
+commits and found the one compile error recorded above, now fixed; the compile and the full test
+total have not been seen green, and Hermes verifies both from the next run. Every fix above is its
+own commit, so any one of them can be dropped.
 
 **Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes, both
 CI-found import fixes, the three CI-found fixture fixes, kaiser's device-feedback addition, the
