@@ -581,7 +581,8 @@ or run it, so the first execution of `ThinkingPreviewTest`'s new cases is CI.
 
 **C1 — `fbb152f`: the provider screens' error text, same rule as the banner.** The A2-4
 leftover, closed at the render sites and not in the formatter, as asked. No site already
-escaped; five `Text` calls now go through `displaySafeText`:
+escaped; six `Text` calls now go through `displaySafeText` — the four the review named plus
+two on the same screens that print a stored string:
 
 | Site | What flows in | Already escaped? |
 |---|---|---|
@@ -592,9 +593,9 @@ escaped; five `Text` calls now go through `displaySafeText`:
 | `SettingsScreen.kt:280` `appearanceError` | fixed app copy (`RivetApp.kt:135`) | no |
 | `SettingsScreen.kt:167` `headerNotice` | fixed app copy with a count (`ProvidersViewModel.kt:106-114`) | no |
 
-`test.message` is one line above the site the review named and is the same exposure — it is the
-main "Test connection" error surface — so it is included, and said so here rather than folded in
-silently. `headerNotice` came last: a broader source check ("no bare `Text(<stored string>, ...)`
+The review named `fetchError`, `loadError`, `autonomyError` and `appearanceError`. `test.message`
+is one line above `fetchError` and is the same exposure — the main "Test connection" error
+surface — so it is included, and said so here rather than folded in silently. `headerNotice` came last: a broader source check ("no bare `Text(<stored string>, ...)`
 left on the provider screens") failed on exactly that line, so the code was changed to satisfy
 the rule rather than the claim narrowed to fit the code (`8e4b97dc851f`, `3ef966e`).
 
