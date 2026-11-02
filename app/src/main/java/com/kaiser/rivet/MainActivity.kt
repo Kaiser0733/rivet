@@ -16,7 +16,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        consumeProcessRequest(intent)
+        // The system redelivers the original launch intent after a recreation (the extra removed
+        // by consumeProcessRequest only reaches this instance's Intent, not the activity record),
+        // so a rotation would replay "open Processes" over the screen the user navigated back to.
+        // Restoring is not launching: only a fresh launch handles the request.
+        if (savedInstanceState == null) consumeProcessRequest(intent)
         // AGP 8.x has no BuildConfig version field by default; the package
         // manager is the source of truth for the installed version.
         val versionName = packageManager.getPackageInfo(packageName, 0).versionName ?: ""
