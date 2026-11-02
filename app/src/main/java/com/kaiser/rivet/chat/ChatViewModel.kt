@@ -18,12 +18,10 @@ import com.kaiser.rivet.agent.AgentToolExecutor
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentToolEffect
 import com.kaiser.rivet.agent.AgentToolLifecycle
-import com.kaiser.rivet.agent.ContextBudget
 import com.kaiser.rivet.agent.PreparedAgentTool
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.InternalContext
 import com.kaiser.rivet.agent.ProjectContext
-import com.kaiser.rivet.agent.TokenEstimateSource
 import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.ProjectInstructions
 import com.kaiser.rivet.agent.SafAgentWorkspace
@@ -163,29 +161,18 @@ internal fun runtimeFailureMessage(code: String?): String = when (code) {
     else -> "Rivet couldn't start the project command. Check the project and try again."
 }
 
-// A context refusal has to name a number the request was actually judged against. F4 plans a
-// guessed window at half of Rivet's 256K default, so quoting that default would print a size
-// nothing was ever compared with; an entered or detected window is quoted exactly as before.
-internal fun contextUnavailableMessage(windowTokens: String, plannedTokens: String,
-                                       windowIsGuessed: Boolean): String =
-    if (windowIsGuessed)
-        "Rivet compacted this chat as far as it could, and it still does not fit the " +
-            "$plannedTokens-token budget Rivet planned for this model (no context window is known " +
-            "for it). Your messages were kept. Start a new conversation to keep going."
-    else
-        "Rivet compacted this chat as far as it could, and it still does not fit the " +
-            "$windowTokens-token context window. Your messages were kept. Start a new conversation " +
-            "to keep going."
+// Kaiser's ruling on the device, 2026-11-02: the old refusal was incomprehensible to a
+// non-technical user, quoted a number nothing compared against, and told someone who had worked
+// for hours to start over. No numbers, no "budget", no "token", no "context window", and no
+// "start a new conversation" anywhere in this family. What is left is what happened, that nothing
+// was lost, and one thing to try.
+internal fun contextUnavailableMessage(): String =
+    "This chat is too long for the model to read all at once, even after Rivet shortened it. " +
+        "Your messages are safe. Try again, and if it keeps stopping here, remove the longest message."
 
-internal fun contextTooSmallMessage(windowTokens: String, plannedTokens: String,
-                                    windowIsGuessed: Boolean): String =
-    if (windowIsGuessed)
-        "This request does not fit the $plannedTokens-token budget Rivet planned for this model " +
-            "(no context window is known for it). Choose a model with a larger context window or " +
-            "shorten the request."
-    else
-        "This model's context capacity is too small ($windowTokens-token context window) for this " +
-            "request. Choose a model with a larger context window or shorten the request."
+internal fun contextTooSmallMessage(): String =
+    "The newest message is too big for this model to read. Your earlier messages are safe. " +
+        "Shorten it and send it again."
 
 internal sealed interface ProviderRuntimeResult {
     data class Ready(val config: ProviderConfig, val apiKey: String) : ProviderRuntimeResult
@@ -1108,12 +1095,6 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun finish(result: AgentRunResult, durable: List<AgentMessage>, config: ProviderConfig) {
-        val windowTokens = java.lang.String.format(java.util.Locale.US, "%,d",
-            config.resolvedContextWindowTokens())
-        // The second number is the one the request was judged against: for a guessed window F4
-        // plans half of the 256K default, so the copy names that budget instead of the guess.
-        val plan = ContextBudget.assess(config, null, TokenEstimateSource.Unknown)
-        val plannedTokens = java.lang.String.format(java.util.Locale.US, "%,d", plan.allowedInputTokens)
         val error = when (result.stopReason) {
             AgentStopReason.Completed -> {
                 val last = result.messages.lastOrNull()
@@ -1131,10 +1112,8 @@ class ChatViewModel private constructor(
                     "Rivet stopped after an attempted change could not be confirmed. Project changes may remain; safe Undo is unavailable."
                 else -> "Rivet couldn't prepare a safe Undo, so it stopped before changing files."
             } + CHECKPOINT_LIMITS_HINT
-            AgentStopReason.ContextUnavailable ->
-                contextUnavailableMessage(windowTokens, plannedTokens, plan.windowIsGuessed)
-            AgentStopReason.ContextTooSmall ->
-                contextTooSmallMessage(windowTokens, plannedTokens, plan.windowIsGuessed)
+            AgentStopReason.ContextUnavailable -> contextUnavailableMessage()
+            AgentStopReason.ContextTooSmall -> contextTooSmallMessage()
             AgentStopReason.NoProgress -> "Rivet couldn't get past the same problem. Check the last message, then tell it what to try next."
             AgentStopReason.RuntimeBlocked -> runtimeFailureMessage(result.failureCode)
             AgentStopReason.CapabilityBlocked -> when (result.failureCode) {
@@ -1509,8 +1488,10 @@ class ChatViewModel private constructor(
         internal const val UNSUPPORTED_REASONING_ERROR =
             "This model does not support that reasoning effort. Choose another level to send the same message again."
 
+        // The session cap, not the model's window: the chat itself has reached its length. Plain
+        // words and no blame, and it still says the true thing — a new chat is how this one goes on.
         internal const val CONTEXT_LIMIT_ERROR =
-            "This conversation is too long to continue here. Start a new conversation."
+            "This chat is full. Your messages are safe. Start a new chat to keep working."
         internal const val INTERRUPTED_TURN_PROMPT =
             "This turn was interrupted — Retry?"
         private const val MAX_LIVE_TOOL_EVENTS = 64
