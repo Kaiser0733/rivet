@@ -109,11 +109,20 @@ class UpdateResilienceTest {
                     first = false
                     return MockResponse().setBody(full).setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)
                 }
-                val from = ranges.last()!!.removePrefix("bytes=").removeSuffix("-").toInt()
+                // Never dereference a null Range here: an exception thrown from a dispatcher aborts
+                // the connection, which the client sees as another transport failure and which hides
+                // the real one. A request without a Range is answered with the whole file instead.
+                val from = request.getHeader("Range")
+                    ?.removePrefix("bytes=")?.removeSuffix("-")?.toIntOrNull()
+                    ?.coerceIn(1, full.length - 1) ?: 0
                 resumedFrom = from
-                return MockResponse().setResponseCode(206)
-                    .setHeader("Content-Range", "bytes $from-${full.length - 1}/${full.length}")
-                    .setBody(full.substring(from))
+                return if (from == 0) {
+                    MockResponse().setBody(full).setHeader("Content-Length", full.length)
+                } else {
+                    MockResponse().setResponseCode(206)
+                        .setHeader("Content-Range", "bytes $from-${full.length - 1}/${full.length}")
+                        .setBody(full.substring(from))
+                }
             }
         }
 
