@@ -35,7 +35,7 @@ Chosen design: **carry across when the workspace matches, plus rehydrate on load
 | F1 401/403/5xx bodies | **DONE** — `83febf3` (detail on `Unauthorized`/`Forbidden`/`Server`, appended as "The provider said: …"; bodyless keeps the short sentence) |
 | F2 non-SSE 200 | **DONE** — `295f61a` (`requireEventStream` in both readers; JSON error → `httpError`, otherwise `InvalidResponse` with `NOT_A_STREAM` copy) |
 | F3 classifier replacing a real message | **CLOSED, no code change** — boundary is the tightest the evidence supports, see below |
-| F4 `capacitySource` gating | not started |
+| F4 `capacitySource` gating | **DONE** — `5209bc8` (guessed window plans at 131 072; entered/detected windows byte-identical, pinned by `aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged`) |
 | F5 title dead-end | **DONE** — `c4dbe7f`, test `40a88bd` |
 | F6 per-delta rendering cost | not started |
 | F7 three SUSPECTED UI items | not started |
@@ -111,9 +111,29 @@ must be checked against the exact body that provider returned on the device; cha
 reading alone risks re-breaking a device-verified path. Needs that body, which is in the
 round-4 device notes, not in the tree.
 
+### F4 — contract change, stated
+
+Two existing assertions changed with the fix, deliberately: `compactionTriggersBeforeTheCeilingAndAimsLowerStill`
+and the default-window half of `contextWindowResolutionOrderManualBeatsDetectedBeats256kDefault`
+now expect `131 072 - 16 000`. Justification: the subject of both tests (the two-margin
+relationship, and the manual > detected > default resolution order) is unchanged — the
+resolution still returns 262 144, asserted in the same test — while the *planning* target for a
+guessed window is exactly what F4 changes. The default-window input was lowered from 120 000 to
+100 000 so `needsReduction` still tests "under the ceiling", since 120 000 now sits above it.
+
+### S2 residual — `markInterrupted` binding (NOT done, why)
+
+Binding it needs the check and the write inside one `onDatabase` block, i.e. refactoring
+`markInterrupted`'s body the way `save` was refactored. A check-then-act wrapper would narrow
+the window without closing it, and the flag is a boolean cleanup rather than transcript data,
+so it does not meet the order's "if it fits the same shape" bar. Left named for Hermes.
+
 ## STOP POINT (for the next run)
 
-Stopped after F1 (`83febf3`). Done in this order: F5 (+test `40a88bd`), S1 (`bb5d149`),
-S2-carry (`50f21e1`), F1 (`83febf3`). **Next: F2**, using the plan above (`Http.sse` content-type
-branch + the same branch in `responsesSse`, with a MockWebServer test serving a JSON 200).
-Then F3 only with the device body in hand, F4, F6, F7, the S2 residuals, then Phase A2.
+Stopped after F4 (`5209bc8`). Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed, no code), F4.
+**Next: F6** (incremental reasoning preview + bucketed scroll key in `ChatScreen.kt:759-769`
+and `ChatText.thinkingPreview`; the accepted behaviour is that the visible preview and the
+scroll position do not change, so pin those first, then change the cost). Then F7 (three
+SUSPECTED items: message-index-keyed `remember`/`rememberSaveable` re-association after the
+100-message trim; `LiveStatusRow`'s saveable clock with no turn key; the draft not keyed to the
+conversation — read first, they may be DISPROVEN), the two named S2 residuals, then Phase A2.
