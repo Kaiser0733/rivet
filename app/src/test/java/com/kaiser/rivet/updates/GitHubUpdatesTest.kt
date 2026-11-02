@@ -10,8 +10,10 @@ import okhttp3.Cookie
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
 import org.junit.After
@@ -93,21 +95,44 @@ class GitHubUpdatesTest {
         chunked.delete()
     }
 
+    // Each case answers every request it causes, through a dispatcher, and never leaves a request
+    // hanging on an empty queue: the download retries transport failures three times, so a sub-case
+    // that drops the connection consumes three responses. Before this test was rebuilt it relied on
+    // the poisoned-route accident to fail instantly; with the harness on a single honest route it
+    // met a real 10-second read timeout instead, which is a slow failure, not a passing check.
     @Test fun downloadsAreBoundedEvenWithoutAnHonestLengthAndFailuresCleanTemps() = runTest {
         val release = updates.parseRelease(metadata(), "0.11.0")!!
-        server.enqueue(MockResponse().setChunkedBody("x".repeat(65), 8))
+        val dropMidBody = {
+            MockResponse().setBody("x").setHeader("Content-Length", 4)
+                .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_END)
+        }
+        respond(MockResponse().setChunkedBody("x".repeat(65), 8))
         assertSuspendFailure { updates.download(release) { _, _ -> } }
         assertTrue(directory.listFiles()!!.isEmpty())
-        server.enqueue(MockResponse().setBody("x"))
+
+        respond(MockResponse().setBody("x"))
         assertSuspendFailure { updates.download(release) { _, _ -> } }
-        server.enqueue(MockResponse().setResponseCode(500))
+
+        respond(MockResponse().setResponseCode(500))
         assertSuspendFailure { updates.download(release) { _, _ -> } }
-        server.enqueue(MockResponse().setBody("x").setHeader("Content-Length", 4)
-            .setSocketPolicy(okhttp3.mockwebserver.SocketPolicy.DISCONNECT_AT_END))
+
+        // A body cut short of its Content-Length is a transport failure now, so all three attempts
+        // are answered; the point of the case is that the temp file is gone when they are spent.
+        respond(dropMidBody(), dropMidBody(), dropMidBody())
         assertSuspendFailure { updates.download(release) { _, _ -> } }
-        server.enqueue(MockResponse().setBody(""))
+
+        respond(MockResponse().setBody(""))
         assertSuspendFailure { updates.download(release) { _, _ -> } }
         assertTrue(directory.listFiles()!!.isEmpty())
+    }
+
+    /** Answers the next requests from [responses], then a plain 500 so nothing is ever left hanging. */
+    private fun respond(vararg responses: MockResponse) {
+        val queue = ArrayDeque(responses.toList())
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse =
+                queue.removeFirstOrNull() ?: MockResponse().setResponseCode(500)
+        }
     }
 
     @Test fun unpublishedMissingOrMalformedMetadataIsControlled() = runTest {
