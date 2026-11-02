@@ -18,6 +18,7 @@ import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
 import okhttp3.OkHttpClient
+import okhttp3.Protocol
 import okhttp3.Request
 import okhttp3.Response
 import okio.Buffer
@@ -55,7 +56,13 @@ internal class GitHubUpdates(
 ) {
     private val client = client.newBuilder().followRedirects(false).followSslRedirects(false)
         .cookieJar(CookieJar.NO_COOKIES).authenticator(Authenticator.NONE)
-        .proxyAuthenticator(Authenticator.NONE).retryOnConnectionFailure(false).cache(null).build()
+        .proxyAuthenticator(Authenticator.NONE).retryOnConnectionFailure(false).cache(null)
+        // UNPROVEN insurance, taken deliberately and labelled as such: the device symptom was a
+        // download that died while the API check worked, which is also what an HTTP/2 stream reset
+        // or a carrier middlebox mangling HTTP/2 to a CDN host looks like. Nothing in hand proves
+        // that is this bug. Forcing HTTP/1.1 on this client alone costs one connection reuse pattern
+        // on a 14 MB file — no user-visible latency — and removes the whole class of failure.
+        .protocols(listOf(Protocol.HTTP_1_1)).build()
 
     init { require(maxDownloadBytes in 1..MAX_APK_BYTES) }
 
