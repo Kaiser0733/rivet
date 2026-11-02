@@ -41,6 +41,7 @@ import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.runtime.ManagedProcesses
 import com.kaiser.rivet.runtime.ProjectDownloader
 import com.kaiser.rivet.runtime.CheckpointFailure
+import com.kaiser.rivet.runtime.CheckpointRecord
 import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.MirrorSync
 import com.kaiser.rivet.storage.AgentSessionLimitException
@@ -277,6 +278,9 @@ class ChatViewModel private constructor(
                             interruptedTurn = interruptedTurn,
                         )
                     }
+                    // A turn that finished before the process died leaves its checkpoint on
+                    // disk; the Undo row has to come back with the conversation.
+                    if (ticket == generation) rehydrateUndo(restored.workspaceId)
                     val restoredId = restored.id
                     if (restoredId != null && !restored.interrupted && restored.title == "New session") {
                         val pendingTitle = try { sessions?.hasPendingAutoTitle(restoredId) == true }
@@ -360,6 +364,10 @@ class ChatViewModel private constructor(
                     }
                 }
                 _uiState.update { it.copy(projectLoading = false, error = null) }
+                // Switching to a project also has to offer what that project can still undo;
+                // inside the same project the row was cleared a few lines up only because the
+                // conversation changed, not the workspace.
+                rehydrateUndo(identity)
             } catch (e: CancellationException) { throw e
             } catch (e: WorkspaceFailure) {
                 _uiState.update { it.copy(projectLoading = false, projectError = when (e.reason) {
@@ -959,11 +967,9 @@ class ChatViewModel private constructor(
                             if (runtime.finishCheckpoint(workspaceId, id) && ticket == generation) {
                                 val record = runtime.latestCheckpoint()
                                 if (record?.id == id) {
-                                    val paths = runtime.checkpointTurnChanges(record)
-                                        .filter { it.beforeSize != null || it.afterSize != null }
-                                        .map { it.path }
-                                    _uiState.update { it.copy(lastTurnFiles = paths.take(5),
-                                        lastTurnFileCount = paths.size, undoCheckpointId = id) }
+                                    val row = undoRowFor(record)
+                                    _uiState.update { it.copy(lastTurnFiles = row.files,
+                                        lastTurnFileCount = row.fileCount, undoCheckpointId = row.checkpointId) }
                                 }
                             }
                         }
@@ -1270,6 +1276,40 @@ class ChatViewModel private constructor(
         _uiState.update { it.copy(error = null, errorAction = null, unsupportedReasoning = null) }
     }
 
+    // What the Undo row shows for one checkpoint: the regular files it touched, five named on
+    // screen and the rest counted. The turn that made the change and a restart that finds it
+    // again both render through here, so the row cannot drift between the two.
+    private class UndoRow(val checkpointId: String, val files: List<String>, val fileCount: Int)
+
+    private suspend fun undoRowFor(record: CheckpointRecord): UndoRow {
+        val paths = runtimeController.checkpointTurnChanges(record)
+            .filter { it.beforeSize != null || it.afterSize != null }
+            .map { it.path }
+        return UndoRow(record.id, paths.take(5), paths.size)
+    }
+
+    // Undo outlives the process. The checkpoint is on disk and belongs to the project, not to
+    // the conversation, so opening the app again in the same project has to offer the same
+    // Undo instead of coming back with no row and no way to take the change back. A checkpoint
+    // from another workspace is not this conversation's Undo, so the row is left alone.
+    private suspend fun rehydrateUndo(workspaceId: String?) {
+        if (workspaceId == null) return
+        val record = try { runtimeController.latestCheckpoint() }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { null }
+        if (record == null || record.workspace != workspaceId) return
+        val row = try { undoRowFor(record) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { return }
+        _uiState.update { state ->
+            // The conversation can move while the checkpoint is read; a row from another
+            // project's checkpoint must never appear over this one.
+            if (state.currentSessionWorkspaceId != workspaceId) state
+            else state.copy(lastTurnFiles = row.files, lastTurnFileCount = row.fileCount,
+                undoCheckpointId = row.checkpointId)
+        }
+    }
+
     fun undoLastTurn() {
         val id = _uiState.value.undoCheckpointId ?: return
         val controller = runtimeController
@@ -1317,6 +1357,9 @@ class ChatViewModel private constructor(
                     currentSessionWorkspaceId = selected.workspaceId, usage = usage,
                     projectName = project.projectName, projectIdentity = project.projectIdentity,
                     projectLoading = project.projectLoading, projectError = project.projectError)
+                // Clearing the transcript does not clear the project: a change this project
+                // can still undo must keep its row instead of becoming unreachable.
+                rehydrateUndo(selected.workspaceId)
             }
         }
     }
