@@ -594,10 +594,18 @@ escaped; five `Text` calls now go through `displaySafeText`:
 
 `test.message` is one line above the site the review named and is the same exposure — it is the
 main "Test connection" error surface — so it is included, and said so here rather than folded in
-silently. `headerNotice` came last: the broader source check recorded as `rcpt-0016` ("no bare
-`Text(<stored string>, ...)` left on the provider screens") failed on exactly that line, so the
-code was changed to satisfy the rule rather than the claim narrowed to fit the code
-(`8e4b97dc851f`).
+silently. `headerNotice` came last: a broader source check ("no bare `Text(<stored string>, ...)`
+left on the provider screens") failed on exactly that line, so the code was changed to satisfy
+the rule rather than the claim narrowed to fit the code (`8e4b97dc851f`, `3ef966e`).
+
+**One receipt in this ledger is void and stays that way.** The first recording of that check
+was made as `bash -c '! grep ...'`, and the receipts tool stores a command as its argv joined by
+spaces and replays it as a string, so the quotes were lost and `rcpt-0016` re-runs as
+`bash -c ! grep ...`, which cannot exit 0 whatever the code says. It is left in the ledger
+rather than rewritten, because editing evidence by hand is the thing a ledger exists to
+prevent, and the rule it was meant to state is checked by `rcpt-0017`, whose recorded command is
+`bash round3/provider-text-check.sh` (a script, so replay is exact). Expect `receipts check` to
+report 16 passing claims and that one void line.
 
 The three SettingsScreen error values and the notice carry no provider text today, so escaping
 changes nothing they show; they are done anyway so the rule is "every Text that prints a stored
