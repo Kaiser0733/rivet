@@ -13,6 +13,7 @@ import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.TestResult
+import com.kaiser.rivet.provider.withManualContextWindow
 import com.kaiser.rivet.storage.AgentSessionStore
 import com.kaiser.rivet.storage.CodingSessions
 import kotlinx.coroutines.runBlocking
@@ -229,7 +230,11 @@ class ContextPreparationTest {
             AgentMessage.assistant("Noted"), AgentMessage.user("Continue the fix"))
         sessions.save(history, interrupted = true)
         val provider = SummaryProvider()
+        // The window is entered, not guessed: F4 plans a guessed 256K window at half of it
+        // (a ~100k trigger), which would fire the token trigger and hide the projection-cap
+        // path this test exists to pin.
         val config = ProviderConfig("test", ProviderType.OpenAiCompatible, "Test", endpoint, "big")
+            .withManualContextWindow(262_144)
         // A fresh turn has no stored summary; the parameter stays required because a real
         // session's summary must never be silently dropped.
         val preparation = ContextPreparation(sessions, id, provider, config, "turn-big", "") { messages, _ ->
