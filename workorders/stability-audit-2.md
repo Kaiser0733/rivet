@@ -50,10 +50,10 @@ turn), so no title call is burnt on failing turns.
 
 ## Phase A2 — second full audit  [ DONE — see "Phase A2 record" at the bottom ]
 
-Verdict, stated up front: **seven defects found and fixed — three in product code, one in copy,
-two in tests, and one compile break CI found — and nothing known-open.** Four came from this
-audit, two from Hermes' review of its record, one from the branch's first CI execution (all at
-the end of this section). The residuals were
+Verdict, stated up front: **eight defects found and fixed — three in product code, one in copy,
+three in tests, and two compile breaks CI found — and nothing known-open.** Four came from this
+audit, two from Hermes' review of its record, two from CI's first two executions (all at the end
+of this section). The residuals were
 re-checked one by one: none could be cleared outright, five are confirmed as stated, and this
 pass adds three of its own. The SCOPE/ENVIRONMENT note at the head of the A2 record is
 load-bearing: no Kotlin was executed on this host, so every test named below runs for the
@@ -375,9 +375,10 @@ Python audit I ran and name; nothing is from a device or a JVM.
 
 ### Verdict
 
-**Seven defects, all fixed: three in product code (A2-3, A2-4, C2), one in user-facing copy (C1),
-two in tests (A2-1 could never pass; A2-2 had lost its subject), and one compile break (CF).**
-Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`, `4e677da`, `0b28b03`.
+**Eight defects, all fixed: three in product code (A2-3, A2-4, C2), one in user-facing copy (C1),
+three in tests (A2-1 could never pass; A2-2 had lost its subject; CF-2 would not compile), and two
+compile breaks (CF-1, CF-2).** Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`,
+`4e677da`, `0b28b03`, `acbc563`.
 
 | # | Finding | Kind | Commit |
 |---|---|---|---|
@@ -385,7 +386,8 @@ Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`, `4e677da`, `0b28
 | A2-2 | F4 silently made the projection-cap pin vacuous (guess halves the trigger) | test, lost coverage | `b4b7206` |
 | A2-3 | Per-conversation drafts were destroyed by every switch, not kept | product code | `6e26d94` |
 | A2-4 | F1 put provider words in the error banner unescaped (bidi controls) | product code | `2f9f5c4` |
-| CF | `ContextBudget` called two provider extensions it did not import: the file did not compile | **found by CI, not here** | `0b28b03` |
+| CF-1 | `ContextBudget` called two provider extensions it did not import: the file did not compile | **found by CI, not here** | `0b28b03` |
+| CF-2 | `ProviderErrorClassificationTest` called `assertEquals` without importing it: the unit-test set did not compile | **found by CI, not here** | `acbc563` |
 | — | `turnSessionId` lifetime, F2's content-type gate and its four readers, S1 write ordering, Undo carry/drop and rehydration, F4's reach into the send path, the draft's leak into another chat | **no defect** | withdrawn, below |
 
 ### A2-1 — F2's `ModelNotFound` assertion cannot pass (`0db23a5`)
@@ -725,6 +727,57 @@ conclusion from the compiler for the produced source sets and from the sweep for
 The unused `resolvedContextWindowTokens` import stays, as recorded earlier: it is a warning-level
 leftover with its own note, not part of this fix.
 
+### CI-found fix 2 (second CI round)
+
+**CF-2 — `acbc563`: a test called `assertEquals` without importing it.** Evidence from CI at head
+`7c722ce`, exactly as reported and not extrapolated:
+
+- Release run `41384155003` — **SUCCESS**. The main source set compiles, which confirms CF-1
+  (`0b28b03`) closed the first break.
+- Android Build run `41384152559` — **FAILURE at `:app:compileDebugUnitTestKotlin`**, with exactly
+  two errors in the whole log: `ProviderErrorClassificationTest.kt:89:9` and `:91:9`,
+  `Unresolved reference 'assertEquals'`.
+
+The file imported `org.junit.Assert.assertTrue`, `org.junit.Assert.assertFalse` and
+`org.junit.Test`, and never `assertEquals`; lines 89 and 91 are the two assertions F1 added
+(`83febf3`), the same commit whose banner text C1 had to fix. One import added; the three
+`Assert` imports are now in alphabetical order.
+
+**Why the first sweep could not see it, and what covers it now.** `round3/import-sweep.py` indexes
+declarations made in this repository; `assertEquals` comes from a jar, and the CF-1 record already
+named that as a limit rather than hiding it. This break is a library name in a test file, so it
+needed a second rule.
+
+**The test-source sweep — `round3/junit-import-sweep.py`** (untracked working evidence,
+re-runnable here):
+
+1. Reads all **78 Kotlin files under `app/src/test`**, blanking comments and string literals.
+2. For each of the **18 public statics junit 4.13.2 exposes** on `org.junit.Assert`
+   (`assertEquals`, `assertNotEquals`, `assertTrue`, `assertFalse`, `assertNull`, `assertNotNull`,
+   `assertSame`, `assertNotSame`, `assertArrayEquals`, `assertThat`, `fail`, `assertThrows`,
+   `assertDoesNotThrow`, `assertAll`, `assertTimeout`, `assertTimeoutPreemptively`,
+   `assertIterableEquals`, `assertLinesMatch`), finds unqualified call sites and requires either
+   `import org.junit.Assert.<member>` or an object wildcard (`import org.junit.Assert.*`).
+   `Assert.<member>(...)` behind `import org.junit.Assert` is accepted and reported separately.
+   Resolution is by member name, not by JUnit specifically, so an equivalent import from another
+   matcher library would also count.
+3. **230 (file, member) pairs** resolve through an import or a wildcard; **1 finding**: the file
+   above at `:89` and `:91`. After the fix: **0 findings**.
+4. **Positive control:** removing the committed import again makes the sweep print the same file and
+   lines and exit 1; the file was restored and `cmp` confirmed it byte-exact, and the sweep exits 0.
+
+**What this sweep cannot see, stated so the compiler stays the authority:** missing imports of any
+other library name — types, functions, constants from JUnit, Robolectric, OkHttp,
+MockWebServer, kotlinx — because their members are not enumerable here without the jars; and
+anything that fails for reasons other than resolution. CI reported exactly two errors for that
+task; the Kotlin frontend reports unresolved references across the module rather than stopping at
+the first, and two is nowhere near its cap, so this is expected to be the last compile error in
+the unit-test source set. Expected is the right word: **the unit-test suite has still never
+executed.** Compilation of the test source set is the current gate; test results are next
+round's question, and every behavioural claim in this record (the Undo row tests, the S1/S2
+pins, `ContextRefusalCopyTest`, the corrected `HttpBridgeTest` assertion) still rests on
+reading until then.
+
 ## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
@@ -732,14 +785,17 @@ Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterru
 test `40a88bd`), F7 items 1-3 settled (`d156e48`, fix `327ff50`, `4ceceeb`), F6 pins (`859c601`)
 and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this audit:
 `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, then Hermes' two closing fixes `fbb152f`, `4e677da`,
-the sixth provider-screen site `8e4b97d`, and the compile break CI found `0b28b03`.
+the sixth provider-screen site `8e4b97d`, and the two compile breaks CI found `0b28b03` and
+`acbc563`.
 
-**Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes and the
-CI-found import fix are complete. No push was made.
+**Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes and both
+CI-found import fixes are complete. No push was made.
 
 **What the next step is, in this order:** (1) Hermes re-runs both workflows on exact head
-(`0b28b03` or later) and verifies the result from the run JSON — the branch has been built once
-and did not compile; (2) the two `ChatViewModelTest` Undo row tests, the only end-to-end
-coverage the Undo row has; (3) the three device checks the doc already names (draft per
-conversation, the live-status clock, the reasoning preview across two chains); (4) residuals 7
-and 9 if Hermes wants them settled rather than named — residual 8 is closed by `4e677da`.
+(`acbc563` or later) and verifies from the run JSON. The gate has moved: at `7c722ce` the main
+source set compiled but the unit-test set did not, so the next gate is `testDebugUnitTest`
+actually starting — and only then do test *results* exist; (2) the two `ChatViewModelTest` Undo
+row tests, the only end-to-end coverage the Undo row has; (3) the three device checks the doc
+already names (draft per conversation, the live-status clock, the reasoning preview across two
+chains); (4) residuals 7 and 9 if Hermes wants them settled rather than named — residual 8 is
+closed by `4e677da`.
