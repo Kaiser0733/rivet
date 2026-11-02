@@ -110,8 +110,10 @@ fun httpError(code: Int, body: String?): ProviderError {
     val detail = errorBodyText(body)
     val providerCode = errorBodyCode(body)
     return when {
-        code == 401 -> ProviderError.Unauthorized()
-        code == 403 -> ProviderError.Forbidden()
+        // The body says what the key is missing (an unpaid plan, a disabled API, a region
+        // block); the fixed sentence alone sent users to re-check a working key.
+        code == 401 -> ProviderError.Unauthorized(detail)
+        code == 403 -> ProviderError.Forbidden(detail)
         code in setOf(400, 413, 422) && isContextOverflow(body.orEmpty()) -> ProviderError.ContextOverflow()
         // Resource exhaustion is the per-minute capacity signal, so it must be read before
         // the billing words: Google says "Quota exceeded … per minute" for a limit that
@@ -120,7 +122,7 @@ fun httpError(code: Int, body: String?): ProviderError {
             ProviderError.ResourceExhausted()
         code == 429 && isUsageLimit(providerCode.orEmpty() + " " + detail.orEmpty()) -> ProviderError.UsageLimit()
         code == 429 -> ProviderError.RateLimited()
-        code in 500..599 -> ProviderError.Server(code)
+        code in 500..599 -> ProviderError.Server(code, detail)
         // Wrong-model bodies arrive as 400 or 404 depending on the service
         // (OpenAI 400 "model 'x' does not exist", others 404 with the id
         // in the message); check the body before assuming endpoint shape.
