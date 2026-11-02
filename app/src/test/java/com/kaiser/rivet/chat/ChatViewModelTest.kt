@@ -878,7 +878,12 @@ class ChatViewModelTest {
         await(viewModel) { it.ready }
 
         viewModel.send("x".repeat(100_000))
-        val stopped = await(viewModel) { !it.streaming && it.error?.contains("context capacity") == true }
+        // The sentence is the copy function's, not a fragment typed into the test: a copy change
+        // used to leave this await waiting for words that no longer exist, and the test timed out
+        // instead of failing on its assertion.
+        val stopped = await(viewModel) {
+            !it.streaming && it.error?.contains(contextTooSmallMessage()) == true
+        }
 
         assertEquals(0, provider.requests.size)
         assertEquals(1, sessions.fullEventCount(id))
@@ -909,10 +914,10 @@ class ChatViewModelTest {
         await(viewModel) { it.ready }
 
         viewModel.send("Continue")
-        // The turn stops with the last-resort copy: it says the chat was compacted and
-        // still did not fit, not that Rivet never tried.
+        // The turn stops with the last-resort copy: it says the chat was too long to read all at
+        // once, not that Rivet never tried. Read from the copy function for the same reason as above.
         val stopped = await(viewModel) {
-            !it.streaming && it.error?.contains("compacted this chat as far as it could") == true
+            !it.streaming && it.error?.contains(contextUnavailableMessage()) == true
         }
 
         assertNull(stopped.pendingApproval)

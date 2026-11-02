@@ -49,6 +49,17 @@ def main():
                 failures.append(f"{name}: says {word!r}: {message!r}")
         if not message.strip():
             failures.append(f"{name}: is empty")
+    # A copy change also has to sweep the tests that wait for the copy: an await whose words no
+    # longer exist does not fail on its assertion, it times out. That is what happened in CI round 4
+    # (two ChatViewModelTest timeouts), so the retired sentences are checked for here.
+    retired = ["context capacity", "compacted this chat as far as it could", "does not fit the",
+               "Start a new conversation to keep going", "token context window"]
+    for path in sorted(pathlib.Path("app/src/test").rglob("*.kt")):
+        body = path.read_text(encoding="utf-8")
+        for phrase in retired:
+            if phrase in body:
+                failures.append(f"{path}: still pins retired copy {phrase!r}")
+
     for failure in failures:
         print("FAIL", failure)
     if failures:
