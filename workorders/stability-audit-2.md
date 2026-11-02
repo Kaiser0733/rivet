@@ -50,10 +50,10 @@ turn), so no title call is burnt on failing turns.
 
 ## Phase A2 — second full audit  [ DONE — see "Phase A2 record" at the bottom ]
 
-Verdict, stated up front: **twelve defects found and fixed — four in product code, one in copy,
+Verdict, stated up front: **thirteen defects found and fixed — five in product code, one in copy,
 six in tests (one of which broke compilation), and one compile break in the main source set — and
 nothing known-open.** Four came from this audit, two from Hermes' review of its record, five from
-CI's three executions, and one from the device (all at the end of this section). The residuals were
+CI's three executions, and two from the device (all at the end of this section). The residuals were
 re-checked one by one: none could be cleared outright, five are confirmed as stated, and this
 pass adds three of its own. The SCOPE/ENVIRONMENT note at the head of the A2 record is
 load-bearing: no Kotlin was executed on this host, so every test named below runs for the
@@ -375,11 +375,12 @@ Python audit I ran and name; nothing is from a device or a JVM.
 
 ### Verdict
 
-**Twelve defects, all fixed: four in product code (A2-3, A2-4, C1, DF-1), one in user-facing copy
-(C2), six in tests (A2-1 could never pass; A2-2 had lost its subject; CF-2 would not compile; CI-3,
-CI-4 and CI-5 pinned the right behaviour on fixtures that could not observe it), and one compile
-break in the main source set (CF-1).** Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`,
-`fbb152f`, `4e677da`, `0b28b03`, `acbc563`, `e83d218`, `ae7fb58`, `86d80cf`, `3051632`.
+**Thirteen defects, all fixed: five in product code (A2-3, A2-4, C1, DF-1, DF-2), one in
+user-facing copy (C2), six in tests (A2-1 could never pass; A2-2 had lost its subject; CF-2 would
+not compile; CI-3, CI-4 and CI-5 pinned the right behaviour on fixtures that could not observe
+it), and one compile break in the main source set (CF-1).** Commits: `0db23a5`, `b4b7206`,
+`6e26d94`, `2f9f5c4`, `fbb152f`, `4e677da`, `0b28b03`, `acbc563`, `e83d218`, `ae7fb58`, `86d80cf`,
+`3051632`, `b06145d`.
 
 | # | Finding | Kind | Commit |
 |---|---|---|---|
@@ -393,6 +394,7 @@ break in the main source set (CF-1).** Commits: `0db23a5`, `b4b7206`, `6e26d94`,
 | CI-4 | `aTurnNeverWritesIntoAConversationItDidNotStartIn` moved the pointer before the turn's first write | test | `ae7fb58` |
 | CI-5 | `titleProviderFailureAndInvalidOutputNeverFailCodingTurn` reused one store across three cases, so a pending title retried into the next case | test | `86d80cf` |
 | DF-1 | the live-status clock's start lived in the list row, so a relayout (a thinking block folding) restarted it at 0s | **found on device** | `3051632`, audit `31f0895` |
+| DF-2 | the follow-scroll bottom-aligned to the viewport and only fired on character buckets, so a wrap left the live-status row half below the list's edge | **found on device** | `b06145d` |
 | — | `turnSessionId` lifetime, F2's content-type gate and its four readers, S1 write ordering, Undo carry/drop and rehydration, F4's reach into the send path, the draft's leak into another chat | **no defect** | withdrawn, below |
 
 ### A2-1 — F2's `ModelNotFound` assertion cannot pass (`0db23a5`)
@@ -620,9 +622,16 @@ Two more receipts, `rcpt-0021` and `rcpt-0023`, are void for a plainer reason: f
 thinking-box tap and again for the turn clock I called `receipts add` before writing
 `round3/thinking-tap-check.py` / `round3/turn-clock-check.py`, so each recorded a command that did
 not exist yet and replays as exit 127. `rcpt-0022` and `rcpt-0024` are the same claims against the
-scripts, and both pass. The void lines stay — the tool has no remove, and hand-editing the ledger is
-the one thing a ledger exists to prevent — so `receipts check` reports three failing lines out of 24
-and all three are recording mistakes, not evidence that the work is unverified. Recording before
+scripts, and both pass.
+
+`rcpt-0005` fails for a fourth and different reason — **its subject was deleted on purpose**.
+It listed `STREAMED_SCROLL_STEP` among the declarations that must resolve, and `b06145d` retired that
+constant with the character-bucketed trigger it served, so the receipt now reports exactly one
+missing symbol while the other three still resolve. `rcpt-0026` re-states the surviving claim.
+
+The void lines stay — the tool has no remove, and hand-editing the ledger is the one thing a ledger
+exists to prevent — so `receipts check` reports four failing lines out of 26: three recording
+mistakes and one deliberate deletion, not evidence that the work is unverified. Recording before
 writing the command is the same mistake twice; the fix is to write the script first, and the next
 entry in this record does that.
 
@@ -1012,6 +1021,76 @@ The unit test pins the state contract; it cannot see composition.
 No other defect found. Nothing here was executed: CI round 5 is the first run of the new test, and
 kaiser's device check is the only evidence for the gesture and for the clock on screen.
 
+### Device-found defect 2 (kaiser, 2026-11-02 10:16 IST) — the status row half out of the list
+
+**The finding.** On the `192c56b` build, while a turn streamed with the screen full of text, the
+live-status row (`Thinking · 12s`) rendered with its lower half cut off at the bottom edge of the
+chat list. Kaiser's guess was the auto-scroll; he was right, and the cause is two code facts.
+
+#### Root cause
+
+1. **The jump bottom-aligned to the viewport, not to the content.** `scrollToConversationBottom`
+   (`ChatScreen.kt:970-977` before the fix) did `scrollToItem(index)` and then, for the item it wanted
+   at the bottom, `offset = item.size - viewport` and `scrollToItem(index, offset)`. That places the
+   item's bottom exactly at the viewport's bottom, which scrolls the list's own bottom content padding
+   (`PaddingValues(bottom = 20.dp)`, `:794`) past the edge. The live-status row therefore ended up
+   **flush against the list's edge with zero room under it**.
+2. **The follow trigger counted characters, not layout.** The effect keyed on
+   `streamingText.length / STREAMED_SCROLL_STEP` and the reasoning equivalent (`:779-782`, the constant
+   at `:668`). A wrap is a layout event: the text row grows by a line height while the character count
+   stays inside its bucket, so no scroll was scheduled. With (1) removing all slack, one wrap was
+   enough to push the row's lower half below the edge — and if the stream then stalled, which is what
+   `Thinking · 12s` looks like, nothing corrected it until 24 more characters arrived. **The clipped
+   state was the settled state**, which is precisely what a screenshot catches.
+
+**Did `31f0895` change this path?** No. It changed the *expression* for `totalItems`
+(`showLiveStatus` → `liveStatusStart != null`) and the item emission (`liveStatusStart?.let`). Count and
+emission were equal before it and are equal after it, so the index this effect targets and the rows it
+emits are identical. The clipping therefore exists at the current head **for the same reason**, not a
+different one; the head also carries `5f68178` (tap toggle, `ThinkingBlock` only) and `3051632` (clock
+start moved out of this row, no layout or scroll change), so neither could have masked or caused it.
+Kaiser's `192c56b` has the same scroll code, byte for byte.
+
+#### The fix — `b06145d`
+
+- `scrollToConversationBottom` now bottom-aligns to the **content's** end:
+  `offset = item.size + layout.afterContentPadding - viewport`. The row keeps the list's 20 dp padding
+  under it instead of sitting on the edge.
+- Rows appearing still land exactly, through the same count-based jump; the two length-bucket keys and
+  `STREAMED_SCROLL_STEP` are gone with the trigger they served.
+- Growth is now followed from the **layout**: a `snapshotFlow` over
+  `last.offset + last.size + afterContentPadding - viewportEndOffset`, and while following, a
+  `scrollBy` of exactly that gap. It settles on the content's end, so the last row is fully visible;
+  it fires on the layout that actually grew, so a wrap is followed and a stall cannot leave drift
+  behind.
+
+**What deliberately does not change.** A reader who has scrolled up has `followBottom = false`, and
+the settle returns before it scrolls — the position stays theirs, exactly as today. A gesture in
+progress is skipped outright (`listState.isScrollInProgress`), which is stricter than the old effect
+but never looser. `followBottom` is still written in exactly one place, the near-bottom updater. The
+jump and the settle agree on where "the end" is — both read `afterContentPadding` — so they cannot
+fight each other.
+
+#### Audit of the change and its neighbours
+
+| Check | Verdict |
+|---|---|
+| count vs emitted items | still one-to-one: `timeline.size`, the two streaming rows, `liveStatusStart`, `showActivity`, `showInterruptedTurn`, notice, error, unsupportedReasoning — nine terms, nine emissions |
+| `unsupportedReasoning` as a trigger key | **absent from the structural effect, and it was absent before this change too** (pre-existing). Covered now by the settle: a row appended below the viewport leaves a gap of at least the 20 dp padding, so the settle reveals it in two steps. No code change |
+| structural effect and settle both landing on the end | consistent: both read `afterContentPadding`; after a jump the gap is 0, so the settle is silent |
+| jump's stale `layoutInfo` read after `scrollToItem` | pre-existing; the early return is harmless because `scrollToItem(lastIndex)` already clamps to the content end, and the settle corrects anything left |
+| can the settle loop | no: `snapshotFlow` emits only on change, a consumed scroll leaves gap 0, a clamped one changes no layout, so at most one extra emission |
+| content shorter than the viewport | gap negative, no scroll, no behaviour change |
+| nested scrollers in the screen | two, both outside this path: the empty-state card (`:615`) and a horizontal row inside markdown (`:1183`); neither is vertical inside the list |
+| viewport height changes (undo row appearing, keyboard rising) | the settle re-aligns while following; that is the same class as the report and the reason it is included |
+| the clock row | untouched by this commit — `round3/turn-clock-check.py` still passes |
+| the three `ThinkingBlock` call sites, tap target and header | untouched — `round3/thinking-tap-check.py` still passes |
+| `STREAMED_SCROLL_STEP` references | none left in the source; the only mention is the earlier section of this record that described the old design, left as written |
+
+**Device-only.** This is a scroll path with no Compose test harness. CI round 5 can only confirm it
+compiles and the 743 unit tests still pass; that the row is fully visible while streaming, that a drag
+still scrolls, and that a reader who scrolled up is left alone are kaiser's checks.
+
 ## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
@@ -1021,20 +1100,22 @@ and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this
 `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, then Hermes' two closing fixes `fbb152f`, `4e677da`,
 the sixth provider-screen site `8e4b97d`, the two compile breaks CI found `0b28b03` and
 `acbc563`, the three test fixtures CI's first full run found `e83d218`, `ae7fb58`, `86d80cf`,
-kaiser's device-feedback addition `5f68178`, the device-found clock fix `3051632` and the audit
-fix `31f0895`.
+kaiser's device-feedback addition `5f68178`, the device-found clock fix `3051632`, the audit
+fix `31f0895`, and the device-found scroll fix `b06145d`.
 
 **Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes, both
-CI-found import fixes, the three CI-found fixture fixes, kaiser's device-feedback addition and the
-device-found clock fix with its audit are complete. No push was made.
+CI-found import fixes, the three CI-found fixture fixes, kaiser's device-feedback addition, the
+device-found clock fix with its audit, and the device-found scroll fix are complete. No push was
+made.
 
 **What the next step is, in this order:** (1) Hermes re-runs both workflows on exact head
-(`31f0895` or later) and verifies from the run JSON. CI is a compile-and-tests check only: it must
-show the three fixture fixes from round 3 still holding, the thinking-box and clock changes
-compiling, and 743 tests green, including `theTurnClockHoldsWithinATurnAndRestartsForTheNext`,
+(`b06145d` or later) and verifies from the run JSON. CI is a compile-and-tests check only: it must
+show the three fixture fixes from round 3 still holding, the thinking-box, clock and scroll
+changes compiling, and 743 tests green, including `theTurnClockHoldsWithinATurnAndRestartsForTheNext`,
 which has never run; (2) kaiser's device check — tap a long chain collapses it, a drag on the
-chain scrolls and does not, and the status line keeps counting through Show/Hide and through box
-taps, with a new turn opening at 0s. No unit test in this project can see any of that; (3) the three existing device
+chain scrolls and does not, the status line keeps counting through Show/Hide and box taps with a
+new turn opening at 0s, and while streaming with the screen full the status row is fully visible;
+and scrolling up by hand still stays put. No unit test in this project can see any of that; (3) the three existing device
 checks the doc already names (draft per conversation, the live-status clock, the reasoning preview
 across two chains); (4) residuals 7 and 9 if Hermes wants them settled rather than named —
 residual 8 is closed by `4e677da`.
