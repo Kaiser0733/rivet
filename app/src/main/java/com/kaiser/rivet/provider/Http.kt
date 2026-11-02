@@ -395,7 +395,12 @@ internal suspend fun OkHttpClient.sse(
                     } catch (e: ProviderError) {
                         if (terminal.compareAndSet(false, true)) cont.resumeWithException(e)
                     } catch (e: StreamCallbackFailure) {
-                        if (terminal.compareAndSet(false, true)) cont.resumeWithException(e.cause)
+                        // The wrapper is only built with a cause (its one construction site above),
+                        // but `getCause()` is declared nullable: falling back to the wrapper keeps a
+                        // real Throwable on the resume path instead of forcing null through it. The
+                        // wrapper carries the same failure, so either way the caller sees a failure
+                        // rather than a lost one.
+                        if (terminal.compareAndSet(false, true)) cont.resumeWithException(e.cause ?: e)
                     } catch (_: Exception) {
                         if (terminal.compareAndSet(false, true)) {
                             cont.resumeWithException(ProviderError.InvalidResponse("malformed stream event"))
