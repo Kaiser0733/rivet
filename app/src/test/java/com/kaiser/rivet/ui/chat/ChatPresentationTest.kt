@@ -8,6 +8,7 @@ import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -44,6 +45,11 @@ class ChatPresentationTest {
 
     @Test fun bidiFormattingControlsAreVisibleInApprovalAndPathText() {
         assertEquals("safe\\u202Etxt", displaySafeText("safe\u202Etxt"))
+        // Clean text is the hot case (every streamed delta): it must come back untouched, as the
+        // same instance, so the render path does not copy a whole answer per delta to find no
+        // bidi controls in it.
+        val clean = "a plain answer with nothing to escape"
+        assertSame("clean text must not be copied", clean, displaySafeText(clean))
     }
 
     @Test fun claudeModelIdsBecomeReadableWords() {
