@@ -99,21 +99,33 @@ class HttpBridgeTest {
         }
     }
 
+    // This test used to assert the opposite of what the bridge now guarantees: that a callback's
+    // own failure comes back as ProviderError.InvalidResponse("malformed stream event"). That
+    // relabelling was the defect 2d84400 removed — it accused a provider that had answered
+    // correctly, and it sent ContextPreparation's summary-budget abort down AgentLoop's provider
+    // branch instead of its context-unavailable one.
+    //
+    // The contract pinned here, in the three parts that matter: the caller's error reaches it as
+    // itself, it is not relabelled as a provider failure, and it is not lost (a lost error would
+    // leave the continuation unresumed and fail the two-second budget below rather than passing).
     @Test
-    fun malformedStreamEventFailureResumesWithProviderError() = runBlocking {
+    fun aCallbackFailureReachesTheCallerAsItselfAndIsNeverLost() = runBlocking {
         val server = MockWebServer()
         server.enqueue(MockResponse().setBody("data: {}\n\n").setHeader("Content-Type", "text/event-stream"))
         server.start()
         try {
             val request = Request.Builder().url(server.url("/stream")).build()
-            try {
+            val abort = IllegalArgumentException("context_summary_limit")
+            val thrown = try {
                 withTimeout(2_000) {
-                    OkHttpClient().sse(request) { throw IllegalArgumentException("bad field type") }
+                    OkHttpClient().sse(request) { throw abort }
                 }
-                throw AssertionError("expected invalid response")
-            } catch (_: ProviderError.InvalidResponse) {
-                Unit
+                null
+            } catch (error: Throwable) {
+                error
             }
+            assertSame("the callback's own error must reach the caller as itself", abort, thrown)
+            assertFalse("and must not be relabelled as a provider failure", thrown is ProviderError)
         } finally {
             server.shutdown()
         }

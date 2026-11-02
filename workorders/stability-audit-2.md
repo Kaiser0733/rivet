@@ -1255,6 +1255,37 @@ thrown exception, carrying its message and stack), so the caller still gets an e
 dropped one — which is what C-2 exists to guarantee. No `!!`: a null on the path whose job is to
 stay careful must not become the crash.
 
+**CI round 2 on the audit fixes — run 41393672361, head `a7b6365`: 746 tests, 1 failed. Verdict: the
+test was wrong, not the code.** The failure was
+`HttpBridgeTest.malformedStreamEventFailureResumesWithProviderError`, ending in
+`java.lang.IllegalArgumentException: bad field type` thrown by the test's own fake.
+
+Ruled in (a), the test pinned the pre-`2d84400` contract, and ruled out (b), a hole in the fix, from
+the path:
+
+1. The callback is invoked at `Http.kt:374`, and that line is inside the `try` opened at `:334` and
+   closed by the catches at `:391-408` — it is inside the guarded region, not outside it.
+2. A callback throw is caught at `:377` and rethrown as `StreamCallbackFailure`, which the chain
+   catches at `:397` and resumes the continuation with `e.cause ?: e` — the caller's own exception.
+   So the stream *does* resume with an error; it cannot hang, and it cannot be dropped.
+3. The CI stack is the original exception's **throw-time** stack: the fake at
+   `HttpBridgeTest.kt:110-111` called from `Http.kt:374`. That is the fingerprint of a preserved
+   error, not of an escape — `resumeWithException` carries the exception object, and its stack was
+   captured where it was thrown.
+4. The test's `catch (_: ProviderError.InvalidResponse)` at `:114` therefore cannot match. The
+   original `IllegalArgumentException` surfaces from `runBlocking`, which is exactly what the JUnit
+   XML records.
+5. Those first four points describe the behaviour `2d84400` was written to produce. The old test
+   asserted `InvalidResponse("malformed stream event")` for a callback failure, which is the
+   relabelling that commit removed.
+
+The test is corrected to pin the new contract in its three parts, and nothing weaker: the caller's
+error reaches it **as itself** (`assertSame` against the exact instance), it is **not relabelled**
+(`assertFalse(thrown is ProviderError)`), and it is **not lost** (a lost error leaves the
+continuation unresumed and fails the two-second budget instead of passing). The test count is
+unchanged at 746 — one test replaced, none added, none removed. No production code changed in this
+commit.
+
 **STOP POINT — this run stopped where kaiser's standing order says to stop rather than rush.** The
 performance audit is complete and fixed. The correctness audit covered all 85 files; six findings are
 verified and fixed, and the ten residuals above plus the suspects are *unverified reports*, not
