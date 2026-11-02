@@ -1154,6 +1154,38 @@ provider (`ContextCapacityTooSmall`, pinned by `aRequestTooLargeToFitIsRefusedBe
 is a genuinely unsendable request, not a dead end: the new copy tells the user which message to
 shorten. It is reachable only when a single message or tool result is larger than the whole budget.
 
+**CI round 4 on the device round — run 41397414525, head `722d207`: 747 tests, 2 failed.** Both are
+`ChatViewModelTest` timeouts at the 5 s await, and both rule the same way: **the tests pin retired
+wording, the code did what it should.** Neither is the budget and neither is the ceiling acceptance.
+
+1. `latestUserMessageThatCannotFitStopsBeforeProviderCall` (~`:881`). Fixture: a *measured* window of
+   16,000 tokens (`modelContextLimit("small", 16_000)`, Gemini → reserve 0, so ceiling 16,000, aim
+   12,000) and one message of 100,000 characters ≈ 33,333 tokens. **Arithmetic:** the minimum
+   projection (fixed text ≈ 2,000 tokens + that message) ≈ 35,300 tokens, far above the ceiling, so
+   `ContextCapacityTooSmall` fires and nothing is sent. **What the turn actually did:** stopped before
+   the provider (0 provider requests, 1 stored event, message kept whole, no pending approval — exactly
+   what the fixture asserts) and set the new capacity sentence. The await was looking for
+   `"context capacity"`, words the copy fix retired, so it never matched and the test timed out instead
+   of asserting. Reading (a) as a *pin* defect, not a sizing one: a measured window never enters the
+   guess branch, so the 220K change cannot reach this fixture. Reading (b) is excluded — the request
+   is refused before anything is sent, so no unsendable or unexplained projection goes out.
+2. `failedSummaryKeepsFullOriginalHistory` (~`:914`). Fixture: the same measured 16,000-token window,
+   22 groups of ~22,000-character tool results (≈ 161,000 tokens), and a summariser that returns
+   `""`. **Arithmetic:** after the aim-sized plan retains the newest tail, its summary call returns
+   empty text, `TaskState.parse` yields null, and `context_summary_invalid` stops the turn. **What the
+   turn actually did:** one provider call (the failed summary), transcript untouched at 67 events, the
+   stored summary still empty, history + "Continue" — exactly the fixture's assertions — and the error
+   is now `contextUnavailableMessage()`. The await was looking for `"compacted this chat as far as it
+   could"`, which the copy fix retired → timeout. Reading (b) is excluded: the ceiling acceptance is
+   never reached on this path, because the first summary attempt throws before it.
+
+Both awaits now read the sentence from the copy function itself (`contextTooSmallMessage()`,
+`contextUnavailableMessage()`) instead of a fragment typed into the test, and
+`round3/refusal-copy-check.py` now also sweeps `app/src/test` for the retired sentences — an await
+whose words no longer exist does not fail on its assertion, it times out, which is precisely how this
+cost a CI round. Every protective assertion is unchanged: 0 provider requests before the refusal, 67
+events kept, empty summary, history plus the new message.
+
 **Limit of this round:** no device and no JVM here, so the "previously refused, now continues" path is
 pinned at the rule and not end-to-end — reproducing the exact device transcript needs estimate
 arithmetic this host cannot run. CI runs the suite; kaiser's device pass on this flow is what the merge
