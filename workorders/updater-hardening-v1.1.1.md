@@ -121,6 +121,32 @@ and pass with the fix, which makes `IOException` in that handler retryable and c
 
 No other production change came out of this round.
 
+**CI run 41404031158 — 755 tests, 752 passed, 3 failures, all three my tests' fault.** No production
+code is implicated; all three were simulations that did not produce the failure they claimed.
+
+1. `aDownloadDroppedMidBodyResumesFromTheBytesOnDisk` and
+2. `aTwoHundredAnswerToARangeRequestRestartsCleanly` — both threw `UpdateFailure` from
+   `GitHubUpdates.kt:175`, the *size validation* ("The update download was incomplete"), not a transport
+   error. Cause: the fixtures sent a 2-byte body with `Content-Length: 4` and a clean
+   `DISCONNECT_AT_END`. A clean end-of-body is not a dropped connection — the client reads two bytes,
+   sees end-of-stream, and rejects them at the size check, which is non-retryable **by design**. So
+   neither test ever created the mid-body drop it was written for, and the retry/resume paths were never
+   entered. Rebuilt: `DISCONNECT_DURING_RESPONSE_BODY` drops the socket part-way through the body, and a
+   `Dispatcher` answers the retry by reading the `Range` it is given (`206` with a matching
+   `Content-Range` for the resume test; a `200` with a different body for the restart test, where a
+   stitching client would fail on length or content). The resume test now asserts that the drop happened
+   at all (`resumedFrom in 1..3`) before asserting the Range and the final bytes — the assertion it was
+   missing is the one that would have caught this the first time.
+3. `theMirrorIsTriedOnlyAfterGitHubsRetriesAreSpent` — `AssertionError` on the path list.
+   `DISCONNECT_AT_START` drops the socket *before* the request is read, so MockWebServer never records
+   it and the captured list came up short. Rebuilt with a `Dispatcher` and
+   `DISCONNECT_AFTER_REQUEST`, which records the request and then drops the connection: three
+   asset-path requests, then `/downloads/Rivet-v0.11.1.apk`, with the count pinned to four.
+
+Assertions were not weakened: the range test additionally asserts the drop location, and the fallback
+test now pins the total attempt count. The other 752 tests, including both retry-leg tests, are
+untouched.
+
 **CI finding on the test round (`87aadff` → fixed next).** Run 41403684086: production code compiled and
 `okhttp-dnsoverhttps:4.12.0` resolved, so the whole hardening and the DoH fallback are build-clean. The
 only failure was test compilation in `UpdateResilienceTest.kt`: `MockWebServer`'s `RecordedRequest` has

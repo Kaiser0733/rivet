@@ -6,8 +6,10 @@ import kotlinx.coroutines.runBlocking
 import okhttp3.CookieJar
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
+import okhttp3.mockwebserver.Dispatcher
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer
+import okhttp3.mockwebserver.RecordedRequest
 import okhttp3.mockwebserver.SocketPolicy
 import okhttp3.tls.HandshakeCertificates
 import okhttp3.tls.HeldCertificate
@@ -87,62 +89,111 @@ class UpdateResilienceTest {
     }
 
     // (2) A connection lost mid-body keeps the bytes and resumes with Range: bytes=N-.
+    //
+    // The first version of this test was wrong: it sent a 2-byte body with Content-Length 4 and a
+    // clean DISCONNECT_AT_END, which the client reads as end-of-body and rejects at its size check
+    // (GitHubUpdates.kt:175) — a validation failure, correctly not retryable. No mid-body drop ever
+    // happened. DISCONNECT_DURING_RESPONSE_BODY drops the socket part-way through the body, which is
+    // the failure the retry and resume exist for, and a dispatcher answers the resume by reading the
+    // Range it is given.
     @Test fun aDownloadDroppedMidBodyResumesFromTheBytesOnDisk() = runBlocking {
         val release = release()
-        // Two of four bytes, then the socket goes away under the reader.
-        server.enqueue(MockResponse().setHeader("Content-Length", 4).setBody("ab")
-            .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END))
-        server.enqueue(MockResponse().setResponseCode(206).setBody("cd")
-            .setHeader("Content-Range", "bytes 2-3/4"))
+        val full = "abcd"
+        var resumedFrom = -1
+        val ranges = mutableListOf<String?>()
+        server.dispatcher = object : Dispatcher() {
+            private var first = true
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                ranges += request.getHeader("Range")
+                if (first) {
+                    first = false
+                    return MockResponse().setBody(full).setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)
+                }
+                val from = ranges.last()!!.removePrefix("bytes=").removeSuffix("-").toInt()
+                resumedFrom = from
+                return MockResponse().setResponseCode(206)
+                    .setHeader("Content-Range", "bytes $from-${full.length - 1}/${full.length}")
+                    .setBody(full.substring(from))
+            }
+        }
 
         val staged = updates.download(release) { _, _ -> }
 
-        server.takeRequest()
-        assertEquals("the second request asks for the missing bytes",
-            "bytes=2-", server.takeRequest().getHeader("Range"))
+        assertTrue("the drop happened mid-body, not at the end: $resumedFrom", resumedFrom in 1..3)
+        assertEquals("the second request asks for what it already has",
+            "bytes=$resumedFrom-", ranges.getOrNull(1))
         assertEquals("the resumed file is the fixture bytes, not a stitched surprise",
-            "abcd", staged.readText())
-        assertEquals(4L, staged.length())
+            full, staged.readText())
+        assertEquals(full.length.toLong(), staged.length())
     }
 
     // (3) A server that answers a Range request with 200 restarts from zero instead of stitching.
     @Test fun aTwoHundredAnswerToARangeRequestRestartsCleanly() = runBlocking {
         val release = release()
-        server.enqueue(MockResponse().setHeader("Content-Length", 4).setBody("ab")
-            .setSocketPolicy(SocketPolicy.DISCONNECT_AT_END))
-        server.enqueue(MockResponse().setBody("wxyz").setHeader("Content-Length", 4))
+        val ranges = mutableListOf<String?>()
+        server.dispatcher = object : Dispatcher() {
+            private var first = true
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                ranges += request.getHeader("Range")
+                if (first) {
+                    first = false
+                    return MockResponse().setBody("abcd").setSocketPolicy(SocketPolicy.DISCONNECT_DURING_RESPONSE_BODY)
+                }
+                // Deliberately a 200 with a different body: a client that stitched would keep the
+                // partial bytes and fail the length or content check.
+                return MockResponse().setBody("wxyz").setHeader("Content-Length", 4)
+            }
+        }
 
         val staged = updates.download(release) { _, _ -> }
 
-        server.takeRequest()
-        val second = server.takeRequest()
-        assertEquals("the retry still offered the Range", "bytes=2-", second.getHeader("Range"))
+        assertTrue("the retry still offered the Range: ${ranges.getOrNull(1)}",
+            ranges.getOrNull(1)?.startsWith("bytes=") == true)
         assertEquals("a 200 means the whole file again, from zero", "wxyz", staged.readText())
     }
 
     // (4) The mirror is tried only after GitHub's chain has spent its retries, and its file is held to
     // the same published size before it becomes the staged file UpdateApks.verify then inspects.
+    //
+    // DISCONNECT_AFTER_REQUEST rather than DISCONNECT_AT_START: the start policy drops the socket
+    // before the request is read, so MockWebServer never records it and the path list came up short.
     @Test fun theMirrorIsTriedOnlyAfterGitHubsRetriesAreSpent() = runBlocking {
         val release = release()
-        repeat(3) { server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)) }
-        server.enqueue(MockResponse().setBody("abcd").setHeader("Content-Length", 4))
+        val paths = mutableListOf<String?>()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                paths += request.path
+                return if (request.path?.startsWith("/downloads/") == true) {
+                    MockResponse().setBody("abcd").setHeader("Content-Length", 4)
+                } else {
+                    MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                }
+            }
+        }
 
         val staged = updates.download(release) { _, _ -> }
 
         val asset = "/Kaiser0733/rivet/releases/download/v0.11.1/Rivet-v0.11.1.apk"
-        // RecordedRequest exposes path and requestUrl; there is no nested request object.
-        val paths = (1..4).map { server.takeRequest().path }
-        assertEquals("three attempts at the release asset first",
-            listOf(asset, asset, asset), paths.take(3))
+        assertEquals("three attempts at the release asset first", listOf(asset, asset, asset), paths.take(3))
         assertEquals("and only then the mirror, with the same filename",
-            "/downloads/Rivet-v0.11.1.apk", paths[3])
+            "/downloads/Rivet-v0.11.1.apk", paths.getOrNull(3))
+        assertEquals("the mirror is the last resort, not a parallel attempt", 4, paths.size)
         assertEquals("the mirror's bytes are the staged file", "abcd", staged.readText())
     }
 
     @Test fun aMirrorFileOfTheWrongSizeIsStillRefused() = runBlocking {
         val release = release()
-        repeat(3) { server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)) }
-        server.enqueue(MockResponse().setBody("abcde").setHeader("Content-Length", 5))
+        val paths = mutableListOf<String?>()
+        server.dispatcher = object : Dispatcher() {
+            override fun dispatch(request: RecordedRequest): MockResponse {
+                paths += request.path
+                return if (request.path?.startsWith("/downloads/") == true) {
+                    MockResponse().setBody("abcde").setHeader("Content-Length", 5)
+                } else {
+                    MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AFTER_REQUEST)
+                }
+            }
+        }
 
         val error = failure { updates.download(release) { _, _ -> } }
 
