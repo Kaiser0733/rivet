@@ -1091,6 +1091,69 @@ fight each other.
 compiles and the 743 unit tests still pass; that the row is fully visible while streaming, that a drag
 still scrolls, and that a reader who scrolled up is left alone are kaiser's checks.
 
+## Final pre-merge audits (kaiser, 2026-11-02)
+
+Two audits of the whole app, then fixes. **The limit, stated once and meant:** there is no
+profiler, no device and no JDK on this host, so audit two is static. Findings are ranked by the
+user-visible impact the code makes arguable, the hot streaming path first because that is what
+kaiser feels on device, and device feel itself remains his check.
+
+### Audit two — performance and allocation
+
+| # | Finding | Fix |
+|---|---|---|
+| P-1 | every published delta re-parsed the **whole** answer: split every line, rebuild every block, re-join every block's text — O(answer) per publication, O(n²) per reply | `4da714d` |
+| P-2 | `displaySafeText` built a new string of the value's length on **every** call, including clean text; the streaming path hands it the whole answer per publication and the whole thinking chain per reasoning delta | `1e52764` |
+
+**P-1 — incremental block parsing (`4da714d`).** `AssistantMarkdown` called
+`parseAssistantMarkdown(text)` per publication. `MarkdownBlocks` now keeps the blocks before the
+last pair and re-parses from there. Two blocks, not one, because the final line may not have
+settled: `- a\n-` is a list plus a paragraph, and one more character makes it a single list of two
+items, so the last block can be absorbed by the one before it. Anything that is not an extension
+of the previous text (a shorter text, a retry, an edit) takes the full parse. **Internal change:**
+work per publication falls from O(answer) to O(tail). **Why behaviour is identical:** the value is
+the same list of blocks, in the same order, with the same text; nothing renders differently, and
+unchanged blocks keep their instance so the already-memoised `InlineMarkdown` work stays cached.
+
+Proven, not asserted: `ChatMarkdownTest` walks every prefix of ten documents (every block kind,
+blank runs, an open fence, CRLF), grows each prefix by more text, and compares with the full parse;
+`round3/markdown-incremental-check.py` transcribes both implementations and checks the identity over
+**341,635 comparisons across 5,010 documents** plus random replacements — 0 mismatches. That check
+earned its keep: the one-block window failed **1,977 of 20,094** comparisons on a case the eye does
+not see (`- one\n-` then a space), which is why the window is two blocks.
+
+**P-2 — no copy when there is nothing to escape (`1e52764`).** `displaySafeText` returned
+`buildString(value.length) { … }` unconditionally. It now scans, returns the same instance when no
+bidi control is present, and takes the previous escaping body only when one is. **Internal change:**
+zero allocation for clean text, which is every streamed delta. **Why behaviour is identical:** the
+returned value is character-for-character the same in both paths; only the instance differs, and
+callers only read it. `ChatPresentationTest` keeps the escaped-output assertion and adds that a
+clean string comes back as the same instance.
+
+**Residuals from this audit, deliberately not fixed** (each would change behaviour, which the order
+forbids):
+
+- **P-R1 — reasoning deltas publish unconditionally.** `ChatViewModel.kt:695-696` does
+  `reasoningPreview.toString()` and a state update per delta; the answer path is windowed at 80 ms
+  (`PreviewWindow`), reasoning deliberately is not, for the reason recorded at `:690-693`. Cost: a
+  30 k-char chain republished ~15 times a second is ~450 KB/s of short-lived strings and a
+  recomposition per delta. A fix needs a window plus a flush at the phase boundary, which changes
+  the preview cadence.
+- **P-R2 — an expanded chain re-lays-out its whole text per publication**
+  (`ThinkingBlock`'s `Text(displaySafeText(text))`). Inherent to showing it; throttling would be a
+  behaviour change.
+- **P-R3 — `persistTurn` re-encodes the whole transcript per message** (`onMessage`), O(n) per
+  message rather than per delta. That is the durability design — each message is durable before it
+  is shown — so changing it changes crash semantics.
+
+**Checked and left alone:** `timeline` is memoised on `(messages, toolLifecycle, messageReasoning)`
+(`ChatScreen.kt:674`); `InlineMarkdown` memoises both `parseInlineMarkdown` and the
+`AnnotatedString` on their inputs (`:1201`, `:1204`); the thinking preview is incremental
+(`PreviewScan`, F6); the answer preview is windowed at 80 ms; `nearBottom` is a `derivedStateOf`;
+`LiveStatusRow` ticks once a second and recomposes only itself. List items are keyed where they can
+be inserted (`streaming-*`, `live-status`, `interrupted-turn`) and index-keyed only for the
+append-only transcript, where indices do not shift under them.
+
 ## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
