@@ -50,10 +50,10 @@ turn), so no title call is burnt on failing turns.
 
 ## Phase A2 — second full audit  [ DONE — see "Phase A2 record" at the bottom ]
 
-Verdict, stated up front: **eight defects found and fixed — three in product code, one in copy,
-three in tests, and two compile breaks CI found — and nothing known-open.** Four came from this
-audit, two from Hermes' review of its record, two from CI's first two executions (all at the end
-of this section). The residuals were
+Verdict, stated up front: **eleven defects found and fixed — three in product code, one in copy,
+six in tests (one of which broke compilation), and one compile break in the main source set — and
+nothing known-open.** Four came from this audit, two from Hermes' review of its record, and five
+from CI's three executions (all at the end of this section). The residuals were
 re-checked one by one: none could be cleared outright, five are confirmed as stated, and this
 pass adds three of its own. The SCOPE/ENVIRONMENT note at the head of the A2 record is
 load-bearing: no Kotlin was executed on this host, so every test named below runs for the
@@ -375,10 +375,11 @@ Python audit I ran and name; nothing is from a device or a JVM.
 
 ### Verdict
 
-**Eight defects, all fixed: three in product code (A2-3, A2-4, C2), one in user-facing copy (C1),
-three in tests (A2-1 could never pass; A2-2 had lost its subject; CF-2 would not compile), and two
-compile breaks (CF-1, CF-2).** Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`,
-`4e677da`, `0b28b03`, `acbc563`.
+**Eleven defects, all fixed: three in product code (A2-3, A2-4, C1), one in user-facing copy (C2),
+six in tests (A2-1 could never pass; A2-2 had lost its subject; CF-2 would not compile; CI-3, CI-4
+and CI-5 pinned the right behaviour on fixtures that could not observe it), and one compile break in
+the main source set (CF-1).** Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`,
+`4e677da`, `0b28b03`, `acbc563`, `e83d218`, `ae7fb58`, `86d80cf`.
 
 | # | Finding | Kind | Commit |
 |---|---|---|---|
@@ -388,6 +389,9 @@ compile breaks (CF-1, CF-2).** Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c
 | A2-4 | F1 put provider words in the error banner unescaped (bidi controls) | product code | `2f9f5c4` |
 | CF-1 | `ContextBudget` called two provider extensions it did not import: the file did not compile | **found by CI, not here** | `0b28b03` |
 | CF-2 | `ProviderErrorClassificationTest` called `assertEquals` without importing it: the unit-test set did not compile | **found by CI, not here** | `acbc563` |
+| CI-3 | `theInterruptedFlagIsBoundToItsConversation` asserted a flag on a conversation that had no turn to interrupt | test | `e83d218` |
+| CI-4 | `aTurnNeverWritesIntoAConversationItDidNotStartIn` moved the pointer before the turn's first write | test | `ae7fb58` |
+| CI-5 | `titleProviderFailureAndInvalidOutputNeverFailCodingTurn` reused one store across three cases, so a pending title retried into the next case | test | `86d80cf` |
 | — | `turnSessionId` lifetime, F2's content-type gate and its four readers, S1 write ordering, Undo carry/drop and rehydration, F4's reach into the send path, the draft's leak into another chat | **no defect** | withdrawn, below |
 
 ### A2-1 — F2's `ModelNotFound` assertion cannot pass (`0db23a5`)
@@ -778,6 +782,87 @@ round's question, and every behavioural claim in this record (the Undo row tests
 pins, `ContextRefusalCopyTest`, the corrected `HttpBridgeTest` assertion) still rests on
 reading until then.
 
+### CI round 3 — the suite executed, three fixtures failed
+
+Evidence, exactly as reported: Android Build run `41384666315` at head `8c042ea`, task
+`:app:testDebugUnitTest`, **742 tests completed, 3 failed**; Release run `41384669562` **SUCCESS**.
+The other **739 passed, and nothing they cover was touched**: every change below is fixture setup
+inside a failing test, and **the product code was not modified in this round at all**.
+
+All three are test-wrong, and each verdict was reached from the code path before anything was
+edited. No assertion was weakened, deleted or relaxed: the round's diff is one added setup line
+(CI-3), one replaced wait (CI-4) and two added setup lines (CI-5), each with a comment that
+states the mechanism, and nothing else.
+
+#### CI-3 — `e83d218`: the flag had no turn to sit on
+
+`ChatViewModelTest > theInterruptedFlagIsBoundToItsConversation`, `:1393`: *"the flag was not
+cleared through the stale pointer expected:<true> but was:<false>"*.
+
+`load()` does not return the column. It derives `interrupted` as
+`hasPendingToolCall(last) || (header.interrupted && hasUnfinishedTurn(active))`, and
+`hasUnfinishedTurn` is false for an empty transcript (`CodingSessions.kt:569-576`); worse, the read
+of a conversation that derives as not-interrupted **clears the column** on the way out
+(`:580-582`). The test set the flag on a conversation with no messages, so the value it asserted on
+could never survive, whatever the binding did. The product is right: a flag with nothing to resume
+means nothing, and crash recovery depends on that.
+
+**Fix:** store one user message before setting the flag, so the read goes through the derivation.
+Both assertions are unchanged; the stale-pointer call must still throw and still must not clear
+first's flag — and now it is a real test, because an unbound `markInterrupted(false)` would clear
+the flag of the session that is active (first) and the assertion would catch it.
+
+#### CI-4 — `ae7fb58`: the pointer moved before the write it was meant to race
+
+`ChatViewModelTest > aTurnNeverWritesIntoAConversationItDidNotStartIn`, `:1564`: *"the turn keeps
+writing to the conversation it started in expected:<[Keep working]> but was:<[]>"*.
+
+`startTurn` sets `streaming = true` **synchronously** (`ChatViewModel.kt:484`) and only then
+launches the turn, whose first durable write is at `:634` after several suspensions. Waiting on
+`it.streaming` therefore returned before the write; the test moved the storage pointer first, and
+the turn's very first bound write was correctly refused. A turn that has written nothing has
+nothing filed in the conversation it started in — refusing is exactly S1's contract, so the test
+was racing the write it meant to protect.
+
+**Fix:** wait for `acceptedMessageCount == 1`, the state update published immediately after
+`persistTurn` returns (`:651-661`), so the pointer moves while the turn is inside the provider call.
+Assertions are unchanged: the other conversation stays empty, the origin conversation keeps its user
+message, and the refused write still surfaces as an error (`stableFailure`, `:1244-1269`, is reached
+through the generic catch at `:982-986`).
+
+#### CI-5 — `86d80cf`: a pending title retried into the next case
+
+`ConversationTitleLifecycleTest > titleProviderFailureAndInvalidOutputNeverFailCodingTurn`, `:188`:
+*"expected null, but was:<The provider returned an empty response.>"*.
+
+The test loops three title-failure payloads over **one** database. F5 (`1b2d8bf`) deliberately made
+a failed title attempt leave its marker pending, and added a startup retry for a pending marker
+(`ChatViewModel.kt:311-326`). So case 2's fresh `ChatViewModel` spends provider call 1 retrying case
+1's marker, and the coding turn receives call 2 — the invalid payload written for the title request.
+An empty assistant reply is precisely what `finish()` reports as "the provider returned an empty
+response" (`:1111-1116`). That the observed text is *that* string, and not a provider-refusal one,
+is the corroboration: case 1 passes because its store is clean, and the empty-response case is the
+one where the coding turn is fed `""`. (The same fixture would also have tripped
+`assertEquals(2, calls)`, because the retried coding turn starts a third title request; the
+assertion at `:188` fails first.)
+
+The behaviour that broke the fixture is the F5 contract the order required — a failed title attempt
+never fails or errors the coding turn, and its marker is retried — which
+`aFailedTitleRequestLeavesTheMarkerForTheNextFinishedTurn` pins independently, and which passed in
+this run.
+
+**Fix:** each case gets its own store, exactly as `@Before` does for the test as a whole
+(`app.deleteDatabase`, `AgentSessionStore(app).clear()`). All four assertions are unchanged,
+including "no error", "still called New session", "two events", "two provider calls".
+
+#### What this round does and does not establish
+
+It establishes that the three named pins were testing the right contract on fixtures that could not
+observe it, and that no product defect surfaced under 742 executed tests. It does **not** establish
+that the fixes pass: nothing here can compile or run Kotlin, so CI round 4 is their first execution,
+and if a fixture fix is wrong the run will say so. The rest of the suite has now executed once and
+passed; the three device-only checks in this record still have no runtime evidence.
+
 ## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
@@ -785,17 +870,17 @@ Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterru
 test `40a88bd`), F7 items 1-3 settled (`d156e48`, fix `327ff50`, `4ceceeb`), F6 pins (`859c601`)
 and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this audit:
 `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, then Hermes' two closing fixes `fbb152f`, `4e677da`,
-the sixth provider-screen site `8e4b97d`, and the two compile breaks CI found `0b28b03` and
-`acbc563`.
+the sixth provider-screen site `8e4b97d`, the two compile breaks CI found `0b28b03` and
+`acbc563`, and the three test fixtures CI's first full run found `e83d218`, `ae7fb58`, `86d80cf`.
 
-**Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes and both
-CI-found import fixes are complete. No push was made.
+**Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes, both
+CI-found import fixes and the three CI-found fixture fixes are complete. No push was made.
 
 **What the next step is, in this order:** (1) Hermes re-runs both workflows on exact head
-(`acbc563` or later) and verifies from the run JSON. The gate has moved: at `7c722ce` the main
-source set compiled but the unit-test set did not, so the next gate is `testDebugUnitTest`
-actually starting — and only then do test *results* exist; (2) the two `ChatViewModelTest` Undo
-row tests, the only end-to-end coverage the Undo row has; (3) the three device checks the doc
-already names (draft per conversation, the live-status clock, the reasoning preview across two
-chains); (4) residuals 7 and 9 if Hermes wants them settled rather than named — residual 8 is
-closed by `4e677da`.
+(`86d80cf` or later) and verifies from the run JSON — the suite has executed once and 739 of
+742 passed; the next question is whether the three fixture fixes hold, and that run is their
+first execution; (2) the two `ChatViewModelTest` Undo row tests have now run — read their
+result in that run rather than this record; (3) the three device checks the doc already names
+(draft per conversation, the live-status clock, the reasoning preview across two chains), which
+no unit test can reach; (4) residuals 7 and 9 if Hermes wants them settled rather than named —
+residual 8 is closed by `4e677da`.
