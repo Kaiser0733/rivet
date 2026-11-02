@@ -38,7 +38,7 @@ Chosen design: **carry across when the workspace matches, plus rehydrate on load
 | F4 `capacitySource` gating | **DONE** — `5209bc8` (guessed window plans at 131 072; entered/detected windows byte-identical, pinned by `aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged`) |
 | F5 title dead-end | **DONE** — `c4dbe7f`, test `40a88bd` |
 | F6 per-delta rendering cost | not started |
-| F7 three SUSPECTED UI items | 1 settled (state resets, does not hop); 2 DEVICE-ONLY, 3 PROVEN (product call) — see below |
+| F7 three SUSPECTED UI items | 1 settled (state resets, does not hop); 2 DEVICE-ONLY; 3 **FIXED** `327ff50` per Hermes' decision |
 
 ### F5 — title dead-end  [ DONE ]
 
@@ -140,7 +140,12 @@ in the composer after switching to B and would be sent to B; A loses it. The mec
 proven from the tree. It is a product decision, not a defect with one right answer, so it is not
 changed here: the honest fix is `rememberSaveable(state.currentSessionId) { … }` with the
 session id passed into `InputBar`, which keeps a draft per conversation and never leaks one into
-another. Kaiser's call — either "per conversation" (that fix) or "one draft, cleared on switch".
+another. **Decided by Hermes: per conversation.** Implemented in `327ff50` —
+`rememberSaveable(sessionId)` in `InputBar`, with `state.currentSessionId` passed in. It cannot
+leak text into another chat and loses nothing typed. No UI test harness exists
+(`createComposeRule` is absent from this project), so this one rests on the code and CI, and the
+device check is simply: type in A, switch to B, the composer is empty; switch back, the text is
+still there.
 
 ### S2 residual — `markInterrupted` binding  [ DONE — 96ac827 ]
 
@@ -170,7 +175,7 @@ so it does not meet the order's "if it fits the same shape" bar. Left named for 
 
 ## STOP POINT (for the next run)
 
-Stopped after the F7 settlements. Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed, no code),
+Stopped after the per-conversation draft fix (`327ff50`). Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed, no code),
 F4, markInterrupted binding, F7 items 1-3 settled (1 resets rather than hops; 2 device-only with
 the exact observation; 3 proven mechanism, product call). **Next: F6** (incremental reasoning preview + bucketed scroll key in `ChatScreen.kt:759-769`
 and `ChatText.thinkingPreview`; the accepted behaviour is that the visible preview and the
