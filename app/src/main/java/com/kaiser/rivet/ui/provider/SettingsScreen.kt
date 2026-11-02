@@ -165,7 +165,9 @@ fun SettingsScreen(
                     modifier = Modifier.padding(vertical = 8.dp)) }
             }
             state.headerNotice?.let { message ->
-                item { Text(message, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                // App copy today (a count of dropped custom headers), escaped for the same
+                // reason as the error rows above: it is a stored string this screen prints.
+                item { Text(displaySafeText(message), color = MaterialTheme.colorScheme.onSurfaceVariant,
                     style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(vertical = 8.dp)) }
             }
