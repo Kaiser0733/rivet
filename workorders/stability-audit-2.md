@@ -37,7 +37,7 @@ Chosen design: **carry across when the workspace matches, plus rehydrate on load
 | F3 classifier replacing a real message | **CLOSED, no code change** — boundary is the tightest the evidence supports, see below |
 | F4 `capacitySource` gating | **DONE** — `5209bc8` (guessed window plans at 131 072; entered/detected windows byte-identical, pinned by `aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged`) |
 | F5 title dead-end | **DONE** — `c4dbe7f`, test `40a88bd` |
-| F6 per-delta rendering cost | not started |
+| F6 per-delta rendering cost | pins committed `859c601`; cost cut NOT done — design constraint below |
 | F7 three SUSPECTED UI items | 1 settled (state resets, does not hop); 2 DEVICE-ONLY; 3 **FIXED** `327ff50` per Hermes' decision |
 
 ### F5 — title dead-end  [ DONE ]
@@ -173,13 +173,32 @@ Binding it needs the check and the write inside one `onDatabase` block, i.e. ref
 the window without closing it, and the flag is a boolean cleanup rather than transcript data,
 so it does not meet the order's "if it fits the same shape" bar. Left named for Hermes.
 
+### F6 — the pin, and the constraint it exposed
+
+Pinned in `859c601` (`ThinkingPreviewTest`): the streaming preview is the first line of the last
+paragraph that has finished a line, and it **stays** on that paragraph even after kilobytes of
+new unfinished text — the tail fallback only applies before any paragraph has finished a line.
+Two cases were added, and writing them corrected my own assumption: I first expected the long
+open paragraph to win, and the implementation proved otherwise (`lastFinishedParagraphFirstLine`,
+`ChatText.kt:56-70`).
+
+Consequence for the cure: a shortcut that only scans the end of the text **cannot** be used —
+it would move the preview to the open line, which is exactly what the new test forbids. The safe
+incremental design is to track state across deltas: keep the last finished paragraph's first
+line, and advance it only when a newline arrives (the streaming loop already sees each delta
+exactly once), falling back to `tailOfLastLine` only while no paragraph has finished a line.
+That is O(delta) per token with identical output for every case pinned, plus the bucketed scroll
+key in `ChatScreen.kt:759-769` (recompute the follow target at most once per frame instead of per
+delta). It is an assembly-level change to `ThinkingBlock`'s `remember(text, streaming)` and
+wants a run with room to reason about it end to end; the pins are in place so that run cannot
+silently change behaviour.
+
 ## STOP POINT (for the next run)
 
-Stopped after the per-conversation draft fix (`327ff50`). Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed, no code),
+Stopped after F6's pins (`859c601`). Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed, no code),
 F4, markInterrupted binding, F7 items 1-3 settled (1 resets rather than hops; 2 device-only with
-the exact observation; 3 proven mechanism, product call). **Next: F6** (incremental reasoning preview + bucketed scroll key in `ChatScreen.kt:759-769`
-and `ChatText.thinkingPreview`; the accepted behaviour is that the visible preview and the
-scroll position do not change, so pin those first, then change the cost). Then F7 (three
+the exact observation; 3 proven mechanism, product call). **Next: F6's cost cut** (see the design constraint above: incremental per-delta state, NOT a
+tail window), then restart rehydration for Undo + the end-to-end Undo-row test, then Phase A2. Then F7 (three
 SUSPECTED items: message-index-keyed `remember`/`rememberSaveable` re-association after the
 100-message trim; `LiveStatusRow`'s saveable clock with no turn key; the draft not keyed to the
 conversation — read first, they may be DISPROVEN), the two named S2 residuals, then Phase A2.
