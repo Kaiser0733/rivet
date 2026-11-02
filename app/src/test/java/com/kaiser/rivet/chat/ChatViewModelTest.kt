@@ -1424,6 +1424,105 @@ class ChatViewModelTest {
             viewModel.undoSurvivesSwitch("project-a", null))
     }
 
+    // The Undo row is what `undoCheckpointId != null` renders, so a row test has to produce a
+    // real checkpoint: these two drive a whole approved turn through the tool path in a real
+    // project (the fake documents provider) instead of hand-writing a checkpoint the product
+    // would never make.
+    private class UndoFixture(
+        val viewModel: ChatViewModel,
+        val documents: TestDocumentsProvider,
+        val tree: android.net.Uri,
+        val sessions: CodingSessions,
+        val config: ProviderConfig,
+    )
+
+    private suspend fun undoFixture(authority: String, responses: List<AgentResponse>): UndoFixture {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val sessions = CodingSessions(app)
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque(responses)) })
+        await(viewModel) { it.ready && !it.projectLoading }
+        viewModel.selectProject(tree, flags)
+        await(viewModel) { it.currentSessionWorkspaceId == tree.toString() && !it.projectLoading }
+        return UndoFixture(viewModel, documents, tree, sessions, config)
+    }
+
+    // One approved create_file turn: the state the moment the Undo row appears.
+    private suspend fun createFileTurn(viewModel: ChatViewModel): ChatUiState {
+        viewModel.send("Create A")
+        val approval = await(viewModel) { it.pendingApproval?.call?.id == "create-a" }
+        viewModel.approve(approval.pendingApproval!!.approvalToken)
+        return await(viewModel) { !it.streaming && it.undoCheckpointId != null }
+    }
+
+    // Undo has to outlive the process. The checkpoint is on disk and belongs to the project, so
+    // opening the app again in that project must offer the same Undo instead of returning with
+    // no row at all — which is what happened before the rehydration read the store.
+    @Test fun theUndoRowComesBackAfterARestartFromTheSavedCheckpoint() = runBlocking {
+        val fixture = undoFixture("com.kaiser.rivet.undo-restart", listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
+            AgentResponse(text = "Done"),
+        ))
+        val row = createFileTurn(fixture.viewModel)
+        val checkpointId = row.undoCheckpointId!!
+        assertTrue("the turn really created the file in the project",
+            fixture.documents.nodes.values.any { it.name == "A.kt" })
+        assertEquals(listOf("A.kt"), row.lastTurnFiles)
+        assertEquals(1, row.lastTurnFileCount)
+
+        // Same disk, same project, same conversation: only the process is new.
+        val restarted = newChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(fixture.config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        val back = await(restarted) { it.ready && it.undoCheckpointId != null }
+        assertEquals(checkpointId, back.undoCheckpointId)
+        assertEquals(listOf("A.kt"), back.lastTurnFiles)
+        assertEquals(1, back.lastTurnFileCount)
+        assertEquals(row.currentSessionId, back.currentSessionId)
+        assertEquals(fixture.tree.toString(), back.currentSessionWorkspaceId)
+    }
+
+    // The order's S2 ask, end to end with a real checkpoint: a switch queued behind a running
+    // turn must not take the Undo row the turn just earned away, because both conversations are
+    // in the same project and Undo reaches that project's files.
+    @Test fun aConversationSwitchQueuedBehindATurnKeepsTheUndoRow() = runBlocking {
+        val fixture = undoFixture("com.kaiser.rivet.undo-switch", listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
+            AgentResponse(text = "Done"),
+        ))
+        // A second conversation in the same project, created the way the history pane does.
+        val other = fixture.sessions.create(fixture.tree.toString()).id!!
+        fixture.sessions.select(fixture.viewModel.uiState.value.currentSessionId!!)
+
+        fixture.viewModel.send("Create A")
+        await(fixture.viewModel) { it.streaming }
+        fixture.viewModel.resumeSession(other)
+        val queued = await(fixture.viewModel) { it.queuedSessionId == other }
+        assertEquals("Rivet will open that conversation when this reply finishes.", queued.notice)
+        val approval = await(fixture.viewModel) { it.pendingApproval?.call?.id == "create-a" }
+        fixture.viewModel.approve(approval.pendingApproval!!.approvalToken)
+
+        val switched = await(fixture.viewModel) { !it.streaming && it.currentSessionId == other }
+        assertNotNull("the queued switch must not drop the Undo row", switched.undoCheckpointId)
+        assertEquals(listOf("A.kt"), switched.lastTurnFiles)
+        assertEquals(1, switched.lastTurnFileCount)
+    }
+
     // A turn writes into the conversation it started in. Before this was bound, a switch
     // landing in the middle of a turn moved the storage pointer and the reply was filed into
     // the other conversation, leaving that one holding a transcript it never had.
