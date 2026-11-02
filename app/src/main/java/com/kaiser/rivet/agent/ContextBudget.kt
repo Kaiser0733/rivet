@@ -40,6 +40,7 @@ internal class ContextCapacityTooSmall : Exception("context_capacity_too_small")
 internal object ContextBudget {
     private const val DEFAULT_PLANNING_LIMIT = DEFAULT_CONTEXT_WINDOW_TOKENS
     private const val UNKNOWN_RESERVE = 16_000
+    private const val GUESSED_WINDOW_PLAN = 131_072
 
     fun estimateRequestTokens(request: AgentRequest): Long {
         val messageBytes = AgentContext.serializedBytes(request.messages).toLong()
@@ -56,7 +57,16 @@ internal object ContextBudget {
 
     fun assess(config: ProviderConfig, inputTokens: Long?, source: TokenEstimateSource): ContextAssessment {
         val known = config.trustedInputLimitTokens()
-        val resolvedWindow = config.resolvedContextWindowTokens().takeIf { it > 0 } ?: DEFAULT_PLANNING_LIMIT
+        val indicatedWindow = config.manualContextWindowForModel()
+            ?: config.detectedContextWindowForModel()
+        val guessedWindow = indicatedWindow == null
+        val resolvedWindow = (indicatedWindow ?: DEFAULT_PLANNING_LIMIT).takeIf { it > 0 }
+            ?: DEFAULT_PLANNING_LIMIT
+        // Nothing was measured: the window is Rivet's 256K guess. Planning compaction as if
+        // the guess were fact leaves a provider with a smaller window to discover the problem
+        // through an overflow error. Plan the guess at half, which only makes compaction
+        // happen earlier; a measured or entered window is used exactly as it is.
+        val planWindow = if (guessedWindow) minOf(resolvedWindow, GUESSED_WINDOW_PLAN) else resolvedWindow
         val manualMaxOutput = config.resolvedManualMaxOutputTokens()
         val reserve = when {
             // A manual output limit at or above the window would leave no room to send
@@ -69,7 +79,7 @@ internal object ContextBudget {
             config.type == ProviderType.OpenRouter -> config.openRouterOutputCeiling() ?: UNKNOWN_RESERVE
             else -> minOf(known, minOf(UNKNOWN_RESERVE, maxOf(2048, known / 4)))
         }
-        val target = (resolvedWindow - reserve).coerceAtLeast(0)
+        val target = (planWindow - reserve).coerceAtLeast(0)
         val headroom = (target / 8).coerceAtLeast(1024)
         return ContextAssessment(inputTokens, source, known,
             if (known == null) CapacitySource.Unknown else CapacitySource.ProviderMetadata,
