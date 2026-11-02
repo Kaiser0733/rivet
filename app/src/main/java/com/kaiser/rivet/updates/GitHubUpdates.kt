@@ -15,8 +15,10 @@ import okhttp3.Authenticator
 import okhttp3.Call
 import okhttp3.Callback
 import okhttp3.CookieJar
+import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.HttpUrl.Companion.toHttpUrlOrNull
+import okhttp3.dnsoverhttps.DnsOverHttps
 import okhttp3.OkHttpClient
 import okhttp3.Protocol
 import okhttp3.Request
@@ -62,7 +64,8 @@ internal class GitHubUpdates(
         // or a carrier middlebox mangling HTTP/2 to a CDN host looks like. Nothing in hand proves
         // that is this bug. Forcing HTTP/1.1 on this client alone costs one connection reuse pattern
         // on a 14 MB file — no user-visible latency — and removes the whole class of failure.
-        .protocols(listOf(Protocol.HTTP_1_1)).build()
+        .protocols(listOf(Protocol.HTTP_1_1))
+        .dns(SecureDnsFallback).build()
 
     init { require(maxDownloadBytes in 1..MAX_APK_BYTES) }
 
@@ -289,6 +292,25 @@ internal class GitHubUpdates(
     }
 
     companion object {
+        // Secure-DNS fallback for this client only. The system resolver is asked first and is trusted
+        // when it answers; when it cannot resolve a host at all, the same name is resolved over HTTPS.
+        // Evidence for this round: Chrome fetched the same APK from GitHub on the same device and
+        // network while the app failed, and api.github.com resolves for the app while the file host
+        // does not, across two carriers — that is a resolver answer, not a TCP problem, and Chrome
+        // bypasses the system resolver the same way this does. Fallback rather than DoH-first: a
+        // working system resolver stays in charge, and a broken one no longer ends the download.
+        private val SecureDnsFallback: Dns = object : Dns {
+            private val secure: DnsOverHttps by lazy {
+                DnsOverHttps.Builder()
+                    .client(OkHttpClient())
+                    .url("https://cloudflare-dns.com/dns-query".toHttpUrlOrNull()!!)
+                    .build()
+            }
+            override fun lookup(hostname: String): List<java.net.InetAddress> =
+                try { Dns.SYSTEM.lookup(hostname) }
+                catch (_: java.net.UnknownHostException) { secure.lookup(hostname) }
+        }
+
         const val MAX_APK_BYTES = 200L * 1024 * 1024
         private const val MAX_METADATA_BYTES = 512L * 1024
         private const val MAX_ATTEMPTS = 3
