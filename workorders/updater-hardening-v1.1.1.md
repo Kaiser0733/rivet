@@ -74,10 +74,31 @@ update — and it also means the update *to* 1.1.1 itself is the last one that h
 client. Nothing here can rescue a user who cannot fetch 1.1.1 at all; that remains a one-time manual
 install or whatever the network allows.
 
-## STOP POINT — the tests are not written
+## Follow-up round
 
-The five fixes are committed and the code is balanced and import-clean by the structural checks, but
-**no test pins them and no CI has run on this branch.** I ran out of context before writing them, and
+**JOB 1 — the red CI, fixed (`1fae1a1`).** Run 41402769275 stopped at `:app:compileDebugKotlin` with two
+errors, both from the fallback wrapper: `File.outputStream()` has no `append` parameter (now
+`FileOutputStream(target, start > 0)`, so a resumed attempt appends and a restart truncates), and the
+`withContext` lambda's type collapsed to `Unit` once the redirect chain was wrapped in `while (true)` —
+reported as `Any!` where `File` was expected. Both in one commit because the second is a consequence of
+the same wrapper, not a separate slip.
+
+**JOB 3 — secure DNS for the update client (`89f7bc0`).** New evidence: Chrome downloaded the same APK
+from GitHub on the device and network where the app fails, and `api.github.com` resolves for the app
+while the file host does not, across two carriers. That is a resolver answer, not TCP. The update client
+now asks the system resolver first and falls back to DNS-over-HTTPS (`cloudflare-dns.com/dns-query`)
+only when a name cannot be resolved at all. **Fallback, not DoH-first**, chosen because a working system
+resolver should stay in charge — some networks resolve internal names only — and because DoH-first
+would change behaviour for every user to fix a resolver fault that only some see. Scope: this client
+only. `okhttp-dnsoverhttps:4.12.0` added to the build, since the core artifact does not carry
+`DnsOverHttps`.
+
+## STOP POINT — the tests are still not written
+
+The fixes are committed and the code is balanced and import-clean by the structural checks, but
+**JOB 2 — every test listed below — is still owed, and no CI has run on this branch.** That includes the
+two compile errors CI found, which is exactly the class of mistake a test-writing pass would have
+surfaced earlier. I ran out of context before writing them, and
 writing them blind would have risked a broken commit and a wasted CI round, so this is where the run
 stops. What must exist next, in `app/src/test/java/com/kaiser/rivet/updates/`:
 
