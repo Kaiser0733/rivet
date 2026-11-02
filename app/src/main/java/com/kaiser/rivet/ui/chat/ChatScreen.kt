@@ -1275,7 +1275,10 @@ private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?,
                      onDiscard: (() -> Unit)? = null, blockedReason: String? = null) {
     Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(6.dp)) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
-            Text(error, color = MaterialTheme.colorScheme.onErrorContainer,
+            // Since F1 the banner can carry the provider's own words, which are untrusted text
+            // like any other: a bidi control inside them reorders the line around Rivet's own
+            // sentence. Every other foreign string on screen goes through displaySafeText.
+            Text(displaySafeText(error), color = MaterialTheme.colorScheme.onErrorContainer,
                 style = MaterialTheme.typography.bodyMedium)
             if (onDiscard != null) TextButton(onClick = onDiscard) { Text("Discard pending changes") }
             if (blockedReason != null) Text(blockedReason, style = MaterialTheme.typography.bodySmall,
