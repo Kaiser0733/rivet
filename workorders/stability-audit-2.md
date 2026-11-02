@@ -1,8 +1,8 @@
 # Stability surgery + re-audit — working doc (order: stability-surgery-and-reaudit.md)
 
 Base: `ab8d1f4`. Checklist is the order's phases, in order. One commit per fix.
-**This run stopped early by context limit; the STOP POINT section at the bottom says
-exactly where to resume.** Nothing half-done was left uncommitted.
+The latest stop point is at the end of the final pre-merge section and says exactly where to
+resume. Nothing half-done was left uncommitted.
 
 ## Phase S — structural surgery
 
@@ -50,9 +50,9 @@ turn), so no title call is burnt on failing turns.
 
 ## Phase A2 — second full audit  [ DONE — see "Phase A2 record" at the bottom ]
 
-Verdict, stated up front: **thirteen defects found and fixed — five in product code, one in copy,
-six in tests (one of which broke compilation), and one compile break in the main source set — and
-nothing known-open.** Four came from this audit, two from Hermes' review of its record, five from
+Verdict, stated up front: **thirteen defects found and fixed in the surgery audit — five in
+product code, one in copy, six in tests (one of which broke compilation), and one compile break in
+the main source set — plus six more from the final pre-merge correctness audit.** Four came from this audit, two from Hermes' review of its record, five from
 CI's three executions, and two from the device (all at the end of this section). The residuals were
 re-checked one by one: none could be cleared outright, five are confirmed as stated, and this
 pass adds three of its own. The SCOPE/ENVIRONMENT note at the head of the A2 record is
@@ -1236,7 +1236,9 @@ and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this
 the sixth provider-screen site `8e4b97d`, the two compile breaks CI found `0b28b03` and
 `acbc563`, the three test fixtures CI's first full run found `e83d218`, `ae7fb58`, `86d80cf`,
 kaiser's device-feedback addition `5f68178`, the device-found clock fix `3051632`, the audit
-fix `31f0895`, and the device-found scroll fix `b06145d`.
+fix `31f0895`, the device-found scroll fix `b06145d`, then the final pre-merge audits: performance
+`4da714d` and `1e52764`, correctness `13c84e3`, `2d84400`, `24ed5e7`, `fab9c9e`, `2f16c37` and
+`88338c3`.
 
 **STOP POINT — this run stopped where kaiser's standing order says to stop rather than rush.** The
 performance audit is complete and fixed. The correctness audit covered all 85 files; six findings are
