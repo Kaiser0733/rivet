@@ -345,6 +345,7 @@ internal suspend fun OkHttpClient.responsesSse(
                 response.use {
                     try {
                         if (!it.isSuccessful) throw httpError(it.code, it.errorText())
+                        requireEventStream(it)
                         val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
                         var responseBytes = 0
                         var lastProgressAt = clockMillis()
