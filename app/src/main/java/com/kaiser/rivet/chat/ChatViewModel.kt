@@ -1055,9 +1055,11 @@ class ChatViewModel private constructor(
                 }
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
-                withContext(NonCancellable) {
-                    try { store.clearAutoTitle(sessionId) } catch (_: Exception) { }
-                }
+                // The title request failed (timeout, network, provider). Leaving the marker
+                // pending lets the next successful turn try again instead of leaving this
+                // chat called "New session" for good. The title path only runs after a
+                // completed turn, so a failing turn still never spends a title call; a
+                // response that arrives but is unusable ends the marker in the branch above.
             }
         }
     }
