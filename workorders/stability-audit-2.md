@@ -38,7 +38,7 @@ Chosen design: **carry across when the workspace matches, plus rehydrate on load
 | F4 `capacitySource` gating | **DONE** — `5209bc8` (guessed window plans at 131 072; entered/detected windows byte-identical, pinned by `aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged`) |
 | F5 title dead-end | **DONE** — `c4dbe7f`, test `40a88bd` |
 | F6 per-delta rendering cost | not started |
-| F7 three SUSPECTED UI items | 1 settled (state resets, does not hop), 2 and 3 not settled |
+| F7 three SUSPECTED UI items | 1 settled (state resets, does not hop); 2 DEVICE-ONLY, 3 PROVEN (product call) — see below |
 
 ### F5 — title dead-end  [ DONE ]
 
@@ -121,6 +121,27 @@ resolution still returns 262 144, asserted in the same test — while the *plann
 guessed window is exactly what F4 changes. The default-window input was lowered from 120 000 to
 100 000 so `needsReduction` still tests "under the ceiling", since 120 000 now sits above it.
 
+### F7 item 2 — the saveable clock with no turn key: DEVICE-ONLY
+
+`ChatScreen.kt:868` `rememberSaveable { SystemClock.elapsedRealtime() }` has no turn key, and the
+row is a LazyColumn item. LazyColumn preserves saveable state for items it disposes, keyed by
+the item key, and this row's key is its list position — so whether turn 2 inherits turn 1's
+start time depends on whether the row reuses a slot. Nothing in the code makes it impossible.
+Observation that settles it: run a turn for ~20 s, let it finish and start a second turn
+immediately — if the second turn's line opens at ~20 s instead of 0 s, it is proven, and the
+fix is to key the row by the turn (pass the turn's identity into `LiveStatusRow`).
+
+### F7 item 3 — the draft is not scoped to a conversation: PROVEN (product call)
+
+`InputBar` is called at `ChatScreen.kt:590`, **outside** the `key(state.currentSessionId)` block
+that closes just before the ChangeSummary (`:576-585`), and its draft is
+`rememberSaveable { mutableStateOf("") }` at `:1276`. So a message typed in conversation A stays
+in the composer after switching to B and would be sent to B; A loses it. The mechanism is
+proven from the tree. It is a product decision, not a defect with one right answer, so it is not
+changed here: the honest fix is `rememberSaveable(state.currentSessionId) { … }` with the
+session id passed into `InputBar`, which keeps a draft per conversation and never leaks one into
+another. Kaiser's call — either "per conversation" (that fix) or "one draft, cleared on switch".
+
 ### S2 residual — `markInterrupted` binding  [ DONE — 96ac827 ]
 
 Full fix, not a wrapper: `markInterrupted(interrupted, expectedSessionId)` reads the pointer
@@ -149,9 +170,9 @@ so it does not meet the order's "if it fits the same shape" bar. Left named for 
 
 ## STOP POINT (for the next run)
 
-Stopped after `96ac827` (markInterrupted). Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed,
-no code), F4, markInterrupted binding, F7 item 1 (settled: resets, does not mis-attribute).
-**Next: F6** (incremental reasoning preview + bucketed scroll key in `ChatScreen.kt:759-769`
+Stopped after the F7 settlements. Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed, no code),
+F4, markInterrupted binding, F7 items 1-3 settled (1 resets rather than hops; 2 device-only with
+the exact observation; 3 proven mechanism, product call). **Next: F6** (incremental reasoning preview + bucketed scroll key in `ChatScreen.kt:759-769`
 and `ChatText.thinkingPreview`; the accepted behaviour is that the visible preview and the
 scroll position do not change, so pin those first, then change the cost). Then F7 (three
 SUSPECTED items: message-index-keyed `remember`/`rememberSaveable` re-association after the
