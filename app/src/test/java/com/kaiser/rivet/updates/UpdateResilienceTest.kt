@@ -32,7 +32,8 @@ class UpdateResilienceTest {
     private lateinit var updates: GitHubUpdates
 
     @Before fun setup() {
-        val certificate = HeldCertificate.Builder().addSubjectAlternativeName("localhost").build()
+        val certificate = HeldCertificate.Builder().addSubjectAlternativeName("localhost")
+            .addSubjectAlternativeName("127.0.0.1").build()
         server = MockWebServer()
         server.protocols = listOf(okhttp3.Protocol.HTTP_1_1)
         server.useHttps(HandshakeCertificates.Builder().heldCertificate(certificate).build().sslSocketFactory(), false)
@@ -40,7 +41,7 @@ class UpdateResilienceTest {
         val trust = HandshakeCertificates.Builder().addTrustedCertificate(certificate.certificate).build()
         val client = OkHttpClient.Builder().sslSocketFactory(trust.sslSocketFactory(), trust.trustManager)
             .proxy(Proxy.NO_PROXY).addInterceptor { chain ->
-                chain.proceed(chain.request().newBuilder().url(server.url(chain.request().url.encodedPath)).build())
+                chain.proceed(chain.request().newBuilder().url(server.url(chain.request().url.encodedPath).newBuilder().host("127.0.0.1").build()).build())
             }.cookieJar(object : CookieJar {
                 override fun saveFromResponse(url: HttpUrl, cookies: List<okhttp3.Cookie>) {}
                 override fun loadForRequest(url: HttpUrl) = emptyList<okhttp3.Cookie>()
