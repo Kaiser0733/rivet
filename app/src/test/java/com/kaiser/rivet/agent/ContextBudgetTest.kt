@@ -106,8 +106,8 @@ class ContextBudgetTest {
             "https://api.example/v1", "glm-5.1")
         val assessed = ContextBudget.assess(wide, 0, TokenEstimateSource.Estimated)
         // No window was entered or detected, so the 256K default is a guess and planning uses
-        // half of it (F4). The trigger/aim relationship this test checks is unchanged.
-        assertEquals(131_072 - 16_000, assessed.allowedInputTokens)
+        // 220K of it (kaiser's number). The trigger/aim relationship this test checks is unchanged.
+        assertEquals(220_000, assessed.allowedInputTokens)
         assertTrue("trigger must leave room", assessed.compactAtTokens < assessed.allowedInputTokens)
         assertTrue("target must sit below the trigger", assessed.compactToTokens < assessed.compactAtTokens)
 
@@ -150,7 +150,7 @@ class ContextBudgetTest {
     @Test fun aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged() {
         val guessed = ProviderConfig("c", ProviderType.OpenAiCompatible, "Compat",
             "https://api.example/v1", "glm-5.1")
-        assertEquals(131_072 - 16_000,
+        assertEquals(220_000,
             ContextBudget.assess(guessed, 0, TokenEstimateSource.Estimated).allowedInputTokens)
         // The same distinction the refusal copy reads: only the guess is flagged, so copy that
         // prints a number can tell the two apart without re-deciding which one it has.
@@ -184,7 +184,7 @@ class ContextBudgetTest {
         assertNull(defaultAssessment.knownInputLimitTokens)
         // Resolution still reports 262 144 (asserted above); only the planning target for a
         // guessed window changed, and this test's subject is the resolution order (F4).
-        assertEquals(131_072 - 16_000, defaultAssessment.allowedInputTokens)
+        assertEquals(220_000, defaultAssessment.allowedInputTokens)
         assertFalse(defaultAssessment.needsReduction)
 
         val detected = base.selectListedModel(ModelInfo("glm-5.1", "GLM 5.1", inputLimitTokens = 200_000))

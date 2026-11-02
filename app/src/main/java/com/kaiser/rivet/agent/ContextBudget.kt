@@ -48,7 +48,11 @@ internal class ContextCapacityTooSmall : Exception("context_capacity_too_small")
 internal object ContextBudget {
     private const val DEFAULT_PLANNING_LIMIT = DEFAULT_CONTEXT_WINDOW_TOKENS
     private const val UNKNOWN_RESERVE = 16_000
-    private const val GUESSED_WINDOW_PLAN = 131_072
+    // Kaiser's ruling on the device, 2026-11-02: planning the guess at half of the 256K default
+    // refused a long chat at 115,072 tokens when the guess could have carried it. The guess is now
+    // planned at 220K of the 256K. Trade accepted with it: a model whose real window is smaller
+    // than the guess fails at the provider instead of at Rivet's polite wall.
+    private const val GUESSED_INPUT_TOKENS = 220_000
 
     fun estimateRequestTokens(request: AgentRequest): Long {
         val messageBytes = AgentContext.serializedBytes(request.messages).toLong()
@@ -70,11 +74,14 @@ internal object ContextBudget {
         val guessedWindow = indicatedWindow == null
         val resolvedWindow = (indicatedWindow ?: DEFAULT_PLANNING_LIMIT).takeIf { it > 0 }
             ?: DEFAULT_PLANNING_LIMIT
-        // Nothing was measured: the window is Rivet's 256K guess. Planning compaction as if
-        // the guess were fact leaves a provider with a smaller window to discover the problem
-        // through an overflow error. Plan the guess at half, which only makes compaction
-        // happen earlier; a measured or entered window is used exactly as it is.
-        val planWindow = if (guessedWindow) minOf(resolvedWindow, GUESSED_WINDOW_PLAN) else resolvedWindow
+        // Nothing was measured: the window is Rivet's 256K guess. Planning compaction as if the
+        // guess were fact leaves a provider with a smaller window to discover the problem through
+        // an overflow error, so the guess is planned below the whole of it — but at 220K, not at
+        // half, which is what turned a long session into a dead end. The reserve is added on top so
+        // [ContextAssessment.allowedInputTokens] lands on the 220K itself. An entered or detected
+        // window is used exactly as it is and never goes through this branch.
+        val planWindow =
+            if (guessedWindow) minOf(resolvedWindow, GUESSED_INPUT_TOKENS + UNKNOWN_RESERVE) else resolvedWindow
         val manualMaxOutput = config.resolvedManualMaxOutputTokens()
         val reserve = when {
             // A manual output limit at or above the window would leave no room to send
