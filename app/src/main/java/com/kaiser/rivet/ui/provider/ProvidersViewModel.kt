@@ -571,6 +571,9 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             }
             try {
                 store.save(config)
+                // Inside the same handling as the save: a DataStore write can fail here too, and
+                // outside it the failure becomes an uncaught exception in this scope.
+                if (state.isNew) store.setActive(config.id)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -578,9 +581,6 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                     it.copy(test = TestUi(false, "Rivet couldn't save these provider settings securely. Try again."))
                 }
                 return@launch
-            }
-            if (state.isNew) {
-                store.setActive(config.id)
             }
             _listState.update { list ->
                 if (list.activeId == null) list.copy(activeId = config.id) else list
