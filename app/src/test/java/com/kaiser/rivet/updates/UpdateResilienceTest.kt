@@ -120,6 +120,36 @@ class UpdateResilienceTest {
         assertEquals("a 200 means the whole file again, from zero", "wxyz", staged.readText())
     }
 
+    // (4) The mirror is tried only after GitHub's chain has spent its retries, and its file is held to
+    // the same published size before it becomes the staged file UpdateApks.verify then inspects.
+    @Test fun theMirrorIsTriedOnlyAfterGitHubsRetriesAreSpent() = runBlocking {
+        val release = release()
+        repeat(3) { server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)) }
+        server.enqueue(MockResponse().setBody("abcd").setHeader("Content-Length", 4))
+
+        val staged = updates.download(release) { _, _ -> }
+
+        val asset = "/Kaiser0733/rivet/releases/download/v0.11.1/Rivet-v0.11.1.apk"
+        val paths = (1..4).map { server.takeRequest().request.url.encodedPath }
+        assertEquals("three attempts at the release asset first",
+            listOf(asset, asset, asset), paths.take(3))
+        assertEquals("and only then the mirror, with the same filename",
+            "/downloads/Rivet-v0.11.1.apk", paths[3])
+        assertEquals("the mirror's bytes are the staged file", "abcd", staged.readText())
+    }
+
+    @Test fun aMirrorFileOfTheWrongSizeIsStillRefused() = runBlocking {
+        val release = release()
+        repeat(3) { server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START)) }
+        server.enqueue(MockResponse().setBody("abcde").setHeader("Content-Length", 5))
+
+        val error = failure { updates.download(release) { _, _ -> } }
+
+        assertTrue("the mirror is held to the published size, not to what it sends: ${error.message}",
+            error.message?.contains("incomplete", ignoreCase = true) == true)
+        assertTrue("and nothing is left behind for verify to pick up", directory.listFiles()!!.isEmpty())
+    }
+
     // (5) Copy: each leg names the server that failed, and the old blame is gone from this family.
     @Test fun eachLegNamesTheServerThatFailed() {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))

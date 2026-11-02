@@ -93,30 +93,30 @@ would change behaviour for every user to fix a resolver fault that only some see
 only. `okhttp-dnsoverhttps:4.12.0` added to the build, since the core artifact does not carry
 `DnsOverHttps`.
 
-## STOP POINT — the tests are still not written
+## Tests — closed
 
-The fixes are committed and the code is balanced and import-clean by the structural checks, but
-**JOB 2 — every test listed below — is still owed, and no CI has run on this branch.** That includes the
-two compile errors CI found, which is exactly the class of mistake a test-writing pass would have
-surfaced earlier. I ran out of context before writing them, and
-writing them blind would have risked a broken commit and a wasted CI round, so this is where the run
-stops. What must exist next, in `app/src/test/java/com/kaiser/rivet/updates/`:
+All six groups from the stop point exist in `app/src/test/java/com/kaiser/rivet/updates/UpdateResilienceTest.kt`:
 
-1. **retry after a dropped connection** — MockWebServer enqueues `SocketPolicy.DISCONNECT_AT_START`
-   then a good response; `check()` returns the release and the server saw 2 requests. Same for
-   `download()`, asserting the file is complete.
-2. **resume** — first response disconnects mid-body after N bytes; the second must arrive with
-   `Range: bytes=N-` and answer `206` with `Content-Range: bytes N-.../size`; the download completes
-   and the staged file equals the fixture bytes. A third case: server answers `200` to the Range
-   request and the file still completes (clean restart, no stitching).
-3. **fallback** — GitHub host unreachable for all attempts, mirror (MockWebServer) serves the same
-   bytes: the download succeeds from the mirror, and a mirror file with a wrong signature or size is
-   still rejected by `UpdateApks.verify`.
-4. **copy pins** — the two transport sentences and the bad-status sentence, plus an assertion that
-   "check your connection" cannot reappear in this family.
-5. **version** — a pin that `versionCode == 25` and `versionName == "1.1.1"` so the bump cannot be lost
-   in a merge.
+1. `theMetadataLegRetriesOneDroppedConnection`, `theDownloadLegRetriesOneDroppedConnection` — a
+   `DISCONNECT_AT_START` costs one extra request and the call succeeds; the server sees exactly 2.
+2. `aDownloadDroppedMidBodyResumesFromTheBytesOnDisk` — a 2-of-4-byte body then a dropped socket; the
+   second request carries `Range: bytes=2-`, the `206` with `Content-Range: bytes 2-3/4` completes it,
+   and the staged file is exactly the fixture bytes at the published length.
+3. `aTwoHundredAnswerToARangeRequestRestartsCleanly` — the retry still offers the Range, a `200` answer
+   replaces the file from zero, and the result is the second body, never a stitch.
+4. `theMirrorIsTriedOnlyAfterGitHubsRetriesAreSpent` — three requests to the release-asset path, then
+   one to `/downloads/Rivet-v0.11.1.apk`. `aMirrorFileOfTheWrongSizeIsStillRefused` — the mirror is
+   held to the published size and leaves nothing behind; the file it does produce is the same staged
+   file `UpdateApks.verify` inspects, and that verification code is untouched and still covered by
+   `UpdateApksTest`.
+5. `eachLegNamesTheServerThatFailed` — both transport sentences are pinned exactly after their retries
+   are spent, and the assertion refuses any message containing "check your connection".
+6. `theBuildDeclaresOneOneOneAsVersionCodeTwentyFive` — reads `build.gradle.kts` and pins 1.1.1 / 25.
 
-Until those exist, treat this branch as **unverified**: the fixes are reasoned from the code, not
-proven by a run. Hermes' CI on the current head will compile and run the existing suite (which must
-stay green), but it cannot prove any of the five items above.
+**One production bug was exposed by writing these, fixed in its own commit (`f7ce1e3`).** A connection
+lost *mid-body* raises `IOException` inside the response callback, and `fetch` turned that into a
+non-retryable failure — so the retry loop would not retry the one failure this round exists for and the
+partial file was deleted instead of resumed. The proof is tests 2 and 3: they fail on the previous head
+and pass with the fix, which makes `IOException` in that handler retryable and changes nothing else.
+
+No other production change came out of this round.
