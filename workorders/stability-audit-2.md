@@ -613,8 +613,14 @@ spaces and replays it as a string, so the quotes were lost and `rcpt-0016` re-ru
 `bash -c ! grep ...`, which cannot exit 0 whatever the code says. It is left in the ledger
 rather than rewritten, because editing evidence by hand is the thing a ledger exists to
 prevent, and the rule it was meant to state is checked by `rcpt-0017`, whose recorded command is
-`bash round3/provider-text-check.sh` (a script, so replay is exact). Expect `receipts check` to
-report 16 passing claims and that one void line.
+`bash round3/provider-text-check.sh` (a script, so replay is exact).
+
+A second receipt, `rcpt-0021`, is void for a plainer reason: for kaiser's thinking-box tap I called
+`receipts add` before writing `round3/thinking-tap-check.py`, so it recorded a command that did not
+exist yet and replays as exit 127. `rcpt-0022` is the same claim against the script, and passes. Both
+void lines stay — the tool has no remove, and hand-editing the ledger is the one thing a ledger
+exists to prevent — so `receipts check` reports two failing lines out of 22 and they are both
+recording mistakes, not evidence that the work is unverified.
 
 The three SettingsScreen error values and the notice carry no provider text today, so escaping
 changes nothing they show; they are done anyway so the rule is "every Text that prints a stored
@@ -863,6 +869,56 @@ that the fixes pass: nothing here can compile or run Kotlin, so CI round 4 is th
 and if a fixture fix is wrong the run will say so. The rest of the suite has now executed once and
 passed; the three device-only checks in this record still have no runtime evidence.
 
+### Device-feedback addition (kaiser, 2026-11-02) — not a defect
+
+Asked for on the green head `192c56b` (both workflows passing, 742/742 tests). One change, in the
+chat thinking UI: **tapping the thinking box itself collapses it**, because a long chain pushes the
+Show/Hide header off the top of the screen and collapsing meant scrolling back up to it.
+
+**Where.** One composable: `ThinkingBlock` (`ChatScreen.kt:1035`). All three call sites go through
+it — the live block (`:817`, `streaming = true`), the standalone finished block (`:806`) and the
+finished block on an assistant message (`:983`) — so the streaming and finished blocks got the
+behaviour from one edit, which is why "both" needed no second change.
+
+**What changed.** The expanded chain's `Surface` gained
+
+```kotlin
+Modifier.clickable(
+    interactionSource = interactions,   // remembered in the composable
+    indication = null,                  // no ripple across a wall of text
+    role = Role.Button,
+    onClickLabel = "Collapse thinking",
+) { expanded = false }
+```
+
+plus one import and one `remember { MutableInteractionSource() }`. Nothing else in the file moved:
+the header row's clickable (`:1047`) is byte-identical, so Show/Hide toggles as before, and a tap on
+it toggles exactly once because the inner target consumes the event before the box's target would.
+The box is only composed while `expanded`, so its tap is always a collapse; expanding still goes
+through the header, which is a full-width target already.
+
+**How the tap-versus-drag split is implemented — the acceptance test.** There is no custom gesture
+detector, and that is deliberate. `Modifier.clickable` fires only when the press is released with
+its pointer changes unconsumed, and it re-checks on the **Final** pass — after the chat list's
+scroll container has seen the same event. A drag starting on the chain therefore has its position
+changes consumed by the list's scrollable, which cancels the press, so the drag scrolls exactly as
+it did before and never toggles. Movement under the touch slop is a tap by the platform's own
+definition, which is what "press and release without dragging" means. The chain carries **no nested
+scroll** — it is a plain `Text` inside the Surface, no `verticalScroll`, no selection container (the
+message-row `SelectionContainer` is a sibling, `:1011`) — so nothing can compete with the list for
+the gesture. Had there been a nested scroller, the list would still have won only for drags starting
+outside it, which is why the absence is stated rather than assumed.
+
+**Untouched, as required.** The F6 preview path (`thinkingPreview`, `PreviewScan`,
+`remember(text, streaming)` — `:1040-1044`), the thinking clock (`LiveStatusRow`, `:884`), the Undo
+row, and every other composable. The diff is one import, one remembered interaction source, one
+modifier on one Surface, and the comment explaining it.
+
+**Verification, stated plainly.** No Compose UI test harness exists in this project, so nothing here
+can prove a gesture. CI round 5 covers compilation and that the other 742 tests stay green — it
+cannot see this behaviour at all. The tap-versus-drag split is proven by `clickable`'s documented
+cancellation and by **kaiser's device check**, and by nothing else in this record.
+
 ## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
@@ -871,16 +927,19 @@ test `40a88bd`), F7 items 1-3 settled (`d156e48`, fix `327ff50`, `4ceceeb`), F6 
 and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this audit:
 `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, then Hermes' two closing fixes `fbb152f`, `4e677da`,
 the sixth provider-screen site `8e4b97d`, the two compile breaks CI found `0b28b03` and
-`acbc563`, and the three test fixtures CI's first full run found `e83d218`, `ae7fb58`, `86d80cf`.
+`acbc563`, the three test fixtures CI's first full run found `e83d218`, `ae7fb58`, `86d80cf`,
+and kaiser's device-feedback addition `5f68178`.
 
 **Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes, both
-CI-found import fixes and the three CI-found fixture fixes are complete. No push was made.
+CI-found import fixes, the three CI-found fixture fixes and kaiser's device-feedback addition
+are complete. No push was made.
 
 **What the next step is, in this order:** (1) Hermes re-runs both workflows on exact head
-(`86d80cf` or later) and verifies from the run JSON — the suite has executed once and 739 of
-742 passed; the next question is whether the three fixture fixes hold, and that run is their
-first execution; (2) the two `ChatViewModelTest` Undo row tests have now run — read their
-result in that run rather than this record; (3) the three device checks the doc already names
-(draft per conversation, the live-status clock, the reasoning preview across two chains), which
-no unit test can reach; (4) residuals 7 and 9 if Hermes wants them settled rather than named —
+(`5f68178` or later) and verifies from the run JSON. That run has two jobs: confirm the three
+fixture fixes from round 3 hold (their first execution), and confirm the thinking-box change
+compiles and leaves the other 742 tests green; (2) kaiser's device check of the new tap — a tap
+on a long chain collapses it, a drag that starts on the chain scrolls and does not, and Show/Hide
+behaves as before. No unit test in this project can see any of that; (3) the three existing device
+checks the doc already names (draft per conversation, the live-status clock, the reasoning preview
+across two chains); (4) residuals 7 and 9 if Hermes wants them settled rather than named —
 residual 8 is closed by `4e677da`.
