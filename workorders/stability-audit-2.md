@@ -187,11 +187,28 @@ it would move the preview to the open line, which is exactly what the new test f
 incremental design is to track state across deltas: keep the last finished paragraph's first
 line, and advance it only when a newline arrives (the streaming loop already sees each delta
 exactly once), falling back to `tailOfLastLine` only while no paragraph has finished a line.
-That is O(delta) per token with identical output for every case pinned, plus the bucketed scroll
-key in `ChatScreen.kt:759-769` (recompute the follow target at most once per frame instead of per
-delta). It is an assembly-level change to `ThinkingBlock`'s `remember(text, streaming)` and
-wants a run with room to reason about it end to end; the pins are in place so that run cannot
-silently change behaviour.
+Implementation settled for the next run (verified against the code, not yet written):
+
+- Extract the loop in `lastFinishedParagraphFirstLine` (`ChatText.kt:56-70`) into a small state
+  holder `PreviewScan(summary, paragraphStart)` with `advance(text): PreviewScan`. The text only
+  grows, so a scan resumed from the cached `paragraphStart` with the carried `summary` produces
+  byte-identical output to a scan from zero — the loop's own variables are already exactly the
+  state to carry.
+- `thinkingPreview(text, streaming)` becomes a one-shot run of that scanner (`PreviewScan().advance(text)`).
+  This is the important part: the pins in `859c601` then exercise **the same code path** the
+  composable uses, so an incremental bug cannot hide behind a separately-tested pure function.
+- `ThinkingBlock` holds `remember { PreviewScan() }` plus the text length it last scanned, and
+  advances only over the new tail; `tailOfLastLine`/`firstLine` keep their current behaviour for
+  the not-yet-a-finished-paragraph case (the pins already cover both).
+- Bucketed scroll key at `ChatScreen.kt:759-769`: the effect currently keys on
+  `streamingReasoning.length` and `streamingText.length`, which restarts it on every delta. Key it
+  on the message count and the activity instead, and let the existing `scrollToConversationBottom`
+  handle growth — the visible behaviour is unchanged because the effect's action already scrolls
+  to the end regardless of which of those inputs changed.
+
+Not written in this run: it is an assembly-level edit to a composable plus its render path, and I
+had no room left to write it and re-read it against the pins line by line. Stopping beats a
+half-verified "no behaviour change" refactor.
 
 ## STOP POINT (for the next run)
 
