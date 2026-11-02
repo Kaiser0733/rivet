@@ -99,10 +99,20 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         AgentSession(messages, interrupted, header.id, header.title, header.workspaceId, summary)
     }
 
-    override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) = onDatabase { db ->
+    override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) =
+        save(messages, interrupted, expectedSessionId = null)
+
+    // A turn must write into the conversation it started in. `compact` already refuses a
+    // stale pointer; the transcript writes did not, so a switch landing in the middle of a
+    // turn filed its messages into whichever conversation the pointer had moved to.
+    suspend fun save(messages: List<AgentMessage>, interrupted: Boolean, expectedSessionId: String?) =
+        onDatabase { db ->
         db.beginTransaction()
         try {
             val id = activeId(db)
+            if (expectedSessionId != null && id != expectedSessionId) {
+                throw IllegalStateException("Session changed")
+            }
             val count = db.rawQuery("SELECT COUNT(*) FROM active_events WHERE session_id=?", arrayOf(id)).use {
                 it.moveToFirst(); it.getInt(0)
             }

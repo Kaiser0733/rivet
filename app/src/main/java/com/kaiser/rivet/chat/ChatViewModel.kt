@@ -228,6 +228,9 @@ class ChatViewModel private constructor(
 
     @Volatile private var titleRenameRevision = 0L
     private var sendJob: Job? = null
+    // The conversation the running turn belongs to. All of its transcript writes are bound
+    // to this id, so a switch that moves the storage pointer cannot redirect them.
+    private var turnSessionId: String? = null
     private var generation = 0L
     @Volatile private var userCancelledTicket = 0L
     private val runtimeController = RuntimeController(app, workspaceSelection, managedProcesses) {
@@ -554,6 +557,7 @@ class ChatViewModel private constructor(
             val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
             val client = clientFactory(snapshot.config, snapshot.apiKey)
             val sessionId = _uiState.value.currentSessionId
+            turnSessionId = sessionId
             val turnId = UUID.randomUUID().toString()
             val titleEligible = try {
                 sessionId != null &&
@@ -593,7 +597,7 @@ class ChatViewModel private constructor(
             }
             val durable = (activeMessages + initialContext(activeMessages) + pendingUser).toMutableList()
             try {
-                sessionStore.save(durable, interrupted = true)
+                persistTurn(durable, interrupted = true)
             } catch (_: AgentSessionLimitException) {
                 if (ticket == generation) {
                     _uiState.update {
@@ -791,7 +795,7 @@ class ChatViewModel private constructor(
                         onMessage = { message ->
                             if (ticket == generation) {
                                 val candidate = durable + message
-                                sessionStore.save(candidate, interrupted = true)
+                                persistTurn(candidate, interrupted = true)
                                 durable += message
                                 activeMessages = durable.toList()
                                 streamPreview.setLength(0)
@@ -904,7 +908,7 @@ class ChatViewModel private constructor(
                         if (userCancelled && sessionId != null) {
                             try { sessions?.clearAutoTitle(sessionId) } catch (_: Exception) { }
                         }
-                        sessionStore.save(durable, interrupted = !userCancelled)
+                        persistTurn(durable, interrupted = !userCancelled)
                         val blocker = try { runtimeController.commandBlocker() }
                             catch (error: CancellationException) { throw error }
                             catch (error: MirrorFailure) { error.code }
@@ -995,6 +999,7 @@ class ChatViewModel private constructor(
                     activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
+                turnSessionId = null
                 runtimeController.finishTurn(turnToken)
                 if (ticket == generation && _uiState.value.streaming) {
                     _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
@@ -1094,7 +1099,7 @@ class ChatViewModel private constructor(
             }
         }
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
-        sessionStore.save(persisted, interrupted = false)
+        persistTurn(persisted, interrupted = false)
         activeMessages = persisted
         val renameRevision = titleRenameRevision
         val history = sessions?.list()
@@ -1189,6 +1194,13 @@ class ChatViewModel private constructor(
                 }
             }
         }
+    }
+
+    private suspend fun persistTurn(messages: List<AgentMessage>, interrupted: Boolean) {
+        val bound = turnSessionId
+        val sql = sessions
+        if (bound != null && sql != null) sql.save(messages, interrupted, bound)
+        else sessionStore.save(messages, interrupted)
     }
 
     private suspend fun stableFailure(ticket: Long, durable: List<AgentMessage>, message: String,
