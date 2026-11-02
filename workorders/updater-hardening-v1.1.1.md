@@ -155,3 +155,26 @@ no nested `.request` property, so `takeRequest().request.url.encodedPath` could 
 three requests to the release-asset path, then `/downloads/Rivet-v0.11.1.apk`. The other `takeRequest()`
 uses in the file read a header, which `RecordedRequest` does expose, so they were already correct. No
 production code touched in that round.
+
+**CI run 41404621240 — 755 tests, 4 failed. Progress report, round still open.**
+
+Hermes read the top frame for the three: `GitHubUpdates.kt:266`, the retryable transport failure built in
+`fetch`'s `onFailure`. So the transport exception escaped `download()` with the retries exhausted — in
+all three, including the two where the dispatcher had a good answer waiting.
+
+**Mechanism found so far, and it is in my tests, not the client.** An exception thrown from inside a
+`MockWebServer` `Dispatcher` aborts that connection, and the client reports the abort as *another*
+transport failure. My resume dispatcher did exactly that: `ranges.last()!!` throws an NPE whenever the
+retry arrives without a `Range` header — which is precisely the case where the previous attempt wrote
+zero bytes before the drop. Each attempt then died the same way, three attempts exhausted, and the
+transport failure escaped: the simulated drop was hiding its own cause. Fixed in `9e422b1` by making the
+dispatcher incapable of throwing: a Range-less request gets the whole file, and an offset is clamped.
+
+**Not yet ruled:** whether `DISCONNECT_DURING_RESPONSE_BODY` leaves the pooled connection unusable for
+the immediate retry (the hypothesis Hermes raised), and why `aMirrorFileOfTheWrongSizeIsStillRefused`
+regressed from pass to AssertionError at `UpdateResilienceTest.kt:184` after the dispatcher rebuild —
+that one changed from `DISCONNECT_AT_START` to `DISCONNECT_AFTER_REQUEST`, so the likely cause is the
+policy change rather than timing, but it is not proven. **The round stops here rather than guess again**;
+the next pass starts from `9e422b1` and, if the dispatch-throw theory is right, the three should be
+green — and if not, the remaining candidate is the pooled-connection hypothesis, whose test is a
+dispatcher that answers the *first* Range-bearing request regardless of attempt count.
