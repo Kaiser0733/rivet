@@ -18,7 +18,7 @@ sealed class ProviderError(message: String) : Exception(message) {
     // arrived but no data payload for the progress budget. They read the same to the
     // user, so the difference has to be recorded here to be diagnosable at all.
     class Timeout(val stage: String = "idle") : ProviderError("timeout")
-    class InvalidResponse(val detail: String) : ProviderError("invalid response: $detail")
+    class InvalidResponse(val detail: String, val userText: String? = null) : ProviderError("invalid response: $detail")
     class IncompleteGeneration(
         val reason: String,
         val partialText: String = "",
@@ -54,7 +54,7 @@ sealed class ProviderError(message: String) : Exception(message) {
             else -> "The network request failed."
         }
         is Timeout -> "The provider took too long to respond."
-        is InvalidResponse -> "The provider returned a response Rivet could not parse."
+        is InvalidResponse -> userText ?: "The provider returned a response Rivet could not parse."
         is IncompleteGeneration -> "The model stopped before finishing its response. Try again or choose another model."
         is ResponseTooLarge -> "This reply hit Rivet's 16 MB response limit. Ask the model to write or edit the file in smaller parts."
         is Server -> "Provider server error (HTTP $status)." + said(detail)

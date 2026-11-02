@@ -193,6 +193,37 @@ class HttpBridgeTest {
         }
     }
 
+    // A 200 that is not a stream used to be read as SSE and reported as a truncation. It is
+    // either a provider error served with 200, or a normal reply on the wrong endpoint.
+    @Test fun aNonStream200IsReportedForWhatItIs() = runBlocking {
+        val server = MockWebServer()
+        server.enqueue(MockResponse().setBody("""{"error":{"message":"model 'x' does not exist"}}""")
+            .setHeader("Content-Type", "application/json"))
+        server.enqueue(MockResponse().setBody("""{"choices":[{"message":{"content":"hi"}}]}""")
+            .setHeader("Content-Type", "application/json"))
+        server.start()
+        try {
+            val client = OkHttpClient()
+            val events = mutableListOf<String>()
+            val error = try {
+                client.sse(Request.Builder().url(server.url("/chat")).build()) { events += it }
+                null
+            } catch (e: ProviderError) { e }
+            assertTrue("the provider's own error must be used", error is ProviderError.ModelNotFound)
+            assertTrue(events.isEmpty())
+
+            events.clear()
+            val reply = try {
+                client.sse(Request.Builder().url(server.url("/chat")).build()) { events += it }
+                null
+            } catch (e: ProviderError) { e }
+            assertEquals(NOT_A_STREAM, (reply as ProviderError.InvalidResponse).text())
+            assertTrue(events.isEmpty())
+        } finally {
+            server.shutdown()
+        }
+    }
+
     // A model that thinks longer than the progress budget and then answers must not have
     // that first token thrown away: the payload is progress, so it is accepted before the
     // deadline is judged.

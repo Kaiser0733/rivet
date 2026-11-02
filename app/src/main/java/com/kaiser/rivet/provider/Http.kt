@@ -286,6 +286,21 @@ internal suspend fun Call.await(): Response =
         })
     }
 
+// A 200 whose body is not a stream is a normal reply or an error delivered to the streaming
+// path. Reading it as SSE reported a truncation that never happened and threw the body away.
+internal const val NOT_A_STREAM =
+    "The provider sent a normal reply instead of a stream. Check that this is a streaming chat endpoint."
+
+internal fun requireEventStream(response: okhttp3.Response) {
+    val type = response.body?.contentType()
+    if (type == null || type.toString().contains("event-stream", ignoreCase = true)) return
+    val body = try { response.peekBody(MAX_ERROR_BODY_BYTES.toLong()).string() }
+        catch (_: Exception) { "" }
+    val detail = errorBodyText(body)
+    throw if (detail != null) httpError(response.code, body)
+    else ProviderError.InvalidResponse("not a stream", NOT_A_STREAM)
+}
+
 // Reads an SSE body, invoking onEvent for each non-empty data payload.
 // Coroutine cancellation cancels the OkHttp call and remains a
 // CancellationException; callback completion can never resume twice.
@@ -313,6 +328,7 @@ internal suspend fun OkHttpClient.sse(
                 response.use {
                     try {
                         if (!it.isSuccessful) throw httpError(it.code, it.errorText())
+                        requireEventStream(it)
                         val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
                         var completed = false
                         var responseBytes = 0
