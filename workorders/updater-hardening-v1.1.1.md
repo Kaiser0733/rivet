@@ -178,3 +178,40 @@ policy change rather than timing, but it is not proven. **The round stops here r
 the next pass starts from `9e422b1` and, if the dispatch-throw theory is right, the three should be
 green — and if not, the remaining candidate is the pooled-connection hypothesis, whose test is a
 dispatcher that answers the *first* Range-bearing request regardless of attempt count.
+
+**Route-fix round — the mechanism, and the predictions this run is testing.**
+
+Diagnosis (Opus), accepted because it explains every run so far including the ones my own fixes did not
+move: in the failing tests the drop lands on an **established** connection that never completed an
+exchange, so `RealConnection.trackFailure` postpones the `127.0.0.1` route in the client's
+`RouteDatabase`. On the CI runner `localhost` resolves to `[127.0.0.1, ::1]`, so `RouteSelector` hands
+every later attempt `[::1]` only — where MockWebServer is not listening. Connect refused → `onFailure`
+(`GitHubUpdates.kt:266`) → retries exhausted. `DISCONNECT_AT_START` fails during connect/TLS and never
+touches the route database, which is why the AT_START tests recovered and mine did not. That also
+explains why `9e422b1` (making the dispatcher unable to throw) changed nothing: the dispatcher was never
+the problem. And test (d)'s earlier pass was for the wrong reason — `DISCONNECT_AT_START` is honoured
+only through `Dispatcher.peek()` at accept time, so under a custom dispatcher it was ignored and an
+empty 200 was served, which is where "incomplete" came from.
+
+Fixed in the harness, tests only (`23e3ba9`): the certificate carries `127.0.0.1` as well as
+`localhost`, and the interceptor rewrites to `server.url(path).newBuilder().host("127.0.0.1")`, so DNS
+yields exactly one route and the route database can only postpone the route that is serving.
+`GitHubUpdatesTest` was given the same treatment — it uses `DISCONNECT_AT_END`, the same
+post-handshake policy, and passed only because its failures are asserted.
+
+**Predictions, recorded before the run so the run is a real test of the diagnosis:**
+
+1. `aDownloadDroppedMidBodyResumesFromTheBytesOnDisk` — the second request reaches the server with
+   `Range: bytes=2-`, and the staged file is exactly `abcd`.
+2. `aTwoHundredAnswerToARangeRequestRestartsCleanly` — the staged file is exactly `wxyz`.
+3. `theMirrorIsTriedOnlyAfterGitHubsRetriesAreSpent` — the server records three
+   `/Kaiser0733/rivet/releases/download/v0.11.1/Rivet-v0.11.1.apk` requests, then one
+   `/downloads/Rivet-v0.11.1.apk`.
+4. `aMirrorFileOfTheWrongSizeIsStillRefused` — the mirror's 5-byte answer is refused with "incomplete"
+   and nothing is left behind.
+
+If 1-4 pass, the diagnosis holds and this round's work is done. If 1 or 2 still reach `:266`, the cause
+is not the route database and the next thing to try is a dispatcher that answers the first
+Range-bearing request regardless of attempt count — which separates route exhaustion from any remaining
+pooled-connection effect. If 3 or 4 fail on the path assertions while 1 and 2 pass, the remaining issue
+is in the dispatcher's alternation, not in the client.
