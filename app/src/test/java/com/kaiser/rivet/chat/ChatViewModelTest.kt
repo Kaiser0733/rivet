@@ -1374,6 +1374,34 @@ class ChatViewModelTest {
         assertEquals(ReasoningLevel.Ultra, provider.requests[0].reasoning)
     }
 
+    // Undo reaches one project's files. Switching conversations inside that project must
+    // keep the Undo the turn just registered; switching to a conversation in another
+    // project must not offer it.
+    @Test fun undoSurvivesAConversationSwitchOnlyInsideTheSameProject() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ) = AgentResponse(text = "ok")
+        }
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "model-a")
+        val viewModel = newChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        assertTrue(viewModel.undoSurvivesSwitch("project-a", "project-a"))
+        assertTrue("two unbound conversations share the same state",
+            viewModel.undoSurvivesSwitch(null, null))
+        assertFalse(viewModel.undoSurvivesSwitch("project-a", "project-b"))
+        assertFalse("going from a project to no project must drop it",
+            viewModel.undoSurvivesSwitch("project-a", null))
+    }
+
     // A turn writes into the conversation it started in. Before this was bound, a switch
     // landing in the middle of a turn moved the storage pointer and the reply was filed into
     // the other conversation, leaving that one holding a transcript it never had.
