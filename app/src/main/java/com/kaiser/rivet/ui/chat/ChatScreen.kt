@@ -819,7 +819,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
         }
-        if (showLiveStatus) item(key = "live-status") { LiveStatusRow(statusLabel) }
+        val turnStartedAt = state.turnStartedAt
+        if (showLiveStatus && turnStartedAt != null) item(key = "live-status") {
+            LiveStatusRow(statusLabel, turnStartedAt)
+        }
         if (showActivity) state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
@@ -878,12 +881,15 @@ private fun ReasoningFallbackRow(notice: UnsupportedReasoningNotice,
 
 // Ticks once a second from the moment the turn started. The label is recomputed by the
 // caller, so a new step ("Writing", a tool name) shows up without restarting the clock.
-// The start time is saveable: a plain remember reset the clock to 0s whenever the row was
-// disposed and rebuilt, which read as "frozen" exactly while the model was thinking.
+// The start comes from the turn (ChatUiState.turnStartedAt), not from this row's own state:
+// the row is disposed and rebuilt whenever the list relaid out — a long thinking block folding
+// does exactly that — and a start held here came back as 0s on device. Keeping it with the turn
+// also means a new turn takes a new start instead of inheriting the row's last one.
 @Composable
-private fun LiveStatusRow(label: String) {
-    val startedAt = rememberSaveable { SystemClock.elapsedRealtime() }
-    var elapsed by remember { mutableStateOf(0L) }
+private fun LiveStatusRow(label: String, startedAt: Long) {
+    var elapsed by remember(startedAt) {
+        mutableStateOf(((SystemClock.elapsedRealtime() - startedAt) / 1000).coerceAtLeast(0))
+    }
     LaunchedEffect(startedAt) {
         while (true) {
             elapsed = ((SystemClock.elapsedRealtime() - startedAt) / 1000).coerceAtLeast(0)
