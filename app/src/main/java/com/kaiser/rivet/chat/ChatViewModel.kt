@@ -1371,6 +1371,10 @@ class ChatViewModel private constructor(
         }
     }
 
+    // Undo reaches the files of one project, so it survives a conversation switch only while
+    // the project stays the same. Two unbound conversations share the "no project" state.
+    internal fun undoSurvivesSwitch(previous: String?, next: String?): Boolean = previous == next
+
     private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
         val store = sessions ?: return
         if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
@@ -1389,6 +1393,10 @@ class ChatViewModel private constructor(
                 val interruptedTurn = selected.interrupted &&
                     (visible.isNotEmpty() || selected.messages.isNotEmpty())
                 val project = _uiState.value
+                // Undo is workspace-scoped, so a checkpoint made in this project is still the
+                // right Undo after switching conversations inside it. A switch that changes
+                // project must drop it: the checkpoint belongs to the old project's files.
+                val keepUndo = undoSurvivesSwitch(project.currentSessionWorkspaceId, selected.workspaceId)
                 if (ticket == generation) _uiState.value = ChatUiState(
                     messages = visible, ready = true, sessions = history,
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
@@ -1396,7 +1404,10 @@ class ChatViewModel private constructor(
                     usage = usage,
                     projectName = project.projectName, projectIdentity = project.projectIdentity,
                     projectLoading = project.projectLoading, projectError = project.projectError,
-                    interruptedTurn = interruptedTurn)
+                    interruptedTurn = interruptedTurn,
+                    undoCheckpointId = if (keepUndo) project.undoCheckpointId else null,
+                    lastTurnFiles = if (keepUndo) project.lastTurnFiles else emptyList(),
+                    lastTurnFileCount = if (keepUndo) project.lastTurnFileCount else 0)
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
                 if (ticket == generation) _uiState.update { it.copy(error = "Could not open the session.") }
