@@ -655,14 +655,15 @@ Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterru
 (`96ac827`), F1 (`83febf3`), F2 (`295f61a`), F3 (closed, no code), F4 (`5209bc8`), F5 (`c4dbe7f`,
 test `40a88bd`), F7 items 1-3 settled (`d156e48`, fix `327ff50`, `4ceceeb`), F6 pins (`859c601`)
 and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this audit:
-`0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, and Hermes' two closing fixes `fbb152f`, `4e677da`.
+`0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, then Hermes' two closing fixes `fbb152f`, `4e677da`
+and the sixth provider-screen site `8e4b97d`.
 
 **Nothing is uncommitted and nothing is half-done.** Phase A2 and Hermes' two closing fixes
 are complete. No push was made.
 
 **What the next step is, in this order:** (1) exact-head CI on this branch — nothing here has
-ever run, and four of the last five commits are new code or changed tests; (2) the two
+ever run, and every fix commit in this pass is new code or changed tests; (2) the two
 `ChatViewModelTest` Undo row tests, the only end-to-end coverage the Undo row has; (3) the three
 device checks the doc already names (draft per conversation, the live-status clock, the reasoning
-preview across two chains); (4) residuals 7 and 9 if Hermes wants them settled rather than named (residual 8 is
-closed by `4e677da`).
+preview across two chains); (4) residuals 7 and 9 if Hermes wants them settled rather than
+named — residual 8 is closed by `4e677da`.
