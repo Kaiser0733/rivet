@@ -1,6 +1,7 @@
 package com.kaiser.rivet.ui.chat
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 // The collapsed thinking row shows one cheap line. While the chain streams, that line is
@@ -34,6 +35,25 @@ class ThinkingPreviewTest {
     @Test fun theTailPreviewStaysOneShortLine() {
         val long = "y".repeat(500)
         assertEquals(160, thinkingPreview(long, streaming = true).length)
+    }
+
+    // Pinned before the cost of computing this is changed: once a paragraph has finished a
+    // line, the preview stays on that paragraph even after kilobytes of new unfinished text.
+    // This is why a shortcut that only looks at the end of the text cannot be used — it would
+    // move the preview to the open line.
+    @Test fun aFinishedParagraphKeepsThePreviewWhileALongOpenOneStreams() {
+        val finished = "Check the parser first\nsecond line\n\n"
+        val open = "Now a much longer thought that never ends " + "word ".repeat(80)
+        assertEquals("Check the parser first", thinkingPreview(finished + open, streaming = true))
+        assertEquals("Check the parser first", thinkingPreview(finished.trimEnd(), streaming = true))
+        assertTrue("the open tail is never what a finished paragraph shows",
+            thinkingPreview(finished + open, streaming = true) != "word word word")
+    }
+
+    // Paragraphs are separated by blank lines: the preview follows the last finished one.
+    @Test fun thePreviewFollowsTheLastFinishedParagraph() {
+        assertEquals("Second", thinkingPreview("First\none\n\nSecond\ntwo\n\nThird", streaming = true))
+        assertEquals("First", thinkingPreview("First\none\n\nSecond", streaming = true))
     }
 
     @Test fun thePreviewStaysOneShortLine() {
