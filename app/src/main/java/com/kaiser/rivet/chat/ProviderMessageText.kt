@@ -12,8 +12,11 @@ internal fun providerMessageText(raw: String): String? {
     val decoded = decodeEntities(withoutTags)
     val collapsed = decoded.replace(WHITESPACE, " ").trim()
     if (collapsed.isEmpty()) return null
+    // take() counts UTF-16 units, so a cut can fall between the halves of an emoji or a
+    // supplementary CJK character; dropping the orphaned high surrogate keeps the banner from
+    // rendering a replacement glyph.
     val capped = if (collapsed.length <= MAX_PROVIDER_DETAIL) collapsed
-        else collapsed.take(MAX_PROVIDER_DETAIL).trimEnd() + "…"
+        else collapsed.take(MAX_PROVIDER_DETAIL).dropLastWhile { it.isHighSurrogate() }.trimEnd() + "…"
     return "The provider said: $capped"
 }
 
