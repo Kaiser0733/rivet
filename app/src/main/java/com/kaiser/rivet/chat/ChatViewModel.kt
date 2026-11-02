@@ -1152,9 +1152,13 @@ class ChatViewModel private constructor(
         val errorAction = when {
             result.failureCode != null && result.failureCode in SYNC_RECOVERY_CODES ->
                 ChatErrorAction.RetryProjectChanges
-            // Nothing else to recover from: offer the way back the turn deserves.
-            error != null && result.stopReason != AgentStopReason.CapabilityBlocked ->
-                ChatErrorAction.RetryTurn
+            // Nothing else to recover from: offer the way back the turn deserves. A refusal
+            // that says the request cannot fit is not retryable — the same transcript against
+            // the same window stops the same way — and its banner already names the exit.
+            error != null && result.stopReason !in setOf(
+                AgentStopReason.CapabilityBlocked, AgentStopReason.ContextUnavailable,
+                AgentStopReason.ContextTooSmall, AgentStopReason.SessionLimit,
+            ) -> ChatErrorAction.RetryTurn
             else -> null
         }
         _uiState.update { state ->
