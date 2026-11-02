@@ -2,6 +2,7 @@ package com.kaiser.rivet.chat
 
 import android.app.Application
 import android.net.Uri
+import android.os.SystemClock
 import android.util.Log
 import com.kaiser.rivet.RivetApplication
 import androidx.lifecycle.AndroidViewModel
@@ -114,6 +115,10 @@ data class ChatUiState(
     val undoing: Boolean = false,
     val notice: String? = null,
     val acceptedMessageCount: Long = 0,
+    // When the running turn started, on the monotonic clock. The turn owns this, not the row
+    // that prints it: a start held inside the live-status list item was lost whenever the list
+    // relaid it out (a long thinking block folding does exactly that) and came back as 0s.
+    val turnStartedAt: Long? = null,
     val interruptedTurn: Boolean = false,
     // A shell command holds the project lock for as long as it runs, so Undo and
     // retry cannot complete until it ends. The UI says so instead of ignoring taps.
@@ -481,7 +486,8 @@ class ChatViewModel private constructor(
     private fun startTurn(trimmed: String, retryingInterrupted: Boolean) {
         val wasInterrupted = _uiState.value.interruptedTurn
         val ticket = ++generation
-        _uiState.update { it.copy(streaming = true, streamingText = "", streamingReasoning = "",
+        _uiState.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
+            streamingText = "", streamingReasoning = "",
             activity = "Getting ready…",
             toolLifecycle = emptyList(), commandRunning = false, error = null, errorAction = null, notice = null,
             interruptedTurn = false) }

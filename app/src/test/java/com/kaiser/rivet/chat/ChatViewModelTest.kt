@@ -7,6 +7,7 @@ import kotlinx.coroutines.cancelAndJoin
 import android.content.Context
 import android.content.Intent
 import android.content.pm.ProviderInfo
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentContext
@@ -58,6 +59,8 @@ import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadows.ShadowSystemClock
+import java.time.Duration
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -1398,6 +1401,59 @@ class ChatViewModelTest {
             sessions.load().interrupted)
         sessions.select(other)
         assertEquals("the other conversation was never touched", false, sessions.load().interrupted)
+    }
+
+    // The live-status clock is a fact about the turn, not about the row that prints it. The row
+    // is disposed and rebuilt whenever the list relaid out, which a two-minute thinking block
+    // folding does, and a start held in the row came back as 0s on device (kaiser, 2026-11-02).
+    // Both directions are pinned here: the start cannot move inside a turn, and a new turn takes
+    // a new one rather than inheriting the last.
+    @Test fun theTurnClockHoldsWithinATurnAndRestartsForTheNext() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        sessions.create(null)
+        sessions.select(first)
+        val release = CompletableDeferred<Unit>()
+        var calls = 0
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                if (++calls == 1) {
+                    release.await()
+                    onDelta("Done")
+                    return AgentResponse(text = "Done")
+                }
+                awaitCancellation()
+            }
+        }
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "model-a")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && it.currentSessionId == first }
+
+        viewModel.send("one")
+        val started = await(viewModel) { it.streaming }.turnStartedAt!!
+        assertEquals("the start is the monotonic clock, not wall time",
+            SystemClock.elapsedRealtime(), started)
+
+        ShadowSystemClock.advanceBy(Duration.ofSeconds(5))
+        assertEquals("a running turn keeps the start it began with", started,
+            viewModel.uiState.value.turnStartedAt)
+
+        release.complete(Unit)
+        await(viewModel) { !it.streaming }
+
+        viewModel.send("two")
+        val restarted = await(viewModel) { it.streaming }.turnStartedAt!!
+        assertTrue("a new turn takes a new start instead of inheriting the old one",
+            restarted > started)
     }
 
     // Undo reaches one project's files. Switching conversations inside that project must
