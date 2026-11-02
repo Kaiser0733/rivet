@@ -50,9 +50,10 @@ turn), so no title call is burnt on failing turns.
 
 ## Phase A2 — second full audit  [ DONE — see "Phase A2 record" at the bottom ]
 
-Verdict, stated up front: **six defects found and fixed — three in product code, one in copy,
-two in tests — and nothing proven left open.** Four came from this audit, two from Hermes'
-review of its record (the closing fixes at the end of this section). The residuals were
+Verdict, stated up front: **seven defects found and fixed — three in product code, one in copy,
+two in tests, and one compile break CI found — and nothing known-open.** Four came from this
+audit, two from Hermes' review of its record, one from the branch's first CI execution (all at
+the end of this section). The residuals were
 re-checked one by one: none could be cleared outright, five are confirmed as stated, and this
 pass adds three of its own. The SCOPE/ENVIRONMENT note at the head of the A2 record is
 load-bearing: no Kotlin was executed on this host, so every test named below runs for the
@@ -374,9 +375,9 @@ Python audit I ran and name; nothing is from a device or a JVM.
 
 ### Verdict
 
-**Six defects, all fixed: three in product code (A2-3, A2-4, C2), one in user-facing copy (C1),
-two in tests (A2-1 could never pass; A2-2 had lost its subject). Nothing proven is left open.**
-Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`, `4e677da`.
+**Seven defects, all fixed: three in product code (A2-3, A2-4, C2), one in user-facing copy (C1),
+two in tests (A2-1 could never pass; A2-2 had lost its subject), and one compile break (CF).**
+Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`, `4e677da`, `0b28b03`.
 
 | # | Finding | Kind | Commit |
 |---|---|---|---|
@@ -384,6 +385,7 @@ Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`, `4e677da`.
 | A2-2 | F4 silently made the projection-cap pin vacuous (guess halves the trigger) | test, lost coverage | `b4b7206` |
 | A2-3 | Per-conversation drafts were destroyed by every switch, not kept | product code | `6e26d94` |
 | A2-4 | F1 put provider words in the error banner unescaped (bidi controls) | product code | `2f9f5c4` |
+| CF | `ContextBudget` called two provider extensions it did not import: the file did not compile | **found by CI, not here** | `0b28b03` |
 | — | `turnSessionId` lifetime, F2's content-type gate and its four readers, S1 write ordering, Undo carry/drop and rehydration, F4's reach into the send path, the draft's leak into another chat | **no defect** | withdrawn, below |
 
 ### A2-1 — F2's `ModelNotFound` assertion cannot pass (`0db23a5`)
@@ -649,21 +651,95 @@ restored byte-exact afterwards.
 Banned-word check over both fixes' new copy against the seven terms the order bans: none of
 them appears in the new sentences or in the new comments.
 
+### CI-found fix (the branch's first execution)
+
+**CF — `0b28b03`: `ContextBudget` called two provider extensions it never imported.** Evidence
+from CI, which ran this branch for the first time: release run `41383346256` and Android Build run
+`41383171000`, both failing the same way —
+
+```
+ContextBudget.kt:66:38 Unresolved reference 'manualContextWindowForModel'
+ContextBudget.kt:67:23 Unresolved reference 'detectedContextWindowForModel'
+```
+
+Both are extensions on `ProviderConfig` declared in `provider/ProviderConfig.kt:113,118`; Kotlin
+does not resolve an extension without its import. The import block (`ContextBudget.kt:3-13`) listed
+`resolvedContextWindowTokens`, `resolvedManualMaxOutputTokens`, `trustedInputLimitTokens`,
+`anthropicOutputCeiling` and `openRouterOutputCeiling` from that package, but not the two the file
+calls. The defect came in with F4 (`5209bc8`), whose `guessedWindow` replaced the single
+`config.resolvedContextWindowTokens()` call with these two and imported neither, leaving the
+old import behind unused — which is the same fact this record noted and did not follow up.
+**The tree therefore had not compiled since `5209bc8`**: the 29 commits after it, including the
+F6 cost cut and the S2 rehydration, all inherited the break, and every one of them was audited
+here as if it could run. Fixed by adding exactly those two imports.
+
+**Why this pass missed it, plainly.** Every check this audit ran was behavioural or structural:
+pins, line-by-line reading, and Python transcriptions of algorithms. The `balance` check proves
+delimiters match; the `symbols` check proves a declaration exists in a package. **Neither proves
+that a caller imports it, and nothing here can compile.** The neighbouring symptom was even in
+this record — I noted that the `resolvedContextWindowTokens` import had become unused — and I did
+not ask the obvious follow-up, which is whether the imports it needed were present. The lesson is
+recorded rather than softened: an audit that cannot build cannot conclude "nothing left open"; it
+can conclude only "nothing I could see is open".
+
+### The sweep for the same shape
+
+Hermes asked for a branch-wide sweep for this exact failure mode: an extension (or any top-level
+declaration) defined in one package, referenced from another package whose file lacks the import.
+`round3/import-sweep.py` does it statically (untracked working evidence, re-runnable here):
+
+1. Reads every `.kt` under `app/src/main/java`, `app/src/test/java` and
+   `terminal-emulator/src/main/java` — **163 files** — and blanks comments and string literals so
+   words inside them cannot match.
+2. Indexes every top-level declaration that is importable (skips `private`), by name and package:
+   **400 names, each declared in exactly one package** (grouping by package rather than by file, so
+   same-package overloads are handled instead of skipped).
+3. For every file in another package that references such a name in a call, constructor or type
+   position, requires `import pkg.Name` or `import pkg.*`. Anything else is reported with
+   `file:line` and whether that file is inside `c0c49c8..HEAD`.
+4. Reports two filtered categories separately rather than hiding them: references written with the
+   full package at the call site (no import needed, 15 of them) and references to a name that is
+   also a library member (`await`, 13 of them).
+
+**Positive control, because a sweep that cannot fail proves nothing:** with the committed import
+temporarily removed, the sweep prints `ContextBudget.kt:66 manualContextWindowForModel` and exits
+1; the file was then restored and `cmp` confirmed it byte-exact, and the sweep exits 0.
+
+**Result: after the fix, 0 findings.** The only real hits the sweep ever produced were the two CI
+errors, so the commit carries the imports and nothing else. The 15 fully-qualified references
+(`com.kaiser.rivet.agent.AgentResponse/AgentToolCall/AgentToolResult/InternalContext/SafAgentWorkspace/`
+`PreparedAgentTool/modelMessages`, `com.kaiser.rivet.provider.AgentRequest/ReasoningLevel`,
+`com.kaiser.rivet.runtime.ManagedProcesses/MirrorFailure`,
+`com.kaiser.rivet.workspace.WorkspaceSelection`) and the 13 `await` sites (`Deferred`/`Job` members,
+`AgentApprovalGate::await`, and the tests' own `await(viewModel)` helper) were each read before
+being filtered; the lists print under `--verbose`.
+
+**What the sweep cannot see, so the compiler stays the authority:** names and signatures of
+library/external APIs (no dependency jars here), cross-package use of a `private` declaration (I
+tried it with a crude matcher and got only false positives — local variables named `count`, and the
+word "said" inside a UI string — so it is not reported rather than reported as noise), generic and
+typealias resolution, and anything that only fails at compile time for non-resolution reasons. CI
+listed exactly two errors and nothing else, which is why "no other file needed this fix" is a
+conclusion from the compiler for the produced source sets and from the sweep for the rule.
+
+The unused `resolvedContextWindowTokens` import stays, as recorded earlier: it is a warning-level
+leftover with its own note, not part of this fix.
+
 ## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
 (`96ac827`), F1 (`83febf3`), F2 (`295f61a`), F3 (closed, no code), F4 (`5209bc8`), F5 (`c4dbe7f`,
 test `40a88bd`), F7 items 1-3 settled (`d156e48`, fix `327ff50`, `4ceceeb`), F6 pins (`859c601`)
 and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this audit:
-`0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, then Hermes' two closing fixes `fbb152f`, `4e677da`
-and the sixth provider-screen site `8e4b97d`.
+`0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, then Hermes' two closing fixes `fbb152f`, `4e677da`,
+the sixth provider-screen site `8e4b97d`, and the compile break CI found `0b28b03`.
 
-**Nothing is uncommitted and nothing is half-done.** Phase A2 and Hermes' two closing fixes
-are complete. No push was made.
+**Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes and the
+CI-found import fix are complete. No push was made.
 
-**What the next step is, in this order:** (1) exact-head CI on this branch — nothing here has
-ever run, and every fix commit in this pass is new code or changed tests; (2) the two
-`ChatViewModelTest` Undo row tests, the only end-to-end coverage the Undo row has; (3) the three
-device checks the doc already names (draft per conversation, the live-status clock, the reasoning
-preview across two chains); (4) residuals 7 and 9 if Hermes wants them settled rather than
-named — residual 8 is closed by `4e677da`.
+**What the next step is, in this order:** (1) Hermes re-runs both workflows on exact head
+(`0b28b03` or later) and verifies the result from the run JSON — the branch has been built once
+and did not compile; (2) the two `ChatViewModelTest` Undo row tests, the only end-to-end
+coverage the Undo row has; (3) the three device checks the doc already names (draft per
+conversation, the live-status clock, the reasoning preview across two chains); (4) residuals 7
+and 9 if Hermes wants them settled rather than named — residual 8 is closed by `4e677da`.
