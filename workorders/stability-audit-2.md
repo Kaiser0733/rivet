@@ -1098,6 +1098,67 @@ profiler, no device and no JDK on this host, so audit two is static. Findings ar
 user-visible impact the code makes arguable, the hot streaming path first because that is what
 kaiser feels on device, and device feel itself remains his check.
 
+### Device-found fix round (kaiser's ruling, 2026-11-02 11:25 IST) — the context wall
+
+His device test of the long Minecraft session ended at the refusal banner: *"Rivet compacted this chat
+as far as it could, and it still does not fit the 115,072-token budget Rivet planned for this model
+(no context window is known for it). Your messages were kept. Start a new conversation to keep going."*
+His ruling, in substance: the copy is incomprehensible to a non-technical user, the budget is far too
+small, and telling someone to move sessions after hours of work is a rage-quit dead end in an app made
+for long tasks. All three were right, and the third was a defect, not a limitation — see the third fix.
+
+**What actually limits continuation, read before touching anything.** `ContextBudget.assess` derives
+`allowedInputTokens` from the window: a window that was entered or detected is used as it is, and with
+neither, Rivet's 256K default is a *guess*, planned at `GUESSED_WINDOW_PLAN` (half of it) minus a 16K
+reserve — 115,072. From that ceiling it derives `compactAtTokens` (trigger) and `compactToTokens` (aim)
+by two margins of `target/8`. `ContextPreparation.prepareChecked` then prunes old tool results, stubs
+them aggressively, and finally asks `AgentContext.plan` for a retained tail that fits a byte target
+derived from `compactToTokens`, summarising the removed messages into the task state. `noHeadroom`
+refused whenever the request was already at the ceiling and the projection had not reached the *aim*.
+
+**FIX 1 — the copy (`900abb8`).** No numbers, no "budget", no "token", no "context window", no
+parenthetical about unknown windows, no "start a new conversation":
+
+- *"This chat is too long for the model to read all at once, even after Rivet shortened it. Your
+  messages are safe. Try again, and if it keeps stopping here, remove the longest message."*
+- *"The newest message is too big for this model to read. Your earlier messages are safe. Shorten it
+  and send it again."*
+- the session cap: *"This chat is full. Your messages are safe. Start a new chat to keep working."*
+
+The two copy functions lost their number parameters, so a count cannot drift back into the sentence,
+and the formatting and imports that built it are gone. `ContextRefusalCopyTest` pins the three
+sentences and asserts digits and the banned words cannot return;
+`round3/refusal-copy-check.py` rebuilds the sentences from the Kotlin literals and checks the same
+rules without a JVM.
+
+**FIX 2 — the budget (`b5c5a47`).** A guessed window is planned at 220K of the 256K instead of half:
+`allowedInputTokens` = 220,000 for the default guess, with the trigger and aim margins keeping their
+shape. Measured windows — entered or detected — never enter that branch and behave exactly as before.
+Trade-off, recorded as kaiser accepted it: a model whose real window is smaller than the guess now
+fails at the provider instead of at Rivet's polite wall; the dead end at half was worse. The pinned
+numbers in `ContextBudgetTest` are updated as a stated contract change.
+
+**FIX 3 — the dead end (`f56a2cb`).** The conversation now continues in place. A plan is built against
+the ceiling as well as against the aim, and either is sent when it is sendable: fits the ceiling, and
+smaller than the request it replaces so a retry is never the same request twice. That rule is one
+named function, `projectionCanBeSent`, used at every acceptance site, and pinned by
+`aProjectionThatFitsTheCeilingIsSentEvenAboveTheComfortableTarget` — which goes red if the comfortable
+margin ever becomes a condition again. Nothing is deleted: `commit` changes only the durable active
+projection, the stored transcript and scrollback are untouched, and the removed messages are carried
+by the summary. "Start a new conversation" is no longer the answer to a long chat.
+
+**The hard blocker that remains, named rather than papered over:** when the request's *minimum*
+projection — fixed text, the newest message and the latest user turn — already exceeds the ceiling,
+there is nothing to shorten and nothing to summarise into room, so the turn is refused before the
+provider (`ContextCapacityTooSmall`, pinned by `aRequestTooLargeToFitIsRefusedBeforeTheProvider`). That
+is a genuinely unsendable request, not a dead end: the new copy tells the user which message to
+shorten. It is reachable only when a single message or tool result is larger than the whole budget.
+
+**Limit of this round:** no device and no JVM here, so the "previously refused, now continues" path is
+pinned at the rule and not end-to-end — reproducing the exact device transcript needs estimate
+arithmetic this host cannot run. CI runs the suite; kaiser's device pass on this flow is what the merge
+waits for.
+
 ### Audit two — performance and allocation
 
 | # | Finding | Fix |
