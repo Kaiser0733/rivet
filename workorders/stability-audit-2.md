@@ -1154,6 +1154,78 @@ forbids):
 be inserted (`streaming-*`, `live-status`, `interrupted-turn`) and index-keyed only for the
 append-only transcript, where indices do not shift under them.
 
+### Audit one — correctness, area by area
+
+All 85 files under `app/src/main` were read across five parallel area passes (chat, agent+storage,
+provider, runtime+workspace+updates, UI shell), each asked for findings it could point at with a
+line and an execution path. **Every candidate was then re-derived from the code here before a fix
+was made; six survived that and are fixed below. The rest are recorded as residuals because I could
+not re-derive them inside this run** — that is the limit of this pass, not a verdict that they are
+false. A residual that ships unfixed is a known unknown; a "fix" built on an unverified reading is
+a second bug.
+
+**Fixed (each re-derived from the code):**
+
+| # | Defect | Commit |
+|---|---|---|
+| C-1 | in-stream rejections read billing words before capacity words, so a per-minute quota error was reported as a usage limit — the reverse of `httpError`'s documented rule (`Http.kt:118-123` vs `:137-141`) | `13c84e3` |
+| C-2 | `sse` relabelled anything its payload callback threw as `InvalidResponse("malformed stream event")`, so a context-preparation abort accused the provider of unreadable output and took the wrong recovery path (`Http.kt:362`, `:379`) | `2d84400` |
+| C-3 | Retry was offered on `ContextUnavailable`, `ContextTooSmall` and `SessionLimit`, which re-run the same transcript against the same window and can only reproduce the stop (`ChatViewModel` error action) | `24ed5e7` |
+| C-4 | a 300-unit cut could split a surrogate pair, rendering a replacement glyph in the provider-said banner (`ProviderMessageText.kt:15-16`) | `fab9c9e` |
+| C-5 | `save()` called `store.setActive()` outside its try/catch: a failing DataStore write escaped an unguarded `viewModelScope.launch` as an uncaught exception after the provider had already been saved (`ProvidersViewModel.kt:572-584`) | `2f16c37` |
+| C-6 | the "open Processes" launch intent was consumed only from the live `Intent`, so every recreation redelivered it and forced the user back to Processes (`MainActivity.kt:17-19`, `:37-43`) | `88338c3` |
+
+**Checks I ran across the whole source myself, which found nothing:** every `!!` and unchecked
+`first()/last()/single()/requireNotNull()` in `app/src/main` — all guarded (the `single()` in
+`SafWorkspace.resolve` sits behind a size check at `:419-421`; `ProvidersViewModel`'s `first()`
+calls behind `isEmpty` checks at `:391`, `:436`, `:687`; `UpdatesViewModel:81`'s `requireNotNull`
+after a `verify()` that throws instead of returning null; `Http.kt:90`'s behind an `in` check).
+And all 79 `catch (…: Exception)` blocks traced for swallowed cancellation: every hot path rethrows
+`CancellationException` first (`AgentLoop.kt:105-114`, the turn catch in `ChatViewModel`, and
+`stableFailure`), and the remainder are cleanup/close paths or non-suspend code.
+
+**Residuals — reported by the area passes, not verified here.** Ordered by the severity claimed,
+with the mechanism exactly as reported so the next pass can start from the line:
+
+1. **Undo may delete every `.gitignore`d tree** (`node_modules`, `build`, `dist`) from the real
+   project: `TurnCheckpoint.kt:180-192`, `:229-233` → `:126-157`, `WorkspaceMirror.kt:270-281`,
+   `:158-170` — `scan()` skips ignored subtrees in manifest and `before.zip`, `installCheckpoint`
+   swaps that stage in for the whole of `current/`, and the post-undo sync (whose snapshot has no
+   ignore filter) then deletes the paths the baseline still lists. *If true this is the most
+   serious line in this record and needs a device test before merge.*
+2. **An Undo whose post-restore sync returns `Conflict` is neither undone nor marked desynced**
+   (`RuntimeController.kt:165-176`), so the row is offered again, every retry fails, and the
+   workspace stays `sync_required` with only "discard" as an exit.
+3. **A failed SAF write leaves the project file truncated and never repairs it**
+   (`SafWorkspace.kt:223-247` truncates before writing; `WorkspaceMirror.kt:212-222` records
+   `Failed` with no baseline, after which the path is treated as an external conflict).
+4. **An undecodable legacy transcript is converted to "no history" and the migration marked done**
+   (`AgentSessionCodec.kt:38`, `AgentSessionStore.kt:44-59`, `CodingSessions.migrate`), with no
+   quarantine copy and no retry.
+5. **Saving a provider deletes custom-header ciphertext that could not be decrypted**
+   (`ProviderStore.kt:147` drops it from the decoded view; every write rebuilds the list from that
+   view), which is exactly the recovery the migration code promises to keep.
+6. **`ResponsesAgentStream` accepts a stream cut after a text item as complete** and returns a
+   half-written function-call argument as a tool call (`ChatGptPlanClient.kt:201-203`, `:293-305`),
+   with no validation, unlike the other three accumulators.
+7. **`recoverInterrupted` leaves the visible history and the model's context disagreeing** when the
+   synthetic interrupted result does not fit: the row stays in `events` while `active_events` drops
+   it and the pending call (`CodingSessions.kt:596-616`).
+8. **The reasoning-effort classifier can claim a generic 400 that only names the model**
+   (`Http.kt:233-244` + `ChatViewModel.kt:974-983`), discarding the provider's sentence and
+   persisting the level the user then picks.
+9. **Free-tier setup saves the provider before resolving a model** (`ProvidersViewModel.kt:180-215`),
+   so a failed fetch reports failure for a save that happened and each retry adds another provider.
+10. **"Fetch models" persists the editor's uncommitted edits** for an existing provider
+    (`ProvidersViewModel.kt:684-712`), so Cancel does not cancel.
+
+**Lower-confidence suspects, recorded not acted on:** the unbound `markInterrupted` in the
+`AgentSessionLimit` handler (`ChatViewModel.kt:929`); `selectProject` not bumping `generation`
+against a late `finishCheckpoint`; `ManagedProcesses.stopAll` not finishing a preview entry when
+its stop throws; an update download that cannot be cancelled; a staged reasoning change lost on
+recreation; a `configs.collect` that ends for the session on one failure; nested
+`limitedParallelism` in `SafWorkspace.search`; and the ChatGPT-plan model-listing shape.
+
 ## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
@@ -1165,6 +1237,13 @@ the sixth provider-screen site `8e4b97d`, the two compile breaks CI found `0b28b
 `acbc563`, the three test fixtures CI's first full run found `e83d218`, `ae7fb58`, `86d80cf`,
 kaiser's device-feedback addition `5f68178`, the device-found clock fix `3051632`, the audit
 fix `31f0895`, and the device-found scroll fix `b06145d`.
+
+**STOP POINT — this run stopped where kaiser's standing order says to stop rather than rush.** The
+performance audit is complete and fixed. The correctness audit covered all 85 files; six findings are
+verified and fixed, and the ten residuals above plus the suspects are *unverified reports*, not
+cleared code. Not done in this run: verifying and fixing those residuals; and no CI has run on any of
+these eight commits (six correctness, two performance) — the compile and the 743 tests are Hermes'
+next step, and every fix above is its own commit so any one of them can be dropped.
 
 **Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes, both
 CI-found import fixes, the three CI-found fixture fixes, kaiser's device-feedback addition, the
