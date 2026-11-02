@@ -230,13 +230,17 @@ fun ProviderEditor(
                 CircularProgressIndicator(Modifier.padding(top = 8.dp).size(16.dp), strokeWidth = 2.dp)
             }
             state.test?.let { test ->
-                Text(test.message,
+                // A failed connection test carries the provider's own sentence (editorError ->
+                // ProviderError.text()), so it is untrusted text like any other on this screen.
+                Text(displaySafeText(test.message),
                     color = if (test.ok) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(top = 4.dp))
             }
             state.fetchError?.let { err ->
-                Text(err, color = MaterialTheme.colorScheme.error,
+                // Same rule as the banner in Chat: the model-list request can fail with the
+                // provider's own words, which must not reorder the line around them.
+                Text(displaySafeText(err), color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
             }
 

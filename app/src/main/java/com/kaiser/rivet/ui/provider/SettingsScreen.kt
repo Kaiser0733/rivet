@@ -56,6 +56,7 @@ import com.kaiser.rivet.ui.MAX_ROSE_INTENSITY
 import com.kaiser.rivet.ui.MIN_ROSE_INTENSITY
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.RivetThemeMode
+import com.kaiser.rivet.ui.chat.displaySafeText
 
 private val MAX_WIDTH = 680.dp
 
@@ -159,7 +160,7 @@ fun SettingsScreen(
                 start = 20.dp, end = 16.dp, top = 14.dp, bottom = 24.dp),
         ) {
             state.loadError?.let { message ->
-                item { Text(message, color = MaterialTheme.colorScheme.error,
+                item { Text(displaySafeText(message), color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodyMedium,
                     modifier = Modifier.padding(vertical = 8.dp)) }
             }
@@ -221,7 +222,7 @@ fun SettingsScreen(
                         }
                     }
                 }
-                autonomyError?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                autonomyError?.let { Text(displaySafeText(it), color = MaterialTheme.colorScheme.error,
                     style = MaterialTheme.typography.bodySmall) }
             }
 
@@ -276,7 +277,7 @@ fun SettingsScreen(
                 }
                 TextButton(onClick = { showUsage = true }) { Text("Conversation usage") }
                 appearanceError?.let { error ->
-                    Text(error, color = MaterialTheme.colorScheme.error,
+                    Text(displaySafeText(error), color = MaterialTheme.colorScheme.error,
                         style = MaterialTheme.typography.bodySmall)
                 }
             }
