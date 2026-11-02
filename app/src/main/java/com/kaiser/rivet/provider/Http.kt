@@ -134,6 +134,9 @@ fun httpError(code: Int, body: String?): ProviderError {
     }
 }
 
+// Carries what an `onEvent` callback threw past the read loop's parse-error handler.
+private class StreamCallbackFailure(cause: Throwable) : Exception(cause)
+
 internal fun providerMessage(message: String, code: String? = null): ProviderError = when {
     isContextOverflow(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ContextOverflow()
     // Same rule as httpError: a per-minute capacity rejection is read before the billing words,
@@ -361,7 +364,20 @@ internal suspend fun OkHttpClient.sse(
                                     // longer than the budget and then answered must not
                                     // have that first token thrown away.
                                     lastProgressAt = now
-                                    if (!terminal.get()) onEvent(payload)
+                                    // A caller's callback is not provider output: when it
+                                    // throws, its own error has to survive (a context-preparation
+                                    // abort must not be reported as a provider that answered
+                                    // with something unreadable). Wrapped so the parse-error
+                                    // catch below cannot relabel it.
+                                    if (!terminal.get()) {
+                                        try {
+                                            onEvent(payload)
+                                        } catch (e: kotlinx.coroutines.CancellationException) {
+                                            throw e
+                                        } catch (e: Exception) {
+                                            throw StreamCallbackFailure(e)
+                                        }
+                                    }
                                     continue
                                 }
                             }
@@ -378,6 +394,8 @@ internal suspend fun OkHttpClient.sse(
                         }
                     } catch (e: ProviderError) {
                         if (terminal.compareAndSet(false, true)) cont.resumeWithException(e)
+                    } catch (e: StreamCallbackFailure) {
+                        if (terminal.compareAndSet(false, true)) cont.resumeWithException(e.cause)
                     } catch (_: Exception) {
                         if (terminal.compareAndSet(false, true)) {
                             cont.resumeWithException(ProviderError.InvalidResponse("malformed stream event"))
