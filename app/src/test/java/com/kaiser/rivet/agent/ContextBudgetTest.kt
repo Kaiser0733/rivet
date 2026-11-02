@@ -152,14 +152,22 @@ class ContextBudgetTest {
             "https://api.example/v1", "glm-5.1")
         assertEquals(131_072 - 16_000,
             ContextBudget.assess(guessed, 0, TokenEstimateSource.Estimated).allowedInputTokens)
+        // The same distinction the refusal copy reads: only the guess is flagged, so copy that
+        // prints a number can tell the two apart without re-deciding which one it has.
+        assertTrue("no window entered or detected, so this one is a guess",
+            ContextBudget.assess(guessed, 0, TokenEstimateSource.Estimated).windowIsGuessed)
 
         val manual = guessed.withManualContextWindow(262_144)
         assertEquals("an entered window plans at its own size", 262_144 - 16_000,
             ContextBudget.assess(manual, 0, TokenEstimateSource.Estimated).allowedInputTokens)
+        assertFalse("an entered window is not a guess",
+            ContextBudget.assess(manual, 0, TokenEstimateSource.Estimated).windowIsGuessed)
 
         val detected = guessed.selectListedModel(ModelInfo("glm-5.1", "GLM 5.1", inputLimitTokens = 262_144))
         assertEquals("a detected window plans at its own size", 262_144 - 16_000,
             ContextBudget.assess(detected, 0, TokenEstimateSource.Estimated).allowedInputTokens)
+        assertFalse("a detected window is not a guess",
+            ContextBudget.assess(detected, 0, TokenEstimateSource.Estimated).windowIsGuessed)
     }
 
     @Test fun contextWindowResolutionOrderManualBeatsDetectedBeats256kDefault() {

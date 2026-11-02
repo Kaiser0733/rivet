@@ -26,6 +26,12 @@ data class ContextAssessment(
     // the same two-margin scheme dsh uses (thresholdRatio .8 plus a 64k headroom).
     val compactAtTokens: Int = allowedInputTokens,
     val compactToTokens: Int = allowedInputTokens,
+    /**
+     * True when no window was entered for this model and none was detected, so
+     * [allowedInputTokens] comes from planning Rivet's 256K default at half rather than from a
+     * measured window. Copy that has to print a number has to say which number it is printing.
+     */
+    val windowIsGuessed: Boolean = false,
 ) {
     /** True at the hard ceiling: the request may already be too large to send. */
     val needsReduction: Boolean get() = inputTokens != null && inputTokens >= allowedInputTokens
@@ -85,6 +91,7 @@ internal object ContextBudget {
             if (known == null) CapacitySource.Unknown else CapacitySource.ProviderMetadata,
             target, reserve,
             compactAtTokens = (target - headroom).coerceAtLeast(0),
-            compactToTokens = (target - 2 * headroom).coerceAtLeast(0))
+            compactToTokens = (target - 2 * headroom).coerceAtLeast(0),
+            windowIsGuessed = guessedWindow)
     }
 }
