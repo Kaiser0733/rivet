@@ -136,8 +136,10 @@ fun httpError(code: Int, body: String?): ProviderError {
 
 internal fun providerMessage(message: String, code: String? = null): ProviderError = when {
     isContextOverflow(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ContextOverflow()
-    isUsageLimit(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.UsageLimit()
+    // Same rule as httpError: a per-minute capacity rejection is read before the billing words,
+    // because "quota exceeded … per minute" contains both and clears on its own.
     isResourceExhausted(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ResourceExhausted()
+    isUsageLimit(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.UsageLimit()
     else -> ProviderError.ProviderMessage(message)
 }
 
