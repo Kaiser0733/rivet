@@ -215,3 +215,23 @@ is not the route database and the next thing to try is a dispatcher that answers
 Range-bearing request regardless of attempt count — which separates route exhaustion from any remaining
 pooled-connection effect. If 3 or 4 fail on the path assertions while 1 and 2 pass, the remaining issue
 is in the dispatcher's alternation, not in the client.
+
+**Last-test round — `GitHubUpdatesTest.downloadsAreBoundedEvenWithoutAnHonestLengthAndFailuresCleanTemps`.**
+
+Run 41407185901: 755 tests, exactly one failure — this one. Every `UpdateResilienceTest` test is green, so
+the route fix held and Opus's prediction that this test was the collateral was right.
+
+**Ruling: the test was wrong, and it had been passing for the wrong reason twice over.** Two things were
+true of its construction. Its sub-cases were paired one enqueued response to one `download()` call, but a
+download retries a transport failure three times, so the queue no longer lined up with the cases. And its
+`DISCONNECT_AT_END` case — a 1-byte body announcing `Content-Length: 4` — is a **mid-body transport
+failure** since `f7ce1e3`, so it consumes three responses; the third landed on the empty queue, and
+`QueueDispatcher` holds the request until the 10 s read timeout. That is the ~15 s the run's test task
+grew by. Before the route fix this never surfaced because route poisoning failed the sub-case instantly on
+`::1` — the assertion passed on an accident, not on the behaviour it names.
+
+Production is not implicated: the bound, the size check, the retry count and the temp cleanup all behaved
+as designed. Fix is in the test only: each case now answers **every request it causes**, through a
+dispatcher, with a plain 500 as the fallback so a request can never be left hanging. Same assertions,
+unweakened — the 64-byte bound, the "incomplete" failures, and `directory.listFiles()` empty after the
+first failure and again at the end.
