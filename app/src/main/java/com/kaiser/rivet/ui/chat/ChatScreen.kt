@@ -591,7 +591,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     projectBinding == ProjectBindingState.Matched &&
                     providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges,
                     acceptedMessageCount = state.acceptedMessageCount,
-                    error = state.error, notice = state.notice,
+                    error = state.error, notice = state.notice, sessionId = state.currentSessionId,
                     onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
                     modifier = Modifier.fillMaxWidth())
             }
@@ -1271,9 +1271,12 @@ private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?,
 
 @Composable
 private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
-                     error: String?, notice: String?, onSend: (String) -> Unit,
+                     error: String?, notice: String?, sessionId: String?,
+                     onSend: (String) -> Unit,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
-    var draft by rememberSaveable { mutableStateOf("") }
+    // A draft belongs to the conversation it was typed in: switching away keeps it there and
+    // never leaves text in the composer that would be sent to a different conversation.
+    var draft by rememberSaveable(sessionId) { mutableStateOf("") }
     var pendingText by rememberSaveable { mutableStateOf<String?>(null) }
     var submittedAt by rememberSaveable { mutableStateOf(0L) }
     LaunchedEffect(acceptedMessageCount, streaming, error, notice) {
