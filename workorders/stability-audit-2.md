@@ -50,10 +50,10 @@ turn), so no title call is burnt on failing turns.
 
 ## Phase A2 — second full audit  [ DONE — see "Phase A2 record" at the bottom ]
 
-Verdict, stated up front: **eleven defects found and fixed — three in product code, one in copy,
+Verdict, stated up front: **twelve defects found and fixed — four in product code, one in copy,
 six in tests (one of which broke compilation), and one compile break in the main source set — and
-nothing known-open.** Four came from this audit, two from Hermes' review of its record, and five
-from CI's three executions (all at the end of this section). The residuals were
+nothing known-open.** Four came from this audit, two from Hermes' review of its record, five from
+CI's three executions, and one from the device (all at the end of this section). The residuals were
 re-checked one by one: none could be cleared outright, five are confirmed as stated, and this
 pass adds three of its own. The SCOPE/ENVIRONMENT note at the head of the A2 record is
 load-bearing: no Kotlin was executed on this host, so every test named below runs for the
@@ -375,11 +375,11 @@ Python audit I ran and name; nothing is from a device or a JVM.
 
 ### Verdict
 
-**Eleven defects, all fixed: three in product code (A2-3, A2-4, C1), one in user-facing copy (C2),
-six in tests (A2-1 could never pass; A2-2 had lost its subject; CF-2 would not compile; CI-3, CI-4
-and CI-5 pinned the right behaviour on fixtures that could not observe it), and one compile break in
-the main source set (CF-1).** Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`,
-`4e677da`, `0b28b03`, `acbc563`, `e83d218`, `ae7fb58`, `86d80cf`.
+**Twelve defects, all fixed: four in product code (A2-3, A2-4, C1, DF-1), one in user-facing copy
+(C2), six in tests (A2-1 could never pass; A2-2 had lost its subject; CF-2 would not compile; CI-3,
+CI-4 and CI-5 pinned the right behaviour on fixtures that could not observe it), and one compile
+break in the main source set (CF-1).** Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`,
+`fbb152f`, `4e677da`, `0b28b03`, `acbc563`, `e83d218`, `ae7fb58`, `86d80cf`, `3051632`.
 
 | # | Finding | Kind | Commit |
 |---|---|---|---|
@@ -392,6 +392,7 @@ the main source set (CF-1).** Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4
 | CI-3 | `theInterruptedFlagIsBoundToItsConversation` asserted a flag on a conversation that had no turn to interrupt | test | `e83d218` |
 | CI-4 | `aTurnNeverWritesIntoAConversationItDidNotStartIn` moved the pointer before the turn's first write | test | `ae7fb58` |
 | CI-5 | `titleProviderFailureAndInvalidOutputNeverFailCodingTurn` reused one store across three cases, so a pending title retried into the next case | test | `86d80cf` |
+| DF-1 | the live-status clock's start lived in the list row, so a relayout (a thinking block folding) restarted it at 0s | **found on device** | `3051632`, audit `31f0895` |
 | — | `turnSessionId` lifetime, F2's content-type gate and its four readers, S1 write ordering, Undo carry/drop and rehydration, F4's reach into the send path, the draft's leak into another chat | **no defect** | withdrawn, below |
 
 ### A2-1 — F2's `ModelNotFound` assertion cannot pass (`0db23a5`)
@@ -615,12 +616,15 @@ rather than rewritten, because editing evidence by hand is the thing a ledger ex
 prevent, and the rule it was meant to state is checked by `rcpt-0017`, whose recorded command is
 `bash round3/provider-text-check.sh` (a script, so replay is exact).
 
-A second receipt, `rcpt-0021`, is void for a plainer reason: for kaiser's thinking-box tap I called
-`receipts add` before writing `round3/thinking-tap-check.py`, so it recorded a command that did not
-exist yet and replays as exit 127. `rcpt-0022` is the same claim against the script, and passes. Both
-void lines stay — the tool has no remove, and hand-editing the ledger is the one thing a ledger
-exists to prevent — so `receipts check` reports two failing lines out of 22 and they are both
-recording mistakes, not evidence that the work is unverified.
+Two more receipts, `rcpt-0021` and `rcpt-0023`, are void for a plainer reason: for kaiser's
+thinking-box tap and again for the turn clock I called `receipts add` before writing
+`round3/thinking-tap-check.py` / `round3/turn-clock-check.py`, so each recorded a command that did
+not exist yet and replays as exit 127. `rcpt-0022` and `rcpt-0024` are the same claims against the
+scripts, and both pass. The void lines stay — the tool has no remove, and hand-editing the ledger is
+the one thing a ledger exists to prevent — so `receipts check` reports three failing lines out of 24
+and all three are recording mistakes, not evidence that the work is unverified. Recording before
+writing the command is the same mistake twice; the fix is to write the script first, and the next
+entry in this record does that.
 
 The three SettingsScreen error values and the notice carry no provider text today, so escaping
 changes nothing they show; they are done anyway so the rule is "every Text that prints a stored
@@ -919,6 +923,95 @@ can prove a gesture. CI round 5 covers compilation and that the other 742 tests 
 cannot see this behaviour at all. The tap-versus-drag split is proven by `clickable`'s documented
 cancellation and by **kaiser's device check**, and by nothing else in this record.
 
+### Device-found defect (kaiser, 2026-11-02) — the thinking clock restarted on fold
+
+**The finding, verbatim in effect.** On the `192c56b` build with the tap toggle (`5f68178`) on top:
+during a running turn the live status line read `Thinking · 2m`; kaiser tapped Show on the thinking
+block, then Hide, and it read `0s`.
+
+#### Root cause
+
+The start was created inside the live-status list item, not with the turn:
+
+```kotlin
+// ChatScreen.kt:885, before the fix
+val startedAt = rememberSaveable { SystemClock.elapsedRealtime() }
+```
+
+That row is one `item(key = "live-status")`, emitted on `showLiveStatus = streaming` (`:822` and
+`:730` in the pre-fix file). So the value's identity was **the row**, and its lifetime was that item's
+composition. Expanding a two-minute reasoning chain makes the item leave the viewport, the
+`LazyColumn` disposes it, and when it comes back the only path for the value is the item's
+save/restore. It came back initialised — and the initialiser is `SystemClock.elapsedRealtime()`,
+i.e. **now**, which renders as `0s`. Nothing else in the path can produce a reset: `elapsed` is
+recomputed from `startedAt` on every tick (`:889` pre-fix), so a correct restore shows the right
+number within a second; `startedAt` is the clock's only input. *Why* the restore missed is
+Compose-internal and deliberately not claimed here — the point of the fix is that nothing depends on
+that answer any more. The comment that stood above the old code shows the disposal was already known as the risk this
+`rememberSaveable` was meant to survive; the device says it does not.
+
+**This record had already asked this exact question.** F7 item 2, "the saveable clock with no turn
+key", was recorded DEVICE-ONLY, and residual 4 said the reason it could not be settled here was
+`LazySaveableStateHolder`'s dispose rule with no Compose sources on this host to read it; the settling
+observation was "run a turn ~20 s, start a second immediately, does its line open at ~20 s?". The
+device answered the disposal half from the other side, and both questions are now moot: after the fix
+the row holds no state to lose or inherit.
+
+#### The fix — `3051632`
+
+`ChatUiState.turnStartedAt` (`ChatViewModel.kt:121`), written at `:489` **in the same state update
+that sets `streaming = true`**, read once at `ChatScreen.kt:732`, and passed into
+`LiveStatusRow(label, startedAt)` (`:890`), which now only ticks.
+
+**Why this home.** The turn is the ViewModel's concept — `streaming`, `generation` and the turn ticket
+all live there — so the turn's start is a fact of the same kind, not a property of a row that renders
+it. Composition cannot lose what it does not hold: no disposal, relayout or re-parenting can touch it.
+And because `startTurn` is the single place a turn begins, it is also the single place the clock is
+set, which is what makes direction 2 structural rather than remembered. The alternative — a turn-keyed
+`rememberSaveable` in `ChatScreen` — is still composition state, would still be dropped by the same
+class of event, and would encode "this turn" as a boolean instead of holding the turn.
+
+#### The acceptance pair, direction by direction
+
+1. **No toggle resets it.** Tapping Show/Hide changes `expanded` (`ThinkingBlock`, `ChatScreen.kt:1043`)
+   and a box tap (the same state, `5f68178`); neither is an input to the clock. The clock's input is a
+   parameter the row receives from state, so even when the relayout disposes and rebuilds the row —
+   the exact event that produced the bug — the number is recomputed from the turn's unchanged start.
+2. **A new turn starts at 0 and inherits nothing.** `SystemClock.elapsedRealtime()` is written in
+   `startTurn` (`:489`) for every turn, and in no other place. The row is removed from the list
+   whenever `streaming` is false (`ChatScreen.kt:732`), so there is no row state that could carry
+   between turns, and the value itself is replaced at the start of the next one.
+
+**Pinned by a unit test**, `ChatViewModelTest.theTurnClockHoldsWithinATurnAndRestartsForTheNext`: the
+start equals the monotonic clock at turn start; advancing the Robolectric clock 5 s underneath a
+running turn does not move it; the next turn's start is strictly later. It is the only execution
+available on this host, it takes the suite to 743, and CI round 5 is its first run.
+
+**What remains device-only.** Everything about the screen: that a Show/Hide or box tap never resets the
+number while a turn runs, and that a drag on the chain never collapses it (`5f68178`'s acceptance).
+The unit test pins the state contract; it cannot see composition.
+
+#### Audit of this fix and the tap toggle together
+
+| Check | Verdict |
+|---|---|
+| `LiveStatusRow` call sites | one (`:825`); the whole signature change is contained |
+| `turnStartedAt` writers | one (`:489`). The two full-state rebuilds (`:1393`, `:1486`) leave it null and can only run with no turn streaming — `changeSession` joins `sendJob` first (`:1471`) |
+| `streaming = true` writers | `:489` (turn start) and `:660` (same turn), so "streaming implies a start" holds in every state |
+| other elapsed clocks in the app | none (`grep elapsedRealtime` in `app/src/main` returns only these) |
+| state left in the row | none — `remember(startedAt)` for the initial value, the tick keyed on the same parameter |
+| **count vs item** | **found and fixed** (`31f0895`): the item needed a start while `totalItems` still counted `streaming` alone. Unreachable today, but `totalItems` feeds the auto-scroll target, so a drift would scroll to an index with no item. Both now read one `liveStatusStart` |
+| `ThinkingBlock` call sites and ids | three call sites, one composable. `expanded` ids are `"streaming"`, `"thinking-<index>"`, `"thinking-<index or group id>"`; `rememberSaveable(input)` resets on an input change, so a finished block's collapse reverts when the message index moves — the documented F7-1 behaviour, unchanged by either commit |
+| live block's `expanded` across turns | keyed by the constant `"streaming"`, so a new turn's live block restores the previous turn's flag. Pre-existing, unchanged; the default is collapsed and neither commit makes it sticky |
+| box tap vs the row's long-press and selection | the block is a sibling of the message row's `combinedClickable` (`:1004`) and of its `SelectionContainer` (`:1011`), so no tap is seen twice and selection mode is untouched |
+| nested scroll in the chain | none — a plain `Text` in the `Surface`, so the list keeps every drag |
+| F6 preview path | untouched by both commits: the diff over `thinkingPreview` and `PreviewScan` is empty, and it is still `remember(text, streaming)` |
+| accessibility | the box is a second focus stop labelled "Collapse thinking" beside the header's Show/Hide; both toggle the same state, the label is accurate in every reachable state, and there is no focus trap |
+| long press on the chain | fires the collapse on release; it did nothing before, the constraint was about drags, and no long-press action existed to preserve |
+
+No other defect found. Nothing here was executed: CI round 5 is the first run of the new test, and
+kaiser's device check is the only evidence for the gesture and for the clock on screen.
+
 ## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
@@ -928,18 +1021,20 @@ and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this
 `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, then Hermes' two closing fixes `fbb152f`, `4e677da`,
 the sixth provider-screen site `8e4b97d`, the two compile breaks CI found `0b28b03` and
 `acbc563`, the three test fixtures CI's first full run found `e83d218`, `ae7fb58`, `86d80cf`,
-and kaiser's device-feedback addition `5f68178`.
+kaiser's device-feedback addition `5f68178`, the device-found clock fix `3051632` and the audit
+fix `31f0895`.
 
 **Nothing is uncommitted and nothing is half-done.** Phase A2, Hermes' two closing fixes, both
-CI-found import fixes, the three CI-found fixture fixes and kaiser's device-feedback addition
-are complete. No push was made.
+CI-found import fixes, the three CI-found fixture fixes, kaiser's device-feedback addition and the
+device-found clock fix with its audit are complete. No push was made.
 
 **What the next step is, in this order:** (1) Hermes re-runs both workflows on exact head
-(`5f68178` or later) and verifies from the run JSON. That run has two jobs: confirm the three
-fixture fixes from round 3 hold (their first execution), and confirm the thinking-box change
-compiles and leaves the other 742 tests green; (2) kaiser's device check of the new tap — a tap
-on a long chain collapses it, a drag that starts on the chain scrolls and does not, and Show/Hide
-behaves as before. No unit test in this project can see any of that; (3) the three existing device
+(`31f0895` or later) and verifies from the run JSON. CI is a compile-and-tests check only: it must
+show the three fixture fixes from round 3 still holding, the thinking-box and clock changes
+compiling, and 743 tests green, including `theTurnClockHoldsWithinATurnAndRestartsForTheNext`,
+which has never run; (2) kaiser's device check — tap a long chain collapses it, a drag on the
+chain scrolls and does not, and the status line keeps counting through Show/Hide and through box
+taps, with a new turn opening at 0s. No unit test in this project can see any of that; (3) the three existing device
 checks the doc already names (draft per conversation, the live-status clock, the reasoning preview
 across two chains); (4) residuals 7 and 9 if Hermes wants them settled rather than named —
 residual 8 is closed by `4e677da`.
