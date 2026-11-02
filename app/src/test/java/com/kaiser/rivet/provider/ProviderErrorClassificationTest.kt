@@ -70,6 +70,27 @@ class ProviderErrorClassificationTest {
         assertTrue(error.text().contains("billing or usage settings"))
     }
 
+    // A 403 usually explains itself ("the API is not enabled", "region not supported"), and
+    // the fixed sentence alone sends the user to re-check a key that is fine. The provider's
+    // words must reach the banner; a bodyless rejection keeps the short sentence.
+    @Test fun authAndServerBodiesReachTheUser() {
+        val disabled = httpError(403, """{"error":{"message":"Generative Language API has not been used in project 123 before or it is disabled."}}""")
+        assertTrue(disabled is ProviderError.Forbidden)
+        assertTrue(disabled.text().contains("has not been used in project 123"))
+
+        val key = httpError(401, """{"error":{"message":"Incorrect API key provided"}}""")
+        assertTrue(key is ProviderError.Unauthorized)
+        assertTrue(key.text().contains("Incorrect API key provided"))
+
+        val down = httpError(503, """{"error":{"message":"The model is overloaded"}}""")
+        assertTrue(down is ProviderError.Server)
+        assertTrue(down.text().contains("The model is overloaded"))
+
+        assertEquals("a bodyless rejection keeps the short sentence",
+            "Authentication failed. Check the API key.", httpError(401, null).text())
+        assertEquals("Provider server error (HTTP 500).", httpError(500, "").text())
+    }
+
     @Test fun providerWireMessageIsNotShownAsChatError() {
         val error = ProviderError.ProviderMessage("internal_request_id=abc123")
         assertFalse(error.text().contains("internal_request_id"))

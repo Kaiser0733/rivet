@@ -3,8 +3,8 @@ package com.kaiser.rivet.provider
 import com.kaiser.rivet.agent.AgentToolCall
 
 sealed class ProviderError(message: String) : Exception(message) {
-    class Unauthorized : ProviderError("unauthorized")
-    class Forbidden : ProviderError("forbidden")
+    class Unauthorized(val detail: String? = null) : ProviderError("unauthorized")
+    class Forbidden(val detail: String? = null) : ProviderError("forbidden")
     class RateLimited : ProviderError("rate limited")
     class ResourceExhausted : ProviderError("resource exhausted")
     class UsageLimit : ProviderError("provider usage limit")
@@ -29,15 +29,15 @@ sealed class ProviderError(message: String) : Exception(message) {
             get() = reason in setOf("length", "max_tokens", "MAX_TOKENS", "max_output_tokens")
     }
     class ResponseTooLarge : ProviderError("provider response exceeded Rivet's size limit")
-    class Server(val status: Int) : ProviderError("server error: $status")
+    class Server(val status: Int, val detail: String? = null) : ProviderError("server error: $status")
     object EmptyResponse : ProviderError("empty response")
     class ProviderMessage(val text: String, val statusCode: Int? = null) : ProviderError(text)
 
     // Keep provider wire messages out of normal Chat; they may contain
     // implementation details or request fragments.
     fun text(): String = when (this) {
-        is Unauthorized -> "Authentication failed. Check the API key."
-        is Forbidden -> "The provider rejected access for this key."
+        is Unauthorized -> "Authentication failed. Check the API key." + said(detail)
+        is Forbidden -> "The provider rejected access for this key." + said(detail)
         is RateLimited -> "Rate limited by the provider. Wait a moment and try again."
         is ResourceExhausted -> "The provider's request capacity is exhausted. Wait before trying again or choose another model."
         is UsageLimit -> "The provider account has reached its usage limit. Check its billing or usage settings."
@@ -57,8 +57,12 @@ sealed class ProviderError(message: String) : Exception(message) {
         is InvalidResponse -> "The provider returned a response Rivet could not parse."
         is IncompleteGeneration -> "The model stopped before finishing its response. Try again or choose another model."
         is ResponseTooLarge -> "This reply hit Rivet's 16 MB response limit. Ask the model to write or edit the file in smaller parts."
-        is Server -> "Provider server error (HTTP $status)."
+        is Server -> "Provider server error (HTTP $status)." + said(detail)
         EmptyResponse -> "The provider returned an empty response."
         is ProviderMessage -> "The model provider couldn't complete this request. Try again or check its settings."
     }
 }
+
+// One shape for quoting the provider's own words, so every banner reads the same way.
+private fun said(detail: String?): String =
+    if (detail.isNullOrBlank()) "" else " The provider said: \"$detail\""
