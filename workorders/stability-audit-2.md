@@ -226,7 +226,7 @@ open when a delta arrives (text ends `"...\n\n"`) becomes a *longer* separator o
 (`"...\n\n \n"`), which moves where the following paragraph starts. A resume point inside that
 run reads the next line as part of the open paragraph and loses it. Found by executing the scan
 in a line-by-line transcription and checking every prefix of 2000 random chains against a
-from-zero scan (host has no JDK); fixed by never resuming inside a trailing run of blanks —
+from-zero scan (host has no JDK; the transcription is `round3/preview-scan-check.py`, untracked working evidence, re-runnable with `python3 round3/preview-scan-check.py`); fixed by never resuming inside a trailing run of blanks —
 `minOf(start, blankTailStart(text))` (`ChatText.kt:101`, `:113-117`), which can only move the
 resume point earlier, and resuming earlier is harmless because the loop is deterministic and
 `summary` is overwritten, not accumulated. Pinned for CI by
