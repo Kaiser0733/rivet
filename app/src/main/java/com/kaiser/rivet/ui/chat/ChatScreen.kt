@@ -43,6 +43,7 @@ import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.AlertDialog
@@ -1037,6 +1038,7 @@ private fun ThinkingBlock(text: String, streaming: Boolean, id: String) {
     // reading the whole chain again per token. While it streams the row is keyed and its text
     // only grows, so one scan carries across the deltas and reads only what arrived.
     val scan = remember { PreviewScan() }
+    val interactions = remember { MutableInteractionSource() }
     val preview = remember(text, streaming) {
         displaySafeText(thinkingPreview(text, streaming, scan))
     }
@@ -1059,8 +1061,21 @@ private fun ThinkingBlock(text: String, streaming: Boolean, id: String) {
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (expanded) {
+            // A long chain pushes the header off the top of the screen, so the box is a tap
+            // target of its own: tapping the chain collapses it where the user stopped reading.
+            // This is a clickable, not a hand-rolled tap detector, and that is the whole
+            // tap-versus-drag split: clickable only fires when the press is released without
+            // the pointer changes being consumed, and the chat list's scroll consumes them the
+            // moment a drag starts, which cancels the press. The chain itself carries no nested
+            // scroll (plain Text in the Surface below), so nothing competes with the list.
             Surface(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier.fillMaxWidth()
+                    .clickable(
+                        interactionSource = interactions,
+                        indication = null,
+                        role = Role.Button,
+                        onClickLabel = "Collapse thinking",
+                    ) { expanded = false },
                 color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f),
                 shape = RoundedCornerShape(6.dp),
                 border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
