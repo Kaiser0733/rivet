@@ -622,6 +622,14 @@ detects a 16,000-token window so it takes the unchanged branch.
 `ContextBudgetTest.aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged` gained three
 flag assertions (additions only, no assertion changed).
 
+**Checked mechanically, not by eye.** `ContextRefusalCopyTest` cannot run on this host, so its
+six expected sentences were compared against the strings the implementation assembles, by
+`round3/refusal-copy-check.py` (untracked working evidence, re-runnable here with
+`python3 round3/refusal-copy-check.py`). All six match, and the guessed variants are also
+checked for the guess they must not print. The check was shown to be red-capable: a
+one-digit change in the test's expected number turns it into exit 1, and the file was
+restored byte-exact afterwards.
+
 Banned-word check over both fixes' new copy against the seven terms the order bans: none of
 them appears in the new sentences or in the new comments.
 
