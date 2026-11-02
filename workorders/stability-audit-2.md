@@ -1,0 +1,119 @@
+# Stability surgery + re-audit — working doc (order: stability-surgery-and-reaudit.md)
+
+Base: `ab8d1f4`. Checklist is the order's phases, in order. One commit per fix.
+**This run stopped early by context limit; the STOP POINT section at the bottom says
+exactly where to resume.** Nothing half-done was left uncommitted.
+
+## Phase S — structural surgery
+
+### S1 — a turn must never write into the wrong conversation  [ DONE — bb5d149 ]
+
+Diagnosis (verified at `ab8d1f4`):
+- The turn captures its session once: `ChatViewModel.kt:563` `val context = ContextPreparation(sessions, sessionId, …)`; every write then goes through `sessionStore.save(...)` (`:592` at turn start, `:790` per message, `stableFailure` at the end).
+- `CodingSessions.save` resolves the target from the **DB pointer**, not from the turn: `CodingSessions.kt:102-105` `val id = activeId(db)`.
+- `changeSession` flips that pointer (`ChatViewModel.kt:1362`, inside `action(store)`) and only afterwards checks the generation (`:1371`), with several suspends between. A `send()` landing in that window passes every guard (`send` checks only `streaming/ready/recoveringProjectChanges`, `:377-382`) and writes A's transcript into B. `compact` already shows the correct pattern: `CodingSessions.kt:316-330` takes `expectedSessionId` and throws `IllegalStateException("Session changed")`.
+
+Chosen design (smallest that closes the hole, no fake churn):
+1. `AgentSessionPersistence.save(messages, interrupted, expectedSessionId: String? = null)` — a **defaulted** parameter, so all 10 implementations and test fakes keep compiling and only `CodingSessions` needs the check.
+2. `CodingSessions.save` compares `expectedSessionId` with `activeId(db)` inside the same `onDatabase` block and throws `IllegalStateException("Session changed")` when they differ — the same failure `compact` already raises.
+3. `ChatViewModel` passes the captured `sessionId` on the three turn write sites (`:592`, `:790`, and the save inside `stableFailure`).
+4. Test: interleave `newSession()`/`resumeSession(other)` with an in-flight turn (blocking provider), then assert `sessions.recent(first)` still holds A's transcript, `recent(other)` is untouched, and the turn surfaced a failure rather than writing to B.
+
+### S2 — Undo must survive a conversation switch  [ DONE — 50f21e1 (carry implemented; restart rehydration still open) ]
+
+Diagnosis (verified):
+- The turn registers undo in its inner `finally`: `ChatViewModel.kt:951-959` sets `lastTurnFiles`, `lastTurnFileCount`, `undoCheckpointId`.
+- The queued switch runs later in the *same* `finally` (`:1003-1008`) and calls `changeSession`, which rebuilds the state from scratch (`:1371-1378`); `undoCheckpointId`/`lastTurnFiles`/`lastTurnFileCount` fall back to their defaults (`:108-110`). The row only renders when `undoCheckpointId != null` (`ChatScreen.kt:586`).
+- Nothing rehydrates: `runtime.latestCheckpoint()` (validator at `:952`, `:1254`) reads complete records from disk (`TurnCheckpoint.kt:107-113`) but is never used to *populate* the state after a switch.
+
+Chosen design: **carry across when the workspace matches, plus rehydrate on load.** Undo is workspace-scoped (`RuntimeController.kt:140-143` keys on `selection.currentIdentity()`), so a checkpoint from the same project is still the right Undo after switching conversations in that project; a switch that changes workspace must drop it. Rehydrating from `runtime.latestCheckpoint()` on `load`/`select` covers restart. Justification: carrying is O(1) and exact (the state already knows the workspace), rehydrating alone would lose the file list for a checkpoint made in the same session.
+
+## Phase F — flagged items
+
+| Item | Status |
+|---|---|
+| F1 401/403/5xx bodies | **DONE** — `83febf3` (detail on `Unauthorized`/`Forbidden`/`Server`, appended as "The provider said: …"; bodyless keeps the short sentence) |
+| F2 non-SSE 200 | **DONE** — `295f61a` (`requireEventStream` in both readers; JSON error → `httpError`, otherwise `InvalidResponse` with `NOT_A_STREAM` copy) |
+| F3 classifier replacing a real message | **CLOSED, no code change** — boundary is the tightest the evidence supports, see below |
+| F4 `capacitySource` gating | not started |
+| F5 title dead-end | **DONE** — `c4dbe7f`, test `40a88bd` |
+| F6 per-delta rendering cost | not started |
+| F7 three SUSPECTED UI items | not started |
+
+### F5 — title dead-end  [ DONE ]
+
+Behaviour chosen (matches both the order and the "runs once" intent): a *failed* title
+request keeps the marker `pending`, so the next **successful** turn retries it; a bad or
+empty response still ends the marker, so a provider that answers with junk costs one
+call. Failing *turns* never call the title path at all (it runs only on a completed
+turn), so no title call is burnt on failing turns.
+
+## Phase A2 — second full audit  [ NOT REACHED ]
+
+## What S1/S2 actually changed (read before touching them)
+
+- `CodingSessions` gained a **3-argument `save(messages, interrupted, expectedSessionId)`**
+  overload; the 2-argument override delegates with `null`, so the `AgentSessionPersistence`
+  interface and all 10 fakes are untouched. The overload throws `IllegalStateException("Session changed")`
+  inside the transaction when the pointer moved, matching `compact`.
+- `ChatViewModel` holds `private var turnSessionId`, set at turn start (`:560`) and cleared
+  in the outer `finally` (`:1002`); `persistTurn(...)` (`:1199`) routes all four transcript
+  writes through the bound overload when the store is the SQLite one. Test:
+  `ChatViewModelTest.aTurnNeverWritesIntoAConversationItDidNotStartIn` (pointer moved under a
+  live turn → other conversation untouched, failure surfaced).
+- S2 carries `undoCheckpointId`/`lastTurnFiles`/`lastTurnFileCount` across `changeSession`
+  when `undoSurvivesSwitch(old, new)` holds (workspace equality), and drops them otherwise.
+  Test: `undoSurvivesAConversationSwitchOnlyInsideTheSameProject`.
+- **Residuals of the surgery, stated plainly:** `markInterrupted` is still pointer-based (a
+  boolean on whichever session is active); restart rehydration of the Undo row from
+  `runtime.latestCheckpoint()` is not built; the end-to-end "queued switch keeps the Undo
+  row visible" test needs the workspace/checkpoint harness and is still owed.
+
+### F2 plan (verified shape, not yet written)
+
+`Http.sse` reads the body as SSE whatever `Content-Type` says (`Http.kt:301-302`, `:323`), so a
+JSON completion or a JSON error served with `200` is read as an empty stream and reported as a
+truncation by all four clients. Fix in one place: after `isSuccessful`, read the content type;
+when it is present and is not `text/event-stream`, read the body (bounded, same 64 KiB rule as
+`errorText`), and (a) if it parses as an error body, `throw httpError(code, body)` so the real
+provider sentence is used, else (b) throw `InvalidResponse` with copy naming the problem —
+plain words, e.g. "The provider sent a normal reply instead of a stream. Check that this is a
+streaming chat endpoint." `ChatGptPlanClient.responsesSse` needs the same branch (it is a
+deliberate duplicate).
+
+### F3 — settled with the device evidence, no code change (closing note)
+
+Evidence: the device refusal body is "Invalid inference request. Check the model's supported
+parameters and input limits." (`workorders/device-fix-round4-dsh.md:58`, kaiser's screenshot).
+
+- It names **no effort field**, so any rule requiring an effort word would be blind exactly
+  where the device fix needs it. The current rule only requires an effort to have been sent,
+  a client-side status, a parameter phrase, and no size phrase — that is the minimum that
+  covers the device body.
+- Adding "input limits" to `SIZE_REJECTION` would re-classify the device case as a size
+  problem, drop the ladder, and undo the round-4 device fix. That is why the doc's standing
+  warning exists, and the new evidence confirms it rather than contradicting it.
+- No concrete misclassification follows from the evidence, so the code stays as it is.
+
+Named residual: a size-driven refusal whose body says only "Invalid inference request" (no
+size phrase) is still attributed to effort, and the provider's sentence is replaced by the
+ladder in the banner (it survives in the error detail, not on screen). Settle it with a body
+from that provider whose size complaint uses wording outside `SIZE_REJECTION`; until then a
+change would be guessing against a hardware-verified path.
+
+### F3 — original note (why I did not change the classifier blind)
+
+Tightening `PARAMETER_REJECTION` (`Http.kt:207-223`) so a generic 400 reaches the user verbatim
+would also weaken the recognition that the **device fix depends on**: the ultra-send path was
+verified on hardware only because a generic 400 mentioning the model is classified as an effort
+refusal (`OpenAiCompatibleClient.reasoningEffort` + `ChatViewModel.kt:924-931`). Any tightening
+must be checked against the exact body that provider returned on the device; changing it from
+reading alone risks re-breaking a device-verified path. Needs that body, which is in the
+round-4 device notes, not in the tree.
+
+## STOP POINT (for the next run)
+
+Stopped after F1 (`83febf3`). Done in this order: F5 (+test `40a88bd`), S1 (`bb5d149`),
+S2-carry (`50f21e1`), F1 (`83febf3`). **Next: F2**, using the plan above (`Http.sse` content-type
+branch + the same branch in `responsesSse`, with a MockWebServer test serving a JSON 200).
+Then F3 only with the device body in hand, F4, F6, F7, the S2 residuals, then Phase A2.
