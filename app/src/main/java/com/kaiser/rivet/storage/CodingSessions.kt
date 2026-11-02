@@ -161,16 +161,26 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean =
         AgentSessionCodec.fits(messages, reservedEncodedBytes + summaryBytes)
 
-    override suspend fun markInterrupted(interrupted: Boolean) = onDatabase { db ->
+    override suspend fun markInterrupted(interrupted: Boolean) =
+        markInterrupted(interrupted, expectedSessionId = null)
+
+    // Same rule as `save`: the flag belongs to the conversation the call was made for, and a
+    // switch that moved the pointer must not let a turn clear another conversation's flag.
+    // The check and the write share one database block so they cannot be split.
+    suspend fun markInterrupted(interrupted: Boolean, expectedSessionId: String?) = onDatabase { db ->
+        val id = activeId(db)
+        if (expectedSessionId != null && id != expectedSessionId) {
+            throw IllegalStateException("Session changed")
+        }
         if (!interrupted) {
             val last = db.rawQuery("SELECT payload FROM active_events WHERE session_id=? ORDER BY id DESC LIMIT 1",
-                arrayOf(activeId(db))).use { cursor ->
+                arrayOf(id)).use { cursor ->
                 if (cursor.moveToFirst()) decode(cursor.getString(0)) else null
             }
             if (hasPendingToolCall(last)) return@onDatabase
         }
         db.execSQL("UPDATE sessions SET interrupted=? WHERE id=?",
-            arrayOf(if (interrupted) 1 else 0, activeId(db)))
+            arrayOf(if (interrupted) 1 else 0, id))
     }
 
     override suspend fun clear() = onDatabase { db ->

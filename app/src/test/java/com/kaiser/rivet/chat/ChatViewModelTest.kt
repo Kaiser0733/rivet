@@ -1374,6 +1374,28 @@ class ChatViewModelTest {
         assertEquals(ReasoningLevel.Ultra, provider.requests[0].reasoning)
     }
 
+    // The interrupted flag belongs to a conversation, like the transcript: a stale pointer
+    // must not let a turn clear the flag of the conversation it is not writing to.
+    @Test fun theInterruptedFlagIsBoundToItsConversation() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        val other = sessions.create(null).id!!
+        sessions.select(first)
+
+        sessions.markInterrupted(true, first)
+        try {
+            sessions.markInterrupted(false, other)
+            throw AssertionError("a stale pointer must not clear another conversation's flag")
+        } catch (_: IllegalStateException) { /* expected */ }
+
+        assertEquals("the flag was not cleared through the stale pointer", true,
+            sessions.load().interrupted)
+        sessions.select(other)
+        assertEquals("the other conversation was never touched", false, sessions.load().interrupted)
+    }
+
     // Undo reaches one project's files. Switching conversations inside that project must
     // keep the Undo the turn just registered; switching to a conversation in another
     // project must not offer it.
