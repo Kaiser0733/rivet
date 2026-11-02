@@ -68,6 +68,8 @@ import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
+import androidx.compose.runtime.saveable.Saver
+import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.semantics.Role
@@ -96,8 +98,10 @@ import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
+import com.kaiser.rivet.chat.draftFor
 import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
+import com.kaiser.rivet.chat.withDraft
 import com.kaiser.rivet.chat.liveStatusLine
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.provider.ReasoningLevel
@@ -1285,19 +1289,32 @@ private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?,
     }
 }
 
+// Drafts are a small String map, so a map saver keeps them across process death without
+// a bespoke encoding: every key and value is a String, which is what a Bundle can hold.
+private val DRAFT_SAVER: Saver<Map<String, String>, Any> = mapSaver(
+    save = { drafts -> drafts },
+    restore = { saved -> saved.mapNotNull { (key, value) -> (value as? String)?.let { key to it } }.toMap() },
+)
+
 @Composable
 private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
                      error: String?, notice: String?, sessionId: String?,
                      onSend: (String) -> Unit,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
     // A draft belongs to the conversation it was typed in: switching away keeps it there and
-    // never leaves text in the composer that would be sent to a different conversation.
-    var draft by rememberSaveable(sessionId) { mutableStateOf("") }
+    // never leaves text in the composer that would be sent to a different conversation. The
+    // drafts live in one saveable map rather than in a rememberSaveable keyed by the session:
+    // a keyed state reverts to its init value when the key changes, which would drop the text
+    // on the way out and show an empty composer on the way back.
+    var drafts by rememberSaveable(stateSaver = DRAFT_SAVER) {
+        mutableStateOf(emptyMap<String, String>())
+    }
+    val draft = draftFor(drafts, sessionId)
     var pendingText by rememberSaveable { mutableStateOf<String?>(null) }
     var submittedAt by rememberSaveable { mutableStateOf(0L) }
-    LaunchedEffect(acceptedMessageCount, streaming, error, notice) {
+    LaunchedEffect(acceptedMessageCount, streaming, error, notice, sessionId) {
         if (pendingText != null && acceptedMessageCount > submittedAt) {
-            if (draft == pendingText) draft = ""
+            if (draft == pendingText) drafts = withDraft(drafts, sessionId, "")
             pendingText = null
         } else if (!streaming && (error != null || notice != null)) {
             pendingText = null
@@ -1326,7 +1343,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             verticalAlignment = Alignment.Bottom) {
             OutlinedTextField(
                 value = draft,
-                onValueChange = { draft = it },
+                onValueChange = { drafts = withDraft(drafts, sessionId, it) },
                 modifier = Modifier.weight(1f),
                 placeholder = { Text("Ask Rivet…") },
                 minLines = 1,
