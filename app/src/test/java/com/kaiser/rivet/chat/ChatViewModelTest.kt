@@ -1557,7 +1557,11 @@ class ChatViewModelTest {
         await(viewModel) { it.ready && it.currentSessionId == first }
 
         viewModel.send("Keep working")
-        await(viewModel) { it.streaming }
+        // Wait until the turn's first write is durable before moving the pointer. S1 is about the
+        // reply not following the pointer into another conversation; moving it first makes even a
+        // correct turn refuse its own first write, and the conversation is then empty by design.
+        // streaming is set synchronously in startTurn, so it says nothing about the write.
+        await(viewModel) { it.acceptedMessageCount == 1L }
 
         // The storage pointer moves under the running turn, as a switch in flight does.
         sessions.select(other)
