@@ -120,3 +120,12 @@ partial file was deleted instead of resumed. The proof is tests 2 and 3: they fa
 and pass with the fix, which makes `IOException` in that handler retryable and changes nothing else.
 
 No other production change came out of this round.
+
+**CI finding on the test round (`87aadff` → fixed next).** Run 41403684086: production code compiled and
+`okhttp-dnsoverhttps:4.12.0` resolved, so the whole hardening and the DoH fallback are build-clean. The
+only failure was test compilation in `UpdateResilienceTest.kt`: `MockWebServer`'s `RecordedRequest` has
+no nested `.request` property, so `takeRequest().request.url.encodedPath` could not compile. It exposes
+`.path` and `.requestUrl`; the fallback test now reads `.path` and asserts exactly what it did before —
+three requests to the release-asset path, then `/downloads/Rivet-v0.11.1.apk`. The other `takeRequest()`
+uses in the file read a header, which `RecordedRequest` does expose, so they were already correct. No
+production code touched in that round.
