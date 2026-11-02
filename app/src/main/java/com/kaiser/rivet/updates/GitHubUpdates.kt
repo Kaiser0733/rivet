@@ -127,13 +127,21 @@ internal class GitHubUpdates(
                         var url = release.url.toHttpUrlOrNull() ?: throw metadataFailure()
                         repeat(6) {
                             val result = retrying {
-                                fetch(url, "application/vnd.android.package-archive", DOWNLOAD_TRANSPORT, target) { response ->
-                                if (!response.isSuccessful) throw UpdateFailure("Rivet couldn't download the update. Try again later.")
+                                fetch(url, "application/vnd.android.package-archive", DOWNLOAD_TRANSPORT, target,
+                                            rangeFrom = target.length()) { response ->
+                                if (response.code != 200 && response.code != 206) {
+                                    throw UpdateFailure("Rivet couldn't download the update. Try again later.")
+                                }
                                 val body = response.body ?: throw UpdateFailure("GitHub returned an empty update.")
+                                // 206 means the server honoured the Range we asked for, so the bytes
+                                // are appended to the partial file. 200 means it ignored the Range
+                                // and is sending the whole file: this becomes a clean restart from
+                                // zero rather than a stitched-together APK.
+                                val start = if (response.code == 206) resumeStart(response, target.length()) else 0L
                                 val length = body.contentLength().takeIf { it >= 0 }
-                                if (length != null && length > maxDownloadBytes) throw tooLarge()
-                                var total = 0L
-                                target.outputStream().use { output ->
+                                if (length != null && length + start > maxDownloadBytes) throw tooLarge()
+                                var total = start
+                                target.outputStream(append = start > 0).use { output ->
                                     body.byteStream().use { input ->
                                         val buffer = ByteArray(64 * 1024)
                                         while (true) {
@@ -142,11 +150,11 @@ internal class GitHubUpdates(
                                             total += count
                                             if (total > maxDownloadBytes) throw tooLarge()
                                             output.write(buffer, 0, count)
-                                            progress(total, length)
+                                            progress(total, length?.let { start + it })
                                         }
                                     }
                                 }
-                                if (total == 0L || total != release.size || (length != null && total != length)) {
+                                if (total == 0L || total != release.size || (length != null && total != start + length)) {
                                     throw UpdateFailure("The update download was incomplete. Try again.")
                                 }
                                 Fetch.Downloaded
@@ -161,9 +169,23 @@ internal class GitHubUpdates(
                         throw UpdateFailure("GitHub redirected the update too many times. Try again later.")
                     }
                 } catch (e: CancellationException) { target.delete(); throw e
+                } catch (e: UpdateFailure) {
+                    // A transport failure keeps the partial file so the next attempt can resume from
+                    // it. Everything else deletes it: a failed validation is not resumable.
+                    if (!e.retryable) target.delete()
+                    throw e
                 } catch (e: Exception) { target.delete(); throw e }
             }
         } catch (e: Exception) { staged?.delete(); throw e }
+    }
+
+    // A 206 is only usable when it starts exactly where the partial file ends. A missing or
+    // mismatched Content-Range restarts from zero: bytes from the wrong offset would pass the size
+    // check and fail the signature check with a confusing message instead of just downloading again.
+    private fun resumeStart(response: Response, requested: Long): Long {
+        val start = response.header("Content-Range")
+            ?.substringAfter("bytes ", "")?.substringBefore('-')?.trim()?.toLongOrNull()
+        return if (requested > 0 && start == requested) requested else 0L
     }
 
     private fun validatedRedirect(from: HttpUrl, location: String): HttpUrl {
@@ -194,9 +216,12 @@ internal class GitHubUpdates(
     }
 
     private suspend fun fetch(url: HttpUrl, accept: String, transportMessage: String, staged: File? = null,
+                              rangeFrom: Long = 0L,
                               read: (Response) -> Fetch): Fetch = suspendCancellableCoroutine { continuation ->
         val cancelled = AtomicBoolean(false)
-        val call = client.newCall(Request.Builder().url(url).header("Accept", accept).get().build())
+        val request = Request.Builder().url(url).header("Accept", accept).get()
+        if (rangeFrom > 0) request.header("Range", "bytes=$rangeFrom-")
+        val call = client.newCall(request.build())
         continuation.invokeOnCancellation { cancelled.set(true); call.cancel() }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
