@@ -209,8 +209,13 @@ class HttpBridgeTest {
                 client.sse(Request.Builder().url(server.url("/chat")).build()) { events += it }
                 null
             } catch (e: ProviderError) { e }
-            assertTrue("the provider's own error must be used", error is ProviderError.ModelNotFound)
-            assertTrue(events.isEmpty())
+            // The provider's own sentence is the contract here, not a classification: a 200
+            // says nothing about the model, and `isModelNotFound` only reads a 400/404 body as
+            // a missing model. What has to survive is the wording the provider sent.
+            val failure = error as? ProviderError.ProviderMessage
+            assertEquals("model 'x' does not exist", failure?.text)
+            assertEquals(200, failure?.statusCode)
+            assertTrue("a non-stream reply yields no events", events.isEmpty())
 
             events.clear()
             val reply = try {
