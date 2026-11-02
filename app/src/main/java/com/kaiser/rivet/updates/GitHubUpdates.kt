@@ -29,6 +29,22 @@ import kotlin.coroutines.resumeWithException
 
 internal class UpdateFailure(message: String, val retryable: Boolean = false) : Exception(message)
 
+/**
+ * IPv4 routes first, relative order otherwise preserved.
+ *
+ * OkHttp 4.12 has no Happy Eyeballs: one call tries the first address the Dns returns, and with
+ * retryOnConnectionFailure(false) a dead first route ends that attempt — and the app-level retries
+ * re-resolve to the same order and die on the same address. The device signature that started this
+ * round fits that exactly: api.github.com is IPv4-only, so the check worked, while GitHub's
+ * release-asset CDN publishes AAAA records and the download died at connect on every attempt on a
+ * carrier whose IPv6 route is broken, next to a Chrome that succeeds because it tries both families.
+ *
+ * This is a preference, not a removal: IPv6 stays in the list as a later route. Inferred from the
+ * device signature, not proven on a device.
+ */
+internal fun ipv4First(addresses: List<java.net.InetAddress>): List<java.net.InetAddress> =
+    addresses.sortedBy { if (it is java.net.Inet4Address) 0 else 1 }
+
 internal data class ReleaseVersion(val major: Int, val minor: Int, val patch: Int) : Comparable<ReleaseVersion> {
     override fun compareTo(other: ReleaseVersion) = compareValuesBy(this, other,
         ReleaseVersion::major, ReleaseVersion::minor, ReleaseVersion::patch)
@@ -314,9 +330,9 @@ internal class GitHubUpdates(
                     .url("https://cloudflare-dns.com/dns-query".toHttpUrlOrNull()!!)
                     .build()
             }
-            override fun lookup(hostname: String): List<java.net.InetAddress> =
+            override fun lookup(hostname: String): List<java.net.InetAddress> = ipv4First(
                 try { Dns.SYSTEM.lookup(hostname) }
-                catch (_: java.net.UnknownHostException) { secure.lookup(hostname) }
+                catch (_: java.net.UnknownHostException) { secure.lookup(hostname) })
         }
 
         const val MAX_APK_BYTES = 200L * 1024 * 1024

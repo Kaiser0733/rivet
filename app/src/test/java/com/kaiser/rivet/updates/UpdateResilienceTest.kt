@@ -212,6 +212,22 @@ class UpdateResilienceTest {
         assertTrue("and nothing is left behind for verify to pick up", directory.listFiles()!!.isEmpty())
     }
 
+    // IPv4 routes are preferred so a broken IPv6 route cannot swallow every attempt; the family is
+    // still available as a later route, and everything else keeps its order.
+    @Test fun ipv4RoutesAreOfferedFirstAndOrderIsOtherwiseKept() {
+        fun v4(last: Byte) = java.net.InetAddress.getByAddress(byteArrayOf(10, 0, 0, last))
+        fun v6(last: Byte) = java.net.InetAddress.getByAddress(
+            byteArrayOf(0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, last))
+        val first6 = v6(1); val first4 = v4(1); val second6 = v6(2); val second4 = v4(2)
+
+        assertEquals("mixed list comes back IPv4-first, order otherwise preserved",
+            listOf(first4, second4, first6, second6),
+            ipv4First(listOf(first6, first4, second6, second4)))
+        assertEquals("IPv4-only passes through", listOf(first4, second4), ipv4First(listOf(first4, second4)))
+        assertEquals("IPv6-only passes through", listOf(first6, second6), ipv4First(listOf(first6, second6)))
+        assertEquals("empty passes through", emptyList<java.net.InetAddress>(), ipv4First(emptyList()))
+    }
+
     // (5) Copy: each leg names the server that failed, and the old blame is gone from this family.
     @Test fun eachLegNamesTheServerThatFailed() {
         server.enqueue(MockResponse().setSocketPolicy(SocketPolicy.DISCONNECT_AT_START))
