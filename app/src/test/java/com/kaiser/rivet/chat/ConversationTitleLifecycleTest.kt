@@ -119,6 +119,36 @@ class ConversationTitleLifecycleTest {
         return vm to store
     }
 
+    // A title request can fail (timeout, network). The chat must not stay "New session" for
+    // good, and a failing turn must not spend a title call: the marker stays pending until a
+    // finished turn gets a usable title.
+    @Test fun aFailedTitleRequestLeavesTheMarkerForTheNextFinishedTurn() = runBlocking {
+        val titleAttempted = CompletableDeferred<Unit>()
+        var calls = 0
+        val (vm, store) = conversation {
+            when (++calls) {
+                1 -> AgentResponse("Done")
+                2 -> { titleAttempted.complete(Unit); throw ProviderError.Timeout("socket") }
+                3 -> AgentResponse("Done")
+                else -> AgentResponse("Fix Login Crash")
+            }
+        }
+        val id = vm.uiState.value.currentSessionId!!
+
+        vm.send("Fix the login crash")
+        withTimeout(5_000) { vm.uiState.first { !it.streaming && it.acceptedMessageCount == 1L } }
+        withTimeout(5_000) { titleAttempted.await() }
+
+        assertEquals("the failed title must not invent a name", "New session", vm.uiState.value.currentSessionTitle)
+        assertTrue("the marker stays pending so a later turn can title",
+            store.hasPendingAutoTitle(id))
+
+        vm.send("Thanks")
+        withTimeout(5_000) { vm.uiState.first { it.currentSessionTitle == "Fix Login Crash" } }
+        assertEquals("Fix Login Crash", store.list().first { it.id == id }.title)
+        assertFalse("the marker is spent once a title lands", store.hasPendingAutoTitle(id))
+    }
+
     @Test fun manualRenameWinsWhileTitleRequestIsInFlight() = runBlocking {
         val titleStarted = CompletableDeferred<Unit>()
         val titleAnswer = CompletableDeferred<String>()
