@@ -19,7 +19,7 @@ Chosen design (smallest that closes the hole, no fake churn):
 3. `ChatViewModel` passes the captured `sessionId` on the three turn write sites (`:592`, `:790`, and the save inside `stableFailure`).
 4. Test: interleave `newSession()`/`resumeSession(other)` with an in-flight turn (blocking provider), then assert `sessions.recent(first)` still holds A's transcript, `recent(other)` is untouched, and the turn surfaced a failure rather than writing to B.
 
-### S2 — Undo must survive a conversation switch  [ DONE — 50f21e1 (carry implemented; restart rehydration still open) ]
+### S2 — Undo must survive a conversation switch  [ DONE — carry 50f21e1, rehydration c30b008 ]
 
 Diagnosis (verified):
 - The turn registers undo in its inner `finally`: `ChatViewModel.kt:951-959` sets `lastTurnFiles`, `lastTurnFileCount`, `undoCheckpointId`.
@@ -65,9 +65,9 @@ turn), so no title call is burnt on failing turns.
   when `undoSurvivesSwitch(old, new)` holds (workspace equality), and drops them otherwise.
   Test: `undoSurvivesAConversationSwitchOnlyInsideTheSameProject`.
 - **Residuals of the surgery, stated plainly:** `markInterrupted` is still pointer-based (a
-  boolean on whichever session is active); restart rehydration of the Undo row from
-  `runtime.latestCheckpoint()` is not built; the end-to-end "queued switch keeps the Undo
-  row visible" test needs the workspace/checkpoint harness and is still owed.
+  boolean on whichever session is active) — closed in `96ac827`; restart rehydration of the
+  Undo row — closed in `c30b008`, below; the end-to-end "queued switch keeps the Undo row
+  visible" test — closed in `c30b008`, below.
 
 ### F2 plan (verified shape, not yet written)
 
@@ -263,12 +263,62 @@ restarts the scan, but a *different, longer* chain handed to the same instance w
 unreachable today because the row leaves composition when the reasoning blanks
 (`ChatViewModel.kt:823-825`, `:917`), and stated as an invariant at `ChatText.kt:68-75`.
 
+### S2 — rehydration and the two row tests  [ DONE — c30b008 ]
+
+**Rehydration.** `rehydrateUndo(workspaceId)` (`ChatViewModel.kt:1295-1311`) reads
+`runtimeController.latestCheckpoint()`, keeps the record only when `record.workspace ==
+workspaceId`, and fills `lastTurnFiles`/`lastTurnFileCount`/`undoCheckpointId` from it. It runs
+on the three paths that rebuild a conversation from disk: the restart load
+(`ChatViewModel.kt:283`), `selectProject` (`:370`), and `clearChat` (`:1362`). The row's content is
+now derived in one place, `undoRowFor` (`:1284-1289`, files only, five named and the rest counted)
+— the turn end at `:970` uses it too, so the row a turn earns and the row a restart finds cannot
+drift.
+
+**Why the workspace comparison is the right guard, not a stricter-than-needed one.** A checkpoint
+can only be made by a turn, and `startTurn` refuses to run unless the conversation is bound to the
+selected project: `projectBindingState` returns `Mismatch` for a session with no workspace while a
+project is selected (`ProjectBinding.kt:14`), and `startTurn` stops on Mismatch
+(`ChatViewModel.kt:528-532`). So every checkpoint belongs to a conversation whose `workspaceId` is
+the project identity, and requiring the loaded conversation's workspace to equal
+`record.workspace` cannot hide a row a turn would have shown. The same comparison also keeps a
+project P checkpoint off a conversation that belongs to project Q.
+`TurnCheckpoint.latest()` (`TurnCheckpoint.kt:107-113`) returns only `complete && after != null &&
+!undone && !desynced`, so a restart after a killed turn offers nothing (the interrupted-turn row
+is the honest state there), and an undone or desynced checkpoint stays gone.
+
+**The two end-to-end tests** (`ChatViewModelTest.kt:1439-1524`) drive a whole approved
+`create_file` turn in the fake project, so the checkpoint is one the product made rather than one
+the test wrote: `theUndoRowComesBackAfterARestartFromTheSavedCheckpoint` (a second ViewModel on the
+same disk comes back with the same checkpoint id, file list and count) and
+`aConversationSwitchQueuedBehindATurnKeepsTheUndoRow` (the owed S2 row test: `resumeSession` is
+queued while the turn runs, the switch applies at the end, and the row is still there). The
+harness piece the earlier run lacked was not a new fake — `TestDocumentsProvider` +
+`selectProject` + `RuntimeController` already produce a real checkpoint; what was missing was a
+helper that runs the turn (`undoFixture`, `createFileTurn`). **Both tests are CI-first evidence:**
+this host has no JDK, so they have not been executed here; their logic was reasoned from source.
+
+**Residual, stated:** a switch *away* from a project and back still drops the row until the project
+is selected again or the app restarts. `RuntimeController.latestCheckpoint()` is scoped to the
+selected project (`RuntimeController.kt:140-143`) and `checkpointTurnChanges` refuses a record whose
+workspace is not the selected one (`:145-148`), so rehydrating by *conversation* workspace needs a
+`latestCheckpoint(workspaceId)` overload plus a changes path that does not require the selection —
+a runtime API change outside this order's design. The carry rule keeps the behaviour safe in the
+meantime: a drop, never a wrong row.
+
 ## STOP POINT (for the next run)
 
-Stopped after F6's pins (`859c601`). Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed, no code),
-F4, markInterrupted binding, F7 items 1-3 settled (1 resets rather than hops; 2 device-only with
-the exact observation; 3 proven mechanism, product call). **Next: F6's cost cut** (see the design constraint above: incremental per-delta state, NOT a
-tail window), then restart rehydration for Undo + the end-to-end Undo-row test, then Phase A2. Then F7 (three
-SUSPECTED items: message-index-keyed `remember`/`rememberSaveable` re-association after the
-100-message trim; `LiveStatusRow`'s saveable clock with no turn key; the draft not keyed to the
-conversation — read first, they may be DISPROVEN), the two named S2 residuals, then Phase A2.
+Stopped after S2's rehydration and its two row tests (`c30b008`), on instruction: the Phase A2
+re-audit is a separate assignment and waits for Hermes' review of F6 and S2.
+
+Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
+(`96ac827`), F1 (`83febf3`), F2 (`295f61a`), F3 (closed, no code), F4 (`5209bc8`), F5 (`c4dbe7f`,
+test `40a88bd`), F7 items 1-3 settled (`d156e48`, fix `327ff50`, `4ceceeb`), F6 pins (`859c601`)
+and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`).
+
+**Nothing is half-done and nothing is uncommitted.** Phase A2 (the whole-branch re-audit from
+`c0c49c8..HEAD`) has not started.
+
+**What the next run must re-check first, in this order:** (1) exact-head CI on this branch — no
+commit here has been executed, so the F6 scanner and the S2 rehydration code have never run;
+(2) the two new `ChatViewModelTest` tests, which are the only coverage the Undo row has end to
+end; (3) then Phase A2, hardest look at `952370f` and `c30b008`.
