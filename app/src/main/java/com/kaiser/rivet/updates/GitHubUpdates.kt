@@ -153,7 +153,9 @@ internal class GitHubUpdates(
                                 val length = body.contentLength().takeIf { it >= 0 }
                                 if (length != null && length + start > maxDownloadBytes) throw tooLarge()
                                 var total = start
-                                target.outputStream(append = start > 0).use { output ->
+                                // File.outputStream() has no append flag; the constructor does. Append
+                                // only for a resumed attempt, so a restart still truncates.
+                                java.io.FileOutputStream(target, start > 0).use { output ->
                                     body.byteStream().use { input ->
                                         val buffer = ByteArray(64 * 1024)
                                         while (true) {
@@ -188,6 +190,11 @@ internal class GitHubUpdates(
                             url = fallbackUrl(release)
                         }
                         }
+                        // Unreachable: the chain either returns the staged file or throws. The throw is
+                        // here so this block's type stays a File, which is what download() returns —
+                        // without it the while(true) leaves the block typed Unit and the whole
+                        // withContext lambda stops matching the declared return type.
+                        throw UpdateFailure("Rivet couldn't download the update. Try again later.")
                     }
                 } catch (e: CancellationException) { target.delete(); throw e
                 } catch (e: UpdateFailure) {
