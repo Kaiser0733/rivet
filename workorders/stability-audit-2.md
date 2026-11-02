@@ -38,7 +38,7 @@ Chosen design: **carry across when the workspace matches, plus rehydrate on load
 | F4 `capacitySource` gating | **DONE** — `5209bc8` (guessed window plans at 131 072; entered/detected windows byte-identical, pinned by `aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged`) |
 | F5 title dead-end | **DONE** — `c4dbe7f`, test `40a88bd` |
 | F6 per-delta rendering cost | not started |
-| F7 three SUSPECTED UI items | not started |
+| F7 three SUSPECTED UI items | 1 settled (state resets, does not hop), 2 and 3 not settled |
 
 ### F5 — title dead-end  [ DONE ]
 
@@ -121,7 +121,26 @@ resolution still returns 262 144, asserted in the same test — while the *plann
 guessed window is exactly what F4 changes. The default-window input was lowered from 120 000 to
 100 000 so `needsReduction` still tests "under the ceiling", since 120 000 now sits above it.
 
-### S2 residual — `markInterrupted` binding (NOT done, why)
+### S2 residual — `markInterrupted` binding  [ DONE — 96ac827 ]
+
+Full fix, not a wrapper: `markInterrupted(interrupted, expectedSessionId)` reads the pointer
+once, refuses a stale one, and uses that same id for both the pending-tool-call query and the
+`UPDATE`, all inside one `onDatabase` block. The 1-argument override delegates with `null`, so
+the interface and all fakes are untouched. `stableFailure` routes through the bound overload
+when the store is the SQLite one. Test: `theInterruptedFlagIsBoundToItsConversation`.
+
+### F7 item 1 — message-index-keyed UI state: state is DROPPED, not mis-attributed
+
+`ChatScreen.kt:960-961` `remember(messageKey)` and `:1016` `rememberSaveable(id)` key state by
+message index. When the 100-message trim shifts indices, the remember key changes and Compose
+**recreates** the state with its initial value — so the effect is a long-press menu closing and
+an expanded reasoning block collapsing, never one message's state appearing on another. Real
+but cosmetic; the same hazard in `ThinkingBlock`'s `id` is likewise a reset. Left as is: a
+content-derived key would fix it but changes nothing a user would call a bug compared with the
+drops. DEVICE-ONLY to confirm severity: expand a reasoning block, then keep chatting past the
+100-message boundary and watch whether it collapses.
+
+### S2 residual — `markInterrupted` binding (original note, superseded)
 
 Binding it needs the check and the write inside one `onDatabase` block, i.e. refactoring
 `markInterrupted`'s body the way `save` was refactored. A check-then-act wrapper would narrow
@@ -130,7 +149,8 @@ so it does not meet the order's "if it fits the same shape" bar. Left named for 
 
 ## STOP POINT (for the next run)
 
-Stopped after F4 (`5209bc8`). Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed, no code), F4.
+Stopped after `96ac827` (markInterrupted). Done: F5 (+test), S1, S2-carry, F1, F2, F3 (closed,
+no code), F4, markInterrupted binding, F7 item 1 (settled: resets, does not mis-attribute).
 **Next: F6** (incremental reasoning preview + bucketed scroll key in `ChatScreen.kt:759-769`
 and `ChatText.thinkingPreview`; the accepted behaviour is that the visible preview and the
 scroll position do not change, so pin those first, then change the cost). Then F7 (three
