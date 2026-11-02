@@ -1207,8 +1207,13 @@ class ChatViewModel private constructor(
                                       action: ChatErrorAction? = null,
                                       reasoningNotice: UnsupportedReasoningNotice? = null) {
         if (ticket != generation) return
-        val persistenceError = try { sessionStore.markInterrupted(false); false }
-            catch (e: CancellationException) { throw e }
+        val bound = turnSessionId
+        val sql = sessions
+        val persistenceError = try {
+            if (bound != null && sql != null) sql.markInterrupted(false, bound)
+            else sessionStore.markInterrupted(false)
+            false
+        } catch (e: CancellationException) { throw e }
             catch (_: Exception) { true }
         activeMessages = durable
         val visible = try { _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: durable }
