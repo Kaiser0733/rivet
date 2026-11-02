@@ -50,11 +50,13 @@ turn), so no title call is burnt on failing turns.
 
 ## Phase A2 — second full audit  [ DONE — see "Phase A2 record" at the bottom ]
 
-Verdict, stated up front: **four defects found and fixed — two in product code, two in tests —
-and nothing proven left open.** The named residuals were re-checked one by one: none could be
-cleared outright, six are confirmed as stated, and this pass adds three of its own. The
-SCOPE/ENVIRONMENT note at the head of the A2 record is load-bearing: no Kotlin was executed on
-this host, so every test named below runs for the first time in CI.
+Verdict, stated up front: **six defects found and fixed — three in product code, one in copy,
+two in tests — and nothing proven left open.** Four came from this audit, two from Hermes'
+review of its record (the closing fixes at the end of this section). The residuals were
+re-checked one by one: none could be cleared outright, five are confirmed as stated, and this
+pass adds three of its own. The SCOPE/ENVIRONMENT note at the head of the A2 record is
+load-bearing: no Kotlin was executed on this host, so every test named below runs for the
+first time in CI.
 
 ## What S1/S2 actually changed (read before touching them)
 
@@ -372,9 +374,9 @@ Python audit I ran and name; nothing is from a device or a JVM.
 
 ### Verdict
 
-**Four defects, all fixed: two in product code (A2-3, A2-4) and two in tests (A2-1 could never
-pass; A2-2 had lost its subject). Nothing proven is left open.** Commits: `0db23a5`, `b4b7206`,
-`6e26d94`, `2f9f5c4`.
+**Six defects, all fixed: three in product code (A2-3, A2-4, C2), one in user-facing copy (C1),
+two in tests (A2-1 could never pass; A2-2 had lost its subject). Nothing proven is left open.**
+Commits: `0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, `fbb152f`, `4e677da`.
 
 | # | Finding | Kind | Commit |
 |---|---|---|---|
@@ -445,10 +447,10 @@ body reorders the line around Rivet's own sentence.
 Fixed at the render site (`ChatScreen.kt:1274-1281`) rather than in the two formatters: the
 provider layer must not depend on a `ui.chat` helper, and the banner also shows fixed app copy,
 which this leaves untouched. No Compose test rule exists, so this rests on the code and CI.
-Not fixed, same class, different surface: `ProvidersViewModel.editorError` (`:793-800`) also
-returns `ProviderError.text()`, and the editor renders it raw at `ProviderEditor.kt:239` and
-`SettingsScreen.kt:162/224/279`; that exposure predates this branch except for the `said(detail)`
-half, and the remedy is the same one line at each site.
+***Same class, other surfaces — closed in `fbb152f` (Hermes' first closing fix).***
+`ProvidersViewModel.editorError` (`:793-800`) also returns `ProviderError.text()`, and the
+provider screens rendered it raw. The same one-line treatment now applies at each site, and a
+site-by-site account of what flows in is in the closing-fix record at the end of this section.
 
 ### Withdrawn suspicions (each examined, none survived)
 
@@ -517,16 +519,12 @@ half, and the remedy is the same one line at each site.
    send the proper type), and the check cannot tell a mislabelled stream from a JSON reply
    without reading the body. Settling evidence: one real response from such a proxy. The failure
    is loud and names the real problem, which is what F2 was for.
-8. **New: the F4 refusal banner names a window the planner did not use.** `finish()` formats
+8. **New: the F4 refusal banner named a window the planner did not use.** `finish()` formatted
    `config.resolvedContextWindowTokens()` (`ChatViewModel.kt:1079-1080`), which is 262,144 for a
    guessed window, while `ContextUnavailable`/`ContextTooSmall` are produced against
-   `allowedInputTokens` = 115,072. A user is told the chat "does not fit the 262,144-token
-   context window" when nothing was ever judged against that number. Not changed: the honest
-   copy needs a product decision (name the planned budget, or say the window is unknown), and
-   the action the banner asks for ("start a new conversation") is right either way. Recommended
-   wording: keep the window number when a window was entered or detected, and otherwise say
-   "does not fit the 115,072-token budget Rivet planned for this model (no context window is
-   known for it)".
+   `allowedInputTokens` = 115,072. A user was told the chat "does not fit the 262,144-token
+   context window" when nothing was ever judged against that number. **DECIDED BY HERMES and
+   fixed in `4e677da`** — see closing fix C1 below.
 9. **New: the open window between `changeSession`'s generation check and its `action(store)`.**
    `changeSession` checks the ticket *before* moving the pointer (`:1434-1435`), so a `send()`
    that lands in the gap after the check starts a turn whose `sessionId` is still the old
@@ -579,18 +577,68 @@ or run it, so the first execution of `ThinkingPreviewTest`'s new cases is CI.
 - The Compose runtime's actual saveable-state behaviour (no Compose jars or sources available
   offline); A2-3 rests on the documented `rememberSaveable` contract, not on a run.
 
+### Closing fixes (Hermes' review of this record)
+
+**C1 — `fbb152f`: the provider screens' error text, same rule as the banner.** The A2-4
+leftover, closed at the render sites and not in the formatter, as asked. No site already
+escaped; five `Text` calls now go through `displaySafeText`:
+
+| Site | What flows in | Already escaped? |
+|---|---|---|
+| `ProviderEditor.kt:235` `test.message` | `editorError` -> `ProviderError.text()`: provider words | no |
+| `ProviderEditor.kt:243` `fetchError` | same | no |
+| `SettingsScreen.kt:163` `loadError` | fixed app copy (`ProvidersViewModel.kt:90/605/623`) | no |
+| `SettingsScreen.kt:225` `autonomyError` | fixed app copy (`RivetApp.kt:156`) | no |
+| `SettingsScreen.kt:280` `appearanceError` | fixed app copy (`RivetApp.kt:135`) | no |
+
+`test.message` is one line above the site the review named and is the same exposure — it is the
+main "Test connection" error surface — so it is included, and said so here rather than folded
+in silently. The three SettingsScreen values carry no provider text today, so escaping changes
+nothing they show; they are done anyway so the rule is "every Text that shows a stored error
+string" instead of a list of exceptions to keep current. No test: `displaySafeText` is already
+pinned (`ChatPresentationTest.bidiFormattingControlsAreVisibleInApprovalAndPathText`) and this
+source set has no `createComposeRule` to assert the wiring.
+
+**C2 — `4e677da`: the context refusal names the budget it judged against (Hermes' decision).**
+The F4 guess/measured distinction is used, not re-derived: `ContextAssessment` now carries
+`windowIsGuessed`, set from the `guessedWindow` the planner already computes
+(`ContextBudget.kt:34`, `:68`, `:75`, `:95`). `finish()` reads it once (`ChatViewModel.kt:1129`,
+`:1131`) and the two sentences became pure functions (`:164`, `:175`), which
+`ContextRefusalCopyTest` pins without a Compose rule:
+
+- **Entered or detected window — unchanged, byte for byte.** "…and it still does not fit the
+  200,000-token context window. Your messages were kept…" and "This model's context capacity is
+  too small (200,000-token context window) for this request…".
+- **Guessed window.** "…and it still does not fit the 115,072-token budget Rivet planned for
+  this model (no context window is known for it). Your messages were kept…" and "This request
+  does not fit the 115,072-token budget Rivet planned for this model (no context window is
+  known for it). Choose a model with a larger context window or shorten the request."
+
+Contract change, stated: the guessed sentence no longer claims anything about the model's
+capacity, because Rivet does not know it; the number it prints is the ceiling the request was
+actually refused against. **No test pinned the old wording**: `ChatViewModelTest:912` checks the
+substring "compacted this chat as far as it could", which both variants keep, and its fixture
+detects a 16,000-token window so it takes the unchanged branch.
+`ContextBudgetTest.aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged` gained three
+flag assertions (additions only, no assertion changed).
+
+Banned-word check over both fixes' new copy against the seven terms the order bans: none of
+them appears in the new sentences or in the new comments.
+
 ## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
 (`96ac827`), F1 (`83febf3`), F2 (`295f61a`), F3 (closed, no code), F4 (`5209bc8`), F5 (`c4dbe7f`,
 test `40a88bd`), F7 items 1-3 settled (`d156e48`, fix `327ff50`, `4ceceeb`), F6 pins (`859c601`)
 and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this audit:
-`0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`.
+`0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`, and Hermes' two closing fixes `fbb152f`, `4e677da`.
 
-**Nothing is uncommitted and nothing is half-done.** Phase A2 is complete. No push was made.
+**Nothing is uncommitted and nothing is half-done.** Phase A2 and Hermes' two closing fixes
+are complete. No push was made.
 
 **What the next step is, in this order:** (1) exact-head CI on this branch — nothing here has
 ever run, and four of the last five commits are new code or changed tests; (2) the two
 `ChatViewModelTest` Undo row tests, the only end-to-end coverage the Undo row has; (3) the three
 device checks the doc already names (draft per conversation, the live-status clock, the reasoning
-preview across two chains); (4) residuals 7-9 if Hermes wants them settled rather than named.
+preview across two chains); (4) residuals 7 and 9 if Hermes wants them settled rather than named (residual 8 is
+closed by `4e677da`).
