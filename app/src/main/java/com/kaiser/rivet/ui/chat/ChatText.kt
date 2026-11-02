@@ -34,8 +34,12 @@ internal fun displayModelName(modelId: String): String {
 // One cheap line for a collapsed thinking row, modelled on dsh: a finished chain shows
 // its first line, a streaming one shows the first line of the last paragraph that has
 // finished a line, so the preview does not change on every token.
-internal fun thinkingPreview(text: String, streaming: Boolean): String =
-    if (!streaming) firstLine(text) else lastFinishedParagraphFirstLine(text).ifEmpty { tailOfLastLine(text) }
+//
+// Callers that see the chain grow (the streaming row) pass their own [PreviewScan] so a
+// delta only reads what arrived; everything else runs a scan from zero. Both go through
+// the same scanner, so a test of this function covers the composable's path.
+internal fun thinkingPreview(text: String, streaming: Boolean, scan: PreviewScan = PreviewScan()): String =
+    if (!streaming) firstLine(text) else scan.advance(text).ifEmpty { tailOfLastLine(text) }
 
 private const val PREVIEW_CHARS = 160
 
@@ -53,20 +57,63 @@ private fun tailOfLastLine(text: String): String {
     return text.substring(start, end + 1).trim().takeLast(PREVIEW_CHARS).trimStart()
 }
 
-private fun lastFinishedParagraphFirstLine(text: String): String {
-    var summary = ""
-    var paragraphStart = 0
-    while (true) {
-        val next = BLANK_LINE.find(text, paragraphStart)
-        val paragraphEnd = next?.let { it.range.first + it.value.indexOf('\n') } ?: text.length
-        val newline = text.indexOf('\n', paragraphStart)
-        if (newline != -1 && newline <= paragraphEnd) {
-            val candidate = text.substring(paragraphStart, newline).trim()
-            if (candidate.isNotEmpty()) summary = candidate
+// The scan behind the streaming preview. A long chain publishes a delta every few tokens
+// and each of them used to read the whole chain, so the cost of one turn was its own length
+// times its delta count. The scan therefore remembers the paragraph it stopped in: every
+// paragraph that already finished a line is represented by [summary] and is never read again,
+// and `advance` resumes at `paragraphStart`. The reader of a growing string cannot skip the
+// paragraph still being written (its first line may arrive at any delta), so a delta costs one
+// open paragraph rather than the whole chain.
+//
+// Resuming is exact because the text only grows during a turn: the paragraphs before
+// `paragraphStart` are fully consumed, and re-reading the open one recomputes the same line.
+// The one thing growth can still change is a blank-line run that was unfinished at the end of
+// the text, which becomes a longer separator and moves where the next paragraph starts, so the
+// resume point never sits inside a trailing run of blanks. A blank line that is *complete*
+// before the run is untouched by later text and stays behind the resume point.
+//
+// A scan handed a shorter text is a different chain and starts over.
+//
+// Not thread-safe and not reusable: it mutates and the streaming row owns one instance.
+internal class PreviewScan {
+    private var summary = ""
+    private var paragraphStart = 0
+    private var read = 0
+
+    /** The preview for [text], reading only what arrived since the previous call. */
+    fun advance(text: String): String {
+        if (text.length < read) {
+            summary = ""
+            paragraphStart = 0
+            read = 0
         }
-        if (next == null) return summary.take(PREVIEW_CHARS)
-        paragraphStart = next.range.last + 1
+        if (text.length == read) return summary.take(PREVIEW_CHARS)
+        var start = paragraphStart
+        while (true) {
+            val next = BLANK_LINE.find(text, start)
+            val paragraphEnd = next?.let { it.range.first + it.value.indexOf('\n') } ?: text.length
+            val newline = text.indexOf('\n', start)
+            if (newline != -1 && newline <= paragraphEnd) {
+                val candidate = text.substring(start, newline).trim()
+                if (candidate.isNotEmpty()) summary = candidate
+            }
+            if (next == null) {
+                paragraphStart = minOf(start, blankTailStart(text))
+                read = text.length
+                return summary.take(PREVIEW_CHARS)
+            }
+            start = next.range.last + 1
+        }
     }
+}
+
+// Where the trailing run of whitespace begins. Whitespace is a superset of the characters a
+// separator is made of, so resuming at or before this index is always safe: it can only make
+// the scan re-read a few characters, never skip one that a longer separator would move.
+private fun blankTailStart(text: String): Int {
+    var index = text.length
+    while (index > 0 && text[index - 1].isWhitespace()) index--
+    return index
 }
 
 private val BIDI_FORMATTING_CONTROLS = setOf(

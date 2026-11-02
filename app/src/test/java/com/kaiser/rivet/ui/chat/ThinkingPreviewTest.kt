@@ -60,4 +60,45 @@ class ThinkingPreviewTest {
         val long = "x".repeat(400) + "\n\n" + "y".repeat(400)
         assertEquals("x".repeat(160), thinkingPreview(long, streaming = true))
     }
+
+    // The streaming row keeps one scan across deltas instead of re-reading the chain, so
+    // resuming has to be invisible: fed delta by delta, the same chain must produce the same
+    // preview at every prefix as a scan from zero — across paragraph breaks, an open
+    // paragraph, a trailing separator and the tail fallback before any line ends.
+    @Test fun resumingAScanAtEachDeltaMatchesScanningFromZero() {
+        val chain = "First thought\nsecond line\n\nSecond thought\n\nThird one is still" +
+            " being written and has no line end yet" + "\n\n" + "fourth\n\n"
+        val scan = PreviewScan()
+        for (end in 1..chain.length) {
+            val prefix = chain.substring(0, end)
+            assertEquals("prefix ending at $end", thinkingPreview(prefix, streaming = true),
+                thinkingPreview(prefix, streaming = true, scan = scan))
+        }
+    }
+
+    // A scan belongs to one growing chain. A shorter text is a different chain (the row is
+    // rebuilt when a turn resets its reasoning), so the carried paragraph must not leak.
+    @Test fun aScanHandedAShorterChainStartsOver() {
+        val scan = PreviewScan()
+        thinkingPreview("First\nsecond\n\nThird\nfourth\n\nFifth", streaming = true, scan = scan)
+        for (next in listOf("Re", "Restarted", "Restarted\nand growing")) {
+            assertEquals("chain \"$next\"", thinkingPreview(next, streaming = true),
+                thinkingPreview(next, streaming = true, scan = scan))
+        }
+    }
+
+    // Growth can lengthen a blank line that was still open when the previous delta arrived
+    // ("\n\n" becomes "\n\n \n"), which moves where the paragraph after it starts. A resume
+    // point inside that run read the next line as part of the open paragraph and lost it —
+    // this exact sequence came out of the scan's equivalence check before it was fixed.
+    @Test fun aBlankLineThatGrowsAcrossDeltasKeepsTheNextParagraphsFirstLine() {
+        val scan = PreviewScan()
+        val prefixes = listOf("A\n\n", "A\n\n ", "A\n\n \n", "A\n\n \nB", "A\n\n \nB\n", "A\n\n \nB\nC")
+        for (prefix in prefixes) {
+            assertEquals("prefix \"${prefix.replace("\n", "\\n")}\"",
+                thinkingPreview(prefix, streaming = true),
+                thinkingPreview(prefix, streaming = true, scan = scan))
+        }
+        assertEquals("B", thinkingPreview("A\n\n \nB\nC", streaming = true))
+    }
 }

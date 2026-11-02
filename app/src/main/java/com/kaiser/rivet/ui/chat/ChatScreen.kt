@@ -656,6 +656,12 @@ private data class TimelineDisplayEntry(
     val standaloneThinking: String? = null,
 )
 
+// How much streamed text has to arrive before the follow-scroll is restarted. A provider
+// publishes a delta every few tokens and one scroll per delta is far more often than a frame
+// can show, so the effect keys on the streamed lengths in steps of this size: under half a
+// line at body size, which keeps following continuous while it restarts a fraction as often.
+private const val STREAMED_SCROLL_STEP = 24
+
 @Composable
 private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
@@ -759,8 +765,14 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // Sending a message is an explicit request to see it: after reading back through the
     // conversation, the reply and the user's own message must not land off-screen.
     LaunchedEffect(state.acceptedMessageCount) { followBottom = true }
-    LaunchedEffect(timeline.size, streamingReasoning.length, streamingText.length, state.streaming, state.activity,
-        state.toolLifecycle, state.interruptedTurn, state.error, state.notice) {
+    // Following a growing reply needs a scroll each time more of it lands, but a provider
+    // publishes a delta every few tokens and one scroll per delta is more restarts than a
+    // frame can show. Growth inside a row is keyed in steps of STREAMED_SCROLL_STEP; the
+    // transitions that add or remove a row move everything at once, so they stay exact.
+    LaunchedEffect(timeline.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
+        streamingReasoning.length / STREAMED_SCROLL_STEP, streamingText.length / STREAMED_SCROLL_STEP,
+        state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
+        state.notice) {
         if (followBottom && totalItems > 0) {
             programmaticScroll = true
             try {
@@ -1017,8 +1029,12 @@ private fun MessageRow(message: AgentMessage, reasoning: String? = null, message
 @Composable
 private fun ThinkingBlock(text: String, streaming: Boolean, id: String) {
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
+    // The chain is republished on every delta, and building the preview from scratch meant
+    // reading the whole chain again per token. While it streams the row is keyed and its text
+    // only grows, so one scan carries across the deltas and reads only what arrived.
+    val scan = remember { PreviewScan() }
     val preview = remember(text, streaming) {
-        displaySafeText(thinkingPreview(text, streaming))
+        displaySafeText(thinkingPreview(text, streaming, scan))
     }
     Column(Modifier.fillMaxWidth(0.94f)) {
         Row(
