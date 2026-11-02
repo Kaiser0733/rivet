@@ -1383,6 +1383,10 @@ class ChatViewModelTest {
         val first = sessions.load().id!!
         val other = sessions.create(null).id!!
         sessions.select(first)
+        // The flag only means something on a conversation with an unfinished turn: load() derives
+        // `interrupted` from the transcript (CodingSessions.kt:569-576) and reports false — clearing
+        // the column on the way — for an empty or finished one. Seed the turn the flag is about.
+        sessions.save(listOf(AgentMessage.user("Keep working")), interrupted = true)
 
         sessions.markInterrupted(true, first)
         try {
