@@ -1374,6 +1374,50 @@ class ChatViewModelTest {
         assertEquals(ReasoningLevel.Ultra, provider.requests[0].reasoning)
     }
 
+    // A turn writes into the conversation it started in. Before this was bound, a switch
+    // landing in the middle of a turn moved the storage pointer and the reply was filed into
+    // the other conversation, leaving that one holding a transcript it never had.
+    @Test fun aTurnNeverWritesIntoAConversationItDidNotStartIn() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        val other = sessions.create(null).id!!
+        sessions.select(first)
+        val release = CompletableDeferred<Unit>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                release.await()
+                onDelta("Done")
+                return AgentResponse(text = "Done")
+            }
+        }
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "model-a")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && it.currentSessionId == first }
+
+        viewModel.send("Keep working")
+        await(viewModel) { it.streaming }
+
+        // The storage pointer moves under the running turn, as a switch in flight does.
+        sessions.select(other)
+        release.complete(Unit)
+        await(viewModel) { !it.streaming }
+
+        assertEquals("the other conversation must stay untouched", 0, sessions.recent(other).size)
+        assertEquals("the turn keeps writing to the conversation it started in",
+            listOf("Keep working"),
+            sessions.recent(first).filter { it.role == com.kaiser.rivet.agent.AgentRole.User }.map { it.text })
+        assertTrue("the refused write surfaces as a failure", viewModel.uiState.value.error != null)
+    }
+
     // A conversation picked while a reply is streaming must not fight the running turn
     // for the storage pointer: the choice waits, then opens when the turn is done.
     @Test fun conversationPickedDuringATurnOpensWhenTheTurnFinishes() = runBlocking {
