@@ -726,8 +726,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     val streaming = state.streaming
     // While a turn runs the status line is always shown, so a long tool call and a
     // stalled stream never look the same. Outside a turn the plain activity text is
-    // still used for recovery messages.
-    val showLiveStatus = streaming
+    // still used for recovery messages. The clock's start comes from the turn; without one
+    // there is no clock to show, and both the item count and the item itself read this one
+    // value so they cannot disagree about whether the row exists.
+    val liveStatusStart = if (streaming) state.turnStartedAt else null
     val toolRunning = liveOperation != null
     val writing = streamingText.isNotBlank()
     val waitingForApproval = state.pendingApproval != null || liveOperation?.stage ==
@@ -743,7 +745,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     val totalItems = timeline.size +
         (if (streamingReasoning.isNotBlank()) 1 else 0) +
         (if (streamingText.isNotBlank()) 1 else 0) +
-        (if (showLiveStatus) 1 else 0) +
+        (if (liveStatusStart != null) 1 else 0) +
         (if (showActivity) 1 else 0) +
         (if (showInterruptedTurn) 1 else 0) +
         (if (state.notice != null) 1 else 0) +
@@ -819,9 +821,8 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
         }
-        val turnStartedAt = state.turnStartedAt
-        if (showLiveStatus && turnStartedAt != null) item(key = "live-status") {
-            LiveStatusRow(statusLabel, turnStartedAt)
+        liveStatusStart?.let { start ->
+            item(key = "live-status") { LiveStatusRow(statusLabel, start) }
         }
         if (showActivity) state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
