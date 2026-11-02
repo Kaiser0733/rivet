@@ -274,7 +274,15 @@ internal class GitHubUpdates(
                     if (continuation.isActive) continuation.resume(result) { staged?.delete() }
                 } catch (e: Exception) {
                     if (continuation.isActive) continuation.resumeWithException(
-                        if (e is UpdateFailure || e is CancellationException) e else UpdateFailure("Rivet couldn't finish the update download. Try again."))
+                        when {
+                            e is UpdateFailure || e is CancellationException -> e
+                            // A connection that dies while the body is being read is a transport
+                            // failure like any other, and it arrives here rather than in onFailure.
+                            // Without this the retry and resume paths could never run for the one
+                            // failure they exist for: the socket going away mid-download.
+                            e is IOException -> UpdateFailure(transportMessage, retryable = true)
+                            else -> UpdateFailure("Rivet couldn't finish the update download. Try again.")
+                        })
                 } finally {
                     // Cancellation can race a callback write. The callback owns the
                     // final cleanup too, so a late write never leaves a partial APK.
