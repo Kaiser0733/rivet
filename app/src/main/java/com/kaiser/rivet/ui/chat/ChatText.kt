@@ -5,7 +5,19 @@ import java.util.Locale
 internal const val COMMAND_APPROVAL_WARNING =
     "Project commands can read, change, or delete project files and Rivet's saved data. They can also use the network."
 
-internal fun displaySafeText(value: String): String = buildString(value.length) {
+// Escapes bidi controls so a provider's text cannot reorder what is around it. Nothing to escape
+// is the common case, and it arrives on every streamed delta with the whole answer attached, so it
+// returns the same instance instead of copying that whole string to say "unchanged". Callers only
+// ever read the value, so which instance they get cannot matter; the escaped case produces exactly
+// the text it always did.
+internal fun displaySafeText(value: String): String {
+    for (index in value.indices) {
+        if (value[index].code in BIDI_FORMATTING_CONTROLS) return escapeBidi(value)
+    }
+    return value
+}
+
+private fun escapeBidi(value: String): String = buildString(value.length) {
     value.forEach { char ->
         if (char.code in BIDI_FORMATTING_CONTROLS) append("\\u%04X".format(Locale.ROOT, char.code))
         else append(char)
