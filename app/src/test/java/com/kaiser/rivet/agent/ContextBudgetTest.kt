@@ -105,7 +105,9 @@ class ContextBudgetTest {
         val wide = ProviderConfig("c", ProviderType.OpenAiCompatible, "Compat",
             "https://api.example/v1", "glm-5.1")
         val assessed = ContextBudget.assess(wide, 0, TokenEstimateSource.Estimated)
-        assertEquals(262_144 - 16_000, assessed.allowedInputTokens)
+        // No window was entered or detected, so the 256K default is a guess and planning uses
+        // half of it (F4). The trigger/aim relationship this test checks is unchanged.
+        assertEquals(131_072 - 16_000, assessed.allowedInputTokens)
         assertTrue("trigger must leave room", assessed.compactAtTokens < assessed.allowedInputTokens)
         assertTrue("target must sit below the trigger", assessed.compactToTokens < assessed.compactAtTokens)
 
@@ -143,6 +145,23 @@ class ContextBudgetTest {
         assertEquals(16_000, ContextBudget.assess(larger, 1, TokenEstimateSource.Estimated).allowedInputTokens)
     }
 
+    // A guessed window must not be planned as fact; an entered or detected one is used
+    // exactly as it always was.
+    @Test fun aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged() {
+        val guessed = ProviderConfig("c", ProviderType.OpenAiCompatible, "Compat",
+            "https://api.example/v1", "glm-5.1")
+        assertEquals(131_072 - 16_000,
+            ContextBudget.assess(guessed, 0, TokenEstimateSource.Estimated).allowedInputTokens)
+
+        val manual = guessed.withManualContextWindow(262_144)
+        assertEquals("an entered window plans at its own size", 262_144 - 16_000,
+            ContextBudget.assess(manual, 0, TokenEstimateSource.Estimated).allowedInputTokens)
+
+        val detected = guessed.selectListedModel(ModelInfo("glm-5.1", "GLM 5.1", inputLimitTokens = 262_144))
+        assertEquals("a detected window plans at its own size", 262_144 - 16_000,
+            ContextBudget.assess(detected, 0, TokenEstimateSource.Estimated).allowedInputTokens)
+    }
+
     @Test fun contextWindowResolutionOrderManualBeatsDetectedBeats256kDefault() {
         val base = ProviderConfig(
             id = "compat",
@@ -153,9 +172,11 @@ class ContextBudgetTest {
         )
         assertEquals(DEFAULT_CONTEXT_WINDOW_TOKENS, base.resolvedContextWindowTokens())
         assertEquals(262_144, base.resolvedContextWindowTokens())
-        val defaultAssessment = ContextBudget.assess(base, 120_000, TokenEstimateSource.Estimated)
+        val defaultAssessment = ContextBudget.assess(base, 100_000, TokenEstimateSource.Estimated)
         assertNull(defaultAssessment.knownInputLimitTokens)
-        assertEquals(262_144 - 16_000, defaultAssessment.allowedInputTokens)
+        // Resolution still reports 262 144 (asserted above); only the planning target for a
+        // guessed window changed, and this test's subject is the resolution order (F4).
+        assertEquals(131_072 - 16_000, defaultAssessment.allowedInputTokens)
         assertFalse(defaultAssessment.needsReduction)
 
         val detected = base.selectListedModel(ModelInfo("glm-5.1", "GLM 5.1", inputLimitTokens = 200_000))
