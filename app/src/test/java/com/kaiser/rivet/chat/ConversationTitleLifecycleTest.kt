@@ -173,6 +173,12 @@ class ConversationTitleLifecycleTest {
 
     @Test fun titleProviderFailureAndInvalidOutputNeverFailCodingTurn() = runBlocking {
         for (invalid in listOf<String?>(null, "", "{\"title\":\"bad\"}")) {
+            // Each case needs its own store. The previous case leaves the auto-title marker
+            // pending on its session, and a fresh ChatViewModel retries a pending title at
+            // startup (ChatViewModel.kt:311-326), which would spend this case's first provider
+            // call and hand the invalid response to the coding turn instead of the title one.
+            app.deleteDatabase("coding-sessions.db")
+            AgentSessionStore(app).clear()
             val done = CompletableDeferred<Unit>()
             var calls = 0
             val (vm, store) = conversation {
