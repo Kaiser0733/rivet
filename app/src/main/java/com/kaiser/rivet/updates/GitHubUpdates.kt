@@ -125,6 +125,11 @@ internal class GitHubUpdates(
                 try {
                     withTimeout(10 * 60_000L) {
                         var url = release.url.toHttpUrlOrNull() ?: throw metadataFailure()
+                        var onFallback = false
+                        // The GitHub chain first; the mirror only after it has spent its attempts on
+                        // transport failures. The check leg above stays GitHub-only on purpose.
+                        while (true) {
+                        try {
                         repeat(6) {
                             val result = retrying {
                                 fetch(url, "application/vnd.android.package-archive", DOWNLOAD_TRANSPORT, target,
@@ -167,6 +172,15 @@ internal class GitHubUpdates(
                             }
                         }
                         throw UpdateFailure("GitHub redirected the update too many times. Try again later.")
+                        } catch (e: UpdateFailure) {
+                            if (!e.retryable || onFallback) throw e
+                            onFallback = true
+                            // Two hosts can serve different bytes; a partial file from one is not a
+                            // prefix of the other. Start the mirror's copy from zero.
+                            target.delete()
+                            url = fallbackUrl(release)
+                        }
+                        }
                     }
                 } catch (e: CancellationException) { target.delete(); throw e
                 } catch (e: UpdateFailure) {
@@ -187,6 +201,12 @@ internal class GitHubUpdates(
             ?.substringAfter("bytes ", "")?.substringBefore('-')?.trim()?.toLongOrNull()
         return if (requested > 0 && start == requested) requested else 0L
     }
+
+    // The second road: the same filename from Rivet's own mirror, checked against the same published
+    // size and then handed to UpdateApks.verify exactly as a GitHub download is. This adds a source,
+    // never a weaker gate.
+    private fun fallbackUrl(release: ReleaseUpdate): HttpUrl =
+        (FALLBACK_BASE + release.filename).toHttpUrlOrNull() ?: throw metadataFailure()
 
     private fun validatedRedirect(from: HttpUrl, location: String): HttpUrl {
         val url = from.resolve(location) ?: throw metadataFailure()
@@ -258,6 +278,7 @@ internal class GitHubUpdates(
         const val MAX_APK_BYTES = 200L * 1024 * 1024
         private const val MAX_METADATA_BYTES = 512L * 1024
         private const val MAX_ATTEMPTS = 3
+        private const val FALLBACK_BASE = "https://vastraalabs.online/downloads/"
         private const val RETRY_PAUSE_MS = 400L
         // Plain words, and honest about which server said what. "Check your connection" led nowhere
         // for a user whose connection was fine: a transport failure here means this host could not
