@@ -42,6 +42,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.ExperimentalFoundationApi
@@ -661,12 +662,6 @@ private data class TimelineDisplayEntry(
     val standaloneThinking: String? = null,
 )
 
-// How much streamed text has to arrive before the follow-scroll is restarted. A provider
-// publishes a delta every few tokens and one scroll per delta is far more often than a frame
-// can show, so the effect keys on the streamed lengths in steps of this size: under half a
-// line at body size, which keeps following continuous while it restarts a fraction as often.
-private const val STREAMED_SCROLL_STEP = 24
-
 @Composable
 private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
@@ -772,18 +767,41 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // Sending a message is an explicit request to see it: after reading back through the
     // conversation, the reply and the user's own message must not land off-screen.
     LaunchedEffect(state.acceptedMessageCount) { followBottom = true }
-    // Following a growing reply needs a scroll each time more of it lands, but a provider
-    // publishes a delta every few tokens and one scroll per delta is more restarts than a
-    // frame can show. Growth inside a row is keyed in steps of STREAMED_SCROLL_STEP; the
-    // transitions that add or remove a row move everything at once, so they stay exact.
+    // Following the bottom while the reader is there. Two things move the list: a row appearing,
+    // which this effect lands exactly, and a row growing — and growth is a layout event, not a
+    // character count. A wrapped line adds a line height inside the same character bucket, so the
+    // character-bucketed trigger this replaced missed it and left the live-status row half below
+    // the list's edge until the next bucket, or for good if the stream stalled there (device
+    // finding, kaiser, 2026-11-02). Growth is followed by the settle effect below; this one only
+    // has to handle rows appearing or disappearing, which move everything at once.
     LaunchedEffect(timeline.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
-        streamingReasoning.length / STREAMED_SCROLL_STEP, streamingText.length / STREAMED_SCROLL_STEP,
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
         state.notice) {
         if (followBottom && totalItems > 0) {
             programmaticScroll = true
             try {
                 scrollToConversationBottom(listState, totalItems - 1)
+            } finally {
+                programmaticScroll = false
+            }
+        }
+    }
+    // A row that grows is followed from the layout: whenever the content's end — the list's own
+    // bottom padding included — sits below the viewport's end, scroll by that gap. This is what
+    // keeps the last row fully visible through a wrap, and it settles exactly on the content's
+    // end, so the live-status row always keeps the padding under it instead of sitting flush
+    // against the list's edge. Not following, not scrolling: a reader who scrolled up owns the
+    // position, and the `followBottom` update above is the only thing that changes that.
+    LaunchedEffect(listState) {
+        androidx.compose.runtime.snapshotFlow {
+            val layout = listState.layoutInfo
+            val last = layout.visibleItemsInfo.lastOrNull() ?: return@snapshotFlow 0
+            last.offset + last.size + layout.afterContentPadding - layout.viewportEndOffset
+        }.collect { gap ->
+            if (!followBottom || gap <= 0 || listState.isScrollInProgress) return@collect
+            programmaticScroll = true
+            try {
+                listState.scrollBy(gap.toFloat())
             } finally {
                 programmaticScroll = false
             }
@@ -971,8 +989,11 @@ private suspend fun scrollToConversationBottom(state: androidx.compose.foundatio
     state.scrollToItem(index)
     val layout = state.layoutInfo
     val item = layout.visibleItemsInfo.firstOrNull { it.index == index } ?: return
+    // Bottom-align the item to the content's end, not to the viewport's: the list's bottom
+    // padding is part of the content, and leaving it visible is what gives the last row room
+    // under it before growth pushes it out of the viewport.
     val viewport = layout.viewportEndOffset - layout.viewportStartOffset
-    val offset = item.size - viewport
+    val offset = item.size + layout.afterContentPadding - viewport
     if (offset != 0) state.scrollToItem(index, offset)
 }
 
