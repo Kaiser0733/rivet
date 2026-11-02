@@ -54,7 +54,11 @@ Your key stays on your phone, encrypted. We never see it.
 
 ## Install
 
-Download the APK from [Releases](https://github.com/Kaiser0733/rivet/releases/latest)
+Download the APK from [Releases](https://github.com/Kaiser0733/rivet/releases/latest).
+
+If GitHub is unreachable or slow from your network, the same file is mirrored at
+[vastraalabs.online/downloads/Rivet-v1.1.1.apk](https://vastraalabs.online/downloads/Rivet-v1.1.1.apk).
+It is the identical signed app: Rivet checks the signature before it offers to install anything.
 and open it. Android will ask if that's okay — it does that for every app
 outside the Play Store.
 
@@ -62,6 +66,15 @@ outside the Play Store.
 
 In the app: **Settings → Check for updates**. Rivet downloads the new APK,
 checks it's really ours, and saves it to Downloads. You tap it to install.
+
+### What's new in 1.1.1
+
+The in-app update download was failing for some people even when an update was
+offered. It now retries a dropped connection, resumes from the bytes it already
+has instead of starting over, resolves names through secure DNS when the phone's
+own resolver fails, prefers IPv4 routes, falls back to the Vastraa mirror when
+GitHub's file server cannot be reached, and no longer blames your connection when
+a server is the thing that cannot be reached.
 Nothing installs on its own.
 
 ## The honest part

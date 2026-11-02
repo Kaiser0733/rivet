@@ -235,3 +235,22 @@ as designed. Fix is in the test only: each case now answers **every request it c
 dispatcher, with a plain 500 as the fallback so a request can never be left hanging. Same assertions,
 unweakened — the 64-byte bound, the "incomplete" failures, and `directory.listFiles()` empty after the
 first failure and again at the end.
+
+**Final build round — IPv4 preference and public docs.**
+
+*JOB 1 (`113ffb7`).* OkHttp 4.12 has no Happy Eyeballs: each call tries the first address the `Dns`
+returns, and with `retryOnConnectionFailure(false)` a dead first route ends that attempt — the app-level
+retries re-resolve to the same order and die on the same address. The device signature fits it: the
+check host is IPv4-only and worked, the release-asset CDN publishes AAAA records and the download died at
+connect on every attempt, while Chrome succeeded because it tries both families. Both the system lookup
+and the DoH fallback now pass through `ipv4First`, a stable sort that prefers `Inet4Address` and
+preserves the relative order otherwise. **IPv6 stays in the list as a later route: preference, not
+removal.** Pinned by a test over mixed, IPv4-only, IPv6-only and empty lists. **Honest caveat: this
+mechanism is inferred from the device signature, not proven on a device or on CI.**
+
+*JOB 2 (this commit).* Public markdown inventory: `README.md` only. There is **no `CHANGELOG.md`**, so no
+entry was invented; `docs/` contains screenshots and `.github/` holds `FUNDING.yml` and the workflows,
+neither user-facing. `README.md` had no version strings to sweep. It now names 1.1.1 in the mirror path,
+adds the mirror as the plain second road for when GitHub is unreachable or slow (with the note that it is
+the identical signed app), and gains a short plain-words what's-new for 1.1.1 listing the retry, the
+resume, secure DNS, the IPv4 preference, the mirror, and the copy that no longer blames the user.
