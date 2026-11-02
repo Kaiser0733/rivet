@@ -130,7 +130,8 @@ class UpdateResilienceTest {
         val staged = updates.download(release) { _, _ -> }
 
         val asset = "/Kaiser0733/rivet/releases/download/v0.11.1/Rivet-v0.11.1.apk"
-        val paths = (1..4).map { server.takeRequest().request.url.encodedPath }
+        // RecordedRequest exposes path and requestUrl; there is no nested request object.
+        val paths = (1..4).map { server.takeRequest().path }
         assertEquals("three attempts at the release asset first",
             listOf(asset, asset, asset), paths.take(3))
         assertEquals("and only then the mirror, with the same filename",
