@@ -48,7 +48,13 @@ empty response still ends the marker, so a provider that answers with junk costs
 call. Failing *turns* never call the title path at all (it runs only on a completed
 turn), so no title call is burnt on failing turns.
 
-## Phase A2 — second full audit  [ NOT REACHED ]
+## Phase A2 — second full audit  [ DONE — see "Phase A2 record" at the bottom ]
+
+Verdict, stated up front: **four defects found and fixed — two in product code, two in tests —
+and nothing proven left open.** The named residuals were re-checked one by one: none could be
+cleared outright, six are confirmed as stated, and this pass adds three of its own. The
+SCOPE/ENVIRONMENT note at the head of the A2 record is load-bearing: no Kotlin was executed on
+this host, so every test named below runs for the first time in CI.
 
 ## What S1/S2 actually changed (read before touching them)
 
@@ -123,7 +129,7 @@ guessed window is exactly what F4 changes. The default-window input was lowered 
 
 ### F7 item 2 — the saveable clock with no turn key: DEVICE-ONLY
 
-`ChatScreen.kt:868` `rememberSaveable { SystemClock.elapsedRealtime() }` has no turn key, and the
+`ChatScreen.kt:868` (now `:884`) `rememberSaveable { SystemClock.elapsedRealtime() }` has no turn key, and the
 row is a LazyColumn item. LazyColumn preserves saveable state for items it disposes, keyed by
 the item key, and this row's key is its list position — so whether turn 2 inherits turn 1's
 start time depends on whether the row reuses a slot. Nothing in the code makes it impossible.
@@ -147,13 +153,35 @@ leak text into another chat and loses nothing typed. No UI test harness exists
 device check is simply: type in A, switch to B, the composer is empty; switch back, the text is
 still there.
 
-### S2 residual — `markInterrupted` binding  [ DONE — 96ac827 ]
+**Corrected in A2 (the chosen implementation did not do what it claimed).**
+`rememberSaveable(sessionId)` satisfies the *first* half only. Its documented contract is that
+changed inputs "cause the state to reset and revert to the init lambda", so `327ff50` destroyed
+the draft on every switch and switching back showed an empty composer — the device check above
+would have failed. Fixed in `6e26d94`: the drafts are one saveable `Map<String, String>` keyed
+by session id (`ChatScreen.kt:1297-1318`), typing writes only that conversation's entry
+(`:1348`), a send clears only the entry it sent, and `draftFor`/`withDraft`
+(`Composer.kt:13-20`) are pure and pinned in `ComposerTest`
+(`everyConversationKeepsItsOwnDraft`, `sendingClearsOnlyTheConversationThatSent`). The map is
+saved through a `mapSaver`, so drafts still survive process death, which the keyed version also
+did.
+
+### S2 residual — `markInterrupted` binding  [ DONE — 96ac827, one path still unbound ]
 
 Full fix, not a wrapper: `markInterrupted(interrupted, expectedSessionId)` reads the pointer
 once, refuses a stale one, and uses that same id for both the pending-tool-call query and the
 `UPDATE`, all inside one `onDatabase` block. The 1-argument override delegates with `null`, so
 the interface and all fakes are untouched. `stableFailure` routes through the bound overload
 when the store is the SQLite one. Test: `theInterruptedFlagIsBoundToItsConversation`.
+
+**Correction (A2).** "Closed" is true of `stableFailure` only. Two other writes of the same
+flag happen *inside* a turn and still call the unbound overload: `ChatViewModel.kt:897` (the
+`AgentSessionLimitException` handler) and `ChatViewModel.kt:994` (the user-cancel path). The
+reachability argument is the same one the rest of S1/S2 rests on — the pointer cannot move
+while `streaming` is true (`changeSession` returns at `:1428`, `selectProject` at `:339`) — so
+this is an incomplete defence, not a live defect, and it is left as is deliberately: both
+sites sit inside error handlers where a new throw path from the bound call (which raises
+`IllegalStateException("Session changed")`) would have to be given its own handling, and the
+guard they bypass cannot fire today. Named here so the claim and the code agree.
 
 ### F7 item 1 — message-index-keyed UI state: state is DROPPED, not mis-attributed
 
@@ -263,6 +291,26 @@ restarts the scan, but a *different, longer* chain handed to the same instance w
 unreachable today because the row leaves composition when the reasoning blanks
 (`ChatViewModel.kt:823-825`, `:917`), and stated as an invariant at `ChatText.kt:68-75`.
 
+**A2 re-check of those two.**
+(1) **Confirmed, and it bounds the win.** The lines are now `ChatViewModel.kt:663`
+(`reasoningPreview.toString()`) and `ChatScreen.kt:819` (`displaySafeText(streamingText)`). A
+reasoning delta therefore still costs one full copy of the chain plus one full escape pass
+before the incremental scan saves anything, so the 13.8× figure is the *scan's* ratio, not the
+turn's; the end-to-end per-delta cost is still linear in the chain. Not changed: stopping the
+per-delta publication is the round-4 decision `3641fb9`.
+(2) **Narrowed: "unreachable" is too strong.** The row leaves composition only if a
+recomposition actually observes `streamingReasoning == ""`. Compose can coalesce the blanking
+update and the first delta of the *next* chain into one frame; the item then never leaves, the
+same `PreviewScan` (`ChatScreen.kt:1039`) sees the new chain, and the resume path only restarts
+when the new text is *shorter* than the old one read (`ChatText.kt:85-89`). A new chain that
+first arrives longer than the old one — plausible when step 2's reasoning bursts after a fast
+tool — would resume at the old `paragraphStart` with the old `summary` and print a wrong one-line
+preview. Only the preview line is affected; the chain text and the transcript are untouched.
+Settling evidence: a Compose-level test (none exists here) or one device turn whose reasoning
+runs two paragraphs, then a tool call, then a longer second chain. Not fixed: the fix needs a
+chain identity in the state (a counter or an epoch on `streamingReasoning`), which is a state
+shape change this pass could not execute.
+
 ### S2 — rehydration and the two row tests  [ DONE — c30b008 ]
 
 **Rehydration.** `rehydrateUndo(workspaceId)` (`ChatViewModel.kt:1295-1311`) reads
@@ -305,20 +353,244 @@ workspace is not the selected one (`:145-148`), so rehydrating by *conversation*
 a runtime API change outside this order's design. The carry rule keeps the behaviour safe in the
 meantime: a drop, never a wrong row.
 
-## STOP POINT (for the next run)
+## Phase A2 record — second full audit of `c0c49c8..HEAD`
 
-Stopped after S2's rehydration and its two row tests (`c30b008`), on instruction: the Phase A2
-re-audit is a separate assignment and waits for Hermes' review of F6 and S2.
+### Scope and environment (read this first)
+
+Branch `stability-v1.1.0`, `c0c49c8..HEAD` — 107 commits when this pass started, 112 with the
+five it adds — audited fresh. The previous pass
+worked from `ab8d1f4`, which is inside this range, so the whole range was re-read with the
+hardest look on the code the surgery itself added: `bb5d149` (S1), `50f21e1` + `c30b008` (S2),
+`96ac827` (flag binding), `295f61a` (F2), `5209bc8` (F4), `327ff50` (draft), `952370f` (F6).
+
+**This host has no JDK.** `java`, `javac`, `kotlinc` are absent and there is no `/usr/lib/jvm`,
+so **no Kotlin was compiled and no Gradle task was run — not the unit tests, not lint, not the
+assemble.** CI (`./gradlew testDebugUnitTest`, `.github/workflows/android-build.yml:37-38`) is
+the first execution of every test named here, including the ones this pass adds or corrects.
+Every claim below is either (a) a reading of source with `file:line`, or (b) the output of a
+Python audit I ran and name; nothing is from a device or a JVM.
+
+### Verdict
+
+**Four defects, all fixed: two in product code (A2-3, A2-4) and two in tests (A2-1 could never
+pass; A2-2 had lost its subject). Nothing proven is left open.** Commits: `0db23a5`, `b4b7206`,
+`6e26d94`, `2f9f5c4`.
+
+| # | Finding | Kind | Commit |
+|---|---|---|---|
+| A2-1 | F2's pin asserted a classification the code cannot produce; would have failed CI | test, unsatisfiable | `0db23a5` |
+| A2-2 | F4 silently made the projection-cap pin vacuous (guess halves the trigger) | test, lost coverage | `b4b7206` |
+| A2-3 | Per-conversation drafts were destroyed by every switch, not kept | product code | `6e26d94` |
+| A2-4 | F1 put provider words in the error banner unescaped (bidi controls) | product code | `2f9f5c4` |
+| — | `turnSessionId` lifetime, F2's content-type gate and its four readers, S1 write ordering, Undo carry/drop and rehydration, F4's reach into the send path, the draft's leak into another chat | **no defect** | withdrawn, below |
+
+### A2-1 — F2's `ModelNotFound` assertion cannot pass (`0db23a5`)
+
+`HttpBridgeTest.aNonStream200IsReportedForWhatItIs` (`:198`) enqueued a 200 carrying
+`{"error":{"message":"model 'x' does not exist"}}` and asserted the reader throws
+`ProviderError.ModelNotFound`. It cannot: `requireEventStream` (`Http.kt:294-302`) calls
+`httpError(response.code, body)` with `response.code == 200`, and `httpError` (`:109-135`) only
+reaches `ModelNotFound` through `isModelNotFound`, whose first line is
+`if (code != 400 && code != 404) return false` (`:168`). A 200 therefore lands on
+`ProviderError.ProviderMessage(detail, 200)`.
+
+**Contract, stated because a test changed:** F2's contract is "the provider's own sentence
+reaches the user", not "a 200 is re-classified". The pin now holds the wording
+(`"model 'x' does not exist"`) and the status code, which is stricter about the thing that
+matters and no longer asserts a branch that cannot be taken. Re-classifying 200 bodies as
+missing models was rejected: it would mean weakening the guard that keeps a base-URL path
+problem from walking the user into the model picker (`:163-174`).
+
+### A2-2 — F4's guess halved the trigger this test was written against (`b4b7206`)
+
+`ContextBudget.assess` now plans a *guessed* window at `min(resolved, 131_072)` (`:69`), so the
+fixture in `aBigWindowCompactsBeforeTheStoredProjectionHitsItsCap`
+(`ContextPreparationTest.kt:220`) — a `ProviderConfig` with no entered or detected window — has
+`compactAtTokens = 115_072 - 14_384 = 100_688` where it used to be 215_376. Its ~168k-token
+transcript is therefore *over* the token trigger, so `prepareChecked`'s early return
+(`:91`) is decided by `shouldCompact`, and the `projectionTriggerTokens` term (152,916) the test
+exists to pin is never the reason compaction fires. The assertions still pass — for the wrong
+reason. Entering the 262,144-token window restores `compactAtTokens = 215_376` and the test's
+own stated numbers; no assertion changed, and F4's code is untouched by this commit.
+
+This is the "never weaken a test" rule applied to a test weakened *by a code change under it*
+rather than by an edit, which is the form that is easy to miss.
+
+### A2-3 — `rememberSaveable(sessionId)` dropped the draft instead of keeping it (`6e26d94`)
+
+`327ff50` replaced `rememberSaveable { mutableStateOf("") }` with
+`rememberSaveable(sessionId) { mutableStateOf("") }`. Changing an input of `rememberSaveable`
+does not carry the value to the new key — the documented contract is that changed inputs "cause
+the state to reset and revert to the init lambda" — so conversation A's text is discarded the
+moment B is opened, and reopening A composes a fresh empty state. The doc's own device check
+("switch back, the text is still there") would have failed, and the half of the decision that
+mattered ("loses nothing typed") was not implemented.
+
+Fixed with one saveable `Map<String, String>` keyed by session id
+(`ChatScreen.kt:1297-1318`), written on every change (`:1349`), cleared only for the
+conversation that sent, and saved through `mapSaver` so drafts still survive process death.
+The pure helpers `draftFor`/`withDraft` (`Composer.kt:13-20`) carry the contract into JUnit
+(`ComposerTest`), because this source set has no `createComposeRule` and the wiring itself
+cannot be asserted here.
+
+### A2-4 — the error banner rendered provider text raw (`2f9f5c4`)
+
+F1 (`83febf3`) made the banner show the provider's own sentence
+(`ChatViewModel.kt:951-952` via `providerMessageText`, and `ProviderError.text()`'s
+`said(detail)` for the 401/403/5xx cases). `ErrorRow` printed it with no `displaySafeText`,
+while every other foreign string on the screen — model text, project names, model ids, file
+paths, approval details, the thinking preview — goes through it. A bidi control inside an error
+body reorders the line around Rivet's own sentence.
+
+Fixed at the render site (`ChatScreen.kt:1274-1281`) rather than in the two formatters: the
+provider layer must not depend on a `ui.chat` helper, and the banner also shows fixed app copy,
+which this leaves untouched. No Compose test rule exists, so this rests on the code and CI.
+Not fixed, same class, different surface: `ProvidersViewModel.editorError` (`:793-800`) also
+returns `ProviderError.text()`, and the editor renders it raw at `ProviderEditor.kt:239` and
+`SettingsScreen.kt:162/224/279`; that exposure predates this branch except for the `said(detail)`
+half, and the remedy is the same one line at each site.
+
+### Withdrawn suspicions (each examined, none survived)
+
+- **`turnSessionId`'s lifetime.** Suspicion: the outer `finally` clears it unconditionally
+  (`ChatViewModel.kt:1008`), so a second turn that started while the first was still finishing
+  would run unbound. It cannot: the assignment (`:568`) is *inside* the turn coroutine and comes
+  after `previous?.join()` (`:466`), so the next turn's binding is written strictly after the
+  previous turn's clear. Verified by indentation as well as by reading. No defect.
+- **F2's content-type gate.** `requireEventStream` returns early when the type is absent or
+  contains `event-stream` (`Http.kt:295-296`), so it adds no failure for the four shipped
+  readers (all covered: `sse` `:331`, `responsesSse` `ChatGptPlanClient.kt:348`) and keeps the
+  old behaviour for a server that sends no type at all. The one behaviour it changes is named as
+  residual 7 below.
+- **S1 write ordering.** `save`'s check sits inside the same transaction as the write
+  (`CodingSessions.kt:108-115`) and every pointer move goes through the same `onDatabase` mutex
+  (`:524-526`), so no check/write pair can be split. The pinning test drives the pointer move
+  with a direct `sessions.select(other)` (`ChatViewModelTest.kt:1559`) — a backdoor the ViewModel
+  itself cannot take while `streaming` is true — so it proves the *binding*, not the reachability
+  of the switch. That is the right thing for it to prove; the comment "as a switch in flight
+  does" overstates it.
+- **Undo carry/drop and rehydration.** `undoSurvivesSwitch` compares the two workspace ids
+  (`:1424`), `changeSession` carries the row only when they match (`:1447-1458`), and
+  `rehydrateUndo` re-reads the store on the three paths that rebuild a conversation from disk
+  (`:283`, `:370`, `:1362`) with a workspace check that both reads (`:1300`) and re-checks at the
+  state update (`:1307`). `selection.currentIdentity()` is a persisted preference, not in-memory
+  selection state (`WorkspaceSelection.kt:34-36`), so the restart path cannot lose the race
+  against `loadProject()`. No defect.
+- **F4's reach.** `allowedInputTokens` is read in exactly four places
+  (`ContextPreparation.kt:83`, `:103`, `:143`, `:223`), never by `AgentLoop`, and
+  `resolvedContextWindowTokens` is *used* only in the banner (`ChatViewModel.kt:1080`). The cap
+  is bounded to planning. `capacitySource` remains unread by production code — the order asked
+  for it to gate the target, and the gate is `guessedWindow` instead, which is the same
+  question asked of the window rather than of the estimate. One leftover of that edit: the
+  import of `resolvedContextWindowTokens` (`ContextBudget.kt:9`) is no longer used, because the
+  call it served is now the `indicatedWindow ?: DEFAULT_PLANNING_LIMIT` pair at `:62-63`.
+  Harmless — the Kotlin compiler does not warn on unused imports, and neither Gradle lint nor
+  the workflow sets a policy that would (app/build.gradle.kts has no `lint {}` block) — so it
+  is named here rather than bundled into a fix commit.
+
+### Named residuals — re-checked one by one
+
+1. **Per-delta `toString()` / `displaySafeText`** — confirmed, and it caps the F6 win (see the
+   F6 section). Not changed; deliberate publication is `3641fb9`'s decision.
+2. **The scan assumes one growing chain** — confirmed as an invariant, narrowed as an
+   unreachability claim (F6 section). Not changed; needs a chain identity in the state.
+3. **F3: a size-driven refusal that says only "Invalid inference request"** — confirmed
+   unresolved. Settling evidence unchanged: that provider's body for a size complaint whose
+   wording is outside `SIZE_REJECTION`. No code change made or implied.
+4. **F7 item 2, the saveable clock with no turn key** (`ChatScreen.kt:884`) — confirmed
+   DEVICE-ONLY. I could not narrow it further: whether the state survives depends on
+   `LazySaveableStateHolder`'s dispose rule, and no Compose sources or jars exist on this host to
+   read. The settling observation stays the one recorded (20 s turn, second turn immediately
+   after: does its line open at ~20 s?).
+5. **F7 item 1, message-index-keyed UI state** — confirmed: `remember(messageKey)` (`:978-979`)
+   and `rememberSaveable(id)` (`:1035`) revert to their init value when the key changes, which is
+   the same documented contract A2-3 turned on. A drop, never a carry-over. Left as is.
+6. **A switch away from a project and back keeps Undo hidden until the project is selected or
+   the app restarts** — confirmed by the same reading that cleared the carry rule: rehydration
+   only runs on load/`selectProject`/`clearChat`, and `changeSession` carries only when the
+   workspace matches, so P → Q → P through `resumeSession` shows no row. Requires a
+   `latestCheckpoint(workspaceId)` and a changes path that does not need the selection, as the
+   earlier run wrote.
+7. **New: a provider that serves SSE as something other than `text/event-stream`** now fails the
+   turn with `NOT_A_STREAM` instead of streaming. Unproven — no shipped provider does it as far
+   as the tree shows (Anthropic, OpenAI-compatible, Gemini `alt=sse` and the Responses API all
+   send the proper type), and the check cannot tell a mislabelled stream from a JSON reply
+   without reading the body. Settling evidence: one real response from such a proxy. The failure
+   is loud and names the real problem, which is what F2 was for.
+8. **New: the F4 refusal banner names a window the planner did not use.** `finish()` formats
+   `config.resolvedContextWindowTokens()` (`ChatViewModel.kt:1079-1080`), which is 262,144 for a
+   guessed window, while `ContextUnavailable`/`ContextTooSmall` are produced against
+   `allowedInputTokens` = 115,072. A user is told the chat "does not fit the 262,144-token
+   context window" when nothing was ever judged against that number. Not changed: the honest
+   copy needs a product decision (name the planned budget, or say the window is unknown), and
+   the action the banner asks for ("start a new conversation") is right either way. Recommended
+   wording: keep the window number when a window was entered or detected, and otherwise say
+   "does not fit the 115,072-token budget Rivet planned for this model (no context window is
+   known for it)".
+9. **New: the open window between `changeSession`'s generation check and its `action(store)`.**
+   `changeSession` checks the ticket *before* moving the pointer (`:1434-1435`), so a `send()`
+   that lands in the gap after the check starts a turn whose `sessionId` is still the old
+   conversation while the pointer is about to move. With S1 in place the turn then fails loudly
+   ("Could not save the conversation…") instead of filing into the other conversation — which is
+   S1 doing its job — but the banner blames storage for a race, and `activeMessages` has already
+   been replaced with the new conversation's. Pre-existing shape, narrowed by S1, not fixed: no
+   execution here to tell a real interleaving from a theoretical one.
+
+### F6 — the equivalence claim, checked independently
+
+I wrote my own transcription of `PreviewScan` and of the pre-F6 loop from
+`ChatText.kt:78-117` (`round3/a2-scan-equivalence.py`, untracked working evidence, re-runnable
+with `python3 round3/a2-scan-equivalence.py`), not from the earlier run's script, and compared:
+
+- exhaustive over every string of length ≤ 8 on `{A, space, LF, CR}` and length ≤ 7 on
+  `{A, space, LF, TAB, CR}` — 97,656 chains — advancing one character at a time and comparing
+  every prefix against a from-zero scan: **0 mismatches**;
+- 4,000 random chains over 11 tokens (words, `\n`, `\n\n`, `\r\n`, `\r\n\r\n`, `\r`, tab)
+  with one-character deltas and with random delta sizes: **0 mismatches**;
+- 3,000 streams whose deltas *skip* prefixes (two deltas consumed by one composition read):
+  **0 mismatches**;
+- handcrafted growth sequences including the recorded bug (`"A\n\n"`, `"A\n\n "`,
+  `"A\n\n \n"`, `"A\n\n \nB"`, …), `\r\n\r\n` separators and a blank run that grows
+  across deltas: **0 mismatches**;
+- repeated `advance` with the same text: idempotent.
+
+Why it holds, beyond the samples: growth can only change where a separator starts if that
+separator was *incomplete* at the old end, and an incomplete separator is a run of whitespace
+from its newline to the end, so it starts at or after `blankTailStart`. Resuming at
+`min(start, blankTailStart)` therefore never skips a paragraph boundary that later moves, and
+`summary` is overwritten rather than accumulated, so re-reading a few characters is harmless.
+The tab/space class of `BLANK_LINE` is a subset of `Char.isWhitespace`, which is what makes the
+"resume at or before the whitespace run" argument safe.
+
+Run for cross-reference, the earlier run's `round3/preview-scan-check.py` also passes and
+reproduces its quoted cost figures (2,475,312 characters from zero vs 179,091 resumed on a
+4,449-character paragraph-shaped chain, 13.8×; 1.0× on a chain with no blank line). **What is
+not proven here:** that the Kotlin above is what I transcribed. Nothing on this host can compile
+or run it, so the first execution of `ThinkingPreviewTest`'s new cases is CI.
+
+### What this pass could not execute
+
+- Any Kotlin compilation, unit test, lint run or APK build. CI is the first execution of
+  `0db23a5`'s corrected assertion, `b4b7206`'s entered window, `6e26d94`'s Compose wiring and
+  `2f9f5c4`'s render change.
+- The two `ChatViewModelTest` Undo row tests from `c30b008`, and the S1/S2/markInterrupted pins
+  — read line by line against their fixtures; not run.
+- Any on-device observation, including F7 item 2 and F7 item 1's severity.
+- The Compose runtime's actual saveable-state behaviour (no Compose jars or sources available
+  offline); A2-3 rests on the documented `rememberSaveable` contract, not on a run.
+
+## END OF RUN — nothing half-done
 
 Done on this branch, in order: S1 (`bb5d149`), S2 carry (`50f21e1`), markInterrupted binding
 (`96ac827`), F1 (`83febf3`), F2 (`295f61a`), F3 (closed, no code), F4 (`5209bc8`), F5 (`c4dbe7f`,
 test `40a88bd`), F7 items 1-3 settled (`d156e48`, fix `327ff50`, `4ceceeb`), F6 pins (`859c601`)
-and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`).
+and F6's cost cut (`952370f`), S2 rehydration + row tests (`c30b008`), then this audit:
+`0db23a5`, `b4b7206`, `6e26d94`, `2f9f5c4`.
 
-**Nothing is half-done and nothing is uncommitted.** Phase A2 (the whole-branch re-audit from
-`c0c49c8..HEAD`) has not started.
+**Nothing is uncommitted and nothing is half-done.** Phase A2 is complete. No push was made.
 
-**What the next run must re-check first, in this order:** (1) exact-head CI on this branch — no
-commit here has been executed, so the F6 scanner and the S2 rehydration code have never run;
-(2) the two new `ChatViewModelTest` tests, which are the only coverage the Undo row has end to
-end; (3) then Phase A2, hardest look at `952370f` and `c30b008`.
+**What the next step is, in this order:** (1) exact-head CI on this branch — nothing here has
+ever run, and four of the last five commits are new code or changed tests; (2) the two
+`ChatViewModelTest` Undo row tests, the only end-to-end coverage the Undo row has; (3) the three
+device checks the doc already names (draft per conversation, the live-status clock, the reasoning
+preview across two chains); (4) residuals 7-9 if Hermes wants them settled rather than named.
