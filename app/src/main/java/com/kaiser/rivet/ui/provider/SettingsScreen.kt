@@ -95,6 +95,7 @@ fun SettingsScreen(
     skillCatalog: SkillCatalog? = null,
     onRefreshSkills: suspend () -> Unit = {},
     onLoadSkillFiles: suspend (Skill) -> List<String> = { emptyList() },
+    onInstallSkill: () -> Unit = {},
 ) {
     val state by viewModel.listState.collectAsState()
     // Level 2 lives here, not in the host: the sheet is only a container.
@@ -213,6 +214,7 @@ fun SettingsScreen(
                     selectedName = selectedSkill,
                     onSelect = { selectedSkill = it },
                     onLoadFiles = onLoadSkillFiles,
+                    onInstall = onInstallSkill,
                 )
                 SettingsSection.Updates -> DetailScroll { UpdatesSection(versionName) }
                 SettingsSection.About -> AboutDetail(
@@ -358,9 +360,9 @@ private fun SectionListItem(
 
 /** Level 2 chrome: a scrolling column sized to the sheet's remaining height. */
 @Composable
-internal fun DetailScroll(content: @Composable ColumnScope.() -> Unit) {
+internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+        modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 16.dp),
         content = content,
     )

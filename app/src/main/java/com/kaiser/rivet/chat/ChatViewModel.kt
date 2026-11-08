@@ -29,6 +29,7 @@ import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.SkillCatalog
 import com.kaiser.rivet.agent.SkillContext
 import com.kaiser.rivet.agent.SkillDiscovery
+import com.kaiser.rivet.agent.globalSkillsRoot
 import com.kaiser.rivet.agent.SkillRootKind
 import com.kaiser.rivet.agent.skillGesture
 import com.kaiser.rivet.provider.AgentRequest
@@ -247,7 +248,7 @@ class ChatViewModel private constructor(
     private val autonomyStore = AutonomyStore(app)
     val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
     private val projectDownloader = ProjectDownloader(app.cacheDir)
-    private val skillDiscovery = SkillDiscovery(File(app.filesDir, "skills"))
+    private val skillDiscovery = SkillDiscovery(globalSkillsRoot(app.filesDir))
     private val sessions get() = sessionStore as? CodingSessions
 
     private val _uiState = MutableStateFlow(ChatUiState())

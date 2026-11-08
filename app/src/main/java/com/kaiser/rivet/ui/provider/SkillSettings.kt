@@ -4,13 +4,17 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.HorizontalDivider
+import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -21,12 +25,14 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.SkillCatalog
 import com.kaiser.rivet.agent.SkillError
 import com.kaiser.rivet.agent.SkillRootKind
+import com.kaiser.rivet.R
 import com.kaiser.rivet.ui.chat.displaySafeText
 
 /** The settings-family labels for each discovery root, in rank order. */
@@ -68,8 +74,8 @@ internal fun manualOnlyLabel(skill: Skill): String? =
     if (skill.disableModelInvocation) "manual only" else null
 
 /**
- * Settings -> Skills: the grouped catalog, or one skill's read-only detail. The whole
- * screen is display-only in v1; installs are a later step.
+ * Settings -> Skills: the grouped catalog, or one skill's read-only detail. Installing
+ * lives in SkillInstallDialog; this screen only lists and describes what is installed.
  */
 @Composable
 internal fun SkillsSettings(
@@ -77,23 +83,53 @@ internal fun SkillsSettings(
     selectedName: String?,
     onSelect: (String) -> Unit,
     onLoadFiles: suspend (Skill) -> List<String>,
+    onInstall: () -> Unit,
 ) {
     val selected = catalog?.skills?.firstOrNull { it.name == selectedName }
-    when {
-        selected != null -> SkillDetail(selected, onLoadFiles)
-        catalog == null -> DetailScroll {
-            Text("Loading skills…", style = MaterialTheme.typography.bodyMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+    if (selected != null) {
+        SkillDetail(selected, onLoadFiles)
+    } else {
+        Column(Modifier.fillMaxSize()) {
+            InstallRow(onInstall)
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            when {
+                catalog == null -> DetailScroll(Modifier.weight(1f)) {
+                    Text("Loading skills…", style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                skillsAreEmpty(catalog) -> DetailScroll(Modifier.weight(1f)) { EmptySkills() }
+                else -> SkillsList(skillPageSections(catalog), onSelect, Modifier.weight(1f))
+            }
         }
-        skillsAreEmpty(catalog) -> DetailScroll { EmptySkills() }
-        else -> SkillsList(skillPageSections(catalog), onSelect)
     }
 }
 
 @Composable
-private fun SkillsList(sections: List<SkillPageSection>, onSelect: (String) -> Unit) {
+private fun InstallRow(onInstall: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth()
+            .clickable(onClick = onInstall)
+            .padding(horizontal = 16.dp, vertical = 14.dp),
+        verticalAlignment = Alignment.CenterVertically,
+    ) {
+        Icon(painterResource(R.drawable.ic_add), contentDescription = null,
+            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
+        Spacer(Modifier.width(12.dp))
+        Text("Install from link", style = MaterialTheme.typography.bodyLarge)
+        Spacer(Modifier.weight(1f))
+        Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null,
+            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+    }
+}
+
+@Composable
+private fun SkillsList(
+    sections: List<SkillPageSection>,
+    onSelect: (String) -> Unit,
+    modifier: Modifier = Modifier,
+) {
     LazyColumn(
-        Modifier.fillMaxSize(),
+        modifier.fillMaxSize(),
         contentPadding = PaddingValues(start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
     ) {
         sections.forEach { section ->

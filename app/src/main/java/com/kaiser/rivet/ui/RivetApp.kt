@@ -39,13 +39,15 @@ import com.kaiser.rivet.ui.processes.ProcessesPane
 import com.kaiser.rivet.ui.provider.ProviderEditor
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.provider.SettingsScreen
+import com.kaiser.rivet.ui.provider.SkillInstallDialog
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
-             providersViewModel: ProvidersViewModel, processNavigationRequest: Int = 0) {
+             providersViewModel: ProvidersViewModel, processNavigationRequest: Int = 0,
+             sharedZip: android.net.Uri? = null, onSharedZipConsumed: () -> Unit = {}) {
     val context = LocalContext.current.applicationContext
     val appearanceStore = remember(context) { AppearanceStore(context) }
     val autonomyStore = remember(context) { AutonomyStore(context) }
@@ -83,6 +85,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         // with a separate flag.
         var processesOpen by rememberSaveable { mutableStateOf(false) }
         var settingsOpen by rememberSaveable { mutableStateOf(false) }
+        var installOpen by rememberSaveable { mutableStateOf(false) }
+        var installZip by remember { mutableStateOf<android.net.Uri?>(null) }
         val drawerState = rememberDrawerState(DrawerValue.Closed)
         val settingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val saveableStates = rememberSaveableStateHolder()
@@ -92,6 +96,14 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 if (drawerState.isOpen) drawerState.close()
                 settingsOpen = false
                 processesOpen = true
+            }
+        }
+        // A zip shared to Rivet lands on the same review sheet as the GitHub route.
+        LaunchedEffect(sharedZip) {
+            if (sharedZip != null) {
+                installZip = sharedZip
+                installOpen = true
+                onSharedZipConsumed()
             }
         }
         val editor by providersViewModel.editorState.collectAsState()
@@ -170,6 +182,10 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     skillCatalog = skillCatalog,
                     onRefreshSkills = chatViewModel::refreshSkillCatalog,
                     onLoadSkillFiles = chatViewModel::skillBundledFiles,
+                    onInstallSkill = {
+                        installZip = null
+                        installOpen = true
+                    },
                     viewModel = providersViewModel,
                     versionName = versionName,
                     onClose = { settingsOpen = false },
@@ -227,6 +243,17 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     },
                 )
             }
+        }
+
+        if (installOpen) {
+            SkillInstallDialog(
+                initialZip = installZip,
+                onDismiss = {
+                    installOpen = false
+                    installZip = null
+                },
+                onInstalled = chatViewModel::refreshSkillCatalog,
+            )
         }
     }
 }
