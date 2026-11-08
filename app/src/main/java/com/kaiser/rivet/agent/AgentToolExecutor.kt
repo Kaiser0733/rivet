@@ -498,6 +498,7 @@ class AgentToolExecutor(
             put("stderr_truncated", stderrCut)
             put("timed_out", result.timedOut)
             if (result.tooManyChildren) put("too_many_child_processes", true)
+            if (result.memoryLimit) put("memory_limit", true)
             put("cwd", result.cwd)
             put("sync", result.sync)
             result.syncPath?.let { put("sync_path", it) }

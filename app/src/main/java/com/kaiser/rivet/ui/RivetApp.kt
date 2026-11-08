@@ -160,10 +160,12 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 onClose = { processesOpen = false }) {
                                 val terminalState by chatViewModel.terminalState.collectAsState()
                                 val workspaceName by chatViewModel.projectName.collectAsState()
+                                val stateLine by chatViewModel.terminalStatusLine.collectAsState()
                                 ToolsPane(
                                     processes = chatViewModel.managedProcesses,
                                     terminal = terminalState,
                                     workspaceName = workspaceName,
+                                    stateLine = stateLine,
                                     onRunTerminal = chatViewModel::runTerminalCommand,
                                     onStopTerminal = chatViewModel::stopTerminalCommand,
                                     modifier = Modifier.fillMaxSize(),

@@ -32,6 +32,8 @@ internal object AgentToolError {
         "unsupported_system_management" to "Rivet cannot install apps, packages, or other Android system software.",
         "approval_unavailable" to "Rivet could not safely request confirmation for this operation, so it stopped.",
         "process_limit" to "Rivet already has the maximum number of active project operations. Stop one in Processes and retry.",
+        "thermal_blocked" to "The phone is too hot. Wait for it to cool before retrying, and do not retry the same long command now.",
+        "battery_low" to "Battery is low — terminal paused for long jobs. Charge the phone or run a short command.",
         "foreground_service_unavailable" to "Rivet couldn't keep the local preview running. Try again while Rivet is open.",
         "preview_unavailable" to "Rivet couldn't start a local preview for this project. Check the selected files and try again.",
         "process_unavailable" to "That Rivet process is no longer active. List active processes before trying again.",
@@ -51,6 +53,7 @@ internal object AgentToolError {
         "workspace_changed", "runtime_unavailable", "denied", "checkpoint_unavailable",
         "invalid_arguments", "invalid_path", "unknown_tool", "unsafe_entry", "stale_target",
         "unsupported_system_management", "approval_unavailable", "process_limit",
+        "thermal_blocked", "battery_low",
         "foreground_service_unavailable", "preview_unavailable", "process_unavailable",
         "invalid_url", "redirect_blocked", "download_too_large", "download_sha_mismatch",
         "destination_exists", "invalid_checksum", "skill_not_found", "skill_manual_only")

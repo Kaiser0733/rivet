@@ -1,5 +1,6 @@
 package com.kaiser.rivet.chat
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,6 +22,16 @@ class WorkspaceLimitInstructionTest {
         assertTrue(briefing.contains("coreutils"))
         listOf("Python", "Node", "git CLI", "package managers")
             .forEach { assertTrue(it, briefing.contains(it)) }
+    }
+
+    @Test fun governorStateIsAnAppObservationAndOnlyWhenNotReady() {
+        assertEquals(ChatViewModel.systemInstruction(workspace = true),
+            ChatViewModel.systemInstruction(workspace = true, terminalState = null))
+        val stopped = ChatViewModel.systemInstruction(workspace = true,
+            terminalState = "Terminal: stopped a command — memory limit")
+        assertTrue(stopped.contains(
+            "Rivet app observation (not permission): Terminal: stopped a command — memory limit."))
+        assertTrue(stopped.contains("Do not retry that command unchanged"))
     }
 
     @Test fun saysWhereUndoStops() {

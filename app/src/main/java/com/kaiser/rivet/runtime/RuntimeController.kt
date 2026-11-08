@@ -28,6 +28,7 @@ data class RuntimeCommandResult(
     val syncConflicts: List<String> = emptyList(),
     val error: String? = null,
     val tooManyChildren: Boolean = false,
+    val memoryLimit: Boolean = false,
 )
 
 data class PreviewLaunch(val processId: String, val url: String, val entry: String)
@@ -40,6 +41,7 @@ class RuntimeController(
 ) {
     private val app = context.applicationContext
     private val toolchain = Toolchain(app)
+    private val governor = TerminalGovernor(app)
     private val operations = Mutex()
     private var mirrorIdentity: String? = null
     private var mirror: WorkspaceMirror? = null
@@ -56,6 +58,14 @@ class RuntimeController(
     suspend fun runCommand(command: String, cwd: String, timeoutMs: Long,
                            onOutput: ((String, String) -> Unit)?): RuntimeCommandResult = operations.withLock {
         val active = currentMirror() ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "workspace_unavailable")
+        // Plan §5 rules 11/12: fresh readings gate every start, so a SERIOUS throttle
+        // lifts on the first command after the phone cools.
+        val readings = governor.readings()
+        managedProcesses?.setActiveLimit(effectiveSlots(readings.thermalStatus))
+        commandGate(timeoutMs, readings)?.let { code ->
+            return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = code)
+        }
+        governor.commandStarted()
         val ready = active.prepare()
         if (ready.dirty) {
             return@withLock RuntimeCommandResult(cwd = cwd, sync = "pending", error = "sync_required")
@@ -79,9 +89,10 @@ class RuntimeController(
         }
         val publisher: ((String, String) -> Unit)? =
             if (processId == null && onOutput == null) null else ::publish
+        val memoryCap = governor.memoryCapBytes()
         val result = try {
             CommandProcess().run(command, directory.absolutePath, environment, timeoutMs,
-                onOutput = publisher)
+                onOutput = publisher, memoryCapBytes = memoryCap)
         } catch (e: CancellationException) {
             processId?.let { managedProcesses?.failCommand(it) }
             throw e
@@ -89,23 +100,29 @@ class RuntimeController(
             processId?.let { managedProcesses?.failCommand(it) }
             throw e
         }
+        if (result.memoryLimit) governor.recordStop("memory limit")
+        else if (result.tooManyChildren) governor.recordStop("too many child processes")
         processId?.let { id -> managedProcesses?.finishCommand(id,
             RuntimeCommandResult(result.exitCode, result.stdout, result.stderr, result.stdoutTruncated,
                 result.stderrTruncated, result.timedOut, cwd, "not_started",
-                tooManyChildren = result.tooManyChildren)) }
+                tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit)) }
         val sync = try { active.sync() }
             catch (_: CancellationException) {
                 // The command already ran. Return its exit status with an
                 // interrupted sync so the correlated event can be persisted.
                 return@withLock RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
                     result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
-                    "interrupted", tooManyChildren = result.tooManyChildren)
+                    "interrupted", tooManyChildren = result.tooManyChildren,
+                    memoryLimit = result.memoryLimit)
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
         RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
             result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
             sync.state.code, sync.path, syncSkipped = sync.skipped, syncConflicts = sync.conflicts,
-            tooManyChildren = result.tooManyChildren)
+            tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit)
     }
+
+    /** Plan §5 rule 14: the one plain terminal state sentence. */
+    fun terminalStateLine(activeCount: Int): String = governor.stateLine(activeCount)
 
     suspend fun requireSafCurrent() = operations.withLock {
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
@@ -255,6 +272,9 @@ class RuntimeController(
         val url = try { server.start() }
             catch (e: CancellationException) { throw e
             } catch (_: Exception) { throw MirrorFailure("preview_unavailable") }
+        // The thermal throttle is refreshed before the preview claims a slot, matching
+        // the command path; it never stops an existing preview.
+        registry.setActiveLimit(effectiveSlots(governor.readings().thermalStatus))
         val id = registry.registerPreview(expectedWorkspace, projectLabel, entryPath.value, url, server::close)
             ?: run { server.close(); throw MirrorFailure("process_limit") }
         server.onWorkspaceInvalidated { registry.stop(id) }
