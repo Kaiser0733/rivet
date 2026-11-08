@@ -1,6 +1,7 @@
 package com.kaiser.rivet.runtime
 
 import java.io.File
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
@@ -10,29 +11,44 @@ import org.junit.Test
 
 /**
  * The terminal panel's 4-arg `runCommand` and the agent both land in CommandProcess,
- * whose cap is this watcher. The test uses a real `/proc` tree so it exercises the same
- * process enumeration a device uses, not a synthetic map.
+ * whose cap is this watcher. The test uses a real `/proc` tree and a real `setsid`
+ * command session, so it exercises the same enumeration and teardown a device uses.
  */
 class CommandTreeCapTest {
     @Test fun watcherStopsARealTreeOverTheCap() = runBlocking {
         assumeTrue("needs /proc", File("/proc").isDirectory)
         assumeTrue("needs a POSIX shell", File("/bin/sh").canExecute())
+        assumeTrue("needs setsid", File("/usr/bin/setsid").canExecute() ||
+            File("/bin/setsid").canExecute())
+        assumeTrue("needs external kill", File("/bin/kill").canExecute())
 
-        val shell = ProcessBuilder("/bin/sh", "-c",
-            "i=0; while [ \$i -lt 70 ]; do sleep 30 & i=\$((i+1)); done; wait").start()
+        val pidFile = File.createTempFile("rivet-cap-", ".pid")
+        val shell = ProcessBuilder("setsid", "/bin/sh", "-c",
+            "echo \$\$ > '${pidFile.absolutePath}'; " +
+                "i=0; while [ \$i -lt 70 ]; do sleep 30 & i=\$((i+1)); done; wait").start()
+        val pid = withTimeout(10_000) {
+            var found: Int? = null
+            while (found == null) {
+                found = pidFile.takeIf { it.isFile }?.readText()?.trim()?.toIntOrNull()
+                if (found == null) delay(25)
+            }
+            found
+        }!!
+        fun killGroup() {
+            ProcessBuilder("/bin/kill", "-s", "KILL", "--", "-$pid").start().waitFor()
+        }
         var stopped = false
         try {
             val stop = withTimeout(20_000) {
                 watchCommandTree(
-                    root = shell.pid(),
+                    root = pid,
                     memoryCapBytes = null,
                     onSample = {},
                     onTooManyChildren = {},
                     onMemoryLimit = {},
                     terminate = {
                         stopped = true
-                        shell.toHandle().descendants().forEach { it.destroyForcibly() }
-                        shell.destroyForcibly()
+                        killGroup()
                     },
                 )
             }
@@ -40,9 +56,10 @@ class CommandTreeCapTest {
             assertEquals(TreeWatchStop.TooManyChildren, stop)
             assertTrue(stopped)
         } finally {
-            shell.toHandle().descendants().forEach { it.destroyForcibly() }
+            killGroup()
             shell.destroyForcibly()
             shell.waitFor()
+            pidFile.delete()
         }
     }
 }
