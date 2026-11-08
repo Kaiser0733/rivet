@@ -209,7 +209,7 @@ fun ModelSheet(
                                         singleLine = true,
                                         textStyle = MaterialTheme.typography.bodyMedium,
                                         modifier = Modifier.fillMaxWidth()
-                                            .padding(start = 12.dp, end = 12.dp, top = 4.dp)),
+                                            .padding(start = 12.dp, end = 12.dp, top = 4.dp))
                                 }
                                 LazyColumn(Modifier.fillMaxWidth().heightIn(max = 300.dp)) {
                                     listState.configs.forEach { config ->
