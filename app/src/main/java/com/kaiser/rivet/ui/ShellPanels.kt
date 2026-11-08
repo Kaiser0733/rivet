@@ -8,7 +8,10 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.WindowInsets
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.safeDrawing
+import androidx.compose.foundation.layout.windowInsetsPadding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Surface
 import androidx.compose.runtime.Composable
@@ -45,7 +48,9 @@ internal fun RightSlidePanel(open: Boolean, onClose: () -> Unit, content: @Compo
                     modifier = Modifier.fillMaxHeight().fillMaxWidth(0.88f)
                         .graphicsLayer { translationX = (1f - progress) * size.width },
                 ) {
-                    content()
+                    Box(Modifier.fillMaxSize().windowInsetsPadding(WindowInsets.safeDrawing)) {
+                        content()
+                    }
                 }
             }
         }
