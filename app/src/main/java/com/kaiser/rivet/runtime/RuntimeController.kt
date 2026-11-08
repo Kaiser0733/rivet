@@ -27,6 +27,7 @@ data class RuntimeCommandResult(
     val syncSkipped: List<String> = emptyList(),
     val syncConflicts: List<String> = emptyList(),
     val error: String? = null,
+    val tooManyChildren: Boolean = false,
 )
 
 data class PreviewLaunch(val processId: String, val url: String, val entry: String)
@@ -76,18 +77,20 @@ class RuntimeController(
         }
         processId?.let { id -> managedProcesses?.finishCommand(id,
             RuntimeCommandResult(result.exitCode, result.stdout, result.stderr, result.stdoutTruncated,
-                result.stderrTruncated, result.timedOut, cwd, "not_started")) }
+                result.stderrTruncated, result.timedOut, cwd, "not_started",
+                tooManyChildren = result.tooManyChildren)) }
         val sync = try { active.sync() }
             catch (_: CancellationException) {
                 // The command already ran. Return its exit status with an
                 // interrupted sync so the correlated event can be persisted.
                 return@withLock RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
                     result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
-                    "interrupted")
+                    "interrupted", tooManyChildren = result.tooManyChildren)
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
         RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
             result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
-            sync.state.code, sync.path, syncSkipped = sync.skipped, syncConflicts = sync.conflicts)
+            sync.state.code, sync.path, syncSkipped = sync.skipped, syncConflicts = sync.conflicts,
+            tooManyChildren = result.tooManyChildren)
     }
 
     suspend fun requireSafCurrent() = operations.withLock {

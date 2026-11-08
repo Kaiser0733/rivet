@@ -3,6 +3,8 @@ package com.kaiser.rivet.runtime
 import android.os.ParcelFileDescriptor
 import android.system.OsConstants
 import java.io.IOException
+import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
@@ -14,6 +16,9 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
+
+/** Rule 6 poll cadence: one /proc walk every two seconds (plan §5). */
+private const val TREE_POLL_MS = 2_000L
 
 internal object CommandNative {
     init { System.loadLibrary("termux") }
@@ -31,6 +36,7 @@ internal data class CommandOutput(
     val stdoutTruncated: Boolean,
     val stderrTruncated: Boolean,
     val timedOut: Boolean,
+    val tooManyChildren: Boolean = false,
 )
 
 internal data class CommandExitOutcome(
@@ -93,15 +99,53 @@ internal class CommandProcess {
                     catch (_: Exception) { /* Display failures do not interrupt the command. */ }
                 }
             } }
+            // Rules 5/6 bookkeeping: every pid seen under this command, with its start
+            // time so a reused pid is never swept by mistake.
+            val strays = ConcurrentHashMap<Int, Long>()
+            val tooManyChildren = AtomicBoolean(false)
+            fun remember(tree: Set<Int>) {
+                for (child in tree) {
+                    if (strays.containsKey(child)) continue
+                    ProcTree.startTime(child)?.let { strays.putIfAbsent(child, it) }
+                }
+            }
+            fun rememberCurrentTree() {
+                try { remember(descendants(pid, ProcTree.parents())) } catch (_: Exception) { }
+            }
+            fun sweepStrays() {
+                for ((child, started) in strays) {
+                    if (ProcTree.startTime(child) == started) ProcTree.kill(child)
+                }
+            }
+            val treeWatch = launch(Dispatchers.IO) {
+                while (true) {
+                    delay(TREE_POLL_MS)
+                    val tree = try { descendants(pid, ProcTree.parents()) }
+                        catch (_: Exception) { emptySet<Int>() }
+                    if (tree.isNotEmpty()) remember(tree)
+                    if (tree.size > MAX_DESCENDANTS) {
+                        tooManyChildren.set(true)
+                        terminate(pid, exited)
+                        return@launch
+                    }
+                }
+            }
             try {
                 val outcome = awaitExitOrTimeout(exited, timeoutMs) {
+                    rememberCurrentTree()
                     terminate(pid, exited)
                 }
                 val exitCode = outcome.exitCode
                 val timedOut = outcome.timedOut
+                treeWatch.cancel()
                 // The foreground shell may have exited while children kept
                 // inherited output pipes open. End that process group first.
                 CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+                // Rule 5: children that left the group (setsid) are not reached by that
+                // kill; sweep the strays the watcher saw. Best effort: a process that
+                // forked, setsid'd and lost its parent between two samples is invisible
+                // here (ponytail: 2 s sampling; a UID-wide turn-end sweep is the upgrade).
+                sweepStrays()
                 if (withTimeoutOrNull(3000) { joinAll(stdoutReader, stderrReader) } == null) {
                     stdoutFd.close()
                     stderrFd.close()
@@ -109,9 +153,10 @@ internal class CommandProcess {
                     stderrReader.cancel()
                 }
                 CommandOutput(exitCode, stdout.text(), stderr.text(), stdout.truncated,
-                    stderr.truncated, timedOut)
+                    stderr.truncated, timedOut, tooManyChildren.get())
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
+                    rememberCurrentTree()
                     terminate(pid, exited)
                     stdoutFd.close()
                     stderrFd.close()
@@ -119,8 +164,10 @@ internal class CommandProcess {
                 }
                 throw e
             } finally {
+                treeWatch.cancel()
                 outputPublisher?.cancel()
                 CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+                sweepStrays()
                 stdoutFd.close()
                 stderrFd.close()
                 stdoutReader.cancel()

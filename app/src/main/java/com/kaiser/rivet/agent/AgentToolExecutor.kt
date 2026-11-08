@@ -497,6 +497,7 @@ class AgentToolExecutor(
             put("stdout_truncated", stdoutCut)
             put("stderr_truncated", stderrCut)
             put("timed_out", result.timedOut)
+            if (result.tooManyChildren) put("too_many_child_processes", true)
             put("cwd", result.cwd)
             put("sync", result.sync)
             result.syncPath?.let { put("sync_path", it) }
