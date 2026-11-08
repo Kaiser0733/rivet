@@ -38,7 +38,7 @@ jobs:
           ln -s "$LLVM/llvm-strip" /tmp/shim/aarch64-linux-android-strip
           ln -s "$LLVM/llvm-ranlib" /tmp/shim/aarch64-linux-android-ranlib
           export PATH="/tmp/shim:$LLVM:$PATH"
-          if [ -f configs/android_ndk_defconfig ]; then make android_ndk_defconfig CROSS_COMPILE=aarch64-linux-android-; else make defconfig CROSS_COMPILE=aarch64-linux-android-; fi
+          make defconfig CROSS_COMPILE=aarch64-linux-android-
           sed -i 's/^CONFIG_STATIC=y/# CONFIG_STATIC is not set/' .config || true
           make -j"$(nproc)" CROSS_COMPILE=aarch64-linux-android-
           file busybox
