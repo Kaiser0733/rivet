@@ -25,6 +25,8 @@ import com.kaiser.rivet.agent.ProjectContext
 import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.ProjectInstructions
 import com.kaiser.rivet.agent.SafAgentWorkspace
+import com.kaiser.rivet.agent.SkillContext
+import com.kaiser.rivet.agent.SkillDiscovery
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ALL_REASONING_LEVELS
 import com.kaiser.rivet.provider.ProviderConfig
@@ -71,6 +73,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 
 data class UnsupportedReasoningNotice(
@@ -240,6 +243,7 @@ class ChatViewModel private constructor(
     private val autonomyStore = AutonomyStore(app)
     val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
     private val projectDownloader = ProjectDownloader(app.cacheDir)
+    private val skillDiscovery = SkillDiscovery(File(app.filesDir, "skills"))
     private val sessions get() = sessionStore as? CodingSessions
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -558,11 +562,16 @@ class ChatViewModel private constructor(
                     observedPaths[WorkspacePath.parse(instruction.scope).parent()] = true
                 }
             var instructions = project?.load(observedPaths)
+            // Skills rescan at the same lifecycle point as project instructions: turn
+            // start. Everywhere else (each model step) reads this turn's snapshot.
+            val agentWorkspace = workspace?.let(::SafAgentWorkspace)
+            val skills = agentWorkspace?.let { skillDiscovery.refresh(it, requireNotNull(workspaceId)) }
             fun initialContext(messages: List<AgentMessage>): List<AgentMessage> = buildList {
                 if (activeSummary.isNotBlank() && messages.none { it.role == AgentRole.Context &&
                         it.internalContext?.kind == "summary" }) add(InternalContext.summary(activeSummary, workspaceId))
                 if (workspaceId != null && instructions != null) addAll(ProjectContext.updates(messages,
                     workspaceId, requireNotNull(instructions)))
+                if (workspaceId != null) addAll(SkillContext.updates(messages, workspaceId, skills))
             }
             val executor = workspace?.let { selectedWorkspace ->
                 val boundWorkspaceId = workspaceId ?: selectedWorkspace.tree.toString()
@@ -579,6 +588,7 @@ class ChatViewModel private constructor(
                     },
                     downloader = projectDownloader,
                     currentWorkspaceIdentity = workspaceSelection::currentIdentity,
+                    skills = skills,
                 )
             }
             val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
@@ -793,7 +803,8 @@ class ChatViewModel private constructor(
                 contextUpdates = { candidate ->
                     if (project == null || workspaceId == null) emptyList() else {
                         instructions = project.load(observedPaths)
-                        ProjectContext.updates(candidate, workspaceId, requireNotNull(instructions))
+                        ProjectContext.updates(candidate, workspaceId, requireNotNull(instructions)) +
+                            SkillContext.updates(candidate, workspaceId, skills)
                     }
                 },
             )

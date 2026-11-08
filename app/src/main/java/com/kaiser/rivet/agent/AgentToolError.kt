@@ -53,7 +53,7 @@ internal object AgentToolError {
         "unsupported_system_management", "approval_unavailable", "process_limit",
         "foreground_service_unavailable", "preview_unavailable", "process_unavailable",
         "invalid_url", "redirect_blocked", "download_too_large", "download_sha_mismatch",
-        "destination_exists", "invalid_checksum")
+        "destination_exists", "invalid_checksum", "skill_not_found", "skill_manual_only")
     private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",
