@@ -26,8 +26,10 @@ import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.ProjectInstructions
 import com.kaiser.rivet.agent.SafAgentWorkspace
 import com.kaiser.rivet.agent.Skill
+import com.kaiser.rivet.agent.SkillCatalog
 import com.kaiser.rivet.agent.SkillContext
 import com.kaiser.rivet.agent.SkillDiscovery
+import com.kaiser.rivet.agent.SkillRootKind
 import com.kaiser.rivet.agent.skillGesture
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ALL_REASONING_LEVELS
@@ -255,6 +257,63 @@ class ChatViewModel private constructor(
     // the discovery cache when the sheet opens and at every turn start; never scanned here.
     private val _userSkills = MutableStateFlow<List<Skill>>(emptyList())
     val userSkills: StateFlow<List<Skill>> = _userSkills.asStateFlow()
+
+    // The whole catalog for Settings -> Skills, including manual-only skills and the
+    // error entries the chat path never loads.
+    private val _skillCatalog = MutableStateFlow<SkillCatalog?>(null)
+    val skillCatalog: StateFlow<SkillCatalog?> = _skillCatalog.asStateFlow()
+
+    suspend fun refreshSkillCatalog() {
+        val workspace = try {
+            workspaceSelection.restore()?.first
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        val catalog = try {
+            if (workspace == null) {
+                skillDiscovery.refresh(null, "")
+            } else {
+                skillDiscovery.refresh(SafAgentWorkspace(workspace), workspace.tree.toString())
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        _skillCatalog.value = catalog
+        _userSkills.value = catalog.skills.filter { it.userInvocable }
+    }
+
+    /** The bundled entries of a directory skill, read off-main; empty for flat-file skills. */
+    suspend fun skillBundledFiles(skill: Skill): List<String> {
+        val source = skill.source ?: return emptyList()
+        if (source.baseDir.substringAfterLast('/') != skill.name) return emptyList()
+        return try {
+            when (source.kind) {
+                SkillRootKind.Global, SkillRootKind.Bundled -> {
+                    File(source.baseDir).listFiles()?.map {
+                        if (it.isDirectory) "${it.name}/" else it.name
+                    }?.sorted().orEmpty()
+                }
+                SkillRootKind.ProjectRivet, SkillRootKind.ProjectAgents -> {
+                    val workspace = workspaceSelection.restore()?.first ?: return emptyList()
+                    SafAgentWorkspace(workspace).list(source.baseDir)
+                        .filter { it.path.substringAfterLast('/') != "SKILL.md" }
+                        .map { entry ->
+                            val name = entry.path.substringAfterLast('/')
+                            if (entry.directory) "$name/" else name
+                        }
+                        .sorted()
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
 
     suspend fun refreshUserSkills() {
         val workspace = try {
@@ -595,7 +654,10 @@ class ChatViewModel private constructor(
             // start. Everywhere else (each model step) reads this turn's snapshot.
             val agentWorkspace = workspace?.let(::SafAgentWorkspace)
             val skills = agentWorkspace?.let { skillDiscovery.refresh(it, requireNotNull(workspaceId)) }
-            if (skills != null) _userSkills.value = skills.skills.filter { it.userInvocable }
+            if (skills != null) {
+                _skillCatalog.value = skills
+                _userSkills.value = skills.skills.filter { it.userInvocable }
+            }
             // A `/name` gesture loads its skill for this turn; everything after the token
             // stays the task. Retries already carry the stripped task text.
             val gesture = if (retryingInterrupted) null else skillGesture(trimmed, skills)

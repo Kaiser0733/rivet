@@ -164,8 +164,12 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 sheetState = settingsSheetState,
             ) {
                 val conversation by chatViewModel.uiState.collectAsState()
+                val skillCatalog by chatViewModel.skillCatalog.collectAsState()
                 SettingsScreen(
                     conversationUsage = conversation.usage,
+                    skillCatalog = skillCatalog,
+                    onRefreshSkills = chatViewModel::refreshSkillCatalog,
+                    onLoadSkillFiles = chatViewModel::skillBundledFiles,
                     viewModel = providersViewModel,
                     versionName = versionName,
                     onClose = { settingsOpen = false },
