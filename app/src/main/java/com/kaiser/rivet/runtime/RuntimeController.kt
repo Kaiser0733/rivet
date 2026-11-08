@@ -332,14 +332,14 @@ class RuntimeController(
         val home = mirror.home.apply { mkdirs() }
         val temporary = mirror.temporary.apply { mkdirs() }
         if (!home.isDirectory || !temporary.isDirectory) throw MirrorFailure("storage")
-        return arrayOf(
+        return toolchain.commandEnvironment(listOf(
             "HOME=${home.absolutePath}",
             "PATH=${toolchain.path()}",
             "TMPDIR=${temporary.absolutePath}",
             "PWD=${cwd.absolutePath}",
             "LANG=C.UTF-8",
             "TERM=xterm-256color",
-        )
+        )).toTypedArray()
     }
 
     private fun runtimeDirectory(worktree: File, cwd: String): File {
