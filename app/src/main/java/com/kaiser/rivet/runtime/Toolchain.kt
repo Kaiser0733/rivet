@@ -27,8 +27,8 @@ internal val BUSYBOX_APPLETS: List<String> = listOf(
     "sync", "du", "df", "find", "xargs", "which",
     // Text.
     "head", "tail", "wc", "sort", "uniq", "cut", "tr", "tee", "nl", "od", "xxd", "hexdump",
-    "grep", "egrep", "fgrep", "sed", "awk", "diff", "cmp", "split", "paste", "join", "comm",
-    "fold", "fmt", "expand", "unexpand", "rev", "base64", "md5sum", "sha1sum", "sha256sum",
+    "grep", "egrep", "fgrep", "sed", "awk", "diff", "cmp", "split", "paste", "comm",
+    "fold", "expand", "unexpand", "rev", "base64", "md5sum", "sha1sum", "sha256sum",
     "sha512sum", "cksum",
     // Archives and compression.
     "tar", "gzip", "gunzip", "zcat", "bzip2", "bunzip2", "bzcat", "xz", "unxz", "xzcat",
