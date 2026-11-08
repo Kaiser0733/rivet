@@ -350,6 +350,48 @@ class ChatViewModel private constructor(
     private val runtimeController = RuntimeController(app, workspaceSelection, managedProcesses) {
         _uiState.value.projectName
     }
+
+    // The user terminal's run state. It lives here, not in the slide composable, so
+    // closing the panel or rotating neither stops the command nor loses its output.
+    private val _terminalState = MutableStateFlow(TerminalUiState())
+    val terminalState: StateFlow<TerminalUiState> = _terminalState.asStateFlow()
+    private var terminalJob: Job? = null
+
+    /** Runs through the same RuntimeController path as run_command, governor included. */
+    fun runTerminalCommand(command: String) {
+        val trimmed = command.trim()
+        if (trimmed.isEmpty() || _terminalState.value.running || terminalJob?.isActive == true) return
+        _terminalState.value = TerminalUiState(command = trimmed, running = true)
+        terminalJob = viewModelScope.launch {
+            val result = try {
+                runtimeController.runCommand(trimmed, cwd = "", timeoutMs = TERMINAL_TIMEOUT_MS) { stdout, stderr ->
+                    _terminalState.update { it.copy(output = terminalText(stdout, stderr)) }
+                }
+            } catch (e: CancellationException) {
+                _terminalState.update {
+                    it.copy(running = false, status = terminalStatus(null, cancelled = true))
+                }
+                throw e
+            } catch (_: Exception) {
+                _terminalState.update {
+                    it.copy(running = false, status = "Could not run the command. Try again.")
+                }
+                return@launch
+            }
+            _terminalState.update {
+                it.copy(
+                    running = false,
+                    output = terminalText(result.stdout, result.stderr).ifBlank { it.output },
+                    status = terminalStatus(result, cancelled = false),
+                )
+            }
+        }
+    }
+
+    fun stopTerminalCommand() {
+        terminalJob?.cancel()
+    }
+
     private var activeMessages: List<AgentMessage> = emptyList()
     private var activeSummary: String = ""
 

@@ -35,12 +35,14 @@ import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.storage.AutonomyStore
 import com.kaiser.rivet.ui.chat.ChatScreen
 import com.kaiser.rivet.ui.history.HistoryPane
-import com.kaiser.rivet.ui.processes.ProcessesPane
+import com.kaiser.rivet.ui.processes.ToolsPane
 import com.kaiser.rivet.ui.provider.ProviderEditor
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.provider.SettingsScreen
 import com.kaiser.rivet.ui.provider.SkillInstallDialog
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -158,8 +160,20 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
-                                ProcessesPane(chatViewModel.managedProcesses,
-                                    Modifier.fillMaxSize())
+                                val terminalState by chatViewModel.terminalState.collectAsState()
+                                // Only the workspace name is needed here; a mapped flow
+                                // keeps token streaming from recomposing the panel.
+                                val workspaceName by remember(chatViewModel) {
+                                    chatViewModel.uiState.map { it.projectName }.distinctUntilChanged()
+                                }.collectAsState(initial = chatViewModel.uiState.value.projectName)
+                                ToolsPane(
+                                    processes = chatViewModel.managedProcesses,
+                                    terminal = terminalState,
+                                    workspaceName = workspaceName,
+                                    onRunTerminal = chatViewModel::runTerminalCommand,
+                                    onStopTerminal = chatViewModel::stopTerminalCommand,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                             }
                         }
                     }

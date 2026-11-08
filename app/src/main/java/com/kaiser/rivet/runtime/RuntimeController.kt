@@ -44,7 +44,17 @@ class RuntimeController(
     private var mirrorIdentity: String? = null
     private var mirror: WorkspaceMirror? = null
 
-    suspend fun runCommand(command: String, cwd: String, timeoutMs: Long): RuntimeCommandResult = operations.withLock {
+    suspend fun runCommand(command: String, cwd: String, timeoutMs: Long): RuntimeCommandResult =
+        runCommand(command, cwd, timeoutMs, null)
+
+    /**
+     * The same governed run as the three-argument form. [onOutput] is a read-only
+     * observation hook for surfaces that render the streams live (the user terminal); it
+     * receives the same bounded snapshots the Processes registry gets and cannot change
+     * the command, limits, timeout, or kill path.
+     */
+    suspend fun runCommand(command: String, cwd: String, timeoutMs: Long,
+                           onOutput: ((String, String) -> Unit)?): RuntimeCommandResult = operations.withLock {
         val active = currentMirror() ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) {
@@ -63,11 +73,15 @@ class RuntimeController(
             registry.registerCommand(command, cwd, identity, projectName(), job)
                 ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "process_limit")
         }
+        fun publish(stdout: String, stderr: String) {
+            processId?.let { managedProcesses?.updateCommandOutput(it, stdout, stderr) }
+            onOutput?.invoke(stdout, stderr)
+        }
+        val publisher: ((String, String) -> Unit)? =
+            if (processId == null && onOutput == null) null else ::publish
         val result = try {
             CommandProcess().run(command, directory.absolutePath, environment, timeoutMs,
-                onOutput = processId?.let { id -> { stdout, stderr ->
-                    managedProcesses?.updateCommandOutput(id, stdout, stderr)
-                } })
+                onOutput = publisher)
         } catch (e: CancellationException) {
             processId?.let { managedProcesses?.failCommand(it) }
             throw e
