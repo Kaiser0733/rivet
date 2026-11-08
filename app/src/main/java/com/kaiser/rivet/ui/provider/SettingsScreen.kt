@@ -2,9 +2,9 @@ package com.kaiser.rivet.ui.provider
 
 import androidx.activity.compose.BackHandler
 import androidx.annotation.DrawableRes
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
-import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
@@ -22,6 +22,7 @@ import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
@@ -44,14 +45,10 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -356,19 +353,6 @@ private fun ProviderDetail(
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 0.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
     ) {
-        Row(Modifier.fillMaxWidth().padding(bottom = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { /* handled by parent BackHandler */ }) {
-                Icon(
-                    painterResource(R.drawable.ic_chevron_right),
-                    contentDescription = "Back",
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    contentMatrix = androidx.compose.ui.graphics.Matrix(-1f, 0f, 0f, 1f, 24f, 0f)
-                )
-            }
-            Text("Providers", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(48.dp))
-        }
         
         loadError?.let { message ->
             item { Text(displaySafeText(message), color = MaterialTheme.colorScheme.error,
@@ -428,19 +412,6 @@ private fun AppearanceDetail(
     appearanceError: String?,
 ) {
     DetailScroll {
-        Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { /* handled by parent BackHandler */ }) {
-                Icon(
-                    painterResource(R.drawable.ic_chevron_right),
-                    contentDescription = "Back",
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    contentMatrix = androidx.compose.ui.graphics.Matrix(-1f, 0f, 0f, 1f, 24f, 0f)
-                )
-            }
-            Text("Appearance", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(48.dp))
-        }
         
         Text("Theme", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 12.dp))
         
@@ -547,19 +518,6 @@ private fun AgentDetail(
     onAutonomyChange: (AutonomyMode) -> Unit,
 ) {
     DetailScroll {
-        Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { /* handled by parent BackHandler */ }) {
-                Icon(
-                    painterResource(R.drawable.ic_chevron_right),
-                    contentDescription = "Back",
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    contentMatrix = androidx.compose.ui.graphics.Matrix(-1f, 0f, 0f, 1f, 24f, 0f)
-                )
-            }
-            Text("Agent", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(48.dp))
-        }
         
         listOf(
             AutonomyMode.Ask to "Ask before changes and commands.",
@@ -613,19 +571,6 @@ private fun autonomyDisplayName(mode: AutonomyMode): String = when (mode) {
 @Composable
 private fun AboutDetail(versionName: String, onShowUsage: () -> Unit) {
     DetailScroll {
-        Row(Modifier.fillMaxWidth().padding(bottom = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = { /* handled by parent BackHandler */ }) {
-                Icon(
-                    painterResource(R.drawable.ic_chevron_right),
-                    contentDescription = "Back",
-                    modifier = Modifier.size(24.dp),
-                    tint = MaterialTheme.colorScheme.onSurface,
-                    contentMatrix = androidx.compose.ui.graphics.Matrix(-1f, 0f, 0f, 1f, 24f, 0f)
-                )
-            }
-            Text("About", style = MaterialTheme.typography.titleMedium, modifier = Modifier.weight(1f))
-            Spacer(Modifier.width(48.dp))
-        }
         
         Text(stringResource(R.string.provider_hint_version, versionName),
             style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(bottom = 16.dp))
