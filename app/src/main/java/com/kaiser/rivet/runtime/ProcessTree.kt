@@ -34,6 +34,10 @@ internal fun descendants(root: Int, parents: Map<Int, Int>): Set<Int> {
 internal fun overDescendantCap(root: Int, parents: Map<Int, Int>): Boolean =
     descendants(root, parents).size > MAX_DESCENDANTS
 
+/** The same cap for a command session, where the leader is not a descendant. */
+internal fun overSessionCap(root: Int, members: Set<Int>): Boolean =
+    members.count { it != root } > MAX_DESCENDANTS
+
 /** Sum of the tree's per-process PSS readings; missing pids contribute nothing. */
 internal fun pssBytes(kbByPid: Map<Int, Long>, pids: Set<Int>): Long =
     pids.sumOf { kbByPid[it] ?: 0L } * 1024L
@@ -108,12 +112,6 @@ internal object ProcTree {
             if (parseProcStatSession(stat) == sessionId) members += pid
         }
         return members
-    }
-
-    /** Kill a command's whole session after its leader exits. The group kill misses
-     * background jobs moved to their own process group; the session id does not. */
-    fun killSession(sessionId: Int) {
-        for (pid in sessionMembers(sessionId)) kill(pid)
     }
 
     fun kill(pid: Int) {
