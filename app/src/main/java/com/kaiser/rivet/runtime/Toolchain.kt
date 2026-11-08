@@ -1,6 +1,7 @@
 package com.kaiser.rivet.runtime
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import android.system.Os
 import java.io.File
 import kotlinx.coroutines.CancellationException
@@ -43,12 +44,23 @@ internal val BUSYBOX_APPLETS: List<String> = listOf(
  * - the symlink farm is Zone D's `bin/`.
  */
 internal class Toolchain(context: Context) {
+    // Paths resolve on use, never at construction: a context that exposes no
+    // applicationInfo/nativeLibraryDir (Robolectric, or a platform quirk) must behave
+    // exactly like a missing binary instead of breaking the view model that owns us.
     private val app = context.applicationContext
 
-    val nativeDir: File = File(app.applicationInfo.nativeLibraryDir)
-    val busybox: File = File(nativeDir, "libbusybox.so")
-    val dataRoot: File = File(app.filesDir, "toolchain")
-    val binDir: File = File(dataRoot, "bin")
+    // Both reads can be absent in a test or an unusual platform build; a missing value
+    // is the same state as a missing binary, never an error.
+    private val applicationInfo: ApplicationInfo?
+        get() = try { app.applicationInfo } catch (_: Exception) { null }
+
+    private val filesDir: File?
+        get() = try { app.filesDir } catch (_: Exception) { null }
+
+    val nativeDir: File? get() = applicationInfo?.nativeLibraryDir?.let(::File)
+    val busybox: File? get() = nativeDir?.let { File(it, "libbusybox.so") }
+    val dataRoot: File? get() = filesDir?.let { File(it, "toolchain") }
+    val binDir: File? get() = dataRoot?.let { File(it, "bin") }
 
     @Volatile private var prepared = false
 
@@ -58,13 +70,15 @@ internal class Toolchain(context: Context) {
      */
     suspend fun ensurePrepared() {
         if (prepared) return
-        if (!busybox.isFile) {
+        val binary = busybox
+        val farm = binDir
+        if (binary == null || farm == null || !binary.isFile) {
             prepared = true
             return
         }
         withContext(Dispatchers.IO) {
             try {
-                syncFarm(binDir, busybox, BUSYBOX_APPLETS)
+                syncFarm(farm, binary, BUSYBOX_APPLETS)
                 prepared = true
             } catch (e: CancellationException) {
                 throw e
@@ -75,7 +89,11 @@ internal class Toolchain(context: Context) {
     }
 
     /** The command PATH: the farm first when it exists, today's value otherwise. */
-    fun path(systemPath: String = SYSTEM_PATH): String = commandPath(busybox, binDir, systemPath)
+    fun path(systemPath: String = SYSTEM_PATH): String {
+        val binary = busybox ?: return systemPath
+        val farm = binDir ?: return systemPath
+        return commandPath(binary, farm, systemPath)
+    }
 }
 
 /** PATH composition, kept pure so the no-binary case is provably byte-identical. */
