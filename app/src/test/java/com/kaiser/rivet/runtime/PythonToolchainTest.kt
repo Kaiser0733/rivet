@@ -45,13 +45,13 @@ class PythonToolchainTest {
     }
 
     @Test fun extractionDecisionUsesMarkerAndPresence() {
-        assertEquals(PythonExtraction.Extract, pythonExtraction(null, "3.12.3-rivet1", true))
-        assertEquals(PythonExtraction.Current,
-            pythonExtraction(PYTHON_STDLIB_VERSION, PYTHON_STDLIB_VERSION, true))
-        assertEquals(PythonExtraction.Extract,
-            pythonExtraction("3.12.3-rivet0", PYTHON_STDLIB_VERSION, true))
-        assertEquals(PythonExtraction.Extract,
-            pythonExtraction(PYTHON_STDLIB_VERSION, PYTHON_STDLIB_VERSION, false))
+        assertEquals(VersionedExtraction.Extract, versionedExtraction(null, "3.12.3-rivet1", true))
+        assertEquals(VersionedExtraction.Current,
+            versionedExtraction(PYTHON_STDLIB_VERSION, PYTHON_STDLIB_VERSION, true))
+        assertEquals(VersionedExtraction.Extract,
+            versionedExtraction("3.12.3-rivet0", PYTHON_STDLIB_VERSION, true))
+        assertEquals(VersionedExtraction.Extract,
+            versionedExtraction(PYTHON_STDLIB_VERSION, PYTHON_STDLIB_VERSION, false))
     }
 
     @Test fun farmAddsPythonEntriesOnlyWhenTheInterpreterIsPresent() {

@@ -32,6 +32,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
@@ -51,6 +52,7 @@ import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.storage.SessionUsage
@@ -69,7 +71,7 @@ private val MAX_WIDTH = 680.dp
 
 // The section that is open at level 2. Remembered by RivetApp, so Android Back can step
 // detail -> list -> dismiss instead of closing the sheet in one go.
-internal enum class SettingsSection { Providers, Appearance, Agent, Skills, Updates, About }
+internal enum class SettingsSection { Providers, Appearance, Agent, GitHub, Skills, Updates, About }
 
 /**
  * The body of the settings modal sheet: a two-level page — a section list, and one
@@ -98,6 +100,7 @@ fun SettingsScreen(
     onInstallSkill: () -> Unit = {},
 ) {
     val state by viewModel.listState.collectAsState()
+    val gitHubState by viewModel.gitHubState.collectAsState()
     // Level 2 lives here, not in the host: the sheet is only a container.
     var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
     // A skill's detail is one level below its section list, so Back steps skill -> skills
@@ -117,6 +120,7 @@ fun SettingsScreen(
     var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
     var showUsage by rememberSaveable { mutableStateOf(false) }
     var confirmYolo by rememberSaveable { mutableStateOf(false) }
+    var connectGitHubOpen by rememberSaveable { mutableStateOf(false) }
 
     deleteTarget?.let { provider ->
         AlertDialog(
@@ -145,6 +149,49 @@ fun SettingsScreen(
                 onAutonomyChange(AutonomyMode.Yolo)
             }) { Text("Enable YOLO") } },
             dismissButton = { TextButton(onClick = { confirmYolo = false }) { Text("Cancel") } },
+        )
+    }
+
+    if (connectGitHubOpen) {
+        // The token lives only in this dialog's composition state; it is never saveable
+        // and is discarded when the dialog closes.
+        var token by remember { mutableStateOf("") }
+        LaunchedEffect(gitHubState.connected) {
+            if (gitHubState.connected) connectGitHubOpen = false
+        }
+        AlertDialog(
+            onDismissRequest = { if (!gitHubState.busy) connectGitHubOpen = false },
+            title = { Text("Connect GitHub", style = MaterialTheme.typography.titleMedium) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Text("Paste a personal access token. Prefer a fine-grained token limited to the repositories you push to. Rivet stores it encrypted on this device and never puts it in chat, a command, or the command environment.",
+                        style = MaterialTheme.typography.bodyMedium)
+                    OutlinedTextField(
+                        value = token,
+                        onValueChange = { token = it },
+                        singleLine = true,
+                        enabled = !gitHubState.busy,
+                        visualTransformation = PasswordVisualTransformation(),
+                        label = { Text("Token") },
+                        modifier = Modifier.fillMaxWidth(),
+                    )
+                    gitHubState.error?.let {
+                        Text(displaySafeText(it), color = MaterialTheme.colorScheme.error,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
+                }
+            },
+            confirmButton = {
+                TextButton(
+                    onClick = { viewModel.connectGitHub(token) },
+                    enabled = token.isNotBlank() && !gitHubState.busy,
+                ) { Text(if (gitHubState.busy) "Connecting…" else "Connect") }
+            },
+            dismissButton = {
+                TextButton(onClick = { connectGitHubOpen = false }, enabled = !gitHubState.busy) {
+                    Text("Cancel")
+                }
+            },
         )
     }
 
@@ -183,6 +230,7 @@ fun SettingsScreen(
                     themeSummary = themeMode.name,
                     autonomySummary = autonomyDisplayName(autonomyMode),
                     skillSummary = skillCountSummary(skillCatalog),
+                    gitHubSummary = if (gitHubState.connected) "Connected" else "Not connected",
                     versionSummary = stringResource(R.string.provider_hint_version, versionName),
                     onSelect = { section = it },
                 )
@@ -208,6 +256,13 @@ fun SettingsScreen(
                     autonomyError = autonomyError,
                     confirmYolo = { confirmYolo = true },
                     onAutonomyChange = onAutonomyChange,
+                )
+                SettingsSection.GitHub -> GitHubDetail(
+                    connected = gitHubState.connected,
+                    busy = gitHubState.busy,
+                    error = gitHubState.error,
+                    onConnect = { connectGitHubOpen = true },
+                    onDisconnect = viewModel::disconnectGitHub,
                 )
                 SettingsSection.Skills -> SkillsSettings(
                     catalog = skillCatalog,
@@ -261,6 +316,7 @@ private fun SettingsSection.title(): String = when (this) {
     SettingsSection.Providers -> "Providers"
     SettingsSection.Appearance -> "Appearance"
     SettingsSection.Agent -> "Agent"
+    SettingsSection.GitHub -> "GitHub"
     SettingsSection.Skills -> "Skills"
     SettingsSection.Updates -> "Updates"
     SettingsSection.About -> "About"
@@ -272,6 +328,7 @@ private fun SectionList(
     themeSummary: String,
     autonomySummary: String,
     skillSummary: String,
+    gitHubSummary: String,
     versionSummary: String,
     onSelect: (SettingsSection) -> Unit,
 ) {
@@ -287,6 +344,7 @@ private fun SectionList(
                 SettingsSection.Providers -> "Providers" to providerSummary
                 SettingsSection.Appearance -> "Appearance" to themeSummary
                 SettingsSection.Agent -> "Agent" to autonomySummary
+                SettingsSection.GitHub -> "GitHub" to gitHubSummary
                 SettingsSection.Skills -> "Skills" to skillSummary
                 SettingsSection.Updates -> "Updates" to "Check for updates"
                 SettingsSection.About -> "About" to versionSummary
@@ -295,6 +353,7 @@ private fun SectionList(
                 SettingsSection.Providers -> R.drawable.ic_settings // gear = providers config
                 SettingsSection.Appearance -> R.drawable.ic_visibility // sun/moon for theme
                 SettingsSection.Agent -> R.drawable.ic_processes // robot/processes for agent
+                SettingsSection.GitHub -> R.drawable.ic_files // repository and token settings
                 SettingsSection.Skills -> R.drawable.ic_files // skill folders and instructions
                 SettingsSection.Updates -> R.drawable.ic_history // refresh/history for updates
                 SettingsSection.About -> R.drawable.ic_files // info/documents for about
@@ -355,6 +414,46 @@ private fun SectionListItem(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
             modifier = Modifier.padding(horizontal = 48.dp)
         )
+    }
+}
+
+@Composable
+private fun GitHubDetail(
+    connected: Boolean,
+    busy: Boolean,
+    error: String?,
+    onConnect: () -> Unit,
+    onDisconnect: () -> Unit,
+) {
+    DetailScroll {
+        Text("GitHub", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(8.dp))
+        Text(
+            if (connected) {
+                "Connected. Pushes to github.com use the token kept in Android Keystore."
+            } else {
+                "Not connected. Public clones and local Git work normally. Connect a token to push to GitHub."
+            },
+            style = MaterialTheme.typography.bodyMedium,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        Spacer(Modifier.height(16.dp))
+        if (connected) {
+            RivetOutlinedButton(onClick = onDisconnect, enabled = !busy) {
+                Text(if (busy) "Disconnecting…" else "Disconnect")
+            }
+        } else {
+            RivetOutlinedButton(onClick = onConnect, enabled = !busy) { Text("Connect") }
+        }
+        error?.let {
+            Spacer(Modifier.height(8.dp))
+            Text(displaySafeText(it), color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall)
+        }
+        Spacer(Modifier.height(16.dp))
+        Text("Use a fine-grained token scoped to the repositories you push to. Rivet keeps it encrypted on this device and never sends it to the model, a command, or the command environment.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
