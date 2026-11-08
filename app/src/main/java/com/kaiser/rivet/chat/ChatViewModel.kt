@@ -415,6 +415,15 @@ class ChatViewModel private constructor(
     val terminalState: StateFlow<TerminalUiState> = _terminalState.asStateFlow()
     private var terminalJob: Job? = null
 
+    /** The mode at the decision, not the mode when this turn began. */
+    private suspend fun readAutonomyMode(): AutonomyMode = try {
+        autonomyStore.mode.first()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Exception) {
+        AutonomyMode.Ask
+    }
+
     /** Runs through the same RuntimeController path as run_command, governor included. */
     fun runTerminalCommand(command: String) {
         val trimmed = command.trim()
@@ -704,9 +713,6 @@ class ChatViewModel private constructor(
                 activeSummary = restored.summary
             }
             val snapshot = providerSnapshot(wasInterrupted) ?: return@launch
-            val autonomyMode = try { autonomyStore.mode.first() }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { AutonomyMode.Ask }
             val restoredWorkspace = try {
                 workspaceSelection.restore()
             } catch (e: CancellationException) {
@@ -1028,7 +1034,7 @@ class ChatViewModel private constructor(
                     loop.run(
                         initial = durable,
                         tools = tools,
-                        autonomyMode = autonomyMode,
+                        currentAutonomyMode = { readAutonomyMode() },
                         onText = { delta ->
                             streamPreview.append(delta)
                             if (ticket == generation && delta.isNotEmpty() &&
