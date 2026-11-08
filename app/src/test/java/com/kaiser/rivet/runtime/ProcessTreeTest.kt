@@ -49,6 +49,13 @@ class ProcessTreeTest {
         assertTrue(overDescendantCap(100, overCap))
     }
 
+    @Test fun sessionCapCountsChildrenButNotTheLeader() {
+        val children = (1..MAX_DESCENDANTS).map { 1_000 + it }.toSet()
+
+        assertFalse(overSessionCap(100, children + 100))
+        assertTrue(overSessionCap(100, children + setOf(100, 1_065)))
+    }
+
     @Test fun pssParsersReadRollupAndStatusFields() {
         val rollup = "Rss:             1000 kB\nPss:              742 kB\nPss_Anon:         500 kB\n"
         assertEquals(742L, parseSmapsRollupPssKb(rollup))

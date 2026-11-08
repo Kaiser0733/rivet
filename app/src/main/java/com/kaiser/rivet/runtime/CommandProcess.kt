@@ -162,6 +162,13 @@ internal class CommandProcess {
                     if (ProcTree.startTime(child) == started) ProcTree.kill(child)
                 }
             }
+            // The watcher samples every 2 s; a burst that exits before the first sample
+            // is still counted here, and the whole session is ended in one place.
+            fun endSession() {
+                val members = ProcTree.sessionMembers(pid)
+                if (overSessionCap(pid, members)) tooManyChildren.set(true)
+                for (member in members) ProcTree.kill(member)
+            }
             val treeWatch = launch(Dispatchers.IO) {
                 watchCommandTree(
                     root = pid,
@@ -184,7 +191,7 @@ internal class CommandProcess {
                 // inherited output pipes open. End that process group first, then its
                 // session (background jobs can move to their own process group).
                 CommandNative.signalGroup(pid, OsConstants.SIGKILL)
-                ProcTree.killSession(pid)
+                endSession()
                 // Rule 5: children that left the group (setsid) are not reached by that
                 // kill; sweep the strays the watcher saw. Best effort: a process that
                 // forked, setsid'd and lost its parent between two samples is invisible
@@ -202,7 +209,7 @@ internal class CommandProcess {
                 withContext(NonCancellable) {
                     rememberCurrentTree()
                     terminate(pid, exited)
-                    ProcTree.killSession(pid)
+                    endSession()
                     stdoutFd.close()
                     stderrFd.close()
                     withTimeoutOrNull(3000) { joinAll(stdoutReader, stderrReader) }
@@ -212,7 +219,7 @@ internal class CommandProcess {
                 treeWatch.cancel()
                 outputPublisher?.cancel()
                 CommandNative.signalGroup(pid, OsConstants.SIGKILL)
-                ProcTree.killSession(pid)
+                endSession()
                 sweepStrays()
                 stdoutFd.close()
                 stderrFd.close()
