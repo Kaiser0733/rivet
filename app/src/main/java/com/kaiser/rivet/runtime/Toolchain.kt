@@ -47,6 +47,11 @@ internal const val PYTHON_MARKER = ".rivet-python-version"
 internal const val SYSTEM_CA_PATH = "/system/etc/security/cacerts"
 private const val PYTHON_ASSET = "python-stdlib.zip"
 
+/** Bumped whenever `git-templates.zip` changes, so an app update re-extracts it once. */
+internal const val GIT_TEMPLATES_VERSION = "2.56.0-rivet1"
+internal const val GIT_TEMPLATES_MARKER = ".git-templates-version"
+private const val GIT_TEMPLATES_ASSET = "git-templates.zip"
+
 /**
  * The two-zone layout from plan §2.3:
  * - Zone E is the app's native library directory, where `libbusybox.so` ships;
@@ -74,14 +79,22 @@ internal class Toolchain(context: Context) {
     val binDir: File? get() = dataRoot?.let { File(it, "bin") }
     val pythonHome: File? get() = dataRoot?.let { File(it, "python") }
     val pythonTmp: File? get() = dataRoot?.let { File(it, "tmp") }
+    val git: File? get() = nativeDir?.let { File(it, "libgit.so") }
+    val gitRemoteHttps: File? get() = nativeDir?.let { File(it, "libgit-remote-https.so") }
+    val gitExecDir: File? get() = dataRoot?.let { File(it, "libexec/git-core") }
+    val gitTemplateDir: File? get() = dataRoot?.let { File(it, "share/git-core/templates") }
 
     @Volatile private var prepared = false
     @Volatile private var pythonReady = false
 
+    /** True once the git binary was present and its farm/templates were prepared. */
+    @Volatile var gitReady: Boolean = false
+        private set
+
     /**
-     * Builds or repairs the farm and extracts the Python stdlib once per process, off the
-     * main thread. With no `libbusybox.so` and no `libpython3.so` this is a no-op and
-     * [path] stays exactly as it is today.
+     * Builds or repairs the farms, extracts the Python stdlib and git templates once per
+     * process, off the main thread. With none of the three binaries this is a no-op and
+     * [path] plus the command environment stay exactly as they are today.
      */
     suspend fun ensurePrepared() {
         if (prepared) return
@@ -92,7 +105,9 @@ internal class Toolchain(context: Context) {
         }
         val binary = busybox?.takeIf { it.isFile }
         val python = pythonExecutable?.takeIf { it.isFile }
-        if (binary == null && python == null) {
+        val gitBinary = git?.takeIf { it.isFile }
+        val gitRemote = gitRemoteHttps?.takeIf { it.isFile }
+        if (binary == null && python == null && gitBinary == null) {
             prepared = true
             return
         }
@@ -115,7 +130,20 @@ internal class Toolchain(context: Context) {
                         pythonReady = false
                     }
                 }
-                syncLinks(farm, farmTargets(BUSYBOX_APPLETS, binary?.absolutePath, python?.absolutePath))
+                if (gitBinary != null) {
+                    // A failed template extraction must not cost local git; only the
+                    // missing templates are absent, and the next process retries them.
+                    try {
+                        prepareGit(gitBinary, gitRemote)
+                        gitReady = true
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        gitReady = false
+                    }
+                }
+                syncLinks(farm, farmTargets(BUSYBOX_APPLETS, binary?.absolutePath,
+                    python?.absolutePath, gitBinary?.absolutePath))
                 prepared = true
             } catch (e: CancellationException) {
                 throw e
@@ -128,12 +156,16 @@ internal class Toolchain(context: Context) {
     /** The command PATH: the farm first when it exists, today's value otherwise. */
     fun path(systemPath: String = SYSTEM_PATH): String {
         val farm = binDir ?: return systemPath
-        return commandPath(busybox, farm, systemPath, pythonExecutable)
+        return commandPath(busybox, farm, systemPath, pythonExecutable, git)
     }
 
-    /** Python's fixed environment, or the exact input when Python was not prepared. */
-    fun commandEnvironment(base: List<String>): List<String> =
-        if (pythonReady) pythonEnvironment(base, pythonHome, pythonTmp) else base
+    /** Toolchain environment; the exact input when neither Python nor git is ready. */
+    fun commandEnvironment(base: List<String>, credentialFile: File? = null): List<String> {
+        val withPython = if (pythonReady) pythonEnvironment(base, pythonHome, pythonTmp) else base
+        return if (gitReady) {
+            gitEnvironment(withPython, gitExecDir, gitTemplateDir, credentialFile)
+        } else withPython
+    }
 
     /**
      * Extracts the stdlib when the marker is missing or stale, then repairs the
@@ -148,11 +180,11 @@ internal class Toolchain(context: Context) {
         val marker = File(home, PYTHON_MARKER)
         val manifest = File(home, "SYMLINKS.manifest")
         val stdlib = File(home, "lib/python3.12/os.py")
-        val extract = pythonExtraction(readMarker(marker), PYTHON_STDLIB_VERSION,
-            stdlib.isFile && manifest.isFile) == PythonExtraction.Extract
+        val extract = versionedExtraction(readMarker(marker), PYTHON_STDLIB_VERSION,
+            stdlib.isFile && manifest.isFile) == VersionedExtraction.Extract
         if (extract) {
             if (!home.deleteRecursively() && home.exists()) return
-            if (!extractStdlib(home)) return
+            if (!extractZipAsset(PYTHON_ASSET, home)) return
             if (!manifest.isFile) return
         }
         val links = pythonLinkTargets(parsePythonManifest(manifest.readText()), native)
@@ -164,11 +196,33 @@ internal class Toolchain(context: Context) {
         pythonReady = true
     }
 
-    private fun extractStdlib(home: File): Boolean {
+    /** Extracts the templates tree and records its version, once per asset version. The
+     * marker sits beside the tree, not inside it, so git never copies it into a new repo. */
+    private fun prepareGitTemplates(directory: File) {
+        val parent = directory.parentFile ?: return
+        val marker = File(parent, GIT_TEMPLATES_MARKER)
+        val description = File(directory, "description")
+        val extract = versionedExtraction(readMarker(marker), GIT_TEMPLATES_VERSION,
+            description.isFile) == VersionedExtraction.Extract
+        if (!extract) return
+        if (!directory.deleteRecursively() && directory.exists()) return
+        if (!extractZipAsset(GIT_TEMPLATES_ASSET, directory)) return
+        if (!description.isFile) return
+        try { marker.writeText(GIT_TEMPLATES_VERSION) } catch (_: Exception) { }
+    }
+
+    private fun prepareGit(gitBinary: File, gitRemote: File?) {
+        val exec = gitExecDir ?: return
+        val templates = gitTemplateDir ?: return
+        prepareGitTemplates(templates)
+        syncLinks(exec, gitExecTargets(gitBinary.absolutePath, gitRemote?.absolutePath))
+    }
+
+    private fun extractZipAsset(asset: String, home: File): Boolean {
         return try {
             if (!home.mkdirs() && !home.isDirectory) return false
             val root = home.canonicalFile
-            app.assets.open(PYTHON_ASSET).use { input ->
+            app.assets.open(asset).use { input ->
                 ZipInputStream(BufferedInputStream(input)).use { zip ->
                     while (true) {
                         val entry = zip.nextEntry ?: break
@@ -202,8 +256,9 @@ internal class Toolchain(context: Context) {
 
 /** PATH composition, kept pure so the no-binary case is provably byte-identical. */
 internal fun commandPath(busybox: File?, farm: File, systemPath: String = SYSTEM_PATH,
-                         python: File? = null): String =
-    if ((busybox?.isFile == true || python?.isFile == true) && farm.isDirectory) {
+                         python: File? = null, git: File? = null): String =
+    if ((busybox?.isFile == true || python?.isFile == true || git?.isFile == true) &&
+        farm.isDirectory) {
         "${farm.absolutePath}:$systemPath"
     } else systemPath
 
@@ -217,20 +272,37 @@ internal data class FarmPlan(
 }
 
 /**
- * The farm's name-to-target map: every BusyBox applet plus python3/python when the
- * interpreter shipped. Missing targets leave their entries out, so the absent case is
+ * The farm's name-to-target map: every BusyBox applet plus python3/python and git when
+ * those binaries shipped. Missing targets leave their entries out, so the absent case is
  * exactly the old applet set.
  */
 internal fun farmTargets(
     applets: List<String>,
     busybox: String?,
     python: String? = null,
+    git: String? = null,
 ): Map<String, String> {
     val targets = LinkedHashMap<String, String>()
     if (busybox != null) applets.forEach { targets[it] = busybox }
     if (python != null) {
         targets["python3"] = python
         targets["python"] = python
+    }
+    if (git != null) targets["git"] = git
+    return targets
+}
+
+/** GIT_EXEC_PATH entries: the smart HTTPS helpers and the local-transport builtins. */
+internal fun gitExecTargets(git: String?, remoteHttps: String?): Map<String, String> {
+    val targets = LinkedHashMap<String, String>()
+    if (remoteHttps != null) {
+        targets["git-remote-https"] = remoteHttps
+        targets["git-remote-http"] = remoteHttps
+    }
+    if (git != null) {
+        targets["git-upload-pack"] = git
+        targets["git-receive-pack"] = git
+        targets["git-upload-archive"] = git
     }
     return targets
 }
@@ -253,7 +325,8 @@ internal fun planFarm(
     existing: Map<String, String>,
     target: String,
     python: String? = null,
-): FarmPlan = planLinks(farmTargets(wanted, target, python), existing)
+    git: String? = null,
+): FarmPlan = planLinks(farmTargets(wanted, target, python, git), existing)
 
 /** Applies a link plan to [root]; only links are ours to remove, other entries stay. */
 private fun syncLinks(root: File, wanted: Map<String, String>) {
@@ -312,15 +385,15 @@ internal fun parsePythonManifest(text: String): List<PythonLink> {
 internal fun pythonLinkTargets(links: List<PythonLink>, nativeDir: File): Map<String, String> =
     links.associate { it.path to File(nativeDir, it.target).absolutePath }
 
-internal enum class PythonExtraction { Extract, Current }
+internal enum class VersionedExtraction { Extract, Current }
 
 /** Fresh (no marker) and stale markers extract; a current marker with the tree present is a no-op. */
-internal fun pythonExtraction(
+internal fun versionedExtraction(
     marker: String?,
     version: String,
-    stdlibPresent: Boolean,
-): PythonExtraction =
-    if (stdlibPresent && marker == version) PythonExtraction.Current else PythonExtraction.Extract
+    contentPresent: Boolean,
+): VersionedExtraction =
+    if (contentPresent && marker == version) VersionedExtraction.Current else VersionedExtraction.Extract
 
 /**
  * Adds PYTHONHOME, SSL_CERT_FILE and the Zone D TMPDIR to the command environment. A null
@@ -341,5 +414,31 @@ internal fun pythonEnvironment(base: List<String>, home: File?, temporary: File?
     if (!temporaryReplaced) environment += "TMPDIR=${temporary.absolutePath}"
     environment += "PYTHONHOME=${home.absolutePath}"
     environment += "SSL_CERT_FILE=$SYSTEM_CA_PATH"
+    return environment
+}
+
+/**
+ * Git's fixed environment, plus the credential-helper spec when a token is connected.
+ * The spec names the helper and the app-private file; the token itself stays in that file
+ * and never enters the environment.
+ */
+internal fun gitEnvironment(
+    base: List<String>,
+    execPath: File?,
+    templateDir: File?,
+    credentialFile: File?,
+): List<String> {
+    if (execPath == null || templateDir == null) return base
+    val environment = ArrayList<String>(base.size + 7)
+    environment += base
+    environment += "GIT_EXEC_PATH=${execPath.absolutePath}"
+    environment += "GIT_TEMPLATE_DIR=${templateDir.absolutePath}"
+    environment += "GIT_SSL_CAPATH=$SYSTEM_CA_PATH"
+    environment += "GIT_CONFIG_NOSYSTEM=1"
+    if (credentialFile != null) {
+        environment += "GIT_CONFIG_COUNT=1"
+        environment += "GIT_CONFIG_KEY_0=credential.helper"
+        environment += "GIT_CONFIG_VALUE_0=store --file=${credentialFile.absolutePath}"
+    }
     return environment
 }

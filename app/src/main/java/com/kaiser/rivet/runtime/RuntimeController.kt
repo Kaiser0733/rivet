@@ -1,12 +1,14 @@
 package com.kaiser.rivet.runtime
 
 import android.content.Context
+import com.kaiser.rivet.storage.GitHubTokenStore
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
@@ -41,6 +43,7 @@ class RuntimeController(
 ) {
     private val app = context.applicationContext
     private val toolchain = Toolchain(app)
+    private val gitHub = GitHubTokenStore(app)
     private val governor = TerminalGovernor(app)
     private val operations = Mutex()
     private var mirrorIdentity: String? = null
@@ -73,8 +76,12 @@ class RuntimeController(
         // First use in this process: build the applet farm before PATH is composed.
         // Without libbusybox.so this is a no-op and the environment is unchanged.
         toolchain.ensurePrepared()
+        // Refresh below the model: only the helper spec and file path reach the environment.
+        val credentialFile = if (toolchain.gitReady) {
+            withContext(Dispatchers.IO) { gitHub.refresh() }
+        } else null
         val directory = runtimeDirectory(ready.worktree, cwd)
-        val environment = environment(active, directory)
+        val environment = environment(active, directory, credentialFile)
         val processId = managedProcesses?.let { registry ->
             val job = currentCoroutineContext()[Job]
                 ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "runtime_unavailable")
@@ -328,7 +335,8 @@ class RuntimeController(
         return mirror
     }
 
-    private fun environment(mirror: WorkspaceMirror, cwd: File): Array<String> {
+    private fun environment(mirror: WorkspaceMirror, cwd: File,
+                            credentialFile: File?): Array<String> {
         val home = mirror.home.apply { mkdirs() }
         val temporary = mirror.temporary.apply { mkdirs() }
         if (!home.isDirectory || !temporary.isDirectory) throw MirrorFailure("storage")
@@ -339,7 +347,7 @@ class RuntimeController(
             "PWD=${cwd.absolutePath}",
             "LANG=C.UTF-8",
             "TERM=xterm-256color",
-        )).toTypedArray()
+        ), credentialFile).toTypedArray()
     }
 
     private fun runtimeDirectory(worktree: File, cwd: String): File {

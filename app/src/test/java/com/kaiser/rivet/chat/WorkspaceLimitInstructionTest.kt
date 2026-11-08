@@ -23,7 +23,8 @@ class WorkspaceLimitInstructionTest {
         listOf("Python 3.12.3", "python3", "ensurepip", "python3 -m pip",
             "no bz2 or lzma", "tkinter, curses, or readline")
             .forEach { assertTrue(it, briefing.contains(it)) }
-        listOf("Node", "git CLI", "system package managers")
+        listOf("Git 2.56", "push over HTTPS", "Settings > GitHub",
+            "public clones and local work still work", "Node", "system package managers")
             .forEach { assertTrue(it, briefing.contains(it)) }
     }
 
