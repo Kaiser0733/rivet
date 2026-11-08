@@ -141,6 +141,8 @@ class PreparedAgentTool(
     val basicAutonomyRisk: BasicAutonomyRisk = BasicAutonomyRisk.Elevated,
     val modelRequestsApproval: Boolean = false,
     val blockedReason: String? = null,
+    /** Set for a command that references an installed skill's bundled files. */
+    val skillScript: SkillScriptHit? = null,
     val execute: suspend () -> AgentToolResult,
 )
 

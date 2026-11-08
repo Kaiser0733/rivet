@@ -57,6 +57,8 @@ class AgentLoop(
     private val compactContext: suspend (List<AgentMessage>, Boolean) -> List<AgentMessage> = { messages, _ -> messages },
     private val contextFootprint: (List<AgentMessage>) -> Long = { AgentContext.serializedBytes(it).toLong() },
     private val contextUpdates: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
+    private val approvedSkillScripts: Set<String> = emptySet(),
+    private val recordSkillScriptApproval: suspend (String) -> Unit = {},
 ) {
     suspend fun run(
         initial: List<AgentMessage>,
@@ -79,6 +81,7 @@ class AgentLoop(
             catch (_: Exception) { /* Presentation telemetry never controls execution. */ }
         }
         val deniedMutations = mutableSetOf<String>()
+        val scriptApprovals = approvedSkillScripts.toMutableSet()
         val createdPaths = mutableSetOf<String>()
         val createdDirectories = mutableSetOf<String>()
         val movedExistingPaths = mutableSetOf<String>()
@@ -295,6 +298,14 @@ class AgentLoop(
                         failureCode = runtimeStop ?: decision.reason
                         break
                     }
+                    // A bundled skill script needs a person's first yes. When the mode
+                    // already asks for this command the existing prompt carries the skill
+                    // line; YOLO removes approvals entirely, so the gate is inert there.
+                    val scriptHit = prepared.skillScript
+                    val scriptGate = skillScriptGate(autonomyMode, scriptHit, scriptApprovals,
+                        baseAsks = decision == ApprovalDecision.AskUser)
+                    val skillInserted = scriptGate == SkillScriptGate.InsertApproval &&
+                        prepared.approval != null
                     val blocked = if (prepared.effect.requiresRuntimeBlocker && !previouslyDenied) {
                         try { mutationBlocker(call) }
                         catch (e: CancellationException) { throw e }
@@ -336,9 +347,10 @@ class AgentLoop(
                         stopReason = AgentStopReason.SessionLimit
                         break
                     }
-                    val approval = if (decision == ApprovalDecision.AskUser) prepared.approval?.let { request ->
+                    val asking = decision == ApprovalDecision.AskUser || skillInserted
+                    val approval = if (asking) prepared.approval?.let { request ->
                         val target = request.destructivePath
-                        when {
+                        val described = when {
                             target != null && target in createdDirectories -> request.copy(
                                 title = "Delete folder?",
                                 detail = "${request.detail}\nThis folder may contain files added outside Rivet.",
@@ -349,8 +361,14 @@ class AgentLoop(
                                 describeDestructive(request)
                             else -> request
                         }
+                        if (scriptHit != null && scriptGate != SkillScriptGate.None) described.copy(
+                            detail = described.detail +
+                                "\nBundled skill: ${scriptHit.skill.name}" +
+                                "\nScript: ${scriptHit.path}" +
+                                "\nApproving lets this skill's scripts run without asking again.",
+                        ) else described
                     } else null
-                    val denied = decision == ApprovalDecision.AskUser &&
+                    val denied = asking &&
                         (previouslyDenied || run {
                             lifecycle(call, AgentToolLifecycleStage.AwaitingApproval)
                             !requestApproval(requireNotNull(approval))
@@ -385,6 +403,17 @@ class AgentLoop(
                         stopped(call, mutationBlocker)
                     } else {
                         if (prepared.effect.changesWorkspace) mutationsAttempted++
+                        // The grant is durable once the command is actually about to run.
+                        if (scriptHit != null && scriptGate != SkillScriptGate.None) {
+                            scriptApprovals += scriptHit.skill.name
+                            try {
+                                recordSkillScriptApproval(scriptHit.skill.name)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (_: Exception) {
+                                // The grant still covers this turn if the store cannot persist it.
+                            }
+                        }
                         lifecycle(call, AgentToolLifecycleStage.Started)
                         try {
                             prepared.execute()
