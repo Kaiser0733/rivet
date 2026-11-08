@@ -108,6 +108,7 @@ import com.kaiser.rivet.chat.liveStatusLabel
 import com.kaiser.rivet.chat.withDraft
 import com.kaiser.rivet.chat.liveStatusLine
 import com.kaiser.rivet.agent.AgentApprovalRequest
+import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.ui.provider.labelRes
@@ -149,6 +150,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit) {
     val landscape = showsHistoryPane(LocalConfiguration.current.orientation)
     val state by chatViewModel.uiState.collectAsState()
+    val userSkills by chatViewModel.userSkills.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
     val processItems by chatViewModel.managedProcesses.processes.collectAsState()
     val hasActiveProcesses = processItems.any { it.status in setOf(
@@ -625,6 +627,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges,
                     acceptedMessageCount = state.acceptedMessageCount,
                     error = state.error, notice = state.notice, sessionId = state.currentSessionId,
+                    skills = userSkills,
+                    onRequestSkills = chatViewModel::refreshUserSkills,
                     selector = modelSelector,
                     onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
                     modifier = Modifier.fillMaxWidth())
@@ -1391,6 +1395,8 @@ private val DRAFT_SAVER: Saver<Map<String, String>, Any> = mapSaver(
 @Composable
 private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
                      error: String?, notice: String?, sessionId: String?,
+                     skills: List<Skill> = emptyList(),
+                     onRequestSkills: suspend () -> Unit = {},
                      selector: (@Composable () -> Unit)? = null,
                      onSend: (String) -> Unit,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
@@ -1426,47 +1432,66 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             onSend(text)
         }
     }
+    // The "/" picker only appears while the first token is still being typed; picking a
+    // row just completes the text, and sending is what loads the skill.
+    val commandQuery = skillCommandQuery(draft)
+    val commandMatches = if (commandQuery == null) emptyList() else matchingSkills(skills, commandQuery)
+    var dismissedCommand by rememberSaveable { mutableStateOf<String?>(null) }
+    val showCommands = commandQuery != null && dismissedCommand != draft && commandMatches.isNotEmpty()
+    LaunchedEffect(commandQuery != null) {
+        if (commandQuery != null) onRequestSkills() else dismissedCommand = null
+    }
+    BackHandler(enabled = showCommands) { dismissedCommand = draft }
     // One container for the whole composer: the field inside carries no outline of its
     // own, and the selector shares the quiet second row with send/stop.
-    Surface(
-        modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
-        color = MaterialTheme.colorScheme.surfaceContainer,
-        shape = RoundedCornerShape(20.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
-    ) {
-        Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
-            OutlinedTextField(
-                value = draft,
-                onValueChange = { drafts = withDraft(drafts, sessionId, it) },
-                modifier = Modifier.fillMaxWidth(),
-                placeholder = { Text("Ask Rivet…") },
-                minLines = 1,
-                maxLines = 6,
-                keyboardOptions = KeyboardOptions(
-                    capitalization = KeyboardCapitalization.Sentences,
-                    imeAction = ImeAction.Send,
-                ),
-                keyboardActions = KeyboardActions(onSend = { submit() }),
-                shape = RoundedCornerShape(12.dp),
-                colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
-                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                ),
-            )
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                selector?.invoke()
-                Spacer(Modifier.weight(1f))
-                IconButton(onClick = { if (streaming) onCancel() else submit() },
-                    enabled = streaming || canSend, modifier = Modifier.size(48.dp)
-                    .clip(CircleShape)
-                    .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
-                        else MaterialTheme.colorScheme.surfaceVariant)) {
-                    Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
-                        stringResource(if (streaming) R.string.chat_stop else R.string.chat_send),
-                        tint = if (streaming || canSend) MaterialTheme.colorScheme.onPrimary
-                        else MaterialTheme.colorScheme.onSurfaceVariant)
+    Column(modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp)) {
+        if (showCommands) {
+            SkillCommandSheet(commandMatches) { skill ->
+                dismissedCommand = null
+                drafts = withDraft(drafts, sessionId, "/${skill.name} ")
+            }
+            Spacer(Modifier.padding(bottom = 6.dp))
+        }
+        Surface(
+            Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            shape = RoundedCornerShape(20.dp),
+            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
+        ) {
+            Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
+                OutlinedTextField(
+                    value = draft,
+                    onValueChange = { drafts = withDraft(drafts, sessionId, it) },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("Ask Rivet…") },
+                    minLines = 1,
+                    maxLines = 6,
+                    keyboardOptions = KeyboardOptions(
+                        capitalization = KeyboardCapitalization.Sentences,
+                        imeAction = ImeAction.Send,
+                    ),
+                    keyboardActions = KeyboardActions(onSend = { submit() }),
+                    shape = RoundedCornerShape(12.dp),
+                    colors = OutlinedTextFieldDefaults.colors(
+                        focusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
+                        unfocusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
+                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    ),
+                )
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    selector?.invoke()
+                    Spacer(Modifier.weight(1f))
+                    IconButton(onClick = { if (streaming) onCancel() else submit() },
+                        enabled = streaming || canSend, modifier = Modifier.size(48.dp)
+                        .clip(CircleShape)
+                        .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
+                            else MaterialTheme.colorScheme.surfaceVariant)) {
+                        Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
+                            stringResource(if (streaming) R.string.chat_stop else R.string.chat_send),
+                            tint = if (streaming || canSend) MaterialTheme.colorScheme.onPrimary
+                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
             }
         }

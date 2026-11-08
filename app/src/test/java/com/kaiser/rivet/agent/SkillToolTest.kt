@@ -30,6 +30,15 @@ class SkillToolTest {
         assertEquals("Loaded skill  notes", result.summary)
     }
 
+    @Test fun alreadyLoadedSkillIsNotRenderedAgain() {
+        val result = skillToolResult(call, catalog(skill("notes")), "notes",
+            loadedSkills = setOf("notes"))
+
+        assertFalse(result.error)
+        assertTrue(result.content.contains("already_loaded"))
+        assertFalse(result.content.contains("<skill_content"))
+    }
+
     @Test fun manualOnlySkillIsRefused() {
         val result = skillToolResult(call, catalog(skill("notes", disableModelInvocation = true)), "notes")
 

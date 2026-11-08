@@ -13,6 +13,7 @@ internal fun skillToolResult(
     call: AgentToolCall,
     catalog: SkillCatalog?,
     name: String,
+    loadedSkills: Set<String> = emptySet(),
 ): AgentToolResult {
     val skills = catalog?.skills.orEmpty()
     val skill = skills.firstOrNull { it.name == name }
@@ -25,6 +26,14 @@ internal fun skillToolResult(
                 "No skills are installed in this session. Continue with the request and the other tools."
             else "Available skills: ${available.joinToString(", ")}. Call skill again with one of these exact names.")
         }.toString(), error = true, summary = "Failed  skill")
+    }
+    // Manual beats auto: a `/name` gesture already put this skill in the turn.
+    if (name in loadedSkills) {
+        return AgentToolResult(call.id, call.name, buildJsonObject {
+            put("skill", name)
+            put("already_loaded", true)
+            put("required_action", "The skill is already loaded for this turn. Follow the instructions already in the conversation; do not load it again.")
+        }.toString(), summary = "Skill already loaded  $name")
     }
     if (!skill.modelInvocable) {
         return AgentToolResult(call.id, call.name, buildJsonObject {

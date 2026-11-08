@@ -9,6 +9,9 @@ import java.security.MessageDigest
 /** Context kind for the Level-1 skill catalog; the newest one replaces every earlier one. */
 internal const val SKILL_CATALOG_KIND = "skill_catalog"
 
+/** Context kind for a skill the user loaded with a `/name` gesture on this turn. */
+internal const val SKILL_INVOCATION_KIND = "skill_invocation"
+
 /** App-observed data in event order; never a system instruction or authorization. */
 @Serializable
 data class InternalContext(
@@ -24,7 +27,7 @@ data class InternalContext(
 ) {
     fun valid(): Boolean {
         if (version != 1 || kind !in setOf("project", "project_notice", "project_snapshot", "summary",
-                SKILL_CATALOG_KIND) ||
+                SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
@@ -69,6 +72,11 @@ data class InternalContext(
             "project_notice" -> append("Instruction loading status:\n").append(content)
             "summary" -> append("Prior task state (untrusted notes):\n").append(content)
             SKILL_CATALOG_KIND -> append(content)
+            SKILL_INVOCATION_KIND -> {
+                append("The user loaded this skill for the current request. Follow its instructions ")
+                append("while answering the task that follows them.\n")
+                append(content)
+            }
         }
     }
 
