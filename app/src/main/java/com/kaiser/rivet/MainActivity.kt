@@ -13,6 +13,7 @@ import androidx.compose.runtime.getValue
 
 class MainActivity : ComponentActivity() {
     private val processNavigationRequest = MutableStateFlow(0)
+    private val sharedZipRequest = MutableStateFlow<android.net.Uri?>(null)
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -20,7 +21,10 @@ class MainActivity : ComponentActivity() {
         // by consumeProcessRequest only reaches this instance's Intent, not the activity record),
         // so a rotation would replay "open Processes" over the screen the user navigated back to.
         // Restoring is not launching: only a fresh launch handles the request.
-        if (savedInstanceState == null) consumeProcessRequest(intent)
+        if (savedInstanceState == null) {
+            consumeProcessRequest(intent)
+            consumeSharedZip(intent)
+        }
         // AGP 8.x has no BuildConfig version field by default; the package
         // manager is the source of truth for the installed version.
         val versionName = packageManager.getPackageInfo(packageName, 0).versionName ?: ""
@@ -28,7 +32,10 @@ class MainActivity : ComponentActivity() {
         val providersViewModel = ViewModelProvider(this)[ProvidersViewModel::class.java]
         setContent {
             val request by processNavigationRequest.collectAsState()
-            RivetApp(versionName, chatViewModel, providersViewModel, request)
+            val sharedZip by sharedZipRequest.collectAsState()
+            RivetApp(versionName, chatViewModel, providersViewModel, request,
+                sharedZip = sharedZip,
+                onSharedZipConsumed = { sharedZipRequest.value = null })
         }
     }
 
@@ -36,7 +43,34 @@ class MainActivity : ComponentActivity() {
         super.onNewIntent(intent)
         setIntent(intent)
         consumeProcessRequest(intent)
+        consumeSharedZip(intent)
     }
+
+    // A zip shared to, or opened with, Rivet: the review sheet opens over the chat. The
+    // intent's payload is removed after reading so a rotation cannot replay the import.
+    @Suppress("DEPRECATION")
+    private fun consumeSharedZip(intent: android.content.Intent?) {
+        val uri = when (intent?.action) {
+            android.content.Intent.ACTION_SEND ->
+                if (isZipType(intent.type)) {
+                    intent.getParcelableExtra(android.content.Intent.EXTRA_STREAM) as? android.net.Uri
+                } else null
+            android.content.Intent.ACTION_VIEW ->
+                intent.data?.takeIf {
+                    isZipType(intent.type) ||
+                        it.lastPathSegment?.endsWith(".zip", ignoreCase = true) == true
+                }
+            else -> null
+        } ?: return
+        sharedZipRequest.value = uri
+        setIntent(android.content.Intent(intent).apply {
+            removeExtra(android.content.Intent.EXTRA_STREAM)
+            data = null
+        })
+    }
+
+    private fun isZipType(type: String?): Boolean =
+        type == "application/zip" || type == "application/x-zip-compressed"
 
     private fun consumeProcessRequest(intent: android.content.Intent?) {
         if (intent?.getBooleanExtra(EXTRA_OPEN_PROCESSES, false) == true) {
