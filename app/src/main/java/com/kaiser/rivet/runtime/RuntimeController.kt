@@ -132,7 +132,7 @@ class RuntimeController(
     fun terminalStateLine(activeCount: Int): String = governor.stateLine(activeCount)
 
     /** What the prompt may honestly claim about the shipped toolchain right now. */
-    fun toolchainAvailability(): ToolchainAvailability = toolchain.availability()
+    internal fun toolchainAvailability(): ToolchainAvailability = toolchain.availability()
 
     suspend fun requireSafCurrent() = operations.withLock {
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
