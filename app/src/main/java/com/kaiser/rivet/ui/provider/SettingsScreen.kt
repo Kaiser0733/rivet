@@ -1,65 +1,78 @@
 package com.kaiser.rivet.ui.provider
 
+import androidx.activity.compose.BackHandler
+import androidx.annotation.DrawableRes
+import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.clickable
+import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.selection.selectable
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.heightIn
-import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.RadioButton
-import androidx.compose.material3.Slider
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.LaunchedEffect
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.Role
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import kotlin.math.roundToInt
 import com.kaiser.rivet.storage.SessionUsage
 import com.kaiser.rivet.storage.diagnostics
 import com.kaiser.rivet.R
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
-import com.kaiser.rivet.ui.MAX_ROSE_INTENSITY
-import com.kaiser.rivet.ui.MIN_ROSE_INTENSITY
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.RivetThemeMode
 import com.kaiser.rivet.ui.chat.displaySafeText
 
 private val MAX_WIDTH = 680.dp
 
+// The section that is open at level 2. Remembered by RivetApp, so Android Back can step
+// detail -> list -> dismiss instead of closing the sheet in one go.
+internal enum class SettingsSection { Providers, Appearance, Agent, Updates, About }
+
+/**
+ * The body of the settings modal sheet: a two-level page — a section list, and one
+ * section's detail inside the same sheet. Hosting (the sheet itself) is RivetApp's job;
+ * this composable only fills it.
+ */
 @Composable
 fun SettingsScreen(
     viewModel: ProvidersViewModel,
@@ -67,7 +80,6 @@ fun SettingsScreen(
     onClose: () -> Unit,
     onEditProvider: (String) -> Unit,
     onNewProvider: (ProviderType) -> Unit,
-    roseIntensity: Int,
     themeMode: RivetThemeMode,
     themeSaving: Boolean,
     onThemeChange: (RivetThemeMode) -> Unit,
@@ -76,16 +88,18 @@ fun SettingsScreen(
     autonomySaving: Boolean,
     autonomyError: String?,
     onAutonomyChange: (AutonomyMode) -> Unit,
-    onRoseIntensityPreview: (Int) -> Unit,
-    onRoseIntensityCommit: (Int) -> Unit,
     conversationUsage: SessionUsage? = null,
 ) {
     val state by viewModel.listState.collectAsState()
+    // Level 2 lives here, not in the host: the sheet is only a container.
+    var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
+    // Only while a detail is open, so Back inside the sheet steps detail -> list and then
+    // falls through to the sheet's own dismiss.
+    BackHandler(enabled = section != null) { section = null }
     var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
     var showUsage by rememberSaveable { mutableStateOf(false) }
     var confirmYolo by rememberSaveable { mutableStateOf(false) }
-    var selectedIntensity by rememberSaveable { mutableIntStateOf(roseIntensity) }
-    LaunchedEffect(roseIntensity) { selectedIntensity = roseIntensity }
+
     deleteTarget?.let { provider ->
         AlertDialog(
             onDismissRequest = { deleteTarget = null },
@@ -129,6 +143,204 @@ fun SettingsScreen(
 
     val active = state.configs.firstOrNull { it.id == state.activeId }
     val saved = state.configs.filterNot { it.id == active?.id }
+
+    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
+        Column(Modifier.fillMaxSize().widthIn(max = MAX_WIDTH)) {
+            SheetTopBar(section = section, onClose = onClose, onBack = { section = null })
+            HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
+            when (section) {
+                null -> SectionList(
+                    providerSummary = when {
+                        state.loadError != null -> "Problem loading providers"
+                        active == null -> "Not set"
+                        else -> "${active.name} · ${active.model}"
+                    },
+                    themeSummary = themeMode.name,
+                    autonomySummary = autonomyDisplayName(autonomyMode),
+                    versionSummary = stringResource(R.string.provider_hint_version, versionName),
+                    onSelect = { section = it },
+                )
+                SettingsSection.Providers -> ProviderDetail(
+                    loadError = state.loadError,
+                    headerNotice = state.headerNotice,
+                    active = active,
+                    saved = saved,
+                    onSelect = { viewModel.setActive(it.id) },
+                    onEdit = { id -> onEditProvider(id) },
+                    onDelete = { provider -> deleteTarget = provider },
+                    onNewProvider = onNewProvider,
+                )
+                SettingsSection.Appearance -> AppearanceDetail(
+                    themeMode = themeMode,
+                    themeSaving = themeSaving,
+                    onThemeChange = onThemeChange,
+                    appearanceError = appearanceError,
+                )
+                SettingsSection.Agent -> AgentDetail(
+                    autonomyMode = autonomyMode,
+                    autonomySaving = autonomySaving,
+                    autonomyError = autonomyError,
+                    confirmYolo = { confirmYolo = true },
+                    onAutonomyChange = onAutonomyChange,
+                )
+                SettingsSection.Updates -> DetailScroll { UpdatesSection(versionName) }
+                SettingsSection.About -> AboutDetail(
+                    versionName = versionName,
+                    onShowUsage = { showUsage = true },
+                )
+            }
+        }
+    }
+}
+
+// The sheet supplies its own horizontal padding; the column only centres itself in it.
+
+@Composable
+private fun SheetTopBar(
+    section: SettingsSection?,
+    onClose: () -> Unit,
+    onBack: () -> Unit,
+) {
+    Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        if (section == null) {
+            Spacer(Modifier.size(48.dp))
+        } else {
+            IconButton(onClick = onBack) {
+                Icon(painterResource(R.drawable.ic_back), "Back",
+                    tint = MaterialTheme.colorScheme.onBackground)
+            }
+        }
+        Text(
+            section?.title() ?: stringResource(R.string.settings),
+            style = MaterialTheme.typography.titleLarge,
+            modifier = Modifier.weight(1f),
+        )
+        IconButton(onClick = onClose) {
+            Icon(painterResource(R.drawable.ic_close), stringResource(R.string.close),
+                tint = MaterialTheme.colorScheme.onBackground)
+        }
+    }
+}
+
+private fun SettingsSection.title(): String = when (this) {
+    SettingsSection.Providers -> "Providers"
+    SettingsSection.Appearance -> "Appearance"
+    SettingsSection.Agent -> "Agent"
+    SettingsSection.Updates -> "Updates"
+    SettingsSection.About -> "About"
+}
+
+@Composable
+private fun SectionList(
+    providerSummary: String,
+    themeSummary: String,
+    autonomySummary: String,
+    versionSummary: String,
+    onSelect: (SettingsSection) -> Unit,
+) {
+    Column(
+        Modifier.fillMaxWidth()
+            .clip(RoundedCornerShape(16.dp))
+            .background(MaterialTheme.colorScheme.surfaceContainerLow)
+            .padding(12.dp),
+        verticalArrangement = Arrangement.spacedBy(0.dp)
+    ) {
+        SettingsSection.entries.forEachIndexed { index, section ->
+            val (title, summary) = when (section) {
+                SettingsSection.Providers -> "Providers" to providerSummary
+                SettingsSection.Appearance -> "Appearance" to themeSummary
+                SettingsSection.Agent -> "Agent" to autonomySummary
+                SettingsSection.Updates -> "Updates" to "Check for updates"
+                SettingsSection.About -> "About" to versionSummary
+            }
+            val iconRes = when (section) {
+                SettingsSection.Providers -> R.drawable.ic_settings // gear = providers config
+                SettingsSection.Appearance -> R.drawable.ic_visibility // sun/moon for theme
+                SettingsSection.Agent -> R.drawable.ic_processes // robot/processes for agent
+                SettingsSection.Updates -> R.drawable.ic_history // refresh/history for updates
+                SettingsSection.About -> R.drawable.ic_files // info/documents for about
+            }
+            
+            SectionListItem(
+                iconRes = iconRes,
+                title = title,
+                summary = summary,
+                onClick = { onSelect(section) },
+                showDivider = index < SettingsSection.entries.size - 1
+            )
+        }
+    }
+}
+
+@Composable
+private fun SectionListItem(
+    iconRes: Int,
+    title: String,
+    summary: String,
+    onClick: () -> Unit,
+    showDivider: Boolean,
+) {
+    Row(
+        modifier = Modifier
+            .fillMaxWidth()
+            .clickable(onClick = onClick)
+            .padding(vertical = 14.dp, horizontal = 4.dp),
+        verticalAlignment = Alignment.CenterVertically
+    ) {
+        Icon(
+            painterResource(iconRes),
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+        Spacer(Modifier.width(12.dp))
+        Column(Modifier.weight(1f)) {
+            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(
+                summary,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis
+            )
+        }
+        Icon(
+            painterResource(R.drawable.ic_chevron_right),
+            contentDescription = null,
+            modifier = Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant
+        )
+    }
+    if (showDivider) {
+        HorizontalDivider(
+            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+            modifier = Modifier.padding(horizontal = 48.dp)
+        )
+    }
+}
+
+/** Level 2 chrome: a scrolling column sized to the sheet's remaining height. */
+@Composable
+private fun DetailScroll(content: @Composable ColumnScope.() -> Unit) {
+    Column(
+        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+            .padding(horizontal = 16.dp, vertical = 16.dp),
+        content = content,
+    )
+}
+
+@Composable
+private fun ProviderDetail(
+    loadError: String?,
+    headerNotice: String?,
+    active: ProviderConfig?,
+    saved: List<ProviderConfig>,
+    onSelect: (ProviderConfig) -> Unit,
+    onEdit: (String) -> Unit,
+    onDelete: (ProviderConfig) -> Unit,
+    onNewProvider: (ProviderType) -> Unit,
+) {
     val presets = listOf(
         ProviderType.OpenAiCompatible,
         ProviderType.OpenAi,
@@ -137,170 +349,247 @@ fun SettingsScreen(
         ProviderType.OpenRouter,
         ProviderType.ChatGptPlan,
     )
-
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        Row(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
-            .padding(start = 4.dp, end = 16.dp, top = 4.dp, bottom = 2.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onClose) {
-                Icon(painterResource(R.drawable.ic_back), stringResource(R.string.close),
-                    tint = MaterialTheme.colorScheme.onBackground)
-            }
-            Text(stringResource(R.string.settings), style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.weight(1f))
-            Text(stringResource(R.string.provider_hint_version, versionName),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+    LazyColumn(Modifier.fillMaxSize(),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(
+            start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+    ) {
+        
+        loadError?.let { message ->
+            item { Text(displaySafeText(message), color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodyMedium,
+                modifier = Modifier.padding(vertical = 8.dp)) }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f))
-
-        LazyColumn(
-            Modifier.widthIn(max = MAX_WIDTH).fillMaxSize().align(Alignment.CenterHorizontally),
-            contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = 20.dp, end = 16.dp, top = 14.dp, bottom = 24.dp),
-        ) {
-            state.loadError?.let { message ->
-                item { Text(displaySafeText(message), color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodyMedium,
-                    modifier = Modifier.padding(vertical = 8.dp)) }
-            }
-            state.headerNotice?.let { message ->
-                // App copy today (a count of dropped custom headers), escaped for the same
-                // reason as the error rows above: it is a stored string this screen prints.
-                item { Text(displaySafeText(message), color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(vertical = 8.dp)) }
-            }
-            item { SectionHeading("Current provider") }
-            if (active == null) {
-                item {
-                    Text("Choose a provider below to connect Rivet to a model.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        modifier = Modifier.padding(vertical = 8.dp))
-                }
-            } else {
-                item {
-                    ProviderRow(active, isActive = true, onSelect = {},
-                        onEdit = { onEditProvider(active.id) }, onDelete = { deleteTarget = active })
-                }
-            }
-
-            if (saved.isNotEmpty()) {
-                item { SectionHeading("Other saved providers", Modifier.padding(top = 22.dp)) }
-                items(saved, key = { it.id }) { provider ->
-                    ProviderRow(provider, isActive = false,
-                        onSelect = { viewModel.setActive(provider.id) },
-                        onEdit = { onEditProvider(provider.id) },
-                        onDelete = { deleteTarget = provider })
-                }
-            }
-
+        headerNotice?.let { message ->
+            // App copy today (a count of dropped custom headers), escaped for the same
+            // reason as the error rows above: it is a stored string this screen prints.
+            item { Text(displaySafeText(message), color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall,
+                modifier = Modifier.padding(vertical = 8.dp)) }
+        }
+        item { SectionHeading("Current provider", modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)) }
+        if (active == null) {
             item {
-                SectionHeading("Agent autonomy", Modifier.padding(top = 24.dp))
-                listOf(
-                    AutonomyMode.Ask to "Ask before changes and commands.",
-                    AutonomyMode.BasicYolo to "Routine changes can run automatically. Rivet still asks for higher-risk actions.",
-                    AutonomyMode.Yolo to "Rivet can use its allowed tools without approval prompts.",
-                ).forEach { (mode, detail) ->
-                    Row(Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                        .selectable(selected = mode == autonomyMode, enabled = !autonomySaving,
-                            role = Role.RadioButton, onClick = {
-                                when (mode) {
-                                    AutonomyMode.Yolo -> if (autonomyMode != mode) confirmYolo = true
-                                    else -> onAutonomyChange(mode)
-                                }
-                            }),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = mode == autonomyMode, onClick = null,
-                            enabled = !autonomySaving)
-                        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
-                            Text(when (mode) {
-                                AutonomyMode.Ask -> "Ask"
-                                AutonomyMode.BasicYolo -> "Basic YOLO"
-                                AutonomyMode.Yolo -> "YOLO"
-                            }, style = MaterialTheme.typography.bodyLarge)
-                            Text(detail, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
-                autonomyError?.let { Text(displaySafeText(it), color = MaterialTheme.colorScheme.error,
-                    style = MaterialTheme.typography.bodySmall) }
+                Text("Choose a provider below to connect Rivet to a model.",
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    modifier = Modifier.padding(vertical = 8.dp))
             }
-
+        } else {
             item {
-                SectionHeading("Add a provider", Modifier.padding(top = 24.dp, bottom = 4.dp))
+                ProviderRow(active, isActive = true, onSelect = {},
+                    onEdit = { onEdit(active.id) }, onDelete = { onDelete(active) })
             }
-            items(presets, key = { it.name }) { type ->
-                Row(Modifier.fillMaxWidth().clickable { onNewProvider(type) }
-                    .padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                    Text(typeDisplayName(type), Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyLarge)
-                    Icon(painterResource(R.drawable.ic_chevron_right), null,
-                        Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
-                }
-                HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.2f))
+        }
+        if (saved.isNotEmpty()) {
+            item { SectionHeading("Other saved providers", Modifier.padding(top = 16.dp, bottom = 4.dp)) }
+            items(saved, key = { it.id }) { provider ->
+                ProviderRow(provider, isActive = false,
+                    onSelect = { onSelect(provider) },
+                    onEdit = { onEdit(provider.id) },
+                    onDelete = { onDelete(provider) })
             }
-
-            item {
-                SectionHeading("Appearance", Modifier.padding(top = 24.dp))
-                Text("Theme", style = MaterialTheme.typography.titleSmall)
-                RivetThemeMode.entries.forEach { mode ->
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).selectable(
-                        selected = mode == themeMode, enabled = !themeSaving,
-                        role = Role.RadioButton, onClick = { onThemeChange(mode) }),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        RadioButton(selected = mode == themeMode, onClick = null, enabled = !themeSaving)
-                        Text(mode.name, style = MaterialTheme.typography.bodyLarge)
-                    }
-                }
-                if (themeMode == RivetThemeMode.Rose) {
-                    Text("Rose intensity", style = MaterialTheme.typography.titleSmall)
-                    Text("Adjust Rivet's colors. Device brightness stays the same.",
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        style = MaterialTheme.typography.bodySmall)
-                    Slider(
-                        value = selectedIntensity.toFloat(),
-                        onValueChange = { value ->
-                            selectedIntensity = value.roundToInt()
-                            onRoseIntensityPreview(selectedIntensity)
-                        },
-                        onValueChangeFinished = { onRoseIntensityCommit(selectedIntensity) },
-                        modifier = Modifier.semantics { contentDescription = "Rose intensity" },
-                        valueRange = MIN_ROSE_INTENSITY.toFloat()..MAX_ROSE_INTENSITY.toFloat(),
-                        steps = 5,
-                    )
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = androidx.compose.foundation.layout.Arrangement.SpaceBetween) {
-                        Text("Dim", color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall)
-                        Text("Original", color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-                TextButton(onClick = { showUsage = true }) { Text("Conversation usage") }
-                appearanceError?.let { error ->
-                    Text(displaySafeText(error), color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall)
-                }
+        }
+        item {
+            SectionHeading("Add a provider", Modifier.padding(top = 24.dp, bottom = 8.dp))
+        }
+        items(presets, key = { it.name }) { type ->
+            Row(Modifier.fillMaxWidth().clickable { onNewProvider(type) }
+                .padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
+                Text(typeDisplayName(type), Modifier.weight(1f),
+                    style = MaterialTheme.typography.bodyLarge)
+                Icon(painterResource(R.drawable.ic_chevron_right), null,
+                    Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
             }
-            item {
-                SectionHeading(stringResource(R.string.support_heading),
-                    Modifier.padding(top = 24.dp))
-                SupportSection()
-            }
-            item {
-                SectionHeading("Updates", Modifier.padding(top = 24.dp))
-                UpdatesSection(versionName)
-            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
         }
     }
 }
 
 @Composable
+private fun AppearanceDetail(
+    themeMode: RivetThemeMode,
+    themeSaving: Boolean,
+    onThemeChange: (RivetThemeMode) -> Unit,
+    appearanceError: String?,
+) {
+    DetailScroll {
+        
+        Text("Theme", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 12.dp))
+        
+        // Three cards per the reference; the retired rose-intensity slider is gone from
+        // the UI, its stored value untouched.
+        // The reference lays Light and Dark side by side, System full width below.
+        Row(Modifier.fillMaxWidth()) {
+            ThemeCard(RivetThemeMode.Light, selected = themeMode == RivetThemeMode.Light,
+                enabled = !themeSaving, onClick = { onThemeChange(RivetThemeMode.Light) },
+                modifier = Modifier.weight(1f).padding(end = 8.dp))
+            ThemeCard(RivetThemeMode.Dark, selected = themeMode == RivetThemeMode.Dark,
+                enabled = !themeSaving, onClick = { onThemeChange(RivetThemeMode.Dark) },
+                modifier = Modifier.weight(1f).padding(start = 8.dp))
+        }
+        Spacer(Modifier.height(8.dp))
+        ThemeCard(RivetThemeMode.System, selected = themeMode == RivetThemeMode.System,
+            enabled = !themeSaving, onClick = { onThemeChange(RivetThemeMode.System) })
+        
+        appearanceError?.let { error ->
+            Text(displaySafeText(error), color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 16.dp))
+        }
+    }
+}
+
+@Composable
+private fun ThemeCard(
+    mode: RivetThemeMode,
+    selected: Boolean,
+    enabled: Boolean,
+    onClick: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val shape = RoundedCornerShape(12.dp)
+    Surface(
+        modifier = modifier
+            .heightIn(min = 84.dp)
+            .clip(shape),
+        color = if (selected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
+        else MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.3f),
+        shadowElevation = if (selected) 2.dp else 0.dp,
+        tonalElevation = if (selected) 1.dp else 0.dp,
+        onClick = { /* handled by clickable below */ },
+        border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
+        else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+    ) {
+        Box(
+            modifier = Modifier
+                .fillMaxSize()
+                .clickable(
+                    indication = null,
+                    interactionSource = remember { MutableInteractionSource() }
+                ) {
+                    if (enabled) onClick()
+                },
+            contentAlignment = Alignment.Center
+        ) {
+            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                Icon(
+                    painterResource(themeIcon(mode)),
+                    contentDescription = null,
+                    modifier = Modifier.size(22.dp),
+                    tint = if (selected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+                Spacer(Modifier.height(6.dp))
+                Text(
+                    mode.name,
+                    style = MaterialTheme.typography.bodyMedium,
+                    color = if (selected) MaterialTheme.colorScheme.primary
+                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
+                )
+            }
+        }
+    }
+}
+
+// The app ships its own icon drawables (no material-icons dependency); ic_visibility is
+// the sun stand-in and ic_visibility_off the moon, both simple line glyphs.
+@DrawableRes
+private fun themeIcon(mode: RivetThemeMode): Int = when (mode) {
+    RivetThemeMode.Light -> R.drawable.ic_visibility
+    RivetThemeMode.Dark -> R.drawable.ic_visibility_off
+    RivetThemeMode.System -> R.drawable.ic_settings
+}
+
+@Composable
+private fun UsageRow(onShowUsage: () -> Unit) {
+    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onShowUsage),
+        verticalAlignment = Alignment.CenterVertically) {
+        Text("Conversation usage", Modifier.weight(1f),
+            style = MaterialTheme.typography.bodyLarge)
+        Icon(painterResource(R.drawable.ic_chevron_right), null, Modifier.size(20.dp),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun AgentDetail(
+    autonomyMode: AutonomyMode,
+    autonomySaving: Boolean,
+    autonomyError: String?,
+    confirmYolo: () -> Unit,
+    onAutonomyChange: (AutonomyMode) -> Unit,
+) {
+    DetailScroll {
+        
+        listOf(
+            AutonomyMode.Ask to "Ask before changes and commands.",
+            AutonomyMode.BasicYolo to "Routine changes can run automatically. Rivet still asks for higher-risk actions.",
+            AutonomyMode.Yolo to "Rivet can use its allowed tools without approval prompts.",
+        ).forEachIndexed { index, (mode, detail) ->
+            val isLast = index == 2
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(min = 56.dp)
+                    .selectable(
+                        selected = mode == autonomyMode,
+                        enabled = !autonomySaving,
+                        role = Role.RadioButton,
+                        onClick = {
+                            when (mode) {
+                                AutonomyMode.Yolo -> if (autonomyMode != mode) confirmYolo()
+                                else -> onAutonomyChange(mode)
+                            }
+                        },
+                    ),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                RadioButton(selected = mode == autonomyMode, onClick = null, enabled = !autonomySaving)
+                Column(Modifier.weight(1f).padding(vertical = 6.dp, horizontal = 12.dp)) {
+                    Text(autonomyDisplayName(mode), style = MaterialTheme.typography.bodyLarge)
+                    Text(detail, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            if (!isLast) {
+                HorizontalDivider(
+                    color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+                    modifier = Modifier.padding(horizontal = 68.dp)
+                )
+            }
+        }
+        
+        autonomyError?.let { Text(displaySafeText(it), color = MaterialTheme.colorScheme.error,
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
+    }
+}
+
+private fun autonomyDisplayName(mode: AutonomyMode): String = when (mode) {
+    AutonomyMode.Ask -> "Ask"
+    AutonomyMode.BasicYolo -> "Basic YOLO"
+    AutonomyMode.Yolo -> "YOLO"
+}
+
+@Composable
+private fun AboutDetail(versionName: String, onShowUsage: () -> Unit) {
+    DetailScroll {
+        
+        Text(stringResource(R.string.provider_hint_version, versionName),
+            style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(bottom = 16.dp))
+        
+        SectionHeading(stringResource(R.string.support_heading), modifier = Modifier.padding(bottom = 8.dp))
+        SupportSection()
+        
+        UsageRow(onShowUsage = onShowUsage)
+    }
+}
+
+@Composable
 private fun SectionHeading(text: String, modifier: Modifier = Modifier) {
-    Text(text, modifier = modifier.padding(bottom = 6.dp),
+    Text(
+        text,
+        modifier = modifier.padding(vertical = 4.dp),
         style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary)
+        color = MaterialTheme.colorScheme.primary
+    )
 }
 
 @Composable
@@ -312,10 +601,12 @@ private fun ProviderRow(
     onDelete: () -> Unit,
 ) {
     Column {
-        Row(Modifier.fillMaxWidth()
-            .then(if (isActive) Modifier else Modifier.clickable(onClick = onSelect))
-            .padding(vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically) {
+        Row(
+            Modifier.fillMaxWidth()
+                .then(if (isActive) Modifier else Modifier.clickable(onClick = onSelect))
+                .padding(vertical = 4.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
             RadioButton(selected = isActive, onClick = if (isActive) null else onSelect)
             Column(Modifier.weight(1f).padding(start = 4.dp, end = 4.dp)) {
                 Text(provider.name, style = MaterialTheme.typography.titleMedium)
@@ -333,7 +624,7 @@ private fun ProviderRow(
                     tint = MaterialTheme.colorScheme.onBackground)
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
     }
 }
 
