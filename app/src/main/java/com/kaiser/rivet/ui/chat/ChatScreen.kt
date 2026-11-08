@@ -52,6 +52,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -90,6 +91,7 @@ import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardCapitalization
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
@@ -107,6 +109,7 @@ import com.kaiser.rivet.chat.withDraft
 import com.kaiser.rivet.chat.liveStatusLine
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.provider.ReasoningLevel
+import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.ui.provider.labelRes
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
@@ -394,37 +397,59 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             }
             // Keep one Chat subtree so the composer and scroll state survive rotation.
             Column(Modifier.weight(1f).fillMaxSize()) {
+                // Header row: sessions trigger + title on left, subagent slot + actions on right
                 Row(Modifier.fillMaxWidth()
-                    .padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
-                    if (landscape) Spacer(Modifier.width(96.dp))
-                    else {
-                        // Opening history never touches the running turn, so it stays
-                        // available while the model works.
+                    .padding(horizontal = 8.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    if (landscape) {
+                        Spacer(Modifier.width(96.dp))
+                    } else {
+                        // Sessions trigger (opens left drawer)
                         IconButton(onClick = onOpenHistory, modifier = Modifier.size(48.dp),
                             enabled = state.ready && !state.projectLoading &&
                                 !state.undoing && !state.recoveringProjectChanges) {
                             Icon(painterResource(R.drawable.ic_history), "Conversation history",
                                 tint = MaterialTheme.colorScheme.onBackground)
                         }
-                        Spacer(Modifier.width(48.dp))
                     }
-                    TextButton(onClick = ::chooseProject, modifier = Modifier.weight(1f),
-                        enabled = providers.configs.isNotEmpty() && state.ready && !state.streaming &&
-                            !state.projectLoading && !state.undoing && !state.recoveringProjectChanges) {
-                        Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
-                        Text(displaySafeText(state.projectName ?: "Choose project"), maxLines = 1,
+                    // Title: session title or project name (tappable to choose project)
+                    val titleText = state.currentSessionTitle ?: state.projectName ?: "Rivet"
+                    val canChooseProject = providers.configs.isNotEmpty() && state.ready &&
+                        !state.streaming && !state.projectLoading && !state.undoing &&
+                        !state.recoveringProjectChanges
+                    Row(
+                        modifier = Modifier
+                            .weight(1f)
+                            .padding(horizontal = 8.dp)
+                            .clickable(enabled = canChooseProject, onClick = ::chooseProject),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text(titleText,
+                            style = MaterialTheme.typography.titleMedium,
+                            color = MaterialTheme.colorScheme.onBackground,
+                            maxLines = 1,
                             overflow = TextOverflow.Ellipsis)
-                        Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp))
+                        Icon(
+                            painterResource(R.drawable.ic_chevron_down),
+                            contentDescription = null,
+                            modifier = Modifier.size(18.dp).padding(start = 2.dp),
+                            tint = if (canChooseProject) MaterialTheme.colorScheme.onBackground
+                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f))
                     }
+                    // Subagent chip slot (empty for now, filled by subagents feature later)
+                    // Reserved space, renders nothing until subagents exist
+                    Box(Modifier.size(48.dp)) { }
+                    // Processes action
                     IconButton(onClick = onOpenProcesses, modifier = Modifier.size(48.dp)) {
                         Icon(painterResource(R.drawable.ic_processes), "Processes",
                             tint = if (hasActiveProcesses) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onBackground)
                     }
+                    // Settings action
                     IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
                             tint = MaterialTheme.colorScheme.onBackground)
                     }
+                    // New session action
                     IconButton(onClick = chatViewModel::newSession, modifier = Modifier.size(48.dp),
                         enabled = state.ready && !state.projectLoading && !state.streaming &&
                             !state.undoing && !state.recoveringProjectChanges) {
@@ -434,10 +459,6 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     }
                 }
                 if (providers.configs.isNotEmpty()) {
-                    Box(Modifier.fillMaxWidth()) {
-                        ModelSelector(Modifier.align(Alignment.Center), providersViewModel,
-                            onOpen = { modelSheetVisible = true })
-                    }
                     if (isChatGptPlanActive) {
                         Row(
                             Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
@@ -593,13 +614,22 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     ChangeSummary(state, onUndo = { confirmUndo = true },
                         modifier = Modifier.fillMaxWidth())
                 }
+                // Typed explicitly: an untyped lambda would not be inferred as the
+                // composable slot the composer takes.
+                val modelSelector: (@Composable () -> Unit)? =
+                    if (providers.configs.isNotEmpty()) {
+                        { ModelSelector(providersViewModel) { modelSheetVisible = true } }
+                    } else null
                 InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null &&
                     projectBinding == ProjectBindingState.Matched &&
                     providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges,
                     acceptedMessageCount = state.acceptedMessageCount,
                     error = state.error, notice = state.notice, sessionId = state.currentSessionId,
+                    selector = modelSelector,
                     onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
                     modifier = Modifier.fillMaxWidth())
+                // Status footer: one muted line with turns, tokens, model, and live state
+                StatusFooter(state, providers)
             }
         }
     }
@@ -617,42 +647,54 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
             horizontalAlignment = Alignment.CenterHorizontally,
             verticalArrangement = Arrangement.spacedBy(12.dp)) {
             RivetDoodleMark(kind)
-            Text(title, style = MaterialTheme.typography.headlineSmall,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center)
+            // One short title, then the detail as the quieter second voice.
+            Text(title, style = MaterialTheme.typography.titleLarge,
+                textAlign = TextAlign.Center)
             Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = androidx.compose.ui.text.style.TextAlign.Center,
-                style = MaterialTheme.typography.bodyLarge)
+                textAlign = TextAlign.Center,
+                style = MaterialTheme.typography.bodyMedium)
             if (action != null || secondaryAction != null || tertiaryAction != null) {
-                // FlowRow: on narrow screens (360dp) three buttons no longer
-                // fit one row — "Continue with ChatGPT" was squeezed to 56px
-                // and wrapped mid-word. Wrap instead of squeezing.
+                // Chips, not buttons: a choice offered quietly. FlowRow because three
+                // labels do not fit one 360dp row ("Continue with ChatGPT" wrapped
+                // mid-word when this was a fixed row).
                 FlowRow(
                     horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
                     verticalArrangement = Arrangement.spacedBy(8.dp),
                 ) {
-                    if (action != null) RivetOutlinedButton(onClick = onAction) { Text(action) }
+                    if (action != null) AssistChip(onClick = onAction, label = { Text(action) })
                     if (secondaryAction != null && onSecondaryAction != null)
-                        RivetOutlinedButton(onClick = onSecondaryAction) { Text(secondaryAction) }
+                        AssistChip(onClick = onSecondaryAction, label = { Text(secondaryAction) })
                     if (tertiaryAction != null && onTertiaryAction != null)
-                        RivetOutlinedButton(onClick = onTertiaryAction) { Text(tertiaryAction) }
+                        AssistChip(onClick = onTertiaryAction, label = { Text(tertiaryAction) })
                 }
             }
+            StartOfflineSlot()
         }
     }
 }
 
+// Reserved for the local-model entry ("Start offline"). It renders nothing until that
+// feature exists, so the empty state does not shift when it arrives.
 @Composable
-private fun ModelSelector(modifier: Modifier, providersViewModel: ProvidersViewModel, onOpen: () -> Unit) {
+private fun StartOfflineSlot() = Unit
+
+// The composer's one quiet control: current model, and its effort when the provider
+// offers a choice. Both are changed in ModelSheet; this only shows and opens it.
+@Composable
+private fun ModelSelector(providersViewModel: ProvidersViewModel, onOpen: () -> Unit) {
     val state by providersViewModel.listState.collectAsState()
     val active = state.configs.firstOrNull { it.id == state.activeId }
-    Box(modifier) {
-        TextButton(onClick = onOpen) {
-            Text(active?.let { "${displaySafeText(it.name)} · ${displayModelName(it.model)}" }
-                ?: "Choose model",
-                maxLines = 1, overflow = TextOverflow.Ellipsis,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Icon(painterResource(R.drawable.ic_chevron_down), stringResource(R.string.model_switch))
-        }
+    val modelLabel = active?.let { displayModelName(it.model) }
+        ?: stringResource(R.string.model_switch)
+    val effortLabel = active?.takeIf { offeredReasoning(it).size > 1 }
+        ?.let { stringResource(it.reasoning.labelRes()) }
+    TextButton(onClick = onOpen) {
+        Text(if (effortLabel != null) "$modelLabel · $effortLabel" else modelLabel,
+            maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Icon(painterResource(R.drawable.ic_chevron_down), stringResource(R.string.model_switch),
+            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(18.dp))
     }
 }
 
@@ -1349,6 +1391,7 @@ private val DRAFT_SAVER: Saver<Map<String, String>, Any> = mapSaver(
 @Composable
 private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
                      error: String?, notice: String?, sessionId: String?,
+                     selector: (@Composable () -> Unit)? = null,
                      onSend: (String) -> Unit,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
     // A draft belongs to the conversation it was typed in: switching away keeps it there and
@@ -1383,18 +1426,19 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             onSend(text)
         }
     }
+    // One container for the whole composer: the field inside carries no outline of its
+    // own, and the selector shares the quiet second row with send/stop.
     Surface(
         modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp),
-        color = MaterialTheme.colorScheme.surface,
-        shape = RoundedCornerShape(16.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.45f)),
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(20.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
     ) {
-        Row(Modifier.padding(start = 8.dp, end = 6.dp, top = 4.dp, bottom = 4.dp),
-            verticalAlignment = Alignment.Bottom) {
+        Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
             OutlinedTextField(
                 value = draft,
                 onValueChange = { drafts = withDraft(drafts, sessionId, it) },
-                modifier = Modifier.weight(1f),
+                modifier = Modifier.fillMaxWidth(),
                 placeholder = { Text("Ask Rivet…") },
                 minLines = 1,
                 maxLines = 6,
@@ -1405,22 +1449,87 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                 keyboardActions = KeyboardActions(onSend = { submit() }),
                 shape = RoundedCornerShape(12.dp),
                 colors = OutlinedTextFieldDefaults.colors(
-                    focusedBorderColor = MaterialTheme.colorScheme.surface,
-                    unfocusedBorderColor = MaterialTheme.colorScheme.surface,
-                    focusedContainerColor = MaterialTheme.colorScheme.surface,
-                    unfocusedContainerColor = MaterialTheme.colorScheme.surface,
+                    focusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
+                    unfocusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
+                    focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                    unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                 ),
             )
-            IconButton(onClick = { if (streaming) onCancel() else submit() },
-                enabled = streaming || canSend, modifier = Modifier.size(48.dp)
-                .clip(CircleShape)
-                .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.surfaceVariant)) {
-                Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
-                    stringResource(if (streaming) R.string.chat_stop else R.string.chat_send),
-                    tint = if (streaming || canSend) MaterialTheme.colorScheme.onPrimary
-                    else MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                selector?.invoke()
+                Spacer(Modifier.weight(1f))
+                IconButton(onClick = { if (streaming) onCancel() else submit() },
+                    enabled = streaming || canSend, modifier = Modifier.size(48.dp)
+                    .clip(CircleShape)
+                    .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
+                        else MaterialTheme.colorScheme.surfaceVariant)) {
+                    Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
+                        stringResource(if (streaming) R.string.chat_stop else R.string.chat_send),
+                        tint = if (streaming || canSend) MaterialTheme.colorScheme.onPrimary
+                        else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
         }
+    }
+}
+
+@Composable
+private fun StatusFooter(state: ChatUiState, providers: com.kaiser.rivet.ui.provider.ProviderListUiState) {
+    val active = providers.configs.firstOrNull { it.id == providers.activeId }
+    val modelName = active?.let { "${displaySafeText(it.name)} ${displayModelName(it.model)}" }
+    val usage = state.usage
+    val turns = usage?.reportedRequests ?: 0
+    val inputTokens = usage?.reportedInputTokens ?: 0L
+    val outputTokens = usage?.reportedOutputTokens ?: 0L
+    val totalTokens = inputTokens + outputTokens
+    val liveState = when {
+        state.streaming -> "Working"
+        state.pendingApproval != null -> "Waiting"
+        state.activity != null -> "Working"
+        else -> "Ready"
+    }
+    Row(
+        modifier = Modifier.fillMaxWidth()
+            .padding(horizontal = 16.dp, vertical = 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+    ) {
+        Text(
+            "$turns turns",
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+        if (totalTokens > 0) {
+            Text(
+                "${formatTokenCount(totalTokens)} tok",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+            )
+        }
+        if (modelName != null) {
+            Text(
+                modelName,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false),
+            )
+        } else {
+            Spacer(Modifier.weight(1f))
+        }
+        Text(
+            liveState,
+            style = MaterialTheme.typography.labelSmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+        )
+    }
+}
+
+private fun formatTokenCount(tokens: Long): String {
+    return when {
+        tokens >= 1_000_000 -> "${tokens / 1_000_000}M"
+        tokens >= 1_000 -> "${tokens / 1_000}K"
+        else -> tokens.toString()
     }
 }
