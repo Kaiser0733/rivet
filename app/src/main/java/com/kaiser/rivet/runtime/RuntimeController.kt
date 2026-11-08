@@ -131,6 +131,9 @@ class RuntimeController(
     /** Plan §5 rule 14: the one plain terminal state sentence. */
     fun terminalStateLine(activeCount: Int): String = governor.stateLine(activeCount)
 
+    /** What the prompt may honestly claim about the shipped toolchain right now. */
+    fun toolchainAvailability(): ToolchainAvailability = toolchain.availability()
+
     suspend fun requireSafCurrent() = operations.withLock {
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         if (!active.hasLocalChanges()) return@withLock
@@ -340,14 +343,9 @@ class RuntimeController(
         val home = mirror.home.apply { mkdirs() }
         val temporary = mirror.temporary.apply { mkdirs() }
         if (!home.isDirectory || !temporary.isDirectory) throw MirrorFailure("storage")
-        return toolchain.commandEnvironment(listOf(
-            "HOME=${home.absolutePath}",
-            "PATH=${toolchain.path()}",
-            "TMPDIR=${temporary.absolutePath}",
-            "PWD=${cwd.absolutePath}",
-            "LANG=C.UTF-8",
-            "TERM=xterm-256color",
-        ), credentialFile).toTypedArray()
+        return toolchain.commandEnvironment(
+            baseEnvironment(home, toolchain.path(), temporary, cwd), credentialFile,
+        ).toTypedArray()
     }
 
     private fun runtimeDirectory(worktree: File, cwd: String): File {

@@ -14,6 +14,24 @@ class GitToolchainTest {
     private val base = listOf("HOME=/h", "PATH=/p", "TMPDIR=/mirror/tmp", "PWD=/w",
         "LANG=C.UTF-8", "TERM=xterm-256color")
 
+    @Test fun baseEnvironmentIsAppOwnedWithoutDeveloperLeftovers() {
+        val env = baseEnvironment(File("/data/app/home"), SYSTEM_PATH,
+            File("/data/app/tmp"), File("/data/app/work"))
+
+        assertEquals(listOf(
+            "HOME=/data/app/home",
+            "PATH=$SYSTEM_PATH",
+            "TMPDIR=/data/app/tmp",
+            "PWD=/data/app/work",
+            "LANG=C.UTF-8",
+            "TERM=xterm-256color",
+        ), env)
+        val joined = env.joinToString("\n")
+        assertFalse(joined.contains("termux"))
+        assertFalse(joined.contains("/usr/local"))
+        assertFalse(joined.contains("HOME=/root"))
+    }
+
     @Test fun environmentIsByteIdenticalWithoutGit() {
         assertEquals(base, gitEnvironment(base, null, null, null))
         // A credential file must never add variables on its own.

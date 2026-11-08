@@ -25,6 +25,7 @@ import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.provider.withManualContextWindow
 import com.kaiser.rivet.provider.withManualMaxOutputTokens
 import com.kaiser.rivet.provider.withModelId
+import com.kaiser.rivet.runtime.Toolchain
 import com.kaiser.rivet.storage.GitHubTokenStore
 import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.storage.ProviderStore
@@ -42,6 +43,7 @@ import java.util.UUID
 
 data class GitHubUiState(
     val connected: Boolean = false,
+    val gitAvailable: Boolean = false,
     val busy: Boolean = false,
     val error: String? = null,
 )
@@ -60,6 +62,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     private val store = ProviderStore(app)
     private val secrets = SecretStore(app)
     private val gitHub = GitHubTokenStore(app)
+    private val toolchain = Toolchain(app)
 
     private val _gitHubState = MutableStateFlow(GitHubUiState())
     val gitHubState: StateFlow<GitHubUiState> = _gitHubState.asStateFlow()
@@ -115,7 +118,10 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             }
         }
         viewModelScope.launch(Dispatchers.IO) {
-            _gitHubState.update { it.copy(connected = gitHub.isConnected()) }
+            _gitHubState.update {
+                it.copy(connected = gitHub.isConnected(),
+                    gitAvailable = toolchain.availability().git)
+            }
         }
         viewModelScope.launch {
             store.droppedHeaders.collect { count ->
@@ -133,6 +139,10 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     /** The token is only passed through to the Keystore-backed store; UI state stays boolean. */
     fun connectGitHub(token: String) {
         if (_gitHubState.value.busy) return
+        if (!_gitHubState.value.gitAvailable) {
+            _gitHubState.update { it.copy(error = "Git is not available in this build.") }
+            return
+        }
         _gitHubState.update { it.copy(busy = true, error = null) }
         viewModelScope.launch(Dispatchers.IO) {
             val saved = gitHub.connect(token)

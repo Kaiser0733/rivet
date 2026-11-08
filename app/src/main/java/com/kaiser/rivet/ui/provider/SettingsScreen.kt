@@ -230,7 +230,11 @@ fun SettingsScreen(
                     themeSummary = themeMode.name,
                     autonomySummary = autonomyDisplayName(autonomyMode),
                     skillSummary = skillCountSummary(skillCatalog),
-                    gitHubSummary = if (gitHubState.connected) "Connected" else "Not connected",
+                    gitHubSummary = when {
+                        !gitHubState.gitAvailable -> "Git not available"
+                        gitHubState.connected -> "Connected"
+                        else -> "Not connected"
+                    },
                     versionSummary = stringResource(R.string.provider_hint_version, versionName),
                     onSelect = { section = it },
                 )
@@ -259,6 +263,7 @@ fun SettingsScreen(
                 )
                 SettingsSection.GitHub -> GitHubDetail(
                     connected = gitHubState.connected,
+                    gitAvailable = gitHubState.gitAvailable,
                     busy = gitHubState.busy,
                     error = gitHubState.error,
                     onConnect = { connectGitHubOpen = true },
@@ -420,6 +425,7 @@ private fun SectionListItem(
 @Composable
 private fun GitHubDetail(
     connected: Boolean,
+    gitAvailable: Boolean,
     busy: Boolean,
     error: String?,
     onConnect: () -> Unit,
@@ -429,10 +435,13 @@ private fun GitHubDetail(
         Text("GitHub", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(8.dp))
         Text(
-            if (connected) {
-                "Connected. Pushes to github.com use the token kept in Android Keystore."
-            } else {
-                "Not connected. Public clones and local Git work normally. Connect a token to push to GitHub."
+            when {
+                !gitAvailable ->
+                    "Git is not available in this build, so GitHub pushes cannot run here."
+                connected ->
+                    "Connected. Pushes to github.com use the token kept in Android Keystore."
+                else ->
+                    "Not connected. Public clones and local Git work normally. Connect a token to push to GitHub."
             },
             style = MaterialTheme.typography.bodyMedium,
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -442,7 +451,7 @@ private fun GitHubDetail(
             RivetOutlinedButton(onClick = onDisconnect, enabled = !busy) {
                 Text(if (busy) "Disconnecting…" else "Disconnect")
             }
-        } else {
+        } else if (gitAvailable) {
             RivetOutlinedButton(onClick = onConnect, enabled = !busy) { Text("Connect") }
         }
         error?.let {
@@ -451,9 +460,15 @@ private fun GitHubDetail(
                 style = MaterialTheme.typography.bodySmall)
         }
         Spacer(Modifier.height(16.dp))
-        Text("Use a fine-grained token scoped to the repositories you push to. Rivet keeps it encrypted on this device and never sends it to the model, a command, or the command environment.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (gitAvailable) {
+            Text("Use a fine-grained token scoped to the repositories you push to. Rivet keeps it encrypted on this device and never sends it to the model, a command, or the command environment.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        } else {
+            Text("This build has no Git binary, so there is nothing to connect until an update ships it.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 

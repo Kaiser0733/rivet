@@ -17,8 +17,50 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Rule 6 poll cadence: one /proc walk every two seconds (plan §5). */
+/** Rule 6 poll cadence: one /proc walk every two seconds (plan §5). The first walk is
+ * early so a command that forks a burst and exits is still seen. */
 private const val TREE_POLL_MS = 2_000L
+private const val FIRST_TREE_POLL_MS = 250L
+
+internal enum class TreeWatchStop { TooManyChildren, MemoryLimit }
+
+/** The rule 6/7 watchdog, shared by every command path (agent, terminal panel). */
+internal suspend fun watchCommandTree(
+    root: Int,
+    memoryCapBytes: Long?,
+    onSample: (Set<Int>) -> Unit,
+    onTooManyChildren: () -> Unit,
+    onMemoryLimit: () -> Unit,
+    terminate: suspend () -> Unit,
+): TreeWatchStop {
+    var memorySamples = 0
+    var first = true
+    while (true) {
+        delay(if (first) FIRST_TREE_POLL_MS else TREE_POLL_MS)
+        first = false
+        val tree = try { descendants(root, ProcTree.parents()) }
+            catch (_: Exception) { emptySet<Int>() }
+        if (tree.isNotEmpty()) onSample(tree)
+        if (tree.size > MAX_DESCENDANTS) {
+            onTooManyChildren()
+            terminate()
+            return TreeWatchStop.TooManyChildren
+        }
+        if (memoryCapBytes != null) {
+            // Rule 7: the leader is part of its tree, so its PSS counts too.
+            val pids = tree + root
+            val readings = HashMap<Int, Long>()
+            for (member in pids) ProcTree.pssKb(member)?.let { readings[member] = it }
+            memorySamples = memoryBreachSamples(memorySamples,
+                pssBytes(readings, pids), memoryCapBytes)
+            if (memoryLimitReached(memorySamples)) {
+                onMemoryLimit()
+                terminate()
+                return TreeWatchStop.MemoryLimit
+            }
+        }
+    }
+}
 
 internal object CommandNative {
     init { System.loadLibrary("termux") }
@@ -121,31 +163,14 @@ internal class CommandProcess {
                 }
             }
             val treeWatch = launch(Dispatchers.IO) {
-                var memorySamples = 0
-                while (true) {
-                    delay(TREE_POLL_MS)
-                    val tree = try { descendants(pid, ProcTree.parents()) }
-                        catch (_: Exception) { emptySet<Int>() }
-                    if (tree.isNotEmpty()) remember(tree)
-                    if (tree.size > MAX_DESCENDANTS) {
-                        tooManyChildren.set(true)
-                        terminate(pid, exited)
-                        return@launch
-                    }
-                    if (memoryCapBytes != null) {
-                        // Rule 7: the leader is part of its tree, so its PSS counts too.
-                        val pids = tree + pid
-                        val readings = HashMap<Int, Long>()
-                        for (member in pids) ProcTree.pssKb(member)?.let { readings[member] = it }
-                        memorySamples = memoryBreachSamples(memorySamples,
-                            pssBytes(readings, pids), memoryCapBytes)
-                        if (memoryLimitReached(memorySamples)) {
-                            memoryLimit.set(true)
-                            terminate(pid, exited)
-                            return@launch
-                        }
-                    }
-                }
+                watchCommandTree(
+                    root = pid,
+                    memoryCapBytes = memoryCapBytes,
+                    onSample = { tree -> remember(tree) },
+                    onTooManyChildren = { tooManyChildren.set(true) },
+                    onMemoryLimit = { memoryLimit.set(true) },
+                    terminate = { terminate(pid, exited) },
+                )
             }
             try {
                 val outcome = awaitExitOrTimeout(exited, timeoutMs) {
@@ -156,8 +181,10 @@ internal class CommandProcess {
                 val timedOut = outcome.timedOut
                 treeWatch.cancel()
                 // The foreground shell may have exited while children kept
-                // inherited output pipes open. End that process group first.
+                // inherited output pipes open. End that process group first, then its
+                // session (background jobs can move to their own process group).
                 CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+                ProcTree.killSession(pid)
                 // Rule 5: children that left the group (setsid) are not reached by that
                 // kill; sweep the strays the watcher saw. Best effort: a process that
                 // forked, setsid'd and lost its parent between two samples is invisible
@@ -175,6 +202,7 @@ internal class CommandProcess {
                 withContext(NonCancellable) {
                     rememberCurrentTree()
                     terminate(pid, exited)
+                    ProcTree.killSession(pid)
                     stdoutFd.close()
                     stderrFd.close()
                     withTimeoutOrNull(3000) { joinAll(stdoutReader, stderrReader) }
@@ -184,6 +212,7 @@ internal class CommandProcess {
                 treeWatch.cancel()
                 outputPublisher?.cancel()
                 CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+                ProcTree.killSession(pid)
                 sweepStrays()
                 stdoutFd.close()
                 stderrFd.close()

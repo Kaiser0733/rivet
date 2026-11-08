@@ -3,6 +3,7 @@ package com.kaiser.rivet.runtime
 import android.content.Context
 import android.content.pm.ApplicationInfo
 import android.system.Os
+import android.util.Log
 import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
@@ -84,6 +85,14 @@ internal class Toolchain(context: Context) {
     val gitExecDir: File? get() = dataRoot?.let { File(it, "libexec/git-core") }
     val gitTemplateDir: File? get() = dataRoot?.let { File(it, "share/git-core/templates") }
 
+    /** Which shipped toolchain pieces are actually on disk; the prompt and Settings
+     * copy are composed from this rather than from what the app intended to ship. */
+    fun availability(): ToolchainAvailability = ToolchainAvailability(
+        busybox = busybox?.isFile == true,
+        python = pythonExecutable?.isFile == true,
+        git = git?.isFile == true,
+    )
+
     @Volatile private var prepared = false
     @Volatile private var pythonReady = false
 
@@ -108,6 +117,11 @@ internal class Toolchain(context: Context) {
         val gitBinary = git?.takeIf { it.isFile }
         val gitRemote = gitRemoteHttps?.takeIf { it.isFile }
         if (binary == null && python == null && gitBinary == null) {
+            // The module ships arm64 binaries; a build or device where none is visible
+            // must not silently pretend the toolchain exists.
+            Log.w("Toolchain", "No toolchain binaries under " +
+                (nativeDir?.absolutePath ?: "an unavailable native directory") +
+                "; commands use the legacy shell environment.")
             prepared = true
             return
         }
@@ -252,6 +266,30 @@ internal class Toolchain(context: Context) {
     private fun readMarker(file: File): String? = try {
         if (file.isFile) file.readText().trim() else null
     } catch (_: Exception) { null }
+}
+
+/** The non-toolchain environment: one seam so app-owned values are pinned and no
+ * device profile or developer shell config can smuggle in a Termux prefix. */
+internal fun baseEnvironment(
+    home: File,
+    path: String,
+    temporary: File,
+    cwd: File,
+): List<String> = listOf(
+    "HOME=${home.absolutePath}",
+    "PATH=$path",
+    "TMPDIR=${temporary.absolutePath}",
+    "PWD=${cwd.absolutePath}",
+    "LANG=C.UTF-8",
+    "TERM=xterm-256color",
+)
+
+internal data class ToolchainAvailability(
+    val busybox: Boolean = false,
+    val python: Boolean = false,
+    val git: Boolean = false,
+) {
+    val any: Boolean get() = busybox || python || git
 }
 
 /** PATH composition, kept pure so the no-binary case is provably byte-identical. */
