@@ -351,7 +351,7 @@ private fun ProviderDetail(
     )
     LazyColumn(Modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 0.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
+            start = 16.dp, end = 16.dp, top = 8.dp, bottom = 24.dp),
     ) {
         
         loadError?.let { message ->
