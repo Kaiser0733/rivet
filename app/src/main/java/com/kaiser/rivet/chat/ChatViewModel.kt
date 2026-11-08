@@ -25,8 +25,10 @@ import com.kaiser.rivet.agent.ProjectContext
 import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.ProjectInstructions
 import com.kaiser.rivet.agent.SafAgentWorkspace
+import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.SkillContext
 import com.kaiser.rivet.agent.SkillDiscovery
+import com.kaiser.rivet.agent.skillGesture
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ALL_REASONING_LEVELS
 import com.kaiser.rivet.provider.ProviderConfig
@@ -248,6 +250,33 @@ class ChatViewModel private constructor(
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    // The composer's "/" list: user-invocable skills of the current project. Filled from
+    // the discovery cache when the sheet opens and at every turn start; never scanned here.
+    private val _userSkills = MutableStateFlow<List<Skill>>(emptyList())
+    val userSkills: StateFlow<List<Skill>> = _userSkills.asStateFlow()
+
+    suspend fun refreshUserSkills() {
+        val workspace = try {
+            workspaceSelection.restore()?.first
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (workspace == null) {
+            _userSkills.value = emptyList()
+            return
+        }
+        val catalog = try {
+            skillDiscovery.catalog(SafAgentWorkspace(workspace), workspace.tree.toString())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        _userSkills.value = catalog.skills.filter { it.userInvocable }
+    }
 
     @Volatile private var titleRenameRevision = 0L
     private var sendJob: Job? = null
@@ -566,12 +595,20 @@ class ChatViewModel private constructor(
             // start. Everywhere else (each model step) reads this turn's snapshot.
             val agentWorkspace = workspace?.let(::SafAgentWorkspace)
             val skills = agentWorkspace?.let { skillDiscovery.refresh(it, requireNotNull(workspaceId)) }
+            if (skills != null) _userSkills.value = skills.skills.filter { it.userInvocable }
+            // A `/name` gesture loads its skill for this turn; everything after the token
+            // stays the task. Retries already carry the stripped task text.
+            val gesture = if (retryingInterrupted) null else skillGesture(trimmed, skills)
+            val prompt = gesture?.task ?: trimmed
             fun initialContext(messages: List<AgentMessage>): List<AgentMessage> = buildList {
                 if (activeSummary.isNotBlank() && messages.none { it.role == AgentRole.Context &&
                         it.internalContext?.kind == "summary" }) add(InternalContext.summary(activeSummary, workspaceId))
                 if (workspaceId != null && instructions != null) addAll(ProjectContext.updates(messages,
                     workspaceId, requireNotNull(instructions)))
                 if (workspaceId != null) addAll(SkillContext.updates(messages, workspaceId, skills))
+                if (gesture != null && workspaceId != null) {
+                    add(SkillContext.invocation(gesture.skill, workspaceId))
+                }
             }
             val executor = workspace?.let { selectedWorkspace ->
                 val boundWorkspaceId = workspaceId ?: selectedWorkspace.tree.toString()
@@ -589,6 +626,7 @@ class ChatViewModel private constructor(
                     downloader = projectDownloader,
                     currentWorkspaceIdentity = workspaceSelection::currentIdentity,
                     skills = skills,
+                    loadedSkills = gesture?.let { setOf(it.skill.name) }.orEmpty(),
                 )
             }
             val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
@@ -615,7 +653,7 @@ class ChatViewModel private constructor(
             // request left its user message in it, and a failure after partial output also
             // left the cut-off answer, so appending the prompt again sent it twice.
             val reuseExistingTail = retryingInterrupted
-            val pendingUser = if (reuseExistingTail) emptyList() else listOf(AgentMessage.user(trimmed))
+            val pendingUser = if (reuseExistingTail) emptyList() else listOf(AgentMessage.user(prompt))
             if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
                 try {
                     val reduced = context.prepare(activeMessages, force = true, reason = "storage_pressure")

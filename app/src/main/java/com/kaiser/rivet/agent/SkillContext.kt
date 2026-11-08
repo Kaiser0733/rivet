@@ -55,6 +55,21 @@ internal object SkillContext {
             content = text, digest = digest).event())
     }
 
+    /**
+     * The Level-2 attachment for a manual `/name` invocation: the rendered block, clamped
+     * to the context limit so an oversized SKILL.md cannot invalidate the turn.
+     */
+    fun invocation(skill: Skill, workspace: String): AgentMessage {
+        val block = renderSkillContent(skill, skill.source?.baseDir.orEmpty())
+        val marker = "\n\n(skill content truncated to fit the context limit)"
+        val bytes = block.toByteArray(Charsets.UTF_8)
+        val content = if (bytes.size <= InternalContext.MAX_CONTENT_BYTES) block else
+            bytes.copyOf(InternalContext.MAX_CONTENT_BYTES - marker.toByteArray(Charsets.UTF_8).size)
+                .toString(Charsets.UTF_8).dropLastWhile { it.isHighSurrogate() } + marker
+        return InternalContext(kind = SKILL_INVOCATION_KIND, workspaceId = workspace,
+            content = content, digest = InternalContext.digest(content)).event()
+    }
+
     private fun catalogDescription(value: String): String {
         val normalized = escapeText(value.replace(Regex("\\s+"), " ").trim())
         if (normalized.length <= MAX_DESCRIPTION_CHARS) return normalized

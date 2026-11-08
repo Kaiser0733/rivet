@@ -93,6 +93,8 @@ class AgentToolExecutor(
     private val currentWorkspaceIdentity: suspend () -> String? = { null },
     // The turn's skill catalog snapshot; null when no project session is open.
     private val skills: SkillCatalog? = null,
+    // Skills a `/name` gesture already loaded for this turn; the tool must not repeat them.
+    private val loadedSkills: Set<String> = emptySet(),
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
@@ -174,7 +176,7 @@ class AgentToolExecutor(
                     val args = json.decodeFromString<SkillArgs>(call.arguments)
                     require(args.name.isNotBlank() && args.name.length <= 64)
                     PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
-                        execute(call) { skillToolResult(call, skills, args.name) }
+                        execute(call) { skillToolResult(call, skills, args.name, loadedSkills) }
                     }
                 }
                 "write_file" -> {
