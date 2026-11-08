@@ -84,7 +84,7 @@ class InternalContextTest {
         } }, requestApproval = { approvals++; false },
             contextUpdates = { messages -> if (messages.last().role == AgentRole.Tool)
                 ProjectContext.updates(messages, workspace, instructions("AGENTS.md" to "Updated rule")) else emptyList() }
-        ).run(context + AgentMessage.user("Create"), emptyList(), autonomyMode = AutonomyMode.Ask)
+        ).run(context + AgentMessage.user("Create"), emptyList(), currentAutonomyMode = { AutonomyMode.Ask })
         assertEquals(1, approvals)
         assertEquals(0, writes)
         val toolIndex = result.messages.indexOfFirst { it.role == AgentRole.Tool }
@@ -116,7 +116,7 @@ class InternalContextTest {
             prepareTool = { call -> PreparedAgentTool(call, AgentApprovalRequest(call, "Allow", "Command"),
                 blockedReason = "unsupported_system_management") { executions++; AgentToolResult(call.id, call.name, "{}") } },
             requestApproval = { approvals++; true }).run(guidance + AgentMessage.user("Inspect"), emptyList(),
-                autonomyMode = AutonomyMode.Yolo)
+                currentAutonomyMode = { AutonomyMode.Yolo })
         assertEquals(AgentStopReason.CapabilityBlocked, run.stopReason)
         assertEquals(0, executions)
         assertEquals(0, approvals)

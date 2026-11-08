@@ -63,7 +63,7 @@ class AgentLoopTest {
                     blockedReason = blocker) { AgentToolResult(call.id, call.name, "{}") } },
                 requestApproval = { allowed },
                 beforeMutation = { null },
-            ).run(listOf(AgentMessage.user("Edit")), emptyList(), autonomyMode = mode,
+            ).run(listOf(AgentMessage.user("Edit")), emptyList(), currentAutonomyMode = { mode },
                 onToolLifecycle = { event ->
                     events += event.stage
                     if (telemetryFails) error("presentation callback failed")
@@ -151,7 +151,7 @@ class AgentLoopTest {
             requestApproval = { approvals++; true },
             canPersistToolOutput = { _, reserve -> largestReserve = maxOf(largestReserve, reserve); true },
             beforeMutation = { checkpoints++; null },
-        ).run(listOf(AgentMessage.user("Edit it")), emptyList(), autonomyMode = AutonomyMode.BasicYolo)
+        ).run(listOf(AgentMessage.user("Edit it")), emptyList(), currentAutonomyMode = { AutonomyMode.BasicYolo })
 
         assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals(0, approvals)
@@ -160,6 +160,73 @@ class AgentLoopTest {
         assertTrue(largestReserve > 0)
         assertEquals(1, result.mutationsAttempted)
         assertEquals(1, result.mutationsCompleted)
+    }
+
+    @Test fun askToYoloMidRunStopsFurtherApprovalPrompts() = runTest {
+        val calls = listOf(
+            AgentToolCall("first", "write_file", "{}"),
+            AgentToolCall("second", "write_file", "{}"),
+        )
+        var mode = AutonomyMode.Ask
+        var requests = 0
+        var approvals = 0
+        var executions = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = calls)
+                else AgentResponse(text = "Done")
+            },
+            prepareTool = { call -> PreparedAgentTool(call,
+                AgentApprovalRequest(call, "Edit", "file"),
+                effect = AgentToolEffect.WorkspaceMutation,
+                basicAutonomyRisk = BasicAutonomyRisk.Routine) {
+                executions++
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = {
+                approvals++
+                mode = AutonomyMode.Yolo
+                true
+            },
+            beforeMutation = { null },
+        ).run(listOf(AgentMessage.user("Edit")), emptyList(),
+            currentAutonomyMode = { mode })
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(1, approvals)
+        assertEquals(2, executions)
+    }
+
+    @Test fun yoloToAskMidRunRearmsApprovalPrompts() = runTest {
+        val calls = listOf(
+            AgentToolCall("first", "write_file", "{}"),
+            AgentToolCall("second", "write_file", "{}"),
+        )
+        var mode = AutonomyMode.Yolo
+        var requests = 0
+        var approvals = 0
+        var executions = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = calls)
+                else AgentResponse(text = "Done")
+            },
+            prepareTool = { call -> PreparedAgentTool(call,
+                AgentApprovalRequest(call, "Edit", "file"),
+                effect = AgentToolEffect.WorkspaceMutation,
+                basicAutonomyRisk = BasicAutonomyRisk.Routine) {
+                executions++
+                if (executions == 1) mode = AutonomyMode.Ask
+                AgentToolResult(call.id, call.name, "{}")
+            } },
+            requestApproval = { approvals++; true },
+            beforeMutation = { null },
+        ).run(listOf(AgentMessage.user("Edit")), emptyList(),
+            currentAutonomyMode = { mode })
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(1, approvals)
+        assertEquals(2, executions)
     }
 
     @Test fun yoloMutationCannotRunWithoutSessionResultHeadroom() = runTest {
@@ -176,7 +243,7 @@ class AgentLoopTest {
             requestApproval = { error("YOLO does not request approval") },
             canPersistToolOutput = { _, reserve -> reserve == 0 },
             beforeMutation = { checkpoints++; null },
-        ).run(listOf(AgentMessage.user("Edit it")), emptyList(), autonomyMode = AutonomyMode.Yolo)
+        ).run(listOf(AgentMessage.user("Edit it")), emptyList(), currentAutonomyMode = { AutonomyMode.Yolo })
 
         assertEquals(AgentStopReason.SessionLimit, result.stopReason)
         assertEquals(0, executions)
@@ -197,7 +264,7 @@ class AgentLoopTest {
             requestApproval = { error("YOLO does not request approval") },
             canPersistToolOutput = { _, _ -> true },
             beforeMutation = { checkpoints++; "checkpoint_unavailable" },
-        ).run(listOf(AgentMessage.user("Edit it")), emptyList(), autonomyMode = AutonomyMode.Yolo)
+        ).run(listOf(AgentMessage.user("Edit it")), emptyList(), currentAutonomyMode = { AutonomyMode.Yolo })
 
         assertEquals(AgentStopReason.CheckpointUnavailable, result.stopReason)
         assertEquals(1, checkpoints)
