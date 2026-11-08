@@ -91,6 +91,7 @@ kotlin {
 
 dependencies {
     implementation(project(":terminal-emulator"))
+    implementation(project(":toolchain"))
     val composeBom = platform("androidx.compose:compose-bom:2025.03.00")
     implementation(composeBom)
     implementation("androidx.activity:activity-compose:1.10.1")

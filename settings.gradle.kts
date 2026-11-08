@@ -17,3 +17,4 @@ dependencyResolutionManagement {
 rootProject.name = "Rivet"
 include(":app")
 include(":terminal-emulator")
+include(":toolchain")
