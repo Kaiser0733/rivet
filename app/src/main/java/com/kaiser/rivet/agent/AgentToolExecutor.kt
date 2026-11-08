@@ -276,6 +276,7 @@ class AgentToolExecutor(
                         basicAutonomyRisk = ApprovalPolicy.basicCommandRisk(args.command),
                         modelRequestsApproval = args.askUser,
                         blockedReason = ApprovalPolicy.blockedCommandReason(args.command),
+                        skillScript = matchSkillScript(args.command, skills),
                     ) {
                         execute(call) {
                             val result = runCommand?.invoke(args.command, cwd, args.timeoutMs.toLong())

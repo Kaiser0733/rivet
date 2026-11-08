@@ -59,6 +59,7 @@ import com.kaiser.rivet.storage.CodingSessionHeader
 import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.storage.ContextEstimate
 import com.kaiser.rivet.storage.SessionUsage
+import com.kaiser.rivet.storage.SkillScriptApprovalStore
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import com.kaiser.rivet.workspace.WorkspaceSelection
@@ -249,6 +250,7 @@ class ChatViewModel private constructor(
     val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
     private val projectDownloader = ProjectDownloader(app.cacheDir)
     private val skillDiscovery = SkillDiscovery(globalSkillsRoot(app.filesDir))
+    private val skillScriptApprovals = SkillScriptApprovalStore(app)
     private val sessions get() = sessionStore as? CodingSessions
 
     private val _uiState = MutableStateFlow(ChatUiState())
@@ -659,6 +661,13 @@ class ChatViewModel private constructor(
                 _skillCatalog.value = skills
                 _userSkills.value = skills.skills.filter { it.userInvocable }
             }
+            val approvedSkillScripts = try {
+                skillScriptApprovals.approved()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptySet()
+            }
             // A `/name` gesture loads its skill for this turn; everything after the token
             // stays the task. Retries already carry the stripped task text.
             val gesture = if (retryingInterrupted) null else skillGesture(trimmed, skills)
@@ -908,6 +917,8 @@ class ChatViewModel private constructor(
                             SkillContext.updates(candidate, workspaceId, skills)
                     }
                 },
+                approvedSkillScripts = approvedSkillScripts,
+                recordSkillScriptApproval = skillScriptApprovals::approve,
             )
             try {
                 val runLoop: suspend () -> AgentRunResult = {
