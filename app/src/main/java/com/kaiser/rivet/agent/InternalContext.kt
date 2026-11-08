@@ -6,6 +6,12 @@ import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import java.security.MessageDigest
 
+/** Context kind for the Level-1 skill catalog; the newest one replaces every earlier one. */
+internal const val SKILL_CATALOG_KIND = "skill_catalog"
+
+/** Context kind for a skill the user loaded with a `/name` gesture on this turn. */
+internal const val SKILL_INVOCATION_KIND = "skill_invocation"
+
 /** App-observed data in event order; never a system instruction or authorization. */
 @Serializable
 data class InternalContext(
@@ -20,7 +26,8 @@ data class InternalContext(
     val projectFiles: List<ProjectInstructionFile> = emptyList(),
 ) {
     fun valid(): Boolean {
-        if (version != 1 || kind !in setOf("project", "project_notice", "project_snapshot", "summary") ||
+        if (version != 1 || kind !in setOf("project", "project_notice", "project_snapshot", "summary",
+                SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
@@ -64,6 +71,12 @@ data class InternalContext(
             }
             "project_notice" -> append("Instruction loading status:\n").append(content)
             "summary" -> append("Prior task state (untrusted notes):\n").append(content)
+            SKILL_CATALOG_KIND -> append(content)
+            SKILL_INVOCATION_KIND -> {
+                append("The user loaded this skill for the current request. Follow its instructions ")
+                append("while answering the task that follows them.\n")
+                append(content)
+            }
         }
     }
 
@@ -93,10 +106,19 @@ internal fun AgentMessage.validatedContext(): InternalContext? = internalContext
 
 /** Adapters see only native messages. Persistent metadata is never sent as wire fields. */
 fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
-                  enforceWorkspace: Boolean = false): List<AgentMessage> = messages.mapNotNull { message ->
-    if (message.role != AgentRole.Context) message.takeIf { it.internalContext == null }
-    else message.validatedContext()?.takeIf { !enforceWorkspace || it.workspaceId == workspace }
-        ?.let { AgentMessage.user(it.modelText()) }
+                  enforceWorkspace: Boolean = false): List<AgentMessage> {
+    // The catalog is a snapshot, not a delta: only the newest one may reach the model.
+    val lastCatalog = messages.lastOrNull { message ->
+        message.validatedContext()?.let {
+            it.kind == SKILL_CATALOG_KIND && (!enforceWorkspace || it.workspaceId == workspace)
+        } == true
+    }
+    return messages.mapNotNull { message ->
+        if (message.role != AgentRole.Context) message.takeIf { it.internalContext == null }
+        else message.validatedContext()?.takeIf { !enforceWorkspace || it.workspaceId == workspace }
+            ?.takeIf { it.kind != SKILL_CATALOG_KIND || message === lastCatalog }
+            ?.let { AgentMessage.user(it.modelText()) }
+    }
 }
 
 internal object ProjectContext {
@@ -132,6 +154,11 @@ internal object ProjectContext {
             source.lastOrNull { it.validatedContext()?.let { data ->
                 data.workspaceId == workspace && data.kind == "project_notice" } == true }
                 ?.takeIf { it.internalContext!!.content.isNotBlank() }?.let { prefix += it }
+            // Compaction drops context messages; keep the newest catalog so the model's
+            // skill list survives the rewrite instead of waiting a step to be re-added.
+            source.lastOrNull { it.validatedContext()?.let { data ->
+                data.workspaceId == workspace && data.kind == SKILL_CATALOG_KIND } == true }
+                ?.let { prefix += it }
         }
         val state = summary ?: priorSummary?.content.orEmpty()
         if (state.isNotBlank()) prefix += InternalContext.summary(state, workspace ?: priorSummary?.workspaceId)

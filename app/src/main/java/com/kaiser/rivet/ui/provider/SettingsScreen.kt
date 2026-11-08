@@ -37,6 +37,7 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
@@ -56,6 +57,8 @@ import com.kaiser.rivet.storage.SessionUsage
 import com.kaiser.rivet.storage.diagnostics
 import com.kaiser.rivet.R
 import com.kaiser.rivet.agent.AutonomyMode
+import com.kaiser.rivet.agent.Skill
+import com.kaiser.rivet.agent.SkillCatalog
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.ui.RivetOutlinedButton
@@ -66,7 +69,7 @@ private val MAX_WIDTH = 680.dp
 
 // The section that is open at level 2. Remembered by RivetApp, so Android Back can step
 // detail -> list -> dismiss instead of closing the sheet in one go.
-internal enum class SettingsSection { Providers, Appearance, Agent, Updates, About }
+internal enum class SettingsSection { Providers, Appearance, Agent, Skills, Updates, About }
 
 /**
  * The body of the settings modal sheet: a two-level page — a section list, and one
@@ -89,13 +92,28 @@ fun SettingsScreen(
     autonomyError: String?,
     onAutonomyChange: (AutonomyMode) -> Unit,
     conversationUsage: SessionUsage? = null,
+    skillCatalog: SkillCatalog? = null,
+    onRefreshSkills: suspend () -> Unit = {},
+    onLoadSkillFiles: suspend (Skill) -> List<String> = { emptyList() },
+    onInstallSkill: () -> Unit = {},
 ) {
     val state by viewModel.listState.collectAsState()
     // Level 2 lives here, not in the host: the sheet is only a container.
     var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
-    // Only while a detail is open, so Back inside the sheet steps detail -> list and then
-    // falls through to the sheet's own dismiss.
-    BackHandler(enabled = section != null) { section = null }
+    // A skill's detail is one level below its section list, so Back steps skill -> skills
+    // -> settings root and only then falls through to the sheet's own dismiss.
+    var selectedSkill by rememberSaveable { mutableStateOf<String?>(null) }
+    // A refresh can remove the selected skill; only a resolvable one counts as a level.
+    val shownSkill = skillCatalog?.skills?.firstOrNull { it.name == selectedSkill }
+    BackHandler(enabled = section != null) {
+        if (shownSkill != null) selectedSkill = null else section = null
+    }
+    // The root row's count and the page both read this catalog; refresh off-main when the
+    // sheet opens and again when the Skills page itself is opened.
+    LaunchedEffect(Unit) { onRefreshSkills() }
+    LaunchedEffect(section) {
+        if (section == SettingsSection.Skills) onRefreshSkills()
+    }
     var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
     var showUsage by rememberSaveable { mutableStateOf(false) }
     var confirmYolo by rememberSaveable { mutableStateOf(false) }
@@ -146,7 +164,14 @@ fun SettingsScreen(
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
         Column(Modifier.fillMaxSize().widthIn(max = MAX_WIDTH)) {
-            SheetTopBar(section = section, onClose = onClose, onBack = { section = null })
+            SheetTopBar(
+                section = section,
+                title = if (section == SettingsSection.Skills) shownSkill?.name else null,
+                onClose = onClose,
+                onBack = {
+                    if (shownSkill != null) selectedSkill = null else section = null
+                },
+            )
             HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
             when (section) {
                 null -> SectionList(
@@ -157,6 +182,7 @@ fun SettingsScreen(
                     },
                     themeSummary = themeMode.name,
                     autonomySummary = autonomyDisplayName(autonomyMode),
+                    skillSummary = skillCountSummary(skillCatalog),
                     versionSummary = stringResource(R.string.provider_hint_version, versionName),
                     onSelect = { section = it },
                 )
@@ -183,6 +209,13 @@ fun SettingsScreen(
                     confirmYolo = { confirmYolo = true },
                     onAutonomyChange = onAutonomyChange,
                 )
+                SettingsSection.Skills -> SkillsSettings(
+                    catalog = skillCatalog,
+                    selectedName = selectedSkill,
+                    onSelect = { selectedSkill = it },
+                    onLoadFiles = onLoadSkillFiles,
+                    onInstall = onInstallSkill,
+                )
                 SettingsSection.Updates -> DetailScroll { UpdatesSection(versionName) }
                 SettingsSection.About -> AboutDetail(
                     versionName = versionName,
@@ -198,6 +231,7 @@ fun SettingsScreen(
 @Composable
 private fun SheetTopBar(
     section: SettingsSection?,
+    title: String? = null,
     onClose: () -> Unit,
     onBack: () -> Unit,
 ) {
@@ -212,7 +246,7 @@ private fun SheetTopBar(
             }
         }
         Text(
-            section?.title() ?: stringResource(R.string.settings),
+            title ?: section?.title() ?: stringResource(R.string.settings),
             style = MaterialTheme.typography.titleLarge,
             modifier = Modifier.weight(1f),
         )
@@ -227,6 +261,7 @@ private fun SettingsSection.title(): String = when (this) {
     SettingsSection.Providers -> "Providers"
     SettingsSection.Appearance -> "Appearance"
     SettingsSection.Agent -> "Agent"
+    SettingsSection.Skills -> "Skills"
     SettingsSection.Updates -> "Updates"
     SettingsSection.About -> "About"
 }
@@ -236,6 +271,7 @@ private fun SectionList(
     providerSummary: String,
     themeSummary: String,
     autonomySummary: String,
+    skillSummary: String,
     versionSummary: String,
     onSelect: (SettingsSection) -> Unit,
 ) {
@@ -251,6 +287,7 @@ private fun SectionList(
                 SettingsSection.Providers -> "Providers" to providerSummary
                 SettingsSection.Appearance -> "Appearance" to themeSummary
                 SettingsSection.Agent -> "Agent" to autonomySummary
+                SettingsSection.Skills -> "Skills" to skillSummary
                 SettingsSection.Updates -> "Updates" to "Check for updates"
                 SettingsSection.About -> "About" to versionSummary
             }
@@ -258,6 +295,7 @@ private fun SectionList(
                 SettingsSection.Providers -> R.drawable.ic_settings // gear = providers config
                 SettingsSection.Appearance -> R.drawable.ic_visibility // sun/moon for theme
                 SettingsSection.Agent -> R.drawable.ic_processes // robot/processes for agent
+                SettingsSection.Skills -> R.drawable.ic_files // skill folders and instructions
                 SettingsSection.Updates -> R.drawable.ic_history // refresh/history for updates
                 SettingsSection.About -> R.drawable.ic_files // info/documents for about
             }
@@ -322,9 +360,9 @@ private fun SectionListItem(
 
 /** Level 2 chrome: a scrolling column sized to the sheet's remaining height. */
 @Composable
-private fun DetailScroll(content: @Composable ColumnScope.() -> Unit) {
+internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable ColumnScope.() -> Unit) {
     Column(
-        Modifier.fillMaxSize().verticalScroll(rememberScrollState())
+        modifier.fillMaxSize().verticalScroll(rememberScrollState())
             .padding(horizontal = 16.dp, vertical = 16.dp),
         content = content,
     )
@@ -583,7 +621,7 @@ private fun AboutDetail(versionName: String, onShowUsage: () -> Unit) {
 }
 
 @Composable
-private fun SectionHeading(text: String, modifier: Modifier = Modifier) {
+internal fun SectionHeading(text: String, modifier: Modifier = Modifier) {
     Text(
         text,
         modifier = modifier.padding(vertical = 4.dp),

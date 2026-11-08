@@ -25,6 +25,13 @@ import com.kaiser.rivet.agent.ProjectContext
 import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.ProjectInstructions
 import com.kaiser.rivet.agent.SafAgentWorkspace
+import com.kaiser.rivet.agent.Skill
+import com.kaiser.rivet.agent.SkillCatalog
+import com.kaiser.rivet.agent.SkillContext
+import com.kaiser.rivet.agent.SkillDiscovery
+import com.kaiser.rivet.agent.globalSkillsRoot
+import com.kaiser.rivet.agent.SkillRootKind
+import com.kaiser.rivet.agent.skillGesture
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ALL_REASONING_LEVELS
 import com.kaiser.rivet.provider.ProviderConfig
@@ -52,6 +59,7 @@ import com.kaiser.rivet.storage.CodingSessionHeader
 import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.storage.ContextEstimate
 import com.kaiser.rivet.storage.SessionUsage
+import com.kaiser.rivet.storage.SkillScriptApprovalStore
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import com.kaiser.rivet.workspace.WorkspaceSelection
@@ -71,6 +79,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
+import java.io.File
 import java.util.UUID
 
 data class UnsupportedReasoningNotice(
@@ -240,10 +249,96 @@ class ChatViewModel private constructor(
     private val autonomyStore = AutonomyStore(app)
     val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
     private val projectDownloader = ProjectDownloader(app.cacheDir)
+    private val skillDiscovery = SkillDiscovery(globalSkillsRoot(app.filesDir))
+    private val skillScriptApprovals = SkillScriptApprovalStore(app)
     private val sessions get() = sessionStore as? CodingSessions
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    // The composer's "/" list: user-invocable skills of the current project. Filled from
+    // the discovery cache when the sheet opens and at every turn start; never scanned here.
+    private val _userSkills = MutableStateFlow<List<Skill>>(emptyList())
+    val userSkills: StateFlow<List<Skill>> = _userSkills.asStateFlow()
+
+    // The whole catalog for Settings -> Skills, including manual-only skills and the
+    // error entries the chat path never loads.
+    private val _skillCatalog = MutableStateFlow<SkillCatalog?>(null)
+    val skillCatalog: StateFlow<SkillCatalog?> = _skillCatalog.asStateFlow()
+
+    suspend fun refreshSkillCatalog() {
+        val workspace = try {
+            workspaceSelection.restore()?.first
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        val catalog = try {
+            if (workspace == null) {
+                skillDiscovery.refresh(null, "")
+            } else {
+                skillDiscovery.refresh(SafAgentWorkspace(workspace), workspace.tree.toString())
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        _skillCatalog.value = catalog
+        _userSkills.value = catalog.skills.filter { it.userInvocable }
+    }
+
+    /** The bundled entries of a directory skill, read off-main; empty for flat-file skills. */
+    suspend fun skillBundledFiles(skill: Skill): List<String> {
+        val source = skill.source ?: return emptyList()
+        if (source.baseDir.substringAfterLast('/') != skill.name) return emptyList()
+        return try {
+            when (source.kind) {
+                SkillRootKind.Global, SkillRootKind.Bundled -> {
+                    File(source.baseDir).listFiles()?.map {
+                        if (it.isDirectory) "${it.name}/" else it.name
+                    }?.sorted().orEmpty()
+                }
+                SkillRootKind.ProjectRivet, SkillRootKind.ProjectAgents -> {
+                    val workspace = workspaceSelection.restore()?.first ?: return emptyList()
+                    SafAgentWorkspace(workspace).list(source.baseDir)
+                        .filter { it.path.substringAfterLast('/') != "SKILL.md" }
+                        .map { entry ->
+                            val name = entry.path.substringAfterLast('/')
+                            if (entry.directory) "$name/" else name
+                        }
+                        .sorted()
+                }
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            emptyList()
+        }
+    }
+
+    suspend fun refreshUserSkills() {
+        val workspace = try {
+            workspaceSelection.restore()?.first
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            null
+        }
+        if (workspace == null) {
+            _userSkills.value = emptyList()
+            return
+        }
+        val catalog = try {
+            skillDiscovery.catalog(SafAgentWorkspace(workspace), workspace.tree.toString())
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return
+        }
+        _userSkills.value = catalog.skills.filter { it.userInvocable }
+    }
 
     @Volatile private var titleRenameRevision = 0L
     private var sendJob: Job? = null
@@ -558,11 +653,34 @@ class ChatViewModel private constructor(
                     observedPaths[WorkspacePath.parse(instruction.scope).parent()] = true
                 }
             var instructions = project?.load(observedPaths)
+            // Skills rescan at the same lifecycle point as project instructions: turn
+            // start. Everywhere else (each model step) reads this turn's snapshot.
+            val agentWorkspace = workspace?.let(::SafAgentWorkspace)
+            val skills = agentWorkspace?.let { skillDiscovery.refresh(it, requireNotNull(workspaceId)) }
+            if (skills != null) {
+                _skillCatalog.value = skills
+                _userSkills.value = skills.skills.filter { it.userInvocable }
+            }
+            val approvedSkillScripts = try {
+                skillScriptApprovals.approved()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                emptySet()
+            }
+            // A `/name` gesture loads its skill for this turn; everything after the token
+            // stays the task. Retries already carry the stripped task text.
+            val gesture = if (retryingInterrupted) null else skillGesture(trimmed, skills)
+            val prompt = gesture?.task ?: trimmed
             fun initialContext(messages: List<AgentMessage>): List<AgentMessage> = buildList {
                 if (activeSummary.isNotBlank() && messages.none { it.role == AgentRole.Context &&
                         it.internalContext?.kind == "summary" }) add(InternalContext.summary(activeSummary, workspaceId))
                 if (workspaceId != null && instructions != null) addAll(ProjectContext.updates(messages,
                     workspaceId, requireNotNull(instructions)))
+                if (workspaceId != null) addAll(SkillContext.updates(messages, workspaceId, skills))
+                if (gesture != null && workspaceId != null) {
+                    add(SkillContext.invocation(gesture.skill, workspaceId))
+                }
             }
             val executor = workspace?.let { selectedWorkspace ->
                 val boundWorkspaceId = workspaceId ?: selectedWorkspace.tree.toString()
@@ -579,6 +697,8 @@ class ChatViewModel private constructor(
                     },
                     downloader = projectDownloader,
                     currentWorkspaceIdentity = workspaceSelection::currentIdentity,
+                    skills = skills,
+                    loadedSkills = gesture?.let { setOf(it.skill.name) }.orEmpty(),
                 )
             }
             val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
@@ -605,7 +725,7 @@ class ChatViewModel private constructor(
             // request left its user message in it, and a failure after partial output also
             // left the cut-off answer, so appending the prompt again sent it twice.
             val reuseExistingTail = retryingInterrupted
-            val pendingUser = if (reuseExistingTail) emptyList() else listOf(AgentMessage.user(trimmed))
+            val pendingUser = if (reuseExistingTail) emptyList() else listOf(AgentMessage.user(prompt))
             if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
                 try {
                     val reduced = context.prepare(activeMessages, force = true, reason = "storage_pressure")
@@ -793,9 +913,12 @@ class ChatViewModel private constructor(
                 contextUpdates = { candidate ->
                     if (project == null || workspaceId == null) emptyList() else {
                         instructions = project.load(observedPaths)
-                        ProjectContext.updates(candidate, workspaceId, requireNotNull(instructions))
+                        ProjectContext.updates(candidate, workspaceId, requireNotNull(instructions)) +
+                            SkillContext.updates(candidate, workspaceId, skills)
                     }
                 },
+                approvedSkillScripts = approvedSkillScripts,
+                recordSkillScriptApproval = skillScriptApprovals::approve,
             )
             try {
                 val runLoop: suspend () -> AgentRunResult = {
