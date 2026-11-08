@@ -50,14 +50,17 @@ fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
     HistoryContent(viewModel, Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(), onBack)
 }
 
+// Panel form. `onNavigate` closes the panel after a conversation is opened or created;
+// the compact layout stays because the panel, not the content, owns the back affordance.
 @Composable
-fun HistoryPane(viewModel: ChatViewModel, modifier: Modifier = Modifier) {
-    HistoryContent(viewModel, modifier.background(MaterialTheme.colorScheme.surfaceContainerLow))
+fun HistoryPane(viewModel: ChatViewModel, modifier: Modifier = Modifier, onNavigate: () -> Unit = {}) {
+    HistoryContent(viewModel, modifier.background(MaterialTheme.colorScheme.surfaceContainerLow),
+        onClose = onNavigate, embedded = true)
 }
 
 @Composable
-private fun HistoryContent(viewModel: ChatViewModel, modifier: Modifier, onClose: (() -> Unit)? = null) {
-    val embedded = onClose == null
+private fun HistoryContent(viewModel: ChatViewModel, modifier: Modifier, onClose: (() -> Unit)? = null,
+                           embedded: Boolean = onClose == null) {
     val state by viewModel.uiState.collectAsState()
     val actionsEnabled = state.ready && !state.projectLoading && !state.streaming &&
         !state.undoing && !state.recoveringProjectChanges
@@ -100,7 +103,7 @@ private fun HistoryContent(viewModel: ChatViewModel, modifier: Modifier, onClose
     Column(modifier) {
         Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 2.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            if (onClose != null) IconButton(onClick = onClose) {
+            if (!embedded) IconButton(onClick = { onClose?.invoke() }) {
                 Icon(painterResource(R.drawable.ic_back), "Back", tint = MaterialTheme.colorScheme.onBackground)
             } else Spacer(Modifier.size(12.dp))
             Text("History", style = MaterialTheme.typography.titleLarge)

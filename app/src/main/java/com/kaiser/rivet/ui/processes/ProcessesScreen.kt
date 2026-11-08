@@ -7,6 +7,7 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -51,6 +52,17 @@ import kotlinx.coroutines.delay
 
 @Composable
 fun ProcessesScreen(processes: ManagedProcesses, onBack: () -> Unit) {
+    ProcessesContent(processes, Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(), onBack)
+}
+
+// Panel form: the slide-over supplies the scrim and Back handling, so no back arrow here.
+@Composable
+fun ProcessesPane(processes: ManagedProcesses, modifier: Modifier = Modifier) {
+    ProcessesContent(processes, modifier.background(MaterialTheme.colorScheme.surfaceContainerLow), null)
+}
+
+@Composable
+private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, onBack: (() -> Unit)?) {
     val context = LocalContext.current
     val processItems by processes.processes.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -61,15 +73,15 @@ fun ProcessesScreen(processes: ManagedProcesses, onBack: () -> Unit) {
             now = System.currentTimeMillis()
         }
     }
-    BackHandler(onBack = onBack)
+    if (onBack != null) BackHandler(onBack = onBack)
 
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+    Column(modifier) {
         Row(Modifier.fillMaxWidth().padding(end = 16.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+            if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                 Icon(painterResource(R.drawable.ic_back), "Back to chat",
                     tint = MaterialTheme.colorScheme.onBackground)
-            }
+            } else Spacer(Modifier.size(16.dp))
             Text("Processes", style = MaterialTheme.typography.titleLarge)
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))

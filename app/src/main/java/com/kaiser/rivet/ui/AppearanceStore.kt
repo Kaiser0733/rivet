@@ -17,10 +17,11 @@ internal const val MIN_ROSE_INTENSITY = 70
 internal const val MAX_ROSE_INTENSITY = 100
 internal const val DEFAULT_ROSE_INTENSITY = MAX_ROSE_INTENSITY
 
-enum class RivetThemeMode { Rose, Dark }
+enum class RivetThemeMode { Dark, Light, System }
 
 data class RivetAppearance(
-    val themeMode: RivetThemeMode = RivetThemeMode.Rose,
+    val themeMode: RivetThemeMode = RivetThemeMode.Dark,
+    // Kept so a legacy stored value is never erased; the S1 theme no longer reads it.
     val roseIntensity: Int = DEFAULT_ROSE_INTENSITY,
 )
 
@@ -39,8 +40,15 @@ class AppearanceStore(
         .map { preferences ->
             val storedTheme = preferences.asMap()[themeKey] as? String
             RivetAppearance(
-                themeMode = RivetThemeMode.entries.firstOrNull { it.name == storedTheme }
-                    ?: RivetThemeMode.Rose,
+                // "Rose" predates the Dark/Light/System modes and migrates to Light;
+                // anything unknown falls back to the Dark default.
+                themeMode = when (storedTheme) {
+                    "Dark" -> RivetThemeMode.Dark
+                    "Light" -> RivetThemeMode.Light
+                    "System" -> RivetThemeMode.System
+                    "Rose" -> RivetThemeMode.Light
+                    else -> RivetThemeMode.Dark
+                },
                 roseIntensity = clampRoseIntensity(preferences[intensityKey] ?: DEFAULT_ROSE_INTENSITY),
             )
         }
