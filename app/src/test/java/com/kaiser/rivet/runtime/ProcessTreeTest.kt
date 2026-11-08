@@ -68,6 +68,7 @@ class ProcessTreeTest {
         val stat = "123 (a (b) c) S 42 7 7 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 987654 0 0"
 
         assertEquals(42, parseProcStatPpid(stat))
+        assertEquals(7, parseProcStatSession(stat))
         assertEquals(987654L, parseProcStatStartTime(stat))
         assertNull(parseProcStatPpid("not a stat line"))
     }

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.chat
 
+import com.kaiser.rivet.runtime.ToolchainAvailability
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -9,7 +10,9 @@ import org.junit.Test
 // here must match what the runtime actually enforces.
 class WorkspaceLimitInstructionTest {
 
-    private val briefing = ChatViewModel.systemInstruction(workspace = true)
+    private val allToolchain = ToolchainAvailability(busybox = true, python = true, git = true)
+    private val briefing = ChatViewModel.systemInstruction(workspace = true,
+        availability = allToolchain)
 
     @Test fun namesTheShippedRuntimeLimits() {
         listOf("16 MiB", "128 KiB", "120 seconds", "2000", "1 MiB", "50,000", "1 GiB")
@@ -28,11 +31,30 @@ class WorkspaceLimitInstructionTest {
             .forEach { assertTrue(it, briefing.contains(it)) }
     }
 
+    @Test fun absenceIsStatedPerPiece() {
+        val absent = ChatViewModel.systemInstruction(workspace = true,
+            availability = ToolchainAvailability())
+        assertTrue(absent.contains("BusyBox applet farm is not available in this build"))
+        assertTrue(absent.contains("Python is not available in this build"))
+        assertTrue(absent.contains("Git is not available in this build"))
+        assertFalse(absent.contains("Python 3.12.3 is available"))
+        assertFalse(absent.contains("Git 2.56 is available"))
+
+        val noGit = ChatViewModel.systemInstruction(workspace = true,
+            availability = allToolchain.copy(git = false))
+        assertTrue(noGit.contains("Python 3.12.3 is available"))
+        assertTrue(noGit.contains("Git is not available in this build"))
+        assertFalse(noGit.contains("Pushing to GitHub works"))
+    }
+
     @Test fun governorStateIsAnAppObservationAndOnlyWhenNotReady() {
-        assertEquals(ChatViewModel.systemInstruction(workspace = true),
-            ChatViewModel.systemInstruction(workspace = true, terminalState = null))
+        assertEquals(ChatViewModel.systemInstruction(workspace = true,
+                availability = allToolchain),
+            ChatViewModel.systemInstruction(workspace = true, terminalState = null,
+                availability = allToolchain))
         val stopped = ChatViewModel.systemInstruction(workspace = true,
-            terminalState = "Terminal: stopped a command — memory limit")
+            terminalState = "Terminal: stopped a command — memory limit",
+            availability = allToolchain)
         assertTrue(stopped.contains(
             "Rivet app observation (not permission): Terminal: stopped a command — memory limit."))
         assertTrue(stopped.contains("Do not retry that command unchanged"))

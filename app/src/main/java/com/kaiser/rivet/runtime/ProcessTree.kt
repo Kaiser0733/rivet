@@ -56,6 +56,11 @@ internal fun parseProcStatPpid(stat: String): Int? =
 internal fun parseProcStatStartTime(stat: String): Long? =
     parseStatField(stat, 19)?.toLongOrNull()
 
+/** The session id field (6) of /proc/<pid>/stat. A command shell calls setsid(), so this
+ * is its pid; background jobs that change process groups still share the session. */
+internal fun parseProcStatSession(stat: String): Int? =
+    parseStatField(stat, 3)?.toIntOrNull()
+
 /** Field index counted after "comm) state", so 0 is state, 1 is ppid, 19 is starttime. */
 private fun parseStatField(stat: String, index: Int): String? {
     val close = stat.lastIndexOf(')')
@@ -92,6 +97,24 @@ internal object ProcTree {
     fun pssKb(pid: Int): Long? =
         read("/proc/$pid/smaps_rollup")?.let(::parseSmapsRollupPssKb)
             ?: read("/proc/$pid/status")?.let(::parseStatusVmRssKb)
+
+    /** Every process in [sessionId], including already-reparented background jobs. */
+    fun sessionMembers(sessionId: Int): Set<Int> {
+        val names = File("/proc").list() ?: return emptySet()
+        val members = HashSet<Int>()
+        for (name in names) {
+            val pid = name.toIntOrNull() ?: continue
+            val stat = statOf(name) ?: continue
+            if (parseProcStatSession(stat) == sessionId) members += pid
+        }
+        return members
+    }
+
+    /** Kill a command's whole session after its leader exits. The group kill misses
+     * background jobs moved to their own process group; the session id does not. */
+    fun killSession(sessionId: Int) {
+        for (pid in sessionMembers(sessionId)) kill(pid)
+    }
 
     fun kill(pid: Int) {
         try { Os.kill(pid, OsConstants.SIGKILL) } catch (_: Exception) { }

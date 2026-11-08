@@ -56,6 +56,9 @@ fun TerminalPane(
 ) {
     var command by rememberSaveable { mutableStateOf(state.command) }
     val canRun = workspaceName != null && command.isNotBlank() && !state.running
+    // A run starts from this field or from the keyboard; clear the draft either way so
+    // the next command starts empty.
+    LaunchedEffect(state.running) { if (state.running) command = "" }
     Column(modifier) {
         Row(Modifier.fillMaxWidth().padding(end = 16.dp), verticalAlignment = Alignment.CenterVertically) {
             IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
@@ -84,11 +87,17 @@ fun TerminalPane(
                     onValueChange = { command = it },
                     modifier = Modifier.weight(1f),
                     placeholder = { Text("Command") },
-                    singleLine = true,
+                    singleLine = false,
+                    maxLines = 6,
                     enabled = workspaceName != null,
                     textStyle = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Monospace),
                     keyboardOptions = KeyboardOptions(autoCorrect = false, imeAction = ImeAction.Send),
-                    keyboardActions = KeyboardActions(onSend = { if (canRun) onRun(command) }),
+                    keyboardActions = KeyboardActions(onSend = {
+                        if (canRun) {
+                            onRun(command)
+                            command = ""
+                        }
+                    }),
                     shape = RoundedCornerShape(8.dp),
                     colors = OutlinedTextFieldDefaults.colors(
                         focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
@@ -101,7 +110,14 @@ fun TerminalPane(
                 )
                 Spacer(Modifier.size(8.dp))
                 RivetOutlinedButton(
-                    onClick = { if (state.running) onStop() else onRun(command) },
+                    onClick = {
+                        if (state.running) {
+                            onStop()
+                        } else if (canRun) {
+                            onRun(command)
+                            command = ""
+                        }
+                    },
                     enabled = state.running || canRun,
                 ) { Text(if (state.running) "Stop" else "Run") }
             }
