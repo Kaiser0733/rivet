@@ -1,0 +1,47 @@
+name: Toolchain binaries
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  busybox:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Set up NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          add-to-path: false
+
+      - name: Fetch BusyBox 1.36.1
+        run: |
+          curl -sL -o busybox.tar.bz2 https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+          sha256sum busybox.tar.bz2
+          tar -xf busybox.tar.bz2
+          mv busybox-1.36.1 busybox-src
+
+      - name: Cross-compile for arm64-v8a (API 26)
+        working-directory: busybox-src
+        run: |
+          LLVM="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p /tmp/shim
+          ln -s "$LLVM/aarch64-linux-android26-clang" /tmp/shim/aarch64-linux-android-gcc
+          ln -s "$LLVM/aarch64-linux-android26-clang++" /tmp/shim/aarch64-linux-android-g++
+          ln -s "$LLVM/llvm-ar" /tmp/shim/aarch64-linux-android-ar
+          ln -s "$LLVM/llvm-strip" /tmp/shim/aarch64-linux-android-strip
+          ln -s "$LLVM/llvm-ranlib" /tmp/shim/aarch64-linux-android-ranlib
+          export PATH="/tmp/shim:$LLVM:$PATH"
+          if [ -f configs/android_ndk_defconfig ]; then make android_ndk_defconfig CROSS_COMPILE=aarch64-linux-android-; else make defconfig CROSS_COMPILE=aarch64-linux-android-; fi
+          sed -i 's/^CONFIG_STATIC=y/# CONFIG_STATIC is not set/' .config || true
+          make -j"$(nproc)" CROSS_COMPILE=aarch64-linux-android-
+          file busybox
+          cp busybox "$GITHUB_WORKSPACE/libbusybox.so"
+
+      - name: Upload BusyBox
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbusybox-arm64
+          path: libbusybox.so
