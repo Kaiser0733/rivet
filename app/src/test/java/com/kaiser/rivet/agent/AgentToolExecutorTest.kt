@@ -357,10 +357,24 @@ class AgentToolExecutorTest {
     @Test
     fun catalogContainsWorkspaceToolsAndApprovedCommand() {
         val names = AgentToolExecutor.definitions.map { it.name }
-        assertEquals(listOf("git_status", "git_diff", "list_directory", "read_file", "search_files", "write_file", "apply_patch",
+        assertEquals(listOf("git_status", "git_diff", "list_directory", "read_file", "search_files", "skill", "write_file", "apply_patch",
             "create_file", "create_directory", "rename_path", "move_path", "delete_path", "run_command",
             "list_processes", "stop_process", "start_preview", "download_file"), names)
         assertTrue(names.none { it in setOf("shell", "terminal", "exec", "bash") })
+    }
+
+    @Test fun skillToolIsReadOnlyAndNeedsNoApproval() = runTest {
+        val skill = Skill(name = "notes", description = "Write notes.", body = "Body.",
+            source = SkillSource(".rivet/skills/notes", SkillRootKind.ProjectRivet))
+        val executor = AgentToolExecutor(FakeWorkspace(),
+            skills = SkillCatalog(listOf(skill), emptyList(), skillCatalogDigest(listOf(skill))))
+        val prepared = executor.prepare(AgentToolCall("s1", "skill", "{\"name\":\"notes\"}"))
+
+        assertEquals(AgentToolEffect.ReadOnly, prepared.effect)
+        assertNull(prepared.approval)
+        val result = prepared.execute()
+        assertFalse(result.error)
+        assertTrue(result.content.contains("<skill_content name=\"notes\">"))
     }
 
     @Test fun previewIsAReadOnlyEffectAndReturnsTheActualLoopbackLaunch() = runTest {

@@ -91,6 +91,8 @@ class AgentToolExecutor(
     private val startPreview: (suspend (String, String) -> PreviewLaunch)? = null,
     private val downloader: ProjectDownloader? = null,
     private val currentWorkspaceIdentity: suspend () -> String? = { null },
+    // The turn's skill catalog snapshot; null when no project session is open.
+    private val skills: SkillCatalog? = null,
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
@@ -165,6 +167,14 @@ class AgentToolExecutor(
                     readOnly(call) {
                         val report = workspace.search(path, args.query)
                         success(call, boundedSearchValue(report), "Searched  \"${args.query.take(48)}\"")
+                    }
+                }
+                // Returns catalog text only, so no workspace read or approval is needed.
+                "skill" -> {
+                    val args = json.decodeFromString<SkillArgs>(call.arguments)
+                    require(args.name.isNotBlank() && args.name.length <= 64)
+                    PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
+                        execute(call) { skillToolResult(call, skills, args.name) }
                     }
                 }
                 "write_file" -> {
@@ -617,6 +627,7 @@ class AgentToolExecutor(
     @Serializable private data class PathArgs(val path: String, @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false)
     @Serializable private data class ReadArgs(val path: String, val offset: Int = 0)
     @Serializable private data class SearchArgs(val query: String, val path: String = "")
+    @Serializable private data class SkillArgs(val name: String)
     @Serializable private data class WriteArgs(
         val path: String,
         val content: String,
@@ -713,6 +724,8 @@ class AgentToolExecutor(
                 "Search one file or a directory recursively; empty path means workspace root. Searches are literal and case-sensitive. Broad searches may be limited; inspect limited, files_scanned, entries_visited, bytes_scanned, and skipped for completeness.",
                 schema(listOf("query"), path, "query" to string),
             ),
+            AgentToolDefinition("skill", "Load the full instructions for an installed skill. Call it before acting on a task that names or clearly matches a skill in the skill catalog. Returns the skill's <skill_content> block; bundled resources are read with the normal file tools relative to the base directory it names.",
+                schema(listOf("name"), "name" to string)),
             AgentToolDefinition("write_file", "Replace an existing text file when its hash still matches. In Basic YOLO, set ask_user=true if this edit should still be confirmed.",
                 schema(listOf("path", "content", "expected_sha256"), path, "content" to string, "expected_sha256" to string, askUser)),
             AgentToolDefinition("apply_patch", "Apply exact unique replacements sequentially in supplied order; each later edit sees earlier edits. All edits validate in memory before the final write, which requires the file hash to still match. In Basic YOLO, set ask_user=true to request confirmation.",
