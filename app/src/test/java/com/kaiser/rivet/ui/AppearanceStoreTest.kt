@@ -4,17 +4,14 @@ import androidx.datastore.preferences.core.PreferenceDataStoreFactory
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.intPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
-import androidx.compose.ui.graphics.Color
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.SupervisorJob
-import kotlinx.coroutines.cancel
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -28,13 +25,14 @@ import kotlin.math.pow
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class AppearanceStoreTest {
-    @Test fun defaultsToOriginalAndPersistsOnlyBoundedValues() = runBlocking {
+    @Test fun defaultsToDarkAndPersistsOnlyBoundedIntensity() = runBlocking {
         val app = RuntimeEnvironment.getApplication()
         val file = File(app.cacheDir, "appearance-${UUID.randomUUID()}.preferences_pb")
         val firstScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val firstDataStore = PreferenceDataStoreFactory.create(scope = firstScope, produceFile = { file })
         val first = AppearanceStore(app, firstDataStore)
 
+        assertEquals(RivetThemeMode.Dark, first.appearance.first().themeMode)
         assertEquals(DEFAULT_ROSE_INTENSITY, first.appearance.first().roseIntensity)
         first.setRoseIntensity(Int.MIN_VALUE)
         assertEquals(MIN_ROSE_INTENSITY, first.appearance.first().roseIntensity)
@@ -52,34 +50,12 @@ class AppearanceStoreTest {
         secondScope.cancel()
     }
 
-    @Test fun rosePaletteKeepsOriginalAtDefaultAndMutesOnlyRoseColors() {
-        val original = Color(0xFFE6BBC3)
-        val full = roseSurfaceColor(original, DEFAULT_ROSE_INTENSITY)
-        val dimmed = roseSurfaceColor(original, MIN_ROSE_INTENSITY)
-
-        assertEquals(original, full)
-        assertEquals(1f, full.alpha, 0f)
-        assertEquals(1f, dimmed.alpha, 0f)
-        assertNotEquals(full, dimmed)
-        assertEquals(rivetColors(DEFAULT_ROSE_INTENSITY).onBackground,
-            rivetColors(MIN_ROSE_INTENSITY).onBackground)
-        assertEquals(rivetColors(DEFAULT_ROSE_INTENSITY).primary,
-            rivetColors(MIN_ROSE_INTENSITY).primary)
+    @Test fun intensityClampBoundsStayAsTheLegacyStoreDefinesThem() {
         assertEquals(MIN_ROSE_INTENSITY, clampRoseIntensity(Int.MIN_VALUE))
         assertEquals(MAX_ROSE_INTENSITY, clampRoseIntensity(Int.MAX_VALUE))
     }
 
-    @Test fun roseIntensityKeepsBodyTextContrastAcrossItsRange() {
-        for (intensity in MIN_ROSE_INTENSITY..MAX_ROSE_INTENSITY) {
-            val palette = rivetColors(intensity)
-            assertTrue(contrast(palette.onBackground, palette.background) >= 4.5)
-            assertTrue(contrast(palette.onSurface, palette.surface) >= 4.5)
-            assertTrue(contrast(palette.onSurfaceVariant, palette.surfaceVariant) >= 4.5)
-            assertTrue(contrast(palette.onErrorContainer, palette.errorContainer) >= 4.5)
-        }
-    }
-
-    @Test fun themeDefaultsToRoseAndRejectsUnknownStoredValues() = runBlocking {
+    @Test fun themeDefaultsToDarkAndRejectsUnknownStoredValues() = runBlocking {
         val app = RuntimeEnvironment.getApplication()
         val file = File(app.cacheDir, "appearance-${UUID.randomUUID()}.preferences_pb")
         val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
@@ -87,13 +63,28 @@ class AppearanceStoreTest {
             val dataStore = PreferenceDataStoreFactory.create(scope = scope, produceFile = { file })
             val store = AppearanceStore(app, dataStore)
             assertEquals(RivetAppearance(), store.appearance.first())
-            for (invalid in listOf("", "unknown", "dark", "Dark ")) {
+            for (invalid in listOf("", "unknown", "dark", "Dark ", "Rose ")) {
                 dataStore.edit { it[stringPreferencesKey("theme_mode")] = invalid }
-                assertEquals(RivetThemeMode.Rose, store.appearance.first().themeMode)
+                assertEquals(RivetThemeMode.Dark, store.appearance.first().themeMode)
             }
             dataStore.edit { it[intPreferencesKey("theme_mode")] = 1 }
-            assertEquals(RivetThemeMode.Rose, store.appearance.first().themeMode)
-        } finally { scope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() }
+            assertEquals(RivetThemeMode.Dark, store.appearance.first().themeMode)
+        } finally { scope.coroutineContext[Job]!!.cancelAndJoin() }
+    }
+
+    @Test fun legacyRoseValueMigratesToLightWithoutErasingRoseIntensity() = runBlocking {
+        val app = RuntimeEnvironment.getApplication()
+        val file = File(app.cacheDir, "appearance-${UUID.randomUUID()}.preferences_pb")
+        val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
+        try {
+            val dataStore = PreferenceDataStoreFactory.create(scope = scope, produceFile = { file })
+            dataStore.edit {
+                it[stringPreferencesKey("theme_mode")] = "Rose"
+                it[intPreferencesKey("rose_intensity")] = 82
+            }
+            val store = AppearanceStore(app, dataStore)
+            assertEquals(RivetAppearance(RivetThemeMode.Light, 82), store.appearance.first())
+        } finally { scope.coroutineContext[Job]!!.cancelAndJoin() }
     }
 
     @Test fun themeRoundTripSurvivesReopeningWithoutErasingRoseIntensity() = runBlocking {
@@ -103,33 +94,40 @@ class AppearanceStoreTest {
             val scope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
             try {
                 block(AppearanceStore(app, PreferenceDataStoreFactory.create(scope = scope, produceFile = { file })))
-            } finally { scope.coroutineContext[kotlinx.coroutines.Job]!!.cancelAndJoin() }
+            } finally { scope.coroutineContext[Job]!!.cancelAndJoin() }
         }
         reopen { store ->
             store.setRoseIntensity(82)
-            store.setThemeMode(RivetThemeMode.Dark)
-            assertEquals(RivetAppearance(RivetThemeMode.Dark, 82), store.appearance.first())
+            store.setThemeMode(RivetThemeMode.System)
+            assertEquals(RivetAppearance(RivetThemeMode.System, 82), store.appearance.first())
         }
         reopen { store ->
-            assertEquals(RivetAppearance(RivetThemeMode.Dark, 82), store.appearance.first())
-            store.setThemeMode(RivetThemeMode.Rose)
+            assertEquals(RivetAppearance(RivetThemeMode.System, 82), store.appearance.first())
+            store.setThemeMode(RivetThemeMode.Light)
         }
-        reopen { store -> assertEquals(RivetAppearance(RivetThemeMode.Rose, 82), store.appearance.first()) }
+        reopen { store -> assertEquals(RivetAppearance(RivetThemeMode.Light, 82), store.appearance.first()) }
     }
 
-    @Test fun darkPaletteIgnoresRoseIntensityAndKeepsReadableText() {
-        val palette = rivetColors(DEFAULT_ROSE_INTENSITY, RivetThemeMode.Dark)
-        for (intensity in MIN_ROSE_INTENSITY..MAX_ROSE_INTENSITY) {
-            assertEquals(palette, rivetColors(intensity, RivetThemeMode.Dark))
+    @Test fun resolvedPalettesIgnoreIntensityAndKeepReadableText() {
+        for (palette in listOf(
+            rivetColors(RivetThemeMode.Dark, true),
+            rivetColors(RivetThemeMode.System, true),
+            rivetColors(RivetThemeMode.System, false),
+            rivetColors(RivetThemeMode.Light, true),
+            rivetColors(RivetThemeMode.Light, false),
+        )) {
+            assertTrue(contrast(palette.onBackground, palette.background) >= 4.5)
+            assertTrue(contrast(palette.onSurface, palette.surface) >= 4.5)
+            assertTrue(contrast(palette.onSurfaceVariant, palette.surfaceVariant) >= 4.5)
+            assertTrue(contrast(palette.onErrorContainer, palette.errorContainer) >= 4.5)
+            assertTrue(contrast(palette.onPrimary, palette.primary) >= 4.5)
         }
-        assertTrue(contrast(palette.onBackground, palette.background) >= 4.5)
-        assertTrue(contrast(palette.onSurface, palette.surface) >= 4.5)
-        assertTrue(contrast(palette.onSurfaceVariant, palette.surfaceVariant) >= 4.5)
-        assertTrue(contrast(palette.onErrorContainer, palette.errorContainer) >= 4.5)
-        assertTrue(contrast(palette.onPrimary, palette.primary) >= 4.5)
+        // System mode follows the platform, not the stored intensity.
+        assertEquals(rivetColors(RivetThemeMode.Dark, true), rivetColors(RivetThemeMode.System, true))
+        assertEquals(rivetColors(RivetThemeMode.Light, false), rivetColors(RivetThemeMode.System, false))
     }
 
-    private fun contrast(first: Color, second: Color): Double {
+    private fun contrast(first: androidx.compose.ui.graphics.Color, second: androidx.compose.ui.graphics.Color): Double {
         val one = luminance(first)
         val two = luminance(second)
         val brighter = maxOf(one, two)
@@ -137,7 +135,7 @@ class AppearanceStoreTest {
         return (brighter + 0.05) / (darker + 0.05)
     }
 
-    private fun luminance(color: Color): Double {
+    private fun luminance(color: androidx.compose.ui.graphics.Color): Double {
         fun channel(value: Float): Double {
             val srgb = value.toDouble()
             return if (srgb <= 0.04045) srgb / 12.92 else ((srgb + 0.055) / 1.055).pow(2.4)
