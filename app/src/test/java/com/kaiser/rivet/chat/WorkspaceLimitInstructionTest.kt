@@ -15,10 +15,12 @@ class WorkspaceLimitInstructionTest {
             .forEach { assertTrue(it, briefing.contains(it)) }
     }
 
-    @Test fun namesTheShellTheCommandsActuallyRunIn() {
+    @Test fun namesTheShellAndTheBusyBoxAppletsItRunsWith() {
         assertTrue(briefing.contains("/system/bin/sh"))
-        assertTrue(briefing.contains("PATH=/system/bin:/system/xbin:/vendor/bin"))
-        listOf("node", "python", "git", "npm").forEach { assertTrue(it, briefing.contains(it)) }
+        assertTrue(briefing.contains("BusyBox applet farm"))
+        assertTrue(briefing.contains("coreutils"))
+        listOf("Python", "Node", "git CLI", "package managers")
+            .forEach { assertTrue(it, briefing.contains(it)) }
     }
 
     @Test fun saysWhereUndoStops() {

@@ -38,6 +38,7 @@ class RuntimeController(
     private val projectName: () -> String? = { null },
 ) {
     private val app = context.applicationContext
+    private val toolchain = Toolchain(app)
     private val operations = Mutex()
     private var mirrorIdentity: String? = null
     private var mirror: WorkspaceMirror? = null
@@ -48,6 +49,9 @@ class RuntimeController(
         if (ready.dirty) {
             return@withLock RuntimeCommandResult(cwd = cwd, sync = "pending", error = "sync_required")
         }
+        // First use in this process: build the applet farm before PATH is composed.
+        // Without libbusybox.so this is a no-op and the environment is unchanged.
+        toolchain.ensurePrepared()
         val directory = runtimeDirectory(ready.worktree, cwd)
         val environment = environment(active, directory)
         val processId = managedProcesses?.let { registry ->
@@ -293,7 +297,7 @@ class RuntimeController(
         if (!home.isDirectory || !temporary.isDirectory) throw MirrorFailure("storage")
         return arrayOf(
             "HOME=${home.absolutePath}",
-            "PATH=/system/bin:/system/xbin:/vendor/bin",
+            "PATH=${toolchain.path()}",
             "TMPDIR=${temporary.absolutePath}",
             "PWD=${cwd.absolutePath}",
             "LANG=C.UTF-8",
