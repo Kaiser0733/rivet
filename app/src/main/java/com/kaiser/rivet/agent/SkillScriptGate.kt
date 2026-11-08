@@ -56,7 +56,7 @@ internal fun matchSkillScript(command: String, catalog: SkillCatalog?): SkillScr
 private fun isCdTarget(text: String, index: Int): Boolean {
     val head = text.substring(0, index).trimEnd()
     val token = head.trimEnd('"', '\'').trimEnd()
-        .substringAfterLast { it.isWhitespace() || it in ";&|(" }
+        .takeLastWhile { !it.isWhitespace() && it !in ";&|(" }
     return token == "cd"
 }
 
