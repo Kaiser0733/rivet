@@ -25,10 +25,12 @@ private val TextPrimaryLight = Color(0xFF0F1115)
 private val TextSecondaryLight = Color(0xFF61666B)
 private val TextMetaLight = Color(0xFF81858C)
 
-// dsh's one accent is its link blue: deepseek-500 light, deepseek-400 dark. Its
+// dsh's one accent is its link blue: deepseek-600 light, deepseek-400 dark. Its
 // brand-primary is the monochrome contrast fill (near-black/near-white), which would leave
-// Rivet without the spec's single accent, so primary takes the link value instead.
-private val AccentLight = Color(0xFF4176E6)
+// Rivet without the spec's single accent, so primary takes the link value instead. Light
+// uses one ramp step deeper than the link so white content on the filled accent clears the
+// palette's 4.5 readability bar.
+private val AccentLight = Color(0xFF4868B2)
 private val AccentDark = Color(0xFF7AAAFF)
 
 // bg-base: bluish-00 light, bluish-950 dark.
