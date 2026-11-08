@@ -31,8 +31,9 @@ jobs:
         run: |
           LLVM="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
           mkdir -p /tmp/shim
-          ln -s "$LLVM/aarch64-linux-android26-clang" /tmp/shim/aarch64-linux-android-gcc
-          ln -s "$LLVM/aarch64-linux-android26-clang++" /tmp/shim/aarch64-linux-android-g++
+          printf '#!/bin/sh\nexec "%s/aarch64-linux-android26-clang" "$@"\n' "$LLVM" > /tmp/shim/aarch64-linux-android-gcc
+          printf '#!/bin/sh\nexec "%s/aarch64-linux-android26-clang++" "$@"\n' "$LLVM" > /tmp/shim/aarch64-linux-android-g++
+          chmod +x /tmp/shim/aarch64-linux-android-gcc /tmp/shim/aarch64-linux-android-g++
           ln -s "$LLVM/llvm-ar" /tmp/shim/aarch64-linux-android-ar
           ln -s "$LLVM/llvm-strip" /tmp/shim/aarch64-linux-android-strip
           ln -s "$LLVM/llvm-ranlib" /tmp/shim/aarch64-linux-android-ranlib
