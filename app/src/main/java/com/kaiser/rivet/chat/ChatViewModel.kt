@@ -72,9 +72,13 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.flow.MutableStateFlow
+import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.flow.map
+import kotlinx.coroutines.flow.stateIn
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
@@ -255,6 +259,12 @@ class ChatViewModel private constructor(
 
     private val _uiState = MutableStateFlow(ChatUiState())
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+
+    // The right slide's workspace line. Derived in the view model so the panel reads no
+    // .value at composition and only recomposes when the workspace name actually changes,
+    // not on every streamed token.
+    val projectName: StateFlow<String?> = _uiState.map { it.projectName }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value.projectName)
 
     // The composer's "/" list: user-invocable skills of the current project. Filled from
     // the discovery cache when the sheet opens and at every turn start; never scanned here.

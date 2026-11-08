@@ -41,8 +41,6 @@ import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.provider.SettingsScreen
 import com.kaiser.rivet.ui.provider.SkillInstallDialog
 import kotlinx.coroutines.CancellationException
-import kotlinx.coroutines.flow.distinctUntilChanged
-import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.launch
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -161,11 +159,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
                                 val terminalState by chatViewModel.terminalState.collectAsState()
-                                // Only the workspace name is needed here; a mapped flow
-                                // keeps token streaming from recomposing the panel.
-                                val workspaceName by remember(chatViewModel) {
-                                    chatViewModel.uiState.map { it.projectName }.distinctUntilChanged()
-                                }.collectAsState(initial = chatViewModel.uiState.value.projectName)
+                                val workspaceName by chatViewModel.projectName.collectAsState()
                                 ToolsPane(
                                     processes = chatViewModel.managedProcesses,
                                     terminal = terminalState,
