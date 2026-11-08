@@ -35,9 +35,14 @@ internal fun terminalStatus(result: RuntimeCommandResult?, cancelled: Boolean): 
     result.error == "workspace_unavailable" -> "No workspace is selected. Choose a project in the chat first."
     result.error == "process_limit" -> "Four processes are already running. Stop one and try again."
     result.error == "sync_required" -> "The workspace is syncing. Try again when it finishes."
+    result.error == "thermal_blocked" ->
+        "The phone is too hot. Wait for it to cool before running long commands."
+    result.error == "battery_low" ->
+        "Battery is low — terminal paused for long jobs. Charge the phone or run a short command."
     result.error != null -> "Could not run the command (${result.error})."
     result.timedOut -> "Stopped: timed out after 5 minutes."
     result.tooManyChildren -> "Stopped: too many child processes (limit 64)."
+    result.memoryLimit -> "Stopped: memory limit."
     result.exitCode == 0 -> "Finished."
     result.exitCode != null -> "Exit ${result.exitCode}."
     else -> "Finished."

@@ -48,6 +48,7 @@ import com.kaiser.rivet.ui.RivetOutlinedButton
 fun TerminalPane(
     state: TerminalUiState,
     workspaceName: String?,
+    stateLine: String,
     onRun: (String) -> Unit,
     onStop: () -> Unit,
     onBack: () -> Unit,
@@ -61,7 +62,11 @@ fun TerminalPane(
                 Icon(painterResource(R.drawable.ic_back), "Back to tools",
                     tint = MaterialTheme.colorScheme.onBackground)
             }
-            Text("Terminal", style = MaterialTheme.typography.titleLarge)
+            Column {
+                Text("Terminal", style = MaterialTheme.typography.titleLarge)
+                Text(stateLine, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))
         Column(Modifier.fillMaxSize().padding(16.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {

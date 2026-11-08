@@ -37,6 +37,7 @@ internal data class CommandOutput(
     val stderrTruncated: Boolean,
     val timedOut: Boolean,
     val tooManyChildren: Boolean = false,
+    val memoryLimit: Boolean = false,
 )
 
 internal data class CommandExitOutcome(
@@ -59,7 +60,8 @@ internal suspend fun awaitExitOrTimeout(
 
 internal class CommandProcess {
     suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long,
-                    onOutput: ((String, String) -> Unit)? = null): CommandOutput =
+                    onOutput: ((String, String) -> Unit)? = null,
+                    memoryCapBytes: Long? = null): CommandOutput =
         coroutineScope {
             val started = CommandNative.start(command, cwd, environment)
             check(started.size == 3 && started[0] > 0)
@@ -103,6 +105,7 @@ internal class CommandProcess {
             // time so a reused pid is never swept by mistake.
             val strays = ConcurrentHashMap<Int, Long>()
             val tooManyChildren = AtomicBoolean(false)
+            val memoryLimit = AtomicBoolean(false)
             fun remember(tree: Set<Int>) {
                 for (child in tree) {
                     if (strays.containsKey(child)) continue
@@ -118,6 +121,7 @@ internal class CommandProcess {
                 }
             }
             val treeWatch = launch(Dispatchers.IO) {
+                var memorySamples = 0
                 while (true) {
                     delay(TREE_POLL_MS)
                     val tree = try { descendants(pid, ProcTree.parents()) }
@@ -127,6 +131,19 @@ internal class CommandProcess {
                         tooManyChildren.set(true)
                         terminate(pid, exited)
                         return@launch
+                    }
+                    if (memoryCapBytes != null) {
+                        // Rule 7: the leader is part of its tree, so its PSS counts too.
+                        val pids = tree + pid
+                        val readings = HashMap<Int, Long>()
+                        for (member in pids) ProcTree.pssKb(member)?.let { readings[member] = it }
+                        memorySamples = memoryBreachSamples(memorySamples,
+                            pssBytes(readings, pids), memoryCapBytes)
+                        if (memoryLimitReached(memorySamples)) {
+                            memoryLimit.set(true)
+                            terminate(pid, exited)
+                            return@launch
+                        }
                     }
                 }
             }
@@ -153,7 +170,7 @@ internal class CommandProcess {
                     stderrReader.cancel()
                 }
                 CommandOutput(exitCode, stdout.text(), stderr.text(), stdout.truncated,
-                    stderr.truncated, timedOut, tooManyChildren.get())
+                    stderr.truncated, timedOut, tooManyChildren.get(), memoryLimit.get())
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     rememberCurrentTree()

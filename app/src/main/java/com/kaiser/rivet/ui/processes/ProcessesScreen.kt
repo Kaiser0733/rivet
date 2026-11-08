@@ -68,6 +68,7 @@ fun ToolsPane(
     processes: ManagedProcesses,
     terminal: TerminalUiState,
     workspaceName: String?,
+    stateLine: String,
     onRunTerminal: (String) -> Unit,
     onStopTerminal: () -> Unit,
     modifier: Modifier = Modifier,
@@ -75,15 +76,17 @@ fun ToolsPane(
     var terminalOpen by rememberSaveable { mutableStateOf(false) }
     if (terminalOpen) {
         BackHandler { terminalOpen = false }
-        TerminalPane(terminal, workspaceName, onRunTerminal, onStopTerminal,
+        TerminalPane(terminal, workspaceName, stateLine, onRunTerminal, onStopTerminal,
             onBack = { terminalOpen = false }, modifier = modifier)
     } else {
-        ProcessesContent(processes, modifier, null, onOpenTerminal = { terminalOpen = true })
+        ProcessesContent(processes, modifier, null, stateLine = stateLine,
+            onOpenTerminal = { terminalOpen = true })
     }
 }
 
 @Composable
 private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, onBack: (() -> Unit)?,
+                             stateLine: String? = null,
                              onOpenTerminal: (() -> Unit)? = null) {
     val context = LocalContext.current
     val processItems by processes.processes.collectAsState()
@@ -104,8 +107,14 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                 Icon(painterResource(R.drawable.ic_back), "Back to chat",
                     tint = MaterialTheme.colorScheme.onBackground)
             } else Spacer(Modifier.size(16.dp))
-            Text(if (onOpenTerminal == null) "Processes" else "Tools",
-                style = MaterialTheme.typography.titleLarge)
+            Column {
+                Text(if (onOpenTerminal == null) "Processes" else "Tools",
+                    style = MaterialTheme.typography.titleLarge)
+                if (stateLine != null) {
+                    Text(stateLine, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))
         if (onOpenTerminal != null) {

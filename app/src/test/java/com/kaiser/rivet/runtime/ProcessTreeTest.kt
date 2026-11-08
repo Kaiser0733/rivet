@@ -49,6 +49,21 @@ class ProcessTreeTest {
         assertTrue(overDescendantCap(100, overCap))
     }
 
+    @Test fun pssParsersReadRollupAndStatusFields() {
+        val rollup = "Rss:             1000 kB\nPss:              742 kB\nPss_Anon:         500 kB\n"
+        assertEquals(742L, parseSmapsRollupPssKb(rollup))
+        val status = "Name:\tsh\nVmPeak:\t1000 kB\nVmRSS:\t       321 kB\n"
+        assertEquals(321L, parseStatusVmRssKb(status))
+        assertNull(parseSmapsRollupPssKb("no memory fields"))
+        assertNull(parseStatusVmRssKb("Pss: 1 kB"))
+    }
+
+    @Test fun treePssSumsKnownMembersAndSkipsMissingOnes() {
+        val readings = mapOf(100 to 10L, 101 to 20L)
+
+        assertEquals(30L * 1024L, pssBytes(readings, setOf(100, 101, 102)))
+    }
+
     @Test fun statParsersReadPastACommWithSpacesAndParens() {
         val stat = "123 (a (b) c) S 42 7 7 0 -1 4194560 1 0 0 0 0 0 0 0 20 0 1 0 987654 0 0"
 

@@ -34,6 +34,20 @@ internal fun descendants(root: Int, parents: Map<Int, Int>): Set<Int> {
 internal fun overDescendantCap(root: Int, parents: Map<Int, Int>): Boolean =
     descendants(root, parents).size > MAX_DESCENDANTS
 
+/** Sum of the tree's per-process PSS readings; missing pids contribute nothing. */
+internal fun pssBytes(kbByPid: Map<Int, Long>, pids: Set<Int>): Long =
+    pids.sumOf { kbByPid[it] ?: 0L } * 1024L
+
+/** The `Pss:` field of /proc/<pid>/smaps_rollup (kB). */
+internal fun parseSmapsRollupPssKb(text: String): Long? = parseMemoryField(text, "Pss:")
+
+/** The `VmRSS:` field of /proc/<pid>/status (kB), the fallback where rollup is absent. */
+internal fun parseStatusVmRssKb(text: String): Long? = parseMemoryField(text, "VmRSS:")
+
+private fun parseMemoryField(text: String, name: String): Long? =
+    text.lineSequence().firstOrNull { it.startsWith(name) }
+        ?.trim()?.split(Regex("\\s+"))?.getOrNull(1)?.toLongOrNull()
+
 /** The ppid field (4) of /proc/<pid>/stat, after a comm that may contain spaces/parens. */
 internal fun parseProcStatPpid(stat: String): Int? =
     parseStatField(stat, 1)?.toIntOrNull()
@@ -70,10 +84,21 @@ internal object ProcTree {
     /** Start time of [pid], or null when it has already exited. */
     fun startTime(pid: Int): Long? = statOf(pid.toString())?.let(::parseProcStatStartTime)
 
+    /**
+     * PSS in kB: smaps_rollup when the kernel has it (one read, shared pages accounted),
+     * UID-visible VmRSS from status as the fallback (over-counts shared pages but works
+     * on older kernels).
+     */
+    fun pssKb(pid: Int): Long? =
+        read("/proc/$pid/smaps_rollup")?.let(::parseSmapsRollupPssKb)
+            ?: read("/proc/$pid/status")?.let(::parseStatusVmRssKb)
+
     fun kill(pid: Int) {
         try { Os.kill(pid, OsConstants.SIGKILL) } catch (_: Exception) { }
     }
 
-    private fun statOf(name: String): String? =
-        try { File("/proc/$name/stat").readText() } catch (_: Exception) { null }
+    private fun statOf(name: String): String? = read("/proc/$name/stat")
+
+    private fun read(path: String): String? =
+        try { File(path).readText() } catch (_: Exception) { null }
 }

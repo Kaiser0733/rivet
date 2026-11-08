@@ -21,6 +21,7 @@ class TerminalTest {
         assertTrue(terminalStatus(result(timedOut = true), false).contains("timed out"))
         assertTrue(terminalStatus(result(tooManyChildren = true), false)
             .contains("too many child processes"))
+        assertTrue(terminalStatus(result(memoryLimit = true), false).contains("memory limit"))
         assertEquals("Stopped.", terminalStatus(null, cancelled = true))
     }
 
@@ -31,15 +32,19 @@ class TerminalTest {
             .contains("No workspace"))
         assertTrue(terminalStatus(result(error = "process_limit"), false).contains("Four processes"))
         assertTrue(terminalStatus(result(error = "sync_required"), false).contains("syncing"))
+        assertTrue(terminalStatus(result(error = "thermal_blocked"), false).contains("too hot"))
+        assertTrue(terminalStatus(result(error = "battery_low"), false).contains("Battery is low"))
     }
 
     private fun result(exitCode: Int? = 0, timedOut: Boolean = false,
-                       tooManyChildren: Boolean = false, error: String? = null) =
+                       tooManyChildren: Boolean = false, memoryLimit: Boolean = false,
+                       error: String? = null) =
         RuntimeCommandResult(
             exitCode = exitCode,
             sync = "ok",
             timedOut = timedOut,
             tooManyChildren = tooManyChildren,
+            memoryLimit = memoryLimit,
             error = error,
         )
 }

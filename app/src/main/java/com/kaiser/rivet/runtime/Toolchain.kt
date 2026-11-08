@@ -78,6 +78,12 @@ internal class Toolchain(context: Context) {
         }
         withContext(Dispatchers.IO) {
             try {
+                // Plan §5 rule 10: Zone D takes no new bytes at the 1 GB cap. The farm is
+                // today's only Zone D writer; installs in later steps use the same gate.
+                if (!ToolchainStorage.admits(dataRoot, 0L)) {
+                    prepared = true
+                    return@withContext
+                }
                 syncFarm(farm, binary, BUSYBOX_APPLETS)
                 prepared = true
             } catch (e: CancellationException) {
