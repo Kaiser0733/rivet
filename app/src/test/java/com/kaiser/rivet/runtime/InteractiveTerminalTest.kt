@@ -48,6 +48,7 @@ class InteractiveTerminalTest {
             override suspend fun watch(pid: Int, memoryCapBytes: Long?,
                                        terminate: suspend () -> Unit): String? = null
         },
+        cwd: () -> String? = { null },
         killDescendants: (Int) -> Unit = {},
     ): Harness {
         val engines = mutableListOf<FakeEngine>()
@@ -60,7 +61,8 @@ class InteractiveTerminalTest {
             scope = scope,
             launchFactory = {
                 launches++
-                TerminalLaunch(managedId = "m$launches", workspaceIdentity = identity)
+                TerminalLaunch(managedId = "m$launches", workspaceIdentity = identity,
+                    cwd = cwd().orEmpty())
             },
             engineFactory = TerminalEngineFactory { launch, observer ->
                 FakeEngine(observer, launch).also { engines += it }
@@ -214,5 +216,46 @@ class InteractiveTerminalTest {
         assertEquals(2, harness.engines.size)
         assertTrue(harness.holder.state.value.running)
         assertFalse(harness.holder.state.value.ended)
+    }
+
+    @Test fun aDeadCwdIsReResolvedIntoAFreshShell() = runTest {
+        var dir = java.nio.file.Files.createTempDirectory("rivet-terminal-cwd").toFile()
+        val harness = harness(this, cwd = { dir.absolutePath })
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+        val old = harness.engines.single()
+        assertTrue(old.launch.cwd.isNotEmpty())
+        assertTrue(java.io.File(old.launch.cwd).isDirectory)
+
+        dir.deleteRecursively()
+        dir = java.nio.file.Files.createTempDirectory("rivet-terminal-cwd").toFile()
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+
+        assertEquals(2, harness.launches())
+        assertTrue(old.closed)
+        assertEquals(listOf("m1"), harness.closed)
+        assertEquals(dir.absolutePath, harness.engines.last().launch.cwd)
+        assertTrue(java.io.File(harness.engines.last().launch.cwd).isDirectory)
+    }
+
+    @Test fun rowOnlyImeChangesDoNotReprintTheShellPrompt() = runTest {
+        val harness = harness(this)
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+        val engine = harness.engines.single()
+        assertEquals(1, engine.resizes)
+
+        harness.holder.ensureStarted(80, 12, 8, 16)
+        delay(TERMINAL_RESIZE_DEBOUNCE_MS + 1)
+
+        assertEquals(1, engine.resizes)
+        harness.holder.ensureStarted(100, 12, 8, 16)
+        delay(TERMINAL_RESIZE_DEBOUNCE_MS + 1)
+        assertEquals(2, engine.resizes)
+        assertEquals(Triple(100, 12, 8), engine.lastSize)
     }
 }
