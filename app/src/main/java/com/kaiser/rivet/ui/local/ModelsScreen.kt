@@ -217,6 +217,8 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
             item { Text("Your models", style = MaterialTheme.typography.titleMedium) }
             items(customInstalled, key = { "installed-${it.entry.id}" }) { model ->
                 InstalledRow(model = model,
+                    fit = ui.fits[model.entry.id] ?: com.kaiser.rivet.local.ModelRecommender.fit(
+                        model.entry, ui.totalRamMb, ui.availableRamMb.toLong() * 1024 * 1024),
                     onUse = { viewModel.activate(model.entry); onClose() },
                     onExport = { exportTarget = model.entry; exportLauncher.launch("${model.entry.name}.gguf") },
                     onDelete = { deleteTarget = model.entry })
@@ -473,6 +475,7 @@ private fun ModelRow(
 @Composable
 private fun InstalledRow(
     model: InstalledLocalModel,
+    fit: ModelFit,
     onUse: () -> Unit,
     onExport: () -> Unit,
     onDelete: () -> Unit,
@@ -486,6 +489,7 @@ private fun InstalledRow(
                 else "Downloaded; this repo did not publish a checksum",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                FitLabel(fit)
             }
             TextButton(onClick = onUse) { Text("Use") }
             TextButton(onClick = onExport) { Text("Export") }
