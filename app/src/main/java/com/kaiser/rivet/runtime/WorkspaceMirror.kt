@@ -120,12 +120,19 @@ class WorkspaceMirror(
             // Fast path only when nothing is blocked: a recorded conflict has to go
             // through the full pass below so it is re-checked and can clear.
             if (before.excluded.isEmpty() && local == before.entries) {
-                if (pendingCreate != null) clearPartialCreate()
-                return@withLock MirrorSyncResult(
-                    if (pendingCreate == null) MirrorSync.NoChanges else MirrorSync.Conflict,
-                    pendingCreate?.path,
-                    skipped,
-                )
+                if (pendingCreate != null) {
+                    clearPartialCreate()
+                    return@withLock MirrorSyncResult(MirrorSync.Conflict, pendingCreate.path, skipped)
+                }
+                val externalOnly = safSnapshot()
+                if (externalOnly == before.entries) {
+                    return@withLock MirrorSyncResult(MirrorSync.NoChanges, skipped = skipped)
+                }
+                // No pending mirror work: SAF is authoritative. Adopt external
+                // changes wholesale instead of reporting a conflict that has no
+                // overlapping local edit.
+                materialize()
+                return@withLock MirrorSyncResult(MirrorSync.Ok, skipped = skipped)
             }
             val external = safSnapshot()
             var partial = pendingCreate
@@ -145,13 +152,23 @@ class WorkspaceMirror(
                     partial = null
                 }
             }
-            // Paths the project and this mirror both moved away from: neither side
-            // may be overwritten, so they are reported and skipped. Everything else
-            // syncs. A path whose two sides now agree is no longer blocked.
+            // A path is a true overlap only when BOTH sides moved away from the
+            // baseline and they disagree. An external-only change is adopted below;
+            // a local-only change is pushed below. A path whose two sides now agree
+            // is no longer blocked.
+            val localChanged = (local.keys + before.entries.keys).filter {
+                local[it] != before.entries[it]
+            }.toSet()
+            val externalChanged = (external.keys + before.entries.keys).filter {
+                external[it] != before.entries[it]
+            }.toSet()
             val excluded = before.excluded.toMutableSet()
+            // A recorded block clears only when both sides now agree. An external
+            // side that merely still equals the baseline it was blocked against is
+            // not progress: retrying must not overwrite the local copy.
             excluded.removeAll { path -> external[path] == local[path] }
-            excluded.addAll((external.keys + before.entries.keys + local.keys).filter {
-                external[it] != before.entries[it] && external[it] != local[it] &&
+            excluded.addAll((localChanged intersect externalChanged).filter {
+                external[it] != local[it] &&
                     !(it == partial?.path && external[it] == emptyFile)
             })
             try {
@@ -225,9 +242,15 @@ class WorkspaceMirror(
                         partial = null
                     }
                 }
+                // Pull SAF-only changes into the private worktree. This is the
+                // difference between "the user edited the project" and "both sides
+                // edited the same path". Without it, a non-overlapping external
+                // change would be baselined but left stale in the mirror forever.
+                adoptExternalOnly(external, before.entries, localChanged, excluded)
                 val verified = safSnapshot()
-                val mismatch = (verified.keys + local.keys).firstOrNull {
-                    it !in excluded && verified[it] != local[it]
+                val updatedLocal = localSnapshot(skipped = skipped)
+                val mismatch = (verified.keys + updatedLocal.keys).firstOrNull {
+                    it !in excluded && verified[it] != updatedLocal[it]
                 }
                 if (mismatch != null) return@withLock MirrorSyncResult(MirrorSync.Failed, mismatch, skipped)
                 writeBaseline(current, MirrorBaseline(workspace.tree.toString(), verified,
@@ -374,6 +397,81 @@ class WorkspaceMirror(
         } catch (e: CancellationException) { throw e
         } catch (e: MirrorFailure) { throw e
         } catch (_: Exception) { throw MirrorFailure("materialize_failed") }
+    }
+
+    /** Replace only unchanged-in-the-mirror paths with SAF's newer version. */
+    private suspend fun adoptExternalOnly(
+        external: Map<String, MirrorEntry>,
+        before: Map<String, MirrorEntry>,
+        localChanged: Set<String>,
+        excluded: Set<String>,
+    ) {
+        val paths = (external.keys + before.keys).filter { path ->
+            path.isNotEmpty() && external[path] != before[path] &&
+                path !in localChanged && path !in excluded
+        }
+        // Deletions first, deepest first, so a missing external directory cannot
+        // be recreated by a later child write.
+        for (path in paths.filter { external[it] == null }
+            .sortedByDescending { it.count { ch -> ch == '/' } }) {
+            selected()
+            val target = File(worktree, path)
+            if (Files.isSymbolicLink(target.toPath())) {
+                Files.deleteIfExists(target.toPath())
+            } else if (Files.isDirectory(target.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                removeTree(target)
+            } else {
+                Files.deleteIfExists(target.toPath())
+            }
+        }
+        // Directories before files.
+        for (path in paths.filter { external[it]?.directory == true }
+            .sortedBy { it.count { ch -> ch == '/' } }) {
+            selected()
+            requireNoSymlinkParents(path)
+            val target = File(worktree, path)
+            if (Files.isSymbolicLink(target.toPath())) Files.deleteIfExists(target.toPath())
+            if (Files.exists(target.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                !target.isDirectory) {
+                if (Files.isDirectory(target.toPath(), LinkOption.NOFOLLOW_LINKS)) removeTree(target)
+                else Files.deleteIfExists(target.toPath())
+            }
+            if (!target.isDirectory && !target.mkdirs()) {
+                throw MirrorFailure("materialize_failed", path)
+            }
+        }
+        for (path in paths.filter { external[it]?.directory == false }.sorted()) {
+            selected()
+            requireNoSymlinkParents(path)
+            val target = File(worktree, path)
+            if (Files.isSymbolicLink(target.toPath())) Files.deleteIfExists(target.toPath())
+            if (Files.isDirectory(target.toPath(), LinkOption.NOFOLLOW_LINKS)) removeTree(target)
+            target.parentFile?.let { parent ->
+                if (!parent.isDirectory && !parent.mkdirs()) {
+                    throw MirrorFailure("materialize_failed", path)
+                }
+            }
+            try {
+                FileOutputStream(target).use {
+                    workspace.copyFileTo(WorkspacePath.parse(path), it)
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: MirrorFailure) {
+                throw e
+            } catch (_: Exception) {
+                throw MirrorFailure("materialize_failed", path)
+            }
+        }
+    }
+
+    private fun requireNoSymlinkParents(path: String) {
+        var parent = File(worktree, path).parentFile
+        while (parent != null && parent.path.length >= worktree.path.length) {
+            if (Files.isSymbolicLink(parent.toPath())) throw MirrorFailure("unsafe_entry", path)
+            if (parent == worktree) break
+            parent = parent.parentFile
+        }
     }
 
     private suspend fun safSnapshot(target: File? = null): Map<String, MirrorEntry> {
