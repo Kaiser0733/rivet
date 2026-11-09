@@ -930,7 +930,7 @@ class ChatViewModel private constructor(
         else RunMachine.start(RunMachine.begin(UUID.randomUUID().toString(), workspaceId, title))
         currentRun = next
         runResumeContext = resumed != null
-        if (resumed != null) PersistentProcessService.cancelBudgetPause(app)
+        if (resumed != null) PersistentProcessService.cancelBudgetPause(getApplication<Application>())
         if (resumed == null) {
             if (batteryAskStore.shouldAsk()) {
                 batteryAskStore.markAsked()
@@ -1083,7 +1083,7 @@ class ChatViewModel private constructor(
         runTokenOverride = maxOf(runSpendTokens * 2, (effectiveSpendCaps().perRunTokens ?: 0L) * 2, 1L)
         monthTokenOverride = maxOf(monthSpendTokens * 2, (effectiveSpendCaps().monthlyTokens ?: 0L) * 2, 1L)
         budgetPaused = false
-        PersistentProcessService.cancelBudgetPause(app)
+        PersistentProcessService.cancelBudgetPause(getApplication<Application>())
         _uiState.update { it.copy(budgetPaused = false, notice = "Cap raised for this run.") }
         retryInterruptedTurn()
     }
@@ -1844,9 +1844,9 @@ class ChatViewModel private constructor(
                             currentRun = paused
                             runResumeContext = true
                             if (pauseReason == RunPauseReason.Budget) {
-                                PersistentProcessService.showBudgetPause(app, paused.title)
+                                PersistentProcessService.showBudgetPause(getApplication<Application>(), paused.title)
                             } else if (pauseReason == RunPauseReason.NetworkLost) {
-                                PersistentProcessService.showNetworkPause(app, paused.title)
+                                PersistentProcessService.showNetworkPause(getApplication<Application>(), paused.title)
                             }
                             runCheckpointId?.let { id ->
                                 try { runtimeController.finishRunCheckpoint(live.workspaceId ?: return@let, id) }
