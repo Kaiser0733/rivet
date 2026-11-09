@@ -35,4 +35,6 @@ add_subdirectory("${LLAMA_CPP_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/llama.cpp")
 add_library(rivet_llama SHARED rivet_llama.cpp)
 target_compile_features(rivet_llama PRIVATE cxx_std_17)
 target_compile_options(rivet_llama PRIVATE -O3 -fvisibility=hidden)
+# Android 15+ devices may use 16 KB pages; keep the packaged .so compatible.
+target_link_options(rivet_llama PRIVATE "-Wl,-z,max-page-size=16384")
 target_link_libraries(rivet_llama PRIVATE llama android log)

@@ -42,10 +42,6 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
     val jobs: StateFlow<Map<String, DownloadJob>> =
         (downloads?.jobs ?: MutableStateFlow(emptyMap())).asStateFlow()
 
-    init {
-        refresh()
-    }
-
     fun refresh() {
         viewModelScope.launch {
             _ui.value = _ui.value.copy(loading = true, catalogueError = null)
