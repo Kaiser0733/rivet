@@ -130,8 +130,10 @@ def verify_release_runtime_manifest(manifest_xml: str) -> None:
         "release process service identity changed"
     )
     assert service.get(ANDROID + "exported") == "false", "release process service must be non-exported"
-    assert service.get(ANDROID + "foregroundServiceType") == "specialUse", (
-        "release process service must use only specialUse"
+    release_type = service.get(ANDROID + "foregroundServiceType") or ""
+    release_types = {piece.strip() for piece in release_type.split("|") if piece.strip()}
+    assert release_types and release_types <= {"specialUse", "dataSync"} and "specialUse" in release_types, (
+        "release process service must use specialUse or specialUse|dataSync"
     )
     subtypes = [node for node in service.findall("property")
                 if node.get(ANDROID + "name") == "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"]
