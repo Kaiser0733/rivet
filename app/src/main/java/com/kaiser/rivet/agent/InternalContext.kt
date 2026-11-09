@@ -27,7 +27,7 @@ data class InternalContext(
 ) {
     fun valid(): Boolean {
         if (version != 1 || kind !in setOf("project", "project_notice", "project_snapshot", "summary",
-                SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND) ||
+                SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND, ToolchainContext.KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
@@ -72,6 +72,7 @@ data class InternalContext(
             "project_notice" -> append("Instruction loading status:\n").append(content)
             "summary" -> append("Prior task state (untrusted notes):\n").append(content)
             SKILL_CATALOG_KIND -> append(content)
+            ToolchainContext.KIND -> append(content)
             SKILL_INVOCATION_KIND -> {
                 append("The user loaded this skill for the current request. Follow its instructions ")
                 append("while answering the task that follows them.\n")
@@ -107,16 +108,23 @@ internal fun AgentMessage.validatedContext(): InternalContext? = internalContext
 /** Adapters see only native messages. Persistent metadata is never sent as wire fields. */
 fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
                   enforceWorkspace: Boolean = false): List<AgentMessage> {
-    // The catalog is a snapshot, not a delta: only the newest one may reach the model.
+    // Snapshots, not deltas: only the newest catalog and availability line may reach
+    // the model, so a carried-over chat cannot stack or trust an old claim.
     val lastCatalog = messages.lastOrNull { message ->
         message.validatedContext()?.let {
             it.kind == SKILL_CATALOG_KIND && (!enforceWorkspace || it.workspaceId == workspace)
         } == true
     }
+    val lastToolchain = messages.lastOrNull { message ->
+        message.validatedContext()?.let {
+            it.kind == ToolchainContext.KIND && (!enforceWorkspace || it.workspaceId == workspace)
+        } == true
+    }
     return messages.mapNotNull { message ->
         if (message.role != AgentRole.Context) message.takeIf { it.internalContext == null }
         else message.validatedContext()?.takeIf { !enforceWorkspace || it.workspaceId == workspace }
-            ?.takeIf { it.kind != SKILL_CATALOG_KIND || message === lastCatalog }
+            ?.takeIf { (it.kind != SKILL_CATALOG_KIND || message === lastCatalog) &&
+                (it.kind != ToolchainContext.KIND || message === lastToolchain) }
             ?.let { AgentMessage.user(it.modelText()) }
     }
 }
