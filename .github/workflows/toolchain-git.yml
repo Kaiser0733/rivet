@@ -1,0 +1,41 @@
+name: Toolchain git
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [terminal]
+    paths:
+      - 'toolchain/git/**'
+      - '.github/workflows/toolchain-git.yml'
+
+permissions:
+  contents: read
+
+jobs:
+  git:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          add-to-path: false
+
+      # git's build generators and SHELL_PATH expect the target shell path.
+      - name: Provide the Android shell path on the runner
+        run: sudo mkdir -p /system/bin && sudo ln -sf /bin/sh /system/bin/sh
+
+      - name: Rebuild patched git 2.56.0
+        run: bash toolchain/git/build.sh
+
+      - name: Upload Zone E ship set
+        uses: actions/upload-artifact@v4
+        with:
+          name: git-zone-e-ship
+          path: |
+            toolchain/git/out/libgit.so
+            toolchain/git/out/libgit-remote-https.so
+            toolchain/git/out/SHA256SUMS

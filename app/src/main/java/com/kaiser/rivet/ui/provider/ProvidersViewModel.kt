@@ -25,10 +25,13 @@ import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.provider.withManualContextWindow
 import com.kaiser.rivet.provider.withManualMaxOutputTokens
 import com.kaiser.rivet.provider.withModelId
+import com.kaiser.rivet.runtime.Toolchain
+import com.kaiser.rivet.storage.GitHubTokenStore
 import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,6 +40,13 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import java.util.UUID
+
+data class GitHubUiState(
+    val connected: Boolean = false,
+    val gitAvailable: Boolean = false,
+    val busy: Boolean = false,
+    val error: String? = null,
+)
 
 data class ProviderListUiState(
     val configs: List<ProviderConfig> = emptyList(),
@@ -51,6 +61,11 @@ data class ProviderListUiState(
 class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     private val store = ProviderStore(app)
     private val secrets = SecretStore(app)
+    private val gitHub = GitHubTokenStore(app)
+    private val toolchain = Toolchain(app)
+
+    private val _gitHubState = MutableStateFlow(GitHubUiState())
+    val gitHubState: StateFlow<GitHubUiState> = _gitHubState.asStateFlow()
 
     private val _listState = MutableStateFlow(ProviderListUiState())
     val listState: StateFlow<ProviderListUiState> = _listState.asStateFlow()
@@ -102,6 +117,12 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                 // Keep the current activeId if the preferences store cannot be read.
             }
         }
+        viewModelScope.launch(Dispatchers.IO) {
+            _gitHubState.update {
+                it.copy(connected = gitHub.isConnected(),
+                    gitAvailable = toolchain.availability().git)
+            }
+        }
         viewModelScope.launch {
             store.droppedHeaders.collect { count ->
                 _listState.update {
@@ -112,6 +133,36 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                     })
                 }
             }
+        }
+    }
+
+    /** The token is only passed through to the Keystore-backed store; UI state stays boolean. */
+    fun connectGitHub(token: String) {
+        if (_gitHubState.value.busy) return
+        if (!_gitHubState.value.gitAvailable) {
+            _gitHubState.update { it.copy(error = "Git is not available in this build.") }
+            return
+        }
+        _gitHubState.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            val saved = gitHub.connect(token)
+            _gitHubState.update {
+                it.copy(
+                    connected = saved,
+                    busy = false,
+                    error = if (saved) null else
+                        "Rivet couldn't save that token. Check that it has no spaces or line breaks, then try again.",
+                )
+            }
+        }
+    }
+
+    fun disconnectGitHub() {
+        if (_gitHubState.value.busy) return
+        _gitHubState.update { it.copy(busy = true, error = null) }
+        viewModelScope.launch(Dispatchers.IO) {
+            gitHub.disconnect()
+            _gitHubState.update { GitHubUiState(connected = false) }
         }
     }
 

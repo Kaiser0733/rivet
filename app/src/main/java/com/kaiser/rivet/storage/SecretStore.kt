@@ -100,6 +100,16 @@ class SecretStore internal constructor(context: Context, private val keyProvider
         prefs.edit().remove(providerId).apply()
     }
 
+    // GitHub's PAT lives in its own slot so it can never collide with a provider id and
+    // is only ever read by the credential-file writer, never by provider requests.
+    fun saveGitHubToken(token: String): Boolean = saveApiKey(GITHUB_SLOT, token)
+
+    fun gitHubToken(): String? = apiKey(GITHUB_SLOT)
+
+    fun clearGitHubToken() {
+        clearApiKey(GITHUB_SLOT)
+    }
+
     // OAuth credential bundles (e.g. ChatGPT plan sign-in) live in a separate
     // namespaced slot so the one-secret-per-providerId invariant of the apiKey
     // methods is never disturbed. Same AES-256-GCM + providerId-as-AAD scheme.
@@ -156,6 +166,7 @@ class SecretStore internal constructor(context: Context, private val keyProvider
         const val TRANSFORMATION = "AES/GCM/NoPadding"
         const val GCM_TAG_BITS = 128
         const val HEADER_PREFIX = "rivet-encrypted:v1:"
+        const val GITHUB_SLOT = "github.com"
         val keyLock = Any()
 
         private fun androidKey(): SecretKey = synchronized(keyLock) {

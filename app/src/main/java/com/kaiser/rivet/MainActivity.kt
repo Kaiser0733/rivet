@@ -3,6 +3,7 @@ package com.kaiser.rivet
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.ui.RivetApp
@@ -17,6 +18,9 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        // Draw edge to edge so the IME inset reaches Compose; adjustResize then makes
+        // imePadding lift the composer instead of the window panning the send button away.
+        WindowCompat.setDecorFitsSystemWindows(window, false)
         // The system redelivers the original launch intent after a recreation (the extra removed
         // by consumeProcessRequest only reaches this instance's Intent, not the activity record),
         // so a rotation would replay "open Processes" over the screen the user navigated back to.

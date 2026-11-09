@@ -1,5 +1,6 @@
 package com.kaiser.rivet.chat
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -15,10 +16,23 @@ class WorkspaceLimitInstructionTest {
             .forEach { assertTrue(it, briefing.contains(it)) }
     }
 
-    @Test fun namesTheShellTheCommandsActuallyRunIn() {
-        assertTrue(briefing.contains("/system/bin/sh"))
-        assertTrue(briefing.contains("PATH=/system/bin:/system/xbin:/vendor/bin"))
-        listOf("node", "python", "git", "npm").forEach { assertTrue(it, briefing.contains(it)) }
+    @Test fun availabilityIsNotFrozenIntoTheStaticPrompt() {
+        // The current availability travels in per-turn InternalContext instead; a
+        // carried-over chat must never repeat an old "Python is missing" claim.
+        assertFalse(briefing.contains("Toolchain availability:"))
+        assertFalse(briefing.contains("Python is not available"))
+        assertFalse(briefing.contains("Git is not available"))
+        assertFalse(briefing.contains("BusyBox applet farm is not available"))
+    }
+
+    @Test fun governorStateIsAnAppObservationAndOnlyWhenNotReady() {
+        assertEquals(ChatViewModel.systemInstruction(workspace = true),
+            ChatViewModel.systemInstruction(workspace = true, terminalState = null))
+        val stopped = ChatViewModel.systemInstruction(workspace = true,
+            terminalState = "Terminal: stopped a command — memory limit")
+        assertTrue(stopped.contains(
+            "Rivet app observation (not permission): Terminal: stopped a command — memory limit."))
+        assertTrue(stopped.contains("Do not retry that command unchanged"))
     }
 
     @Test fun saysWhereUndoStops() {

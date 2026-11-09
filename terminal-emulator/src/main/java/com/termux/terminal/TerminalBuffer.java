@@ -532,6 +532,11 @@ public final class TerminalBuffer {
         return allocateFullLineIfNecessary(externalToInternalRow(externalRow)).getStyle(column);
     }
 
+    /** The row at an external row index, for a renderer that needs both text and styles. */
+    public TerminalRow getLine(int externalRow) {
+        return allocateFullLineIfNecessary(externalToInternalRow(externalRow));
+    }
+
     /** Support for http://vt100.net/docs/vt510-rm/DECCARA and http://vt100.net/docs/vt510-rm/DECCARA */
     public void setOrClearEffect(int bits, boolean setOrClear, boolean reverse, boolean rectangular, int leftMargin, int rightMargin, int top, int left,
                                  int bottom, int right) {

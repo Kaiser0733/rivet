@@ -16,6 +16,7 @@ import com.kaiser.rivet.agent.AgentToolEffect
 import com.kaiser.rivet.agent.AgentToolResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -64,6 +65,20 @@ class ManagedProcessesTest {
             processes.finishCommand(id, RuntimeCommandResult(0, cwd = "", sync = "no_changes"))
         }
         assertTrue(processes.processes.value.size <= 8 + ManagedProcesses.MAX_PERSISTENT_PROCESSES)
+    }
+
+    @Test fun thermalThrottleLowersTheActiveLimitWithoutStoppingRunningWork() {
+        val processes = ManagedProcesses()
+        val first = Job()
+        val second = Job()
+        assertNotNull(processes.registerCommand("one", "", "tree", "Project", first))
+
+        processes.setActiveLimit(1)
+        assertNull(processes.registerCommand("two", "", "tree", "Project", second))
+        assertFalse(first.isCancelled)
+
+        processes.setActiveLimit(ManagedProcesses.MAX_ACTIVE_PROCESSES)
+        assertNotNull(processes.registerCommand("three", "", "tree", "Project", second))
     }
 
     @Test fun outputAndDisplayMetadataAreBounded() {

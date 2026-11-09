@@ -50,6 +50,10 @@ class ManagedProcesses {
 
     private val lock = Any()
     private val serviceMutex = Mutex()
+    // Rule 1's budget, lowered to 1 while the phone is thermally SERIOUS (plan §5 rule 12).
+    // Lowering never stops running work; it only refuses new starts.
+    @Volatile private var activeLimit = MAX_ACTIVE_PROCESSES
+
     private val entries = linkedMapOf<String, Entry>()
     private val activeTurns = linkedMapOf<String, () -> Unit>()
     private var serviceStarted = false
@@ -67,7 +71,7 @@ class ManagedProcesses {
         job: Job,
     ): String? = synchronized(lock) {
         if (entries.values.count { it.info.status in ACTIVE && it.persistent } >= MAX_PERSISTENT_PROCESSES ||
-            entries.values.count { it.info.status in ACTIVE } >= MAX_ACTIVE_PROCESSES) return null
+            entries.values.count { it.info.status in ACTIVE } >= activeLimit) return null
         val id = UUID.randomUUID().toString()
         val safeCommand = redactCommand(command)
         val suffix = cwd.takeIf(String::isNotEmpty)?.let { " · $it" }.orEmpty()
@@ -123,11 +127,20 @@ class ManagedProcesses {
     }
 
     fun canStartPreview(): Boolean = synchronized(lock) {
-        canStartPersistentLocked() && entries.values.count { it.info.status in ACTIVE } < MAX_ACTIVE_PROCESSES
+        canStartPersistentLocked() && entries.values.count { it.info.status in ACTIVE } < activeLimit
     }
 
     fun canStartCommand(): Boolean = synchronized(lock) {
-        entries.values.count { it.info.status in ACTIVE } < MAX_ACTIVE_PROCESSES
+        entries.values.count { it.info.status in ACTIVE } < activeLimit
+    }
+
+    internal fun setActiveLimit(limit: Int) {
+        activeLimit = limit.coerceIn(1, MAX_ACTIVE_PROCESSES)
+    }
+
+    /** Active commands and previews, for the one-line terminal state. */
+    fun activeCount(): Int = synchronized(lock) {
+        entries.values.count { it.info.status in ACTIVE }
     }
 
     fun stopDescription(id: String): String? = synchronized(lock) {
@@ -163,7 +176,7 @@ class ManagedProcesses {
         url: String,
         stop: () -> Unit,
     ): String? = synchronized(lock) {
-        if (!canStartPersistentLocked() || entries.values.count { it.info.status in ACTIVE } >= MAX_ACTIVE_PROCESSES) return null
+        if (!canStartPersistentLocked() || entries.values.count { it.info.status in ACTIVE } >= activeLimit) return null
         val id = UUID.randomUUID().toString()
         entries[id] = Entry(
             ManagedProcessInfo(id, ManagedProcessKind.Preview,

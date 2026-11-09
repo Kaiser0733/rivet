@@ -1,0 +1,18 @@
+--- a/ident.c
++++ b/ident.c
+@@ -35,7 +35,14 @@
+ #ifdef NO_GECOS_IN_PWENT
+ #define get_gecos(ignored) "&"
+ #else
+-#define get_gecos(struct_passwd) ((struct_passwd)->pw_gecos)
++/*
++ * Android bionic synthesises a passwd entry for app UIDs and leaves
++ * pw_gecos NULL. Git assumes it is always a valid string and would crash
++ * while scanning it. Fall back to pw_name, which is non-NULL for the
++ * synthesised entry and is what the non-strict empty-name path uses.
++ */
++#define get_gecos(struct_passwd) ((struct_passwd)->pw_gecos ? \
++                                  (struct_passwd)->pw_gecos : (struct_passwd)->pw_name)
+ #endif
+ 
+ static struct passwd *xgetpwuid_self(int *is_bogus)
