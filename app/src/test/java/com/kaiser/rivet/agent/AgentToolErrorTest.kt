@@ -56,7 +56,7 @@ class AgentToolErrorTest {
         val action = requiredAction(AgentToolError.content("checkpoint_unavailable"))
         org.junit.Assert.assertNotNull(action)
         assertTrue(action!!.contains("50,000"))
-        assertTrue(action.contains("1 GiB"))
+        assertTrue(action.contains("500 MB"))
         assertTrue(action.contains(".rivetignore"))
     }
 }

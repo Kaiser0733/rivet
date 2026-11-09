@@ -71,7 +71,7 @@ private val MAX_WIDTH = 680.dp
 
 // The section that is open at level 2. Remembered by RivetApp, so Android Back can step
 // detail -> list -> dismiss instead of closing the sheet in one go.
-internal enum class SettingsSection { Providers, Appearance, Agent, GitHub, Skills, Updates, About }
+internal enum class SettingsSection { Providers, Appearance, Agent, Memory, GitHub, Skills, Updates, About }
 
 /**
  * The body of the settings modal sheet: a two-level page — a section list, and one
@@ -98,6 +98,11 @@ fun SettingsScreen(
     onRefreshSkills: suspend () -> Unit = {},
     onLoadSkillFiles: suspend (Skill) -> List<String> = { emptyList() },
     onInstallSkill: () -> Unit = {},
+    memoryLines: List<String> = emptyList(),
+    memoryMarkdown: String = "",
+    hasProject: Boolean = false,
+    onUpdateMemory: (String) -> Unit = {},
+    onForgetMemoryLine: (Int) -> Unit = {},
 ) {
     val state by viewModel.listState.collectAsState()
     val gitHubState by viewModel.gitHubState.collectAsState()
@@ -230,6 +235,8 @@ fun SettingsScreen(
                     themeSummary = themeMode.name,
                     autonomySummary = autonomyDisplayName(autonomyMode),
                     skillSummary = skillCountSummary(skillCatalog),
+                    memorySummary = if (hasProject) "${memoryLines.size} durable line${if (memoryLines.size == 1) "" else "s"}"
+                        else "Open a project",
                     gitHubSummary = when {
                         !gitHubState.gitAvailable -> "Git not available"
                         gitHubState.connected -> "Connected"
@@ -253,6 +260,13 @@ fun SettingsScreen(
                     themeSaving = themeSaving,
                     onThemeChange = onThemeChange,
                     appearanceError = appearanceError,
+                )
+                SettingsSection.Memory -> MemoryDetail(
+                    lines = memoryLines,
+                    markdown = memoryMarkdown,
+                    hasProject = hasProject,
+                    onUpdate = onUpdateMemory,
+                    onForget = onForgetMemoryLine,
                 )
                 SettingsSection.Agent -> AgentDetail(
                     autonomyMode = autonomyMode,
@@ -321,6 +335,7 @@ private fun SettingsSection.title(): String = when (this) {
     SettingsSection.Providers -> "Providers"
     SettingsSection.Appearance -> "Appearance"
     SettingsSection.Agent -> "Agent"
+    SettingsSection.Memory -> "Memory"
     SettingsSection.GitHub -> "GitHub"
     SettingsSection.Skills -> "Skills"
     SettingsSection.Updates -> "Updates"
@@ -333,6 +348,7 @@ private fun SectionList(
     themeSummary: String,
     autonomySummary: String,
     skillSummary: String,
+    memorySummary: String,
     gitHubSummary: String,
     versionSummary: String,
     onSelect: (SettingsSection) -> Unit,
@@ -349,6 +365,7 @@ private fun SectionList(
                 SettingsSection.Providers -> "Providers" to providerSummary
                 SettingsSection.Appearance -> "Appearance" to themeSummary
                 SettingsSection.Agent -> "Agent" to autonomySummary
+                SettingsSection.Memory -> "Memory" to memorySummary
                 SettingsSection.GitHub -> "GitHub" to gitHubSummary
                 SettingsSection.Skills -> "Skills" to skillSummary
                 SettingsSection.Updates -> "Updates" to "Check for updates"
@@ -358,6 +375,7 @@ private fun SectionList(
                 SettingsSection.Providers -> R.drawable.ic_settings // gear = providers config
                 SettingsSection.Appearance -> R.drawable.ic_visibility // sun/moon for theme
                 SettingsSection.Agent -> R.drawable.ic_processes // robot/processes for agent
+                SettingsSection.Memory -> R.drawable.ic_files // durable project facts
                 SettingsSection.GitHub -> R.drawable.ic_files // repository and token settings
                 SettingsSection.Skills -> R.drawable.ic_files // skill folders and instructions
                 SettingsSection.Updates -> R.drawable.ic_history // refresh/history for updates
@@ -419,6 +437,74 @@ private fun SectionListItem(
             color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
             modifier = Modifier.padding(horizontal = 48.dp)
         )
+    }
+}
+
+@Composable
+private fun MemoryDetail(
+    lines: List<String>,
+    markdown: String,
+    hasProject: Boolean,
+    onUpdate: (String) -> Unit,
+    onForget: (Int) -> Unit,
+) {
+    var editing by remember { mutableStateOf(false) }
+    var draft by remember(markdown) { mutableStateOf(markdown) }
+    if (editing) {
+        AlertDialog(
+            onDismissRequest = { editing = false },
+            title = { Text("Edit project memory") },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                    Text("One durable fact per line. No secrets, transcripts, or task progress.",
+                        style = MaterialTheme.typography.bodySmall)
+                    OutlinedTextField(
+                        value = draft,
+                        onValueChange = { draft = it },
+                        modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 360.dp),
+                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+                    )
+                }
+            },
+            confirmButton = {
+                RivetOutlinedButton(onClick = {
+                    onUpdate(draft)
+                    editing = false
+                }) { Text("Save") }
+            },
+            dismissButton = { TextButton(onClick = { editing = false }) { Text("Cancel") } },
+        )
+    }
+    DetailScroll {
+        Text("Project memory", style = MaterialTheme.typography.titleMedium)
+        Spacer(Modifier.height(6.dp))
+        Text("Stored in .rivet/memory.md and covered by project checkpoints. AGENTS.md outranks it when they disagree.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(10.dp))
+        if (!hasProject) {
+            Text("Open a project to view its memory.", style = MaterialTheme.typography.bodyMedium)
+        } else {
+            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                RivetOutlinedButton(onClick = { draft = markdown; editing = true }) {
+                    Text(if (lines.isEmpty()) "Write memory" else "Edit")
+                }
+            }
+            Spacer(Modifier.height(10.dp))
+            if (lines.isEmpty()) {
+                Text("No durable facts yet. Rivet adds them with the remember tool when it learns something worth keeping.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            lines.forEachIndexed { index, line ->
+                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(displaySafeText(line), modifier = Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium)
+                    TextButton(onClick = { onForget(index) }) { Text("Forget") }
+                }
+            }
+        }
     }
 }
 

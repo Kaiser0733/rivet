@@ -217,12 +217,12 @@ class RuntimeController(
         gitInspection().diff(path)
     }
 
-    suspend fun beginCheckpoint(workspaceId: String): String = operations.withLock {
+    suspend fun beginCheckpoint(workspaceId: String, runId: String? = null): String = operations.withLock {
         if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
-        checkpoints(workspaceId).begin(ready.worktree)
+        checkpoints(workspaceId).begin(ready.worktree, runId)
     }
 
     suspend fun finishCheckpoint(workspaceId: String, id: String): Boolean = operations.withLock {
@@ -247,6 +247,11 @@ class RuntimeController(
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
         checkpoints(workspaceId).matchesPost(id, ready.worktree)
+    }
+
+    suspend fun checkpointHistory(limit: Int = 50): List<CheckpointRecord> = operations.withLock {
+        val identity = selection.currentIdentity() ?: return@withLock emptyList()
+        checkpoints(identity).history(limit)
     }
 
     suspend fun latestCheckpoint(): CheckpointRecord? = operations.withLock {
