@@ -112,6 +112,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
         val editor by providersViewModel.editorState.collectAsState()
+        val providerList by providersViewModel.listState.collectAsState()
         if (editing && editor.config.id.isEmpty()) editing = false
         // Stable instances so ChatScreen can skip: these only change shell state, which
         // rememberSaveable keeps across recompositions.
@@ -198,7 +199,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             ) {
                 ModelsScreen(
                     viewModel = modelsViewModel,
-                    firstRun = providersViewModel.listState.value.configs.isEmpty(),
+                    firstRun = providerList.configs.isEmpty(),
                     onClose = { modelsOpen = false },
                 )
             }
