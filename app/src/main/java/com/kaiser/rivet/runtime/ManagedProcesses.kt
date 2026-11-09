@@ -264,6 +264,10 @@ class ManagedProcesses {
         val (id, shouldStartService) = synchronized(lock) {
             val id = UUID.randomUUID().toString()
             activeTurns[id] = stop
+            // Start the clock as soon as the turn exists. updateRunStatus normally
+            // supplies the run's own timestamp a moment later, but a notification
+            // must never lose elapsed time if that update is delayed or skipped.
+            if (runStartedAt == 0L) runStartedAt = System.currentTimeMillis()
             publishLocked()
             id to !serviceStarted
         }
