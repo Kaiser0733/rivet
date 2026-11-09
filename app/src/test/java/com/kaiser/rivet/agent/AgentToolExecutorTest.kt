@@ -355,6 +355,16 @@ class AgentToolExecutorTest {
     }
 
     @Test
+    fun genericGoalWritesAreRefused() = runTest {
+        val executor = AgentToolExecutor(FakeWorkspace())
+        val prepared = executor.prepare(AgentToolCall("goal", "write_file",
+            """{"path":".rivet/goal.md","content":"done","expected_sha256":"x"}"""))
+        val result = prepared.execute()
+        assertTrue(result.error)
+        assertTrue("reserved_goal" in result.content)
+    }
+
+    @Test
     fun catalogContainsWorkspaceToolsAndApprovedCommand() {
         val names = AgentToolExecutor.definitions.map { it.name }
         assertEquals(listOf("git_status", "git_diff", "list_directory", "read_file", "search_files", "skill", "remember", "write_file", "apply_patch",

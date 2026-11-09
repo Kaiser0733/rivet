@@ -21,6 +21,7 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -50,6 +51,10 @@ import com.kaiser.rivet.runtime.ManagedProcessKind
 import com.kaiser.rivet.runtime.ManagedProcessStatus
 import com.kaiser.rivet.runtime.InteractiveTerminalSession
 import com.kaiser.rivet.runtime.ManagedProcesses
+import com.kaiser.rivet.runtime.RunCheckpointInfo
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import com.kaiser.rivet.ui.terminal.TerminalPane
 import kotlinx.coroutines.delay
 
@@ -68,6 +73,9 @@ internal fun ToolsPane(
     processes: ManagedProcesses,
     terminal: InteractiveTerminalSession,
     stateLine: String,
+    checkpoints: List<RunCheckpointInfo> = emptyList(),
+    onRestoreCheckpoint: (String) -> Unit = {},
+    checkpointNotice: String? = null,
     modifier: Modifier = Modifier,
 ) {
     var terminalOpen by rememberSaveable { mutableStateOf(false) }
@@ -80,15 +88,20 @@ internal fun ToolsPane(
             onOpenTerminal = {
                 terminal.open()
                 terminalOpen = true
-            })
+            }, checkpoints = checkpoints, onRestoreCheckpoint = onRestoreCheckpoint,
+            checkpointNotice = checkpointNotice)
     }
 }
 
 @Composable
 private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, onBack: (() -> Unit)?,
                              stateLine: String? = null,
-                             onOpenTerminal: (() -> Unit)? = null) {
+                             onOpenTerminal: (() -> Unit)? = null,
+                             checkpoints: List<RunCheckpointInfo> = emptyList(),
+                             onRestoreCheckpoint: (String) -> Unit = {},
+                             checkpointNotice: String? = null) {
     val context = LocalContext.current
+    var confirmRestore by remember { mutableStateOf<RunCheckpointInfo?>(null) }
     val processItems by processes.processes.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val activeIds = processItems.filter { it.status in ACTIVE }.map { it.id }
@@ -135,6 +148,48 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                 }
             }
         }
+        if (checkpoints.isEmpty() && checkpointNotice != null) {
+            Text(checkpointNotice, modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (checkpoints.isNotEmpty()) {
+            Column(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 10.dp),
+                verticalArrangement = Arrangement.spacedBy(4.dp)) {
+                val latestRunId = checkpoints.firstOrNull()?.runId
+                val runStart = checkpoints.filter { it.runId == latestRunId }
+                    .minByOrNull { it.sequence }
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    Text("Run checkpoints", style = MaterialTheme.typography.titleMedium,
+                        modifier = Modifier.weight(1f))
+                    runStart?.let {
+                        TextButton(onClick = { confirmRestore = it }) { Text("Undo this run") }
+                    }
+                }
+                checkpoints.take(6).forEach { checkpoint ->
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Column(Modifier.weight(1f)) {
+                            Text(checkpoint.summary,
+                                style = MaterialTheme.typography.bodyMedium)
+                            Text(
+                                SimpleDateFormat("HH:mm", Locale.getDefault())
+                                    .format(Date(checkpoint.createdAt)) + " · " +
+                                    (if (checkpoint.gitRef != null) "hidden git ref · " else "delta copy · ") +
+                                    checkpoint.summary,
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                        }
+                        TextButton(onClick = { confirmRestore = checkpoint }) { Text("Restore") }
+                    }
+                }
+                checkpointNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                if (checkpoints.size > 6) Text("Showing the latest 6 checkpoints",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        }
         if (processItems.isEmpty()) {
             Column(Modifier.fillMaxSize().padding(28.dp),
                 verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {
@@ -155,6 +210,18 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                 }
             }
         }
+    }
+    confirmRestore?.let { checkpoint ->
+        AlertDialog(
+            onDismissRequest = { confirmRestore = null },
+            title = { Text("Restore this checkpoint?") },
+            text = { Text("Rivet restores only the files it changed. If anything changed outside Rivet, it stops and lists those files instead of overwriting them.") },
+            confirmButton = { TextButton(onClick = {
+                confirmRestore = null
+                onRestoreCheckpoint(checkpoint.id)
+            }) { Text("Undo this run") } },
+            dismissButton = { TextButton(onClick = { confirmRestore = null }) { Text("Cancel") } },
+        )
     }
 }
 

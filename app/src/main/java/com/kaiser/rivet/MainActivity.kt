@@ -1,5 +1,6 @@
 package com.kaiser.rivet
 
+import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
@@ -18,6 +19,11 @@ class MainActivity : ComponentActivity() {
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
+            android.content.pm.PackageManager.PERMISSION_GRANTED) {
+            requestPermissions(arrayOf(android.Manifest.permission.POST_NOTIFICATIONS), 43)
+        }
         // Draw edge to edge so the IME inset reaches Compose; adjustResize then makes
         // imePadding lift the composer instead of the window panning the send button away.
         WindowCompat.setDecorFitsSystemWindows(window, false)

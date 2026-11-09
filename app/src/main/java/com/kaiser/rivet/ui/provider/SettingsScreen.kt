@@ -61,6 +61,7 @@ import com.kaiser.rivet.R
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.SkillCatalog
+import com.kaiser.rivet.agent.SpendCaps
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.ui.RivetOutlinedButton
@@ -103,6 +104,9 @@ fun SettingsScreen(
     hasProject: Boolean = false,
     onUpdateMemory: (String) -> Unit = {},
     onForgetMemoryLine: (Int) -> Unit = {},
+    spendCaps: SpendCaps = SpendCaps(),
+    userPricePerMillionUsd: Double? = null,
+    onSaveSpend: (SpendCaps, Double?) -> Unit = { _, _ -> },
 ) {
     val state by viewModel.listState.collectAsState()
     val gitHubState by viewModel.gitHubState.collectAsState()
@@ -274,6 +278,9 @@ fun SettingsScreen(
                     autonomyError = autonomyError,
                     confirmYolo = { confirmYolo = true },
                     onAutonomyChange = onAutonomyChange,
+                    spendCaps = spendCaps,
+                    userPricePerMillionUsd = userPricePerMillionUsd,
+                    onSaveSpend = onSaveSpend,
                 )
                 SettingsSection.GitHub -> GitHubDetail(
                     connected = gitHubState.connected,
@@ -754,7 +761,17 @@ private fun AgentDetail(
     autonomyError: String?,
     confirmYolo: () -> Unit,
     onAutonomyChange: (AutonomyMode) -> Unit,
+    spendCaps: SpendCaps,
+    userPricePerMillionUsd: Double?,
+    onSaveSpend: (SpendCaps, Double?) -> Unit,
 ) {
+    var perRunUsd by remember(spendCaps) { mutableStateOf(spendCaps.perRunUsd?.toString().orEmpty()) }
+    var monthlyUsd by remember(spendCaps) { mutableStateOf(spendCaps.monthlyUsd?.toString().orEmpty()) }
+    var perRunTokens by remember(spendCaps) { mutableStateOf(spendCaps.perRunTokens?.toString().orEmpty()) }
+    var monthlyTokens by remember(spendCaps) { mutableStateOf(spendCaps.monthlyTokens?.toString().orEmpty()) }
+    var price by remember(userPricePerMillionUsd) {
+        mutableStateOf(userPricePerMillionUsd?.toString().orEmpty())
+    }
     DetailScroll {
         
         listOf(
@@ -797,6 +814,36 @@ private fun AgentDetail(
         
         autonomyError?.let { Text(displaySafeText(it), color = MaterialTheme.colorScheme.error,
             style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
+
+        Spacer(Modifier.height(22.dp))
+        SectionHeading("Spend guard")
+        Text("Caps pause a run; they never stop it. Blank means no cap. Local models skip this.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Spacer(Modifier.height(8.dp))
+        OutlinedTextField(value = perRunUsd, onValueChange = { perRunUsd = it },
+            label = { Text("Per-run cap (USD)") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth())
+        OutlinedTextField(value = monthlyUsd, onValueChange = { monthlyUsd = it },
+            label = { Text("Monthly cap (USD)") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+        OutlinedTextField(value = perRunTokens, onValueChange = { perRunTokens = it },
+            label = { Text("Per-run token cap") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+        OutlinedTextField(value = monthlyTokens, onValueChange = { monthlyTokens = it },
+            label = { Text("Monthly token cap") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+        OutlinedTextField(value = price, onValueChange = { price = it },
+            label = { Text("Unknown model price / million tokens (USD)") }, singleLine = true,
+            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+        TextButton(onClick = {
+            onSaveSpend(SpendCaps(
+                perRunUsd = perRunUsd.toDoubleOrNull()?.takeIf { it > 0 },
+                monthlyUsd = monthlyUsd.toDoubleOrNull()?.takeIf { it > 0 },
+                perRunTokens = perRunTokens.toLongOrNull()?.takeIf { it > 0 },
+                monthlyTokens = monthlyTokens.toLongOrNull()?.takeIf { it > 0 },
+            ), price.toDoubleOrNull()?.takeIf { it > 0 })
+        }) { Text("Save spend limits") }
     }
 }
 

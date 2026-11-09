@@ -1,12 +1,14 @@
 package com.kaiser.rivet.runtime
 
 import android.content.Context
+import com.kaiser.rivet.agent.ProjectStateFiles
 import com.kaiser.rivet.storage.GitHubTokenStore
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import java.io.File
+import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -34,6 +36,11 @@ data class RuntimeCommandResult(
 )
 
 data class PreviewLaunch(val processId: String, val url: String, val entry: String)
+
+data class RunCheckpointRestoreResult(
+    val restored: List<String>,
+    val conflicts: List<String>,
+)
 
 class RuntimeController(
     context: Context,
@@ -249,6 +256,97 @@ class RuntimeController(
         checkpoints(workspaceId).matchesPost(id, ready.worktree)
     }
 
+    suspend fun beginRunCheckpoint(workspaceId: String, runId: String, sequence: Int,
+                                   summary: String, allowDirty: Boolean = false): String? =
+        operations.withLock {
+            if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
+            val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+            val ready = active.prepare()
+            if (ready.dirty && !allowDirty) throw MirrorFailure("sync_required")
+            runCheckpoints(workspaceId).begin(ready.worktree, runId, sequence, summary)
+        }
+
+    suspend fun finishRunCheckpoint(workspaceId: String, id: String) {
+        operations.withLock {
+            if (selection.currentIdentity() != workspaceId) return@withLock
+            val active = currentMirror() ?: return@withLock
+            // A completed run is expected to leave local edits; that is the checkpoint's
+            // reason to exist. prepare() still gives the canonical worktree path.
+            val ready = active.prepare()
+            runCheckpoints(workspaceId).finish(id, ready.worktree)
+        }
+    }
+
+    suspend fun runCheckpointHistory(limit: Int = 100): List<RunCheckpointInfo> = operations.withLock {
+        val identity = selection.currentIdentity() ?: return@withLock emptyList()
+        runCheckpoints(identity).history(limit)
+    }
+
+    suspend fun restoreRunCheckpoint(record: RunCheckpointInfo): RunCheckpointRestoreResult =
+        operations.withLock {
+            if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
+            val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+            val ready = active.prepare()
+            if (ready.dirty) throw MirrorFailure("sync_required")
+            val store = runCheckpoints(record.workspace)
+            val staged = store.stageRestore(record, ready.worktree)
+            if (staged.conflicts.isNotEmpty()) {
+                return@withLock RunCheckpointRestoreResult(emptyList(), staged.conflicts)
+            }
+            try {
+                active.installCheckpoint(staged.stage)
+                active.sync()
+                store.markRestored(record)
+                RunCheckpointRestoreResult(staged.restored, emptyList())
+            } catch (error: Exception) {
+                store.discard(record)
+                throw error
+            }
+        }
+
+    /**
+     * The user-visible half of the non-git delta store: pre-change bytes for only the
+     * files this checkpoint owns. The app-private copy is the restore source of truth
+     * so a project edit cannot corrupt it; this copy is the documented `.rivet` store.
+     */
+    private suspend fun writeProjectCheckpoint(workspaceId: String, record: RunCheckpointInfo) {
+        val after = record.after ?: return
+        val workspace = try { selection.restore()?.first } catch (_: Exception) { null } ?: return
+        if (selection.currentIdentity() != workspaceId) return
+        val store = RunCheckpointStore(File(app.filesDir, "run-checkpoints"), record.workspace)
+        val changed = (record.before.keys + after.keys)
+            .filter { record.before[it] != after[it] }.sorted()
+        val payload = buildString {
+            append("{\"runId\":\"").append(record.runId).append("\",\"sequence\":")
+                .append(record.sequence).append(",\"summary\":\"")
+                .append(record.summary.replace("\\", "\\\\").replace("\"", "\\\""))
+                .append("\",\"gitRef\":")
+                .append(record.gitRef?.let { "\"$it\"" } ?: "null")
+                .append(",\"files\":{")
+            var first = true
+            for (path in changed) {
+                val bytes = runCatching { store.deltaBytes(record, path) }.getOrNull() ?: continue
+                if (bytes.size > 2 * 1024 * 1024) continue
+                if (!first) append(',')
+                first = false
+                append('"').append(path.replace("\\", "\\\\").replace("\"", "\\\""))
+                    .append("\":\"").append(Base64.getEncoder().encodeToString(bytes)).append('"')
+            }
+            append("}}")
+        }
+        try {
+            ProjectStateFiles(workspace).write(
+                ".rivet/checkpoints/${record.runId}/${record.sequence}.json", payload)
+        } catch (_: Exception) {
+            // A read-only project must still have a working app-private restore point.
+        }
+    }
+
+    suspend fun runCheckpointPruned(): Int = operations.withLock {
+        val identity = selection.currentIdentity() ?: return@withLock 0
+        runCheckpoints(identity).lastPruned
+    }
+
     suspend fun checkpointHistory(limit: Int = 50): List<CheckpointRecord> = operations.withLock {
         val identity = selection.currentIdentity() ?: return@withLock emptyList()
         checkpoints(identity).history(limit)
@@ -294,6 +392,9 @@ class RuntimeController(
     }
 
     private fun checkpoints(identity: String) = TurnCheckpoint(File(app.filesDir, "checkpoints"), identity)
+
+    private fun runCheckpoints(identity: String) =
+        RunCheckpointStore(File(app.filesDir, "run-checkpoints"), identity)
 
     private suspend fun gitInspection(): GitInspection {
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")

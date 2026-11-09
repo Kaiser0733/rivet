@@ -21,6 +21,9 @@ import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.contentOrNull
+import kotlinx.serialization.json.jsonObject
+import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.put
@@ -100,6 +103,9 @@ class AgentToolExecutor(
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
+        if (reservedGoalMutation(call)) return PreparedAgentTool(call, null) {
+            failure(call, "reserved_goal")
+        }
         return try {
             when (call.name) {
                 "git_status" -> {
@@ -647,6 +653,19 @@ class AgentToolExecutor(
 
     @Serializable private data class ListArgs(val path: String = "")
     @Serializable private data class PathArgs(val path: String, @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false)
+    private fun reservedGoalMutation(call: AgentToolCall): Boolean {
+        if (call.name !in setOf("write_file", "apply_patch", "create_file", "create_directory",
+                "delete_path", "rename_path", "move_path", "download_file")) return false
+        return try {
+            val value = json.parseToJsonElement(call.arguments).jsonObject
+            listOf("path", "new_name", "destination").any { key ->
+                val target = value[key]?.jsonPrimitive?.contentOrNull
+                    ?.replace('\\', '/')?.removePrefix("./")?.trimStart('/')
+                target == GoalDocument.PATH
+            }
+        } catch (_: Exception) { false }
+    }
+
     @Serializable private data class ReadArgs(val path: String, val offset: Int = 0)
     @Serializable private data class SearchArgs(val query: String, val path: String = "")
     @Serializable private data class SkillArgs(val name: String)

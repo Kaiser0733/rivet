@@ -34,6 +34,7 @@ internal object AgentToolError {
         "garden_first" to "Project memory is at its hard cap. Garden it first: merge related facts and delete stale lines.",
         "empty" to "The memory fact was empty. Write one durable sentence.",
         "too_long" to "The memory fact is too long. Keep one fact under 500 characters.",
+        "reserved_goal" to "goal.md belongs to the /goal command. Use /goal to change it; do not edit the goal file with file tools.",
         "approval_unavailable" to "Rivet could not safely request confirmation for this operation, so it stopped.",
         "process_limit" to "Rivet already has the maximum number of active project operations. Stop one in Processes and retry.",
         "thermal_blocked" to "The phone is too hot. Wait for it to cool before retrying, and do not retry the same long command now.",
@@ -61,7 +62,7 @@ internal object AgentToolError {
         "foreground_service_unavailable", "preview_unavailable", "process_unavailable",
         "invalid_url", "redirect_blocked", "download_too_large", "download_sha_mismatch",
         "destination_exists", "invalid_checksum", "skill_not_found", "skill_manual_only",
-        "secret", "garden_first", "empty", "too_long")
+        "secret", "garden_first", "empty", "too_long", "reserved_goal")
     private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",

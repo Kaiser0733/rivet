@@ -7,6 +7,7 @@ import android.content.ClipboardManager
 import android.widget.Toast
 import android.content.Intent
 import android.net.Uri
+import android.provider.Settings
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -227,6 +228,19 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 confirmUndo = false; chatViewModel.undoLastTurn()
             }) { Text("Undo changes") } },
             dismissButton = { TextButton(onClick = { confirmUndo = false }) { Text("Cancel") } })
+    }
+    if (state.batteryAsk) {
+        AlertDialog(
+            onDismissRequest = chatViewModel::dismissBatteryAsk,
+            title = { Text("Keep Rivet working when the screen is off?") },
+            text = { Text("Android may stop long background runs unless Rivet is exempt from battery optimisation. This is asked once; you can change it later in system settings.") },
+            confirmButton = { RivetOutlinedButton(onClick = {
+                try { context.startActivity(Intent(Settings.ACTION_IGNORE_BATTERY_OPTIMIZATION_SETTINGS)) }
+                catch (_: Exception) { }
+                chatViewModel.dismissBatteryAsk()
+            }) { Text("Open settings") } },
+            dismissButton = { TextButton(onClick = chatViewModel::dismissBatteryAsk) { Text("Not now") } },
+        )
     }
     confirmDiscard?.let { identity ->
         AlertDialog(onDismissRequest = { confirmDiscard = null },
@@ -608,6 +622,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                             onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
                             onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
                             onAttachGoal = chatViewModel::attachGoalToProject,
+                            onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
                             onRetryTurn = chatViewModel::retryFailedTurn,
                             onChooseReasoning = chatViewModel::chooseReasoningLevel,
                             modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
@@ -716,6 +731,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onRetryInterruptedTurn: () -> Unit,
                         onDismissInterruptedTurn: () -> Unit,
                         onAttachGoal: () -> Unit,
+                        onRaiseBudget: () -> Unit,
                         onRetryTurn: () -> Unit,
                         onChooseReasoning: (ReasoningLevel) -> Unit,
                         modifier: Modifier = Modifier) {
@@ -902,6 +918,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         if (showInterruptedTurn) item(key = "interrupted-turn") {
             InterruptedTurnRow(
                 recovery = state.runRecovery,
+                spendLabel = state.spendLabel,
+                budgetPaused = state.budgetPaused,
+                onRaiseBudget = onRaiseBudget,
                 onRetry = onRetryInterruptedTurn,
                 onDismiss = onDismissInterruptedTurn,
             )
@@ -1325,6 +1344,11 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
             Text(reason, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
+        state.spendLabel?.let { spend ->
+            Text(if (spend == "unknown pricing") spend else "Spend $spend",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
         if (details) state.lastTurnFiles.forEach { path ->
             Text(displaySafeText(path), style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -1335,7 +1359,9 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
 }
 
 @Composable
-private fun InterruptedTurnRow(recovery: String?, onRetry: () -> Unit, onDismiss: () -> Unit) {
+private fun InterruptedTurnRow(recovery: String?, spendLabel: String?, budgetPaused: Boolean,
+                              onRaiseBudget: () -> Unit,
+                              onRetry: () -> Unit, onDismiss: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(6.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
@@ -1352,8 +1378,14 @@ private fun InterruptedTurnRow(recovery: String?, onRetry: () -> Unit, onDismiss
                     Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall)
                 }
+                spendLabel?.let {
+                    Text(if (it == "unknown pricing") it else "Spend $it",
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall)
+                }
             }
             Row {
+                if (budgetPaused) TextButton(onClick = onRaiseBudget) { Text("Raise cap") }
                 TextButton(onClick = onRetry) { Text(if (recovery == null) "Retry" else "Resume") }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_error_dismiss)) }
             }
@@ -1561,6 +1593,15 @@ private fun StatusFooter(state: ChatUiState, providers: com.kaiser.rivet.ui.prov
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
             )
+        }
+        state.spendLabel?.let {
+            Text(if (it == "unknown pricing") it else "Spend $it",
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        state.spendEstimate?.let {
+            Text(it, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (modelName != null) {
             Text(

@@ -54,6 +54,11 @@ class PersistentProcessService : Service() {
                 NotificationApprovals.resolve(intent?.getLongExtra(EXTRA_APPROVAL_TOKEN, -1) ?: -1, false)
                 return START_NOT_STICKY
             }
+            ACTION_RAISE -> {
+                AgentRunControl.requestRaise()
+                getSystemService(NotificationManager::class.java).cancel(BUDGET_NOTIFICATION_ID)
+                return START_NOT_STICKY
+            }
         }
         if (intent?.action != ACTION_START) return START_NOT_STICKY
         val initial = processes.foregroundState.value
@@ -181,6 +186,63 @@ class PersistentProcessService : Service() {
 
     companion object {
         private const val CHANNEL_ID = "rivet_local_processes"
+        private const val BUDGET_NOTIFICATION_ID = 120
+        private const val REQUEST_RAISE = 116
+
+        /** A paused run's notification must outlive the foreground service. */
+        fun showBudgetPause(context: android.content.Context, title: String?) {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(CHANNEL_ID) == null) {
+                manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Rivet processes",
+                    NotificationManager.IMPORTANCE_LOW))
+            }
+            val open = PendingIntent.getActivity(context, REQUEST_OPEN,
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val raise = PendingIntent.getService(context, REQUEST_RAISE,
+                Intent(context, PersistentProcessService::class.java).setAction(ACTION_RAISE),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val notification = Notification.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_processes)
+                .setContentTitle(title?.let { "Rivet · $it" } ?: "Rivet")
+                .setContentText("budget reached — raise or stop")
+                .setCategory(Notification.CATEGORY_STATUS)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setContentIntent(open)
+                .addAction(android.R.drawable.ic_menu_save, "Raise for this run", raise)
+                .build()
+            manager.notify(BUDGET_NOTIFICATION_ID, notification)
+        }
+
+        fun showNetworkPause(context: android.content.Context, title: String?) {
+            showPaused(context, title, "network lost — resumes when connected")
+        }
+
+        private fun showPaused(context: android.content.Context, title: String?, text: String) {
+            val manager = context.getSystemService(NotificationManager::class.java)
+            if (Build.VERSION.SDK_INT >= 26 && manager.getNotificationChannel(CHANNEL_ID) == null) {
+                manager.createNotificationChannel(NotificationChannel(CHANNEL_ID, "Rivet processes",
+                    NotificationManager.IMPORTANCE_LOW))
+            }
+            val open = PendingIntent.getActivity(context, REQUEST_OPEN,
+                Intent(context, MainActivity::class.java)
+                    .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            val notification = Notification.Builder(context, CHANNEL_ID)
+                .setSmallIcon(R.drawable.ic_processes)
+                .setContentTitle(title?.let { "Rivet · $it" } ?: "Rivet")
+                .setContentText(text)
+                .setCategory(Notification.CATEGORY_STATUS)
+                .setVisibility(Notification.VISIBILITY_PRIVATE)
+                .setContentIntent(open)
+                .build()
+            manager.notify(BUDGET_NOTIFICATION_ID, notification)
+        }
+
+        fun cancelBudgetPause(context: android.content.Context) {
+            context.getSystemService(NotificationManager::class.java).cancel(BUDGET_NOTIFICATION_ID)
+        }
         internal const val NOTIFICATION_ID = 110
         private const val REQUEST_OPEN = 111
         private const val REQUEST_STOP = 112
@@ -194,5 +256,6 @@ class PersistentProcessService : Service() {
         internal const val ACTION_PAUSE = "com.kaiser.rivet.action.PAUSE_RUN"
         internal const val ACTION_APPROVE = "com.kaiser.rivet.action.APPROVE_STEP"
         internal const val ACTION_DENY = "com.kaiser.rivet.action.DENY_STEP"
+        internal const val ACTION_RAISE = "com.kaiser.rivet.action.RAISE_BUDGET"
     }
 }
