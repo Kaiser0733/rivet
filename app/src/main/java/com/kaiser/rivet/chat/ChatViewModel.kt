@@ -1382,10 +1382,12 @@ class ChatViewModel private constructor(
                                             else message.toolCalls.any { it.name == RUN_COMMAND_TOOL },
                                     )
                                 }
-                                if (message.role == AgentRole.Tool) {
-                                    val summary = message.toolResults.joinToString("; ") {
-                                        "${it.name}: ${it.summary.ifBlank { if (it.error) "failed" else "done" }}"
-                                    }
+                                if (message.role == AgentRole.Tool &&
+                                    message.toolResults.any { !it.error }) {
+                                    val summary = message.toolResults.filterNot { it.error }
+                                        .joinToString("; ") {
+                                            "${it.name}: ${it.summary.ifBlank { "done" }}"
+                                        }
                                     persistRunStep(summary)
                                 }
                                 val id = checkpointId
