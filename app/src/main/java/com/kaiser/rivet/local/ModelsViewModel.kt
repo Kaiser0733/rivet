@@ -40,7 +40,7 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
     val ui: StateFlow<ModelsUiState> = _ui.asStateFlow()
     val installed: StateFlow<List<InstalledLocalModel>> = manager.installed
     val jobs: StateFlow<Map<String, DownloadJob>> =
-        (downloads?.jobs ?: MutableStateFlow(emptyMap())).asStateFlow()
+        downloads?.jobs ?: MutableStateFlow(emptyMap())
 
     fun refresh() {
         viewModelScope.launch {
@@ -172,7 +172,7 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun setWifiOnly(enabled: Boolean) {
-        downloads?.setWifiOnly(enabled)
+        downloads?.setWifiOnlyPreference(enabled)
         _ui.value = _ui.value.copy(wifiOnly = enabled)
     }
 

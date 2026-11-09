@@ -46,7 +46,7 @@ class LocalModelManager(val app: Application) {
     val loadedId: StateFlow<String?> = _loadedId.asStateFlow()
     @Volatile private var active: LoadedLocal? = null
 
-    data class LoadedLocal(val entry: LocalModelEntry, val model: LlamaModel)
+    private data class LoadedLocal(val entry: LocalModelEntry, val model: LlamaModel)
 
     fun entry(id: String?): LocalModelEntry? =
         _installed.value.firstOrNull { it.entry.id == id }?.entry
