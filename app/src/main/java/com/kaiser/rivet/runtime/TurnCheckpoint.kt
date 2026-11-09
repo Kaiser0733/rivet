@@ -235,6 +235,11 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
                     return FileVisitResult.SKIP_SUBTREE
                 }
                 if (dir != root.toPath() && dir.fileName.toString() == ".git") return FileVisitResult.SKIP_SUBTREE
+                if (dir != root.toPath() && relative(root, dir) == ".rivet/runs") {
+                    // Run journals change after a checkpoint's post snapshot; they are
+                    // app state, not user files, and must not poison Undo.
+                    return FileVisitResult.SKIP_SUBTREE
+                }
                 if (dir != root.toPath()) {
                     val path = relative(root, dir)
                     if (isIgnored(path, ignored)) return FileVisitResult.SKIP_SUBTREE
