@@ -1305,11 +1305,9 @@ class ChatViewModel private constructor(
             }
             if (workspaceId != null && snapshot.config.type == ProviderType.Local) {
                 val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
-                if (local?.toolCalling == com.kaiser.rivet.local.LocalToolCalling.None) {
-                    failBeforeStart(
-                        "This local model can chat but can't use tools. Pick a model marked for coding.",
-                        wasInterrupted,
-                    )
+                val block = local?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)
+                if (block != null) {
+                    failBeforeStart(block, wasInterrupted)
                     return@launch
                 }
             }

@@ -47,9 +47,8 @@ class LocalProviderClient(
     ): AgentResponse {
         val entry = manager.entry(config.model)
             ?: throw ProviderError.ProviderMessage("This local model isn't installed. Download it again from Models.")
-        if (entry.toolCalling == LocalToolCalling.None && request.tools.isNotEmpty()) {
-            throw ProviderError.ProviderMessage(
-                "This local model can chat but can't use tools. Pick a model marked for coding.")
+        if (request.tools.isNotEmpty()) {
+            LocalToolProtocol.agentBlockReason(entry)?.let { throw ProviderError.ProviderMessage(it) }
         }
         LocalThermal.pauseReason(app)?.let { throw ProviderError.ProviderMessage(it) }
 
