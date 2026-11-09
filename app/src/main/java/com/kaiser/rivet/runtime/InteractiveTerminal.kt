@@ -111,8 +111,10 @@ internal class InteractiveTerminalSession(
 
     /** Starts with the pane's grid; later calls only resize the live PTY. */
     fun ensureStarted(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) {
-        this.columns = columns.coerceAtLeast(1)
-        this.rows = rows.coerceAtLeast(1)
+        // TerminalEmulator.resize throws below 2x2; a transient zero-sized pane
+        // during IME animation must not take the UI down.
+        this.columns = columns.coerceAtLeast(2)
+        this.rows = rows.coerceAtLeast(2)
         this.cellWidthPx = cellWidthPx.coerceAtLeast(1)
         this.cellHeightPx = cellHeightPx.coerceAtLeast(1)
         val live = engine
@@ -188,8 +190,8 @@ internal class InteractiveTerminalSession(
     }
 
     fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) {
-        this.columns = columns.coerceAtLeast(1)
-        this.rows = rows.coerceAtLeast(1)
+        this.columns = columns.coerceAtLeast(2)
+        this.rows = rows.coerceAtLeast(2)
         this.cellWidthPx = cellWidthPx.coerceAtLeast(1)
         this.cellHeightPx = cellHeightPx.coerceAtLeast(1)
         engine?.resize(this.columns, this.rows, this.cellWidthPx, this.cellHeightPx)

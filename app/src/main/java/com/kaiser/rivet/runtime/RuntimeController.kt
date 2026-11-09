@@ -416,6 +416,9 @@ internal fun terminalShellPath(binDir: File?): String =
 
 /** TERM and a folder-only, dollar prompt: no user, host, or absolute path. */
 internal fun terminalEnvironment(base: List<String>): List<String> {
-    val kept = base.filterNot { it.startsWith("TERM=") || it.startsWith("PS1=") }
-    return kept + "TERM=xterm-256color" + "PS1=\\W \\$ "
+    // No startup rc: Android's mksh rc can overwrite PS1 with its own login prompt.
+    val kept = base.filterNot {
+        it.startsWith("TERM=") || it.startsWith("PS1=") || it.startsWith("ENV=")
+    }
+    return kept + "ENV=/dev/null" + "TERM=xterm-256color" + "PS1=\\W \\$ "
 }
