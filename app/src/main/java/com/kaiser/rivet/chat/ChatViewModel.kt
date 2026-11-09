@@ -1920,7 +1920,8 @@ class ChatViewModel private constructor(
                     _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                         activity = null, pendingApproval = null,
                         toolLifecycle = emptyList(), commandRunning = false,
-                        notice = "Stopped. Any completed changes remain in the project.") }
+                        notice = if (budgetPaused) it.notice
+                        else "Stopped. Any completed changes remain in the project.") }
                 }
                 // The conversation picked mid-reply opens now that the turn is over,
                 // whether it finished, failed or was stopped.
