@@ -78,6 +78,12 @@ internal class InteractiveTerminalSession(
     private val killGroup: (Int) -> Unit = { pid ->
         if (pid > 0) ProcTree.sessionMembers(pid).forEach(ProcTree::kill)
     },
+    // The interactive shell survives a watchdog stop: kill its work, not the prompt.
+    private val killDescendants: (Int) -> Unit = { root ->
+        if (root > 0) {
+            ProcTree.sessionMembers(root).filter { it != root }.forEach(ProcTree::kill)
+        }
+    },
 ) {
     private val mutableState = MutableStateFlow(InteractiveTerminalState())
     val state: StateFlow<InteractiveTerminalState> = mutableState.asStateFlow()
@@ -264,17 +270,14 @@ internal class InteractiveTerminalSession(
 
     private suspend fun watchTree(ticket: Long, engine: TerminalEngine,
                                   launch: TerminalLaunch) {
-        if (finished || ticket != generation || engine.pid <= 0) return
-        val reason = treeWatcher.watch(engine.pid, launch.memoryCapBytes) {
-            engine.close()
-            killSession(engine.pid)
+        // Keep watching after a stop: the shell is deliberately spared, and a later
+        // command must be governed too. terminate() kills only descendants.
+        while (!finished && ticket == generation && engine.pid > 0) {
+            val reason = treeWatcher.watch(engine.pid, launch.memoryCapBytes) {
+                killDescendants(engine.pid)
+            } ?: return
+            onStopRecorded(reason)
         }
-        // A watcher may end without a stop (its coroutine was cancelled, or a test
-        // double has nothing to report); only a real tree stop closes the session.
-        if (reason == null) return
-        onStopRecorded(reason)
-        if (ticket != generation || finished) return
-        closeInternal(markEnded = true)
     }
 
     private fun failStart(error: String, managedId: String?) {
