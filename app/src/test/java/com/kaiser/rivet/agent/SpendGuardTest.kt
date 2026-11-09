@@ -14,8 +14,8 @@ class SpendGuardTest {
         assertEquals(2.5 + 1.0 + 0.5, SpendGuard.cost(usage,
             PricingTable.price("gpt-4o"))!!, 0.0001)
         assertNull(SpendGuard.cost(usage, PricingTable.price("made-up-model")))
-        assertEquals("unknown pricing", SpendGuard.estimateRange(null, 1..2, 1..2))
-        assertTrue(SpendGuard.estimateRange(PricingTable.price("gpt-4o"), 1000..2000, 100..200)
+        assertEquals("unknown pricing", SpendGuard.estimateRange(null, 1L..2L, 1L..2L))
+        assertTrue(SpendGuard.estimateRange(PricingTable.price("gpt-4o"), 1000L..2000L, 100L..200L)
             .contains("estimate"))
     }
 
