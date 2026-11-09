@@ -20,7 +20,7 @@ class SpendStoreTest {
             monthlyTokens = 1_000), 0.5)
         val reloaded = SpendStore(context)
         assertEquals(2.0, reloaded.caps().perRunUsd!!, 0.0001)
-        assertEquals(1_000L, reloaded.caps().monthlyTokens)
+        assertEquals(1_000L, reloaded.caps().monthlyTokens ?: -1L)
         assertEquals(0.5, reloaded.userPricePerMillionUsd()!!, 0.0001)
         assertEquals(0.0, reloaded.month().first, 0.0001)
         reloaded.add(0.42, 500)

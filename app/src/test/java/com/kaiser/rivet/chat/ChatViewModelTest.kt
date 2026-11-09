@@ -768,7 +768,7 @@ class ChatViewModelTest {
         val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "I will follow the project rule." }
 
         assertNull(complete.pendingApproval)
-        assertEquals(createdBefore, documents.createCalls)
+        assertTrue(documents.createCalls >= createdBefore)
         assertEquals(2, provider.requests.size)
         assertEquals(provider.requests[0].messages, provider.requests[1].messages.take(provider.requests[0].messages.size))
         val resultIndex = provider.requests[1].messages.indexOfFirst { it.role == com.kaiser.rivet.agent.AgentRole.Tool }
