@@ -95,6 +95,8 @@ class AgentToolExecutor(
     private val skills: SkillCatalog? = null,
     // Skills a `/name` gesture already loaded for this turn; the tool must not repeat them.
     private val loadedSkills: Set<String> = emptySet(),
+    // Durable project memory writes; null when no project is open. Refusals are tool errors.
+    private val rememberMemory: (suspend (String) -> MemoryFormat.Append)? = null,
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
@@ -177,6 +179,21 @@ class AgentToolExecutor(
                     require(args.name.isNotBlank() && args.name.length <= 64)
                     PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
                         execute(call) { skillToolResult(call, skills, args.name, loadedSkills) }
+                    }
+                }
+                "remember" -> {
+                    val args = json.decodeFromString<RememberArgs>(call.arguments)
+                    val fact = args.fact.trim()
+                    require(fact.isNotEmpty() && fact.length <= MemoryFormat.MAX_FACT_CHARS)
+                    val writer = rememberMemory ?: throw AgentWorkspaceFailure("unsupported")
+                    mutation(call, "Update project memory", fact.take(160), fact.length * 2 + 512) {
+                        when (val result = writer(fact)) {
+                            is MemoryFormat.Append.Saved -> success(call, buildJsonObject {
+                                put("lines", result.lines)
+                                put("garden", result.garden)
+                            }, "Memory updated")
+                            is MemoryFormat.Append.Refused -> failure(call, result.code)
+                        }
                     }
                 }
                 "write_file" -> {
@@ -633,6 +650,7 @@ class AgentToolExecutor(
     @Serializable private data class ReadArgs(val path: String, val offset: Int = 0)
     @Serializable private data class SearchArgs(val query: String, val path: String = "")
     @Serializable private data class SkillArgs(val name: String)
+    @Serializable private data class RememberArgs(val fact: String = "")
     @Serializable private data class WriteArgs(
         val path: String,
         val content: String,
@@ -731,6 +749,7 @@ class AgentToolExecutor(
             ),
             AgentToolDefinition("skill", "Load the full instructions for an installed skill. Call it before acting on a task that names or clearly matches a skill in the skill catalog. Returns the skill's <skill_content> block; bundled resources are read with the normal file tools relative to the base directory it names.",
                 schema(listOf("name"), "name" to string)),
+            AgentToolDefinition("remember", "Append one durable project fact to .rivet/memory.md: stack/version, an architecture decision and why, a naming or style convention, a gotcha, or a standing user preference for this project. Never use this for secrets, transcripts, task progress, or other projects. Secrets are refused. Garden memory when it is over its soft cap.", schema(listOf("fact"), "fact" to string)),
             AgentToolDefinition("write_file", "Replace an existing text file when its hash still matches. In Basic YOLO, set ask_user=true if this edit should still be confirmed.",
                 schema(listOf("path", "content", "expected_sha256"), path, "content" to string, "expected_sha256" to string, askUser)),
             AgentToolDefinition("apply_patch", "Apply exact unique replacements sequentially in supplied order; each later edit sees earlier edits. All edits validate in memory before the final write, which requires the file hash to still match. In Basic YOLO, set ask_user=true to request confirmation.",
