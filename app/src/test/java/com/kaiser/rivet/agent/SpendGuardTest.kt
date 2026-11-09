@@ -41,4 +41,16 @@ class SpendGuardTest {
         assertEquals("$1.23", SpendGuard.liveLabel(1.23))
         assertNull(SpendGuard.liveLabel(0.0))
     }
+
+    @Test fun omittedUsageFallsBackToALabelledTextEstimate() {
+        val usage = SpendGuard.estimatedUsage(inputChars = 4_001, outputChars = 800)
+        assertEquals(1_001L, usage.inputTokens)
+        assertEquals(200L, usage.outputTokens)
+        assertEquals(1_201L, usage.totalTokens)
+        val cost = SpendGuard.cost(usage, PricingTable.price("gpt-4o"))!!
+        assertTrue(cost > 0.0)
+        // The estimated usage still crosses a small per-run cap.
+        assertTrue(SpendGuard.evaluate(cost, cost, SpendGuard.tokens(usage),
+            SpendGuard.tokens(usage), SpendCaps(perRunUsd = cost / 2)).paused)
+    }
 }

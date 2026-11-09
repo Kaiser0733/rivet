@@ -130,6 +130,7 @@ class ManagedProcessesTest {
         assertTrue(processes.hasForegroundWork())
         assertEquals(1, processes.activeTurnCount())
         assertEquals(1, processes.foregroundState.value.activeTurns)
+        assertTrue(processes.foregroundState.value.runStartedAt > 0L)
         assertTrue(processes.processes.value.isEmpty())
         assertFalse(processes.stopForegroundServiceIfIdle())
 

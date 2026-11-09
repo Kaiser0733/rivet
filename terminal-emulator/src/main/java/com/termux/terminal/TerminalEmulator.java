@@ -2202,6 +2202,9 @@ public final class TerminalEmulator {
                     case 2: // Erase all of the display - all lines are erased, changed to single-width, and the cursor does not
                         // move..
                         blockClear(0, 0, mColumns, mRows);
+                        // Plain `clear` emits 2J, not xterm's 3J. Clearing scrollback
+                        // here makes the terminal command behave as users expect.
+                        mMainBuffer.clearTranscript();
                         break;
                     case 3: // Delete all lines saved in the scrollback buffer (xterm etc)
                         mMainBuffer.clearTranscript();

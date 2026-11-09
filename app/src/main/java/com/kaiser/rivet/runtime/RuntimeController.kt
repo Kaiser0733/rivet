@@ -16,7 +16,9 @@ import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 
 data class RuntimeCommandResult(
     val exitCode: Int? = null,
@@ -36,6 +38,10 @@ data class RuntimeCommandResult(
 )
 
 data class PreviewLaunch(val processId: String, val url: String, val entry: String)
+
+/** A project sync is a UI-blocking prerequisite for the terminal; it must never hold
+ * the pane forever. On expiry the existing worktree is used and the terminal starts. */
+internal const val WORKSPACE_SYNC_TIMEOUT_MS = 15_000L
 
 data class RunCheckpointRestoreResult(
     val restored: List<String>,
@@ -163,13 +169,26 @@ class RuntimeController(
             return@withLock TerminalLaunch(error = code)
         }
         governor.commandStarted()
-        val ready = active.prepare()
+        val ready = try {
+            withTimeout(WORKSPACE_SYNC_TIMEOUT_MS) { active.prepare() }
+        } catch (e: TimeoutCancellationException) {
+            // The last complete worktree is still a usable terminal root. Never leave
+            // the pane on a sync spinner just because SAF or the device is slow.
+            val fallback = active.worktree.takeIf { it.isDirectory }
+                ?: return@withLock TerminalLaunch(error = "sync_timeout")
+            MirrorReady(fallback, dirty = false)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            return@withLock TerminalLaunch(error = "sync_failed")
+        }
         if (ready.dirty) return@withLock TerminalLaunch(error = "sync_required")
         toolchain.ensurePrepared()
         val credentialFile = if (toolchain.gitReady) {
             withContext(Dispatchers.IO) { gitHub.refresh() }
         } else null
-        val directory = runtimeDirectory(ready.worktree, "")
+        val directory = try { runtimeDirectory(ready.worktree, "") }
+        catch (_: MirrorFailure) { return@withLock TerminalLaunch(error = "sync_timeout") }
         val environment = terminalEnvironment(
             environment(active, directory, credentialFile).toList())
         val identity = mirrorIdentity
@@ -286,9 +305,23 @@ class RuntimeController(
         operations.withLock {
             if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
             val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-            val ready = active.prepare()
-            if (ready.dirty) throw MirrorFailure("sync_required")
+            var ready = active.prepare()
             val store = runCheckpoints(record.workspace)
+            if (ready.dirty) {
+                // Settle non-overlapping work first. If a same-path disagreement
+                // remains, still run the checkpoint comparison so the panel can list
+                // the files that stopped the restore instead of failing silently.
+                val synced = active.sync()
+                if (synced.state == MirrorSync.Conflict || synced.state == MirrorSync.Failed) {
+                    val staged = store.stageRestore(record, ready.worktree)
+                    if (staged.conflicts.isNotEmpty()) {
+                        return@withLock RunCheckpointRestoreResult(emptyList(), staged.conflicts)
+                    }
+                    throw MirrorFailure("sync_required", synced.path)
+                }
+                ready = active.prepare()
+                if (ready.dirty) throw MirrorFailure("sync_required")
+            }
             val staged = store.stageRestore(record, ready.worktree)
             if (staged.conflicts.isNotEmpty()) {
                 return@withLock RunCheckpointRestoreResult(emptyList(), staged.conflicts)
@@ -416,7 +449,16 @@ class RuntimeController(
     suspend fun commandBlocker(): String? = operations.withLock {
         if (managedProcesses?.canStartCommand() == false) return@withLock "process_limit"
         val active = currentMirror() ?: return@withLock "workspace_unavailable"
-        if (active.hasLocalChanges()) "sync_required" else null
+        if (!active.hasLocalChanges()) return@withLock null
+        // A command is a write path too. Settle the mirror exactly as runCommand does:
+        // external non-overlapping edits are adopted, local edits are pushed, and only
+        // a same-path disagreement remains a blocker. Returning sync_required before
+        // this pass was what stranded terminal/external writes behind the banner.
+        when (active.sync().state) {
+            MirrorSync.Ok, MirrorSync.NoChanges -> null
+            MirrorSync.Conflict -> "sync_required"
+            MirrorSync.Failed -> "sync_failed"
+        }
     }
 
     suspend fun startPreview(

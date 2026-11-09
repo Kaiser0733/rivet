@@ -181,6 +181,7 @@ data class ChatUiState(
     val userPricePerMillionUsd: Double? = null,
     val spendLabel: String? = null,
     val spendEstimate: String? = null,
+    val spendFromEstimate: Boolean = false,
     val runSpendUsd: Double = 0.0,
     val budgetPaused: Boolean = false,
     val runCheckpoints: List<RunCheckpointInfo> = emptyList(),
@@ -255,7 +256,7 @@ private class StoredProviderRuntimeSource(app: Application) : ProviderRuntimeSou
 
     override suspend fun load(): ProviderRuntimeResult {
         val activeId = providerStore.activeIdSnapshot()
-            ?: return ProviderRuntimeResult.Failure("No provider selected. Add one in Settings.")
+            ?: return ProviderRuntimeResult.Failure("Choose a model first. Add one in Settings.")
         val config = providerStore.configSnapshot().firstOrNull { it.id == activeId }
             ?: return ProviderRuntimeResult.Failure("The selected provider no longer exists.")
         if (config.type == ProviderType.ChatGptPlan) {
@@ -829,10 +830,12 @@ class ChatViewModel private constructor(
                     return@launch
                 }
                 files.saveMemory(next)
-                finishMemoryCheckpoint(checkpoint)
                 memoryMarkdown = next
+                // Repaint the Settings list as soon as the file write succeeds; the
+                // checkpoint bookkeeping below can take a moment on a large project.
                 _uiState.update { it.copy(memoryMarkdown = next,
                     memoryLines = MemoryFormat.facts(next), notice = "Memory line forgotten.") }
+                finishMemoryCheckpoint(checkpoint)
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
                 _uiState.update { it.copy(error = "Rivet couldn't update project memory.") }
@@ -869,10 +872,10 @@ class ChatViewModel private constructor(
                 val checkpoint = beginMemoryCheckpoint()
                     ?: return "Rivet couldn't prepare a memory checkpoint. Try again."
                 files.saveMemory(result.markdown)
-                finishMemoryCheckpoint(checkpoint)
                 memoryMarkdown = result.markdown
                 _uiState.update { it.copy(memoryMarkdown = result.markdown,
                     memoryLines = MemoryFormat.facts(result.markdown)) }
+                finishMemoryCheckpoint(checkpoint)
                 null
             }
         }
@@ -1012,10 +1015,9 @@ class ChatViewModel private constructor(
         _uiState.update { it.copy(run = next) }
     }
 
-    private fun recordSpend(config: ProviderConfig, usage: AgentUsage?) {
-        if (usage == null) return
+    private fun recordSpend(config: ProviderConfig, usage: AgentUsage, estimated: Boolean) {
         if (SpendStore.isLocal(config.baseUrl)) {
-            _uiState.update { it.copy(spendLabel = null) }
+            _uiState.update { it.copy(spendLabel = null, spendFromEstimate = false) }
             return
         }
         val tokens = SpendGuard.tokens(usage)
@@ -1032,8 +1034,10 @@ class ChatViewModel private constructor(
         }
         val decision = SpendGuard.evaluate(runSpendUsd, monthSpendUsd, runSpendTokens,
             monthSpendTokens, effectiveSpendCaps())
+        val label = if (cost == null) "unknown pricing" else SpendGuard.liveLabel(runSpendUsd)
         _uiState.update { it.copy(
-            spendLabel = if (cost == null) "unknown pricing" else SpendGuard.liveLabel(runSpendUsd),
+            spendLabel = label,
+            spendFromEstimate = estimated && cost != null,
             runSpendUsd = runSpendUsd) }
         if (decision.paused && !budgetPaused) {
             budgetPaused = true
@@ -1104,7 +1108,14 @@ class ChatViewModel private constructor(
     }
 
     fun restoreRunCheckpoint(id: String) {
-        val record = _uiState.value.runCheckpoints.firstOrNull { it.id == id } ?: return
+        val record = _uiState.value.runCheckpoints.firstOrNull { it.id == id }
+        if (record == null) {
+            _uiState.update {
+                it.copy(runCheckpointNotice = "Not restored. That checkpoint is no longer available.",
+                    error = "That checkpoint is no longer available.")
+            }
+            return
+        }
         viewModelScope.launch {
             try {
                 val result = runtimeController.restoreRunCheckpoint(record)
@@ -1112,20 +1123,39 @@ class ChatViewModel private constructor(
                     pendingRollback = "The user rolled back the project to checkpoint " +
                         "${record.summary}. Do not assume later file changes are present."
                 }
+                val conflictList = result.conflicts.take(20).joinToString(", ") +
+                    if (result.conflicts.size > 20) " and ${result.conflicts.size - 20} more" else ""
                 _uiState.update {
                     if (result.conflicts.isEmpty()) it.copy(
-                        runCheckpointNotice = "Restored ${result.restored.size} file(s) from " +
-                            "${record.summary}.",
-                        notice = "Project restored. Rivet's conversation keeps its history.")
+                        runCheckpointNotice = if (result.restored.isEmpty())
+                            "Restored from ${record.summary}. Nothing needed changing."
+                        else "Restored ${result.restored.size} file(s) from ${record.summary}.",
+                        notice = "Project restored. Rivet's conversation keeps its history.",
+                        error = null)
                     else it.copy(runCheckpointNotice = "Not restored. Changed outside Rivet: " +
-                        result.conflicts.take(5).joinToString(", ") +
-                        if (result.conflicts.size > 5) "…" else "",
-                        error = "Restore stopped before overwriting external changes.")
+                        conflictList,
+                        error = "Restore stopped before overwriting external changes. " +
+                            "The conflicting files are listed in Tools.")
                 }
                 refreshRunCheckpoints()
             } catch (e: CancellationException) { throw e
+            } catch (e: MirrorFailure) {
+                val notice = when (e.code) {
+                    "conflict" -> "Not restored. Changed outside Rivet."
+                    "sync_required", "mirror_dirty", "previous_dirty" ->
+                        "Not restored. Rivet kept the pending project changes; resolve them and try again."
+                    "sync_failed" -> "Not restored. The workspace could not finish syncing."
+                    else -> "Not restored. The checkpoint could not be read safely."
+                }
+                _uiState.update {
+                    it.copy(runCheckpointNotice = notice,
+                        error = "Restore stopped. No files were overwritten.")
+                }
             } catch (_: Exception) {
-                _uiState.update { it.copy(error = "Rivet couldn't restore that checkpoint.") }
+                _uiState.update {
+                    it.copy(runCheckpointNotice = "Not restored. The checkpoint could not be read safely.",
+                        error = "Rivet couldn't restore that checkpoint.")
+                }
             }
         }
     }
@@ -1491,7 +1521,24 @@ class ChatViewModel private constructor(
                         catch (e: CancellationException) { throw e
                         } catch (_: Exception) { /* A completed provider response remains usable if usage storage fails. */ }
                     }
-                    recordSpend(snapshot.config, response.usage)
+                    // Some OpenAI-compatible providers omit usage entirely. Estimate
+                    // from the exact text sent and received so the cap still bites and
+                    // the footer never lies by omission.
+                    val responseUsage = response.usage ?: SpendGuard.estimatedUsage(
+                        inputChars = request.messages.sumOf { message ->
+                            message.text.length.toLong() +
+                                message.toolCalls.sumOf { call ->
+                                    call.name.length.toLong() + call.arguments.length
+                                } +
+                                message.toolResults.sumOf { result -> result.content.length.toLong() }
+                        } + request.system.length + request.tools.sumOf { tool ->
+                            tool.name.length.toLong() + tool.description.length +
+                                tool.parameters.toString().length
+                        },
+                        outputChars = response.text.length.toLong() +
+                            response.toolCalls.sumOf { call -> call.arguments.length.toLong() },
+                    )
+                    recordSpend(snapshot.config, responseUsage, estimated = response.usage == null)
                     response
                 },
                 prepareTool = { call ->
@@ -1873,7 +1920,8 @@ class ChatViewModel private constructor(
                     _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                         activity = null, pendingApproval = null,
                         toolLifecycle = emptyList(), commandRunning = false,
-                        notice = "Stopped. Any completed changes remain in the project.") }
+                        notice = if (budgetPaused) it.notice
+                        else "Stopped. Any completed changes remain in the project.") }
                 }
                 // The conversation picked mid-reply opens now that the turn is over,
                 // whether it finished, failed or was stopped.

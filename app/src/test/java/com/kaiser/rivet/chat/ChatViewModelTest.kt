@@ -28,6 +28,8 @@ import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.TestResult
+import com.kaiser.rivet.agent.SpendCaps
+import com.kaiser.rivet.storage.SpendStore
 import com.kaiser.rivet.runtime.CheckpointFailure
 import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.PersistentProcessService
@@ -1750,6 +1752,56 @@ class ChatViewModelTest {
         ): AgentResponse {
             requests += request
             return responses.removeFirst()
+        }
+    }
+
+    @Test fun goalCommandWorksWithoutAProjectOrProvider() = runBlocking {
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Failure("No provider") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready }
+
+        viewModel.send("/goal Ship the docs this week")
+        val withGoal = await(viewModel) { it.goalLine != null }
+
+        assertTrue(withGoal.goalLine!!.contains("Ship the docs this week"))
+        assertNull(withGoal.projectName)
+        assertFalse(withGoal.goalAttachOffer)
+    }
+
+    @Test fun aProviderThatOmitsUsageStillPausesAtTheSpendCap() = runBlocking {
+        try {
+            SpendStore(app).save(SpendCaps(perRunUsd = 0.000001), null)
+            val provider = object : ProviderClient {
+                override suspend fun listModels(): List<ModelInfo> = emptyList()
+                override suspend fun testConnection() = TestResult(true, "ok")
+                override suspend fun streamAgent(
+                    request: AgentRequest,
+                    onReasoning: (String) -> Unit,
+                    onDelta: (String) -> Unit,
+                ): AgentResponse {
+                    val text = "x".repeat(8_000)
+                    onDelta(text)
+                    // Deliberately no usage: some OpenAI-compatible servers omit it.
+                    return AgentResponse(text = text)
+                }
+            }
+            val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+                baseUrl = "https://example.invalid/v1", model = "gpt-4o")
+            val viewModel = newChatViewModel(app, RejectingPersistence(),
+                ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+                { _, _ -> provider })
+            await(viewModel) { it.ready }
+
+            viewModel.send("Write a long answer")
+            val paused = await(viewModel) { it.budgetPaused }
+
+            assertTrue(paused.spendFromEstimate)
+            assertNotNull(paused.spendLabel)
+            assertTrue(paused.spendLabel!!.contains("\$"))
+            assertTrue(paused.notice!!.contains("Budget reached"))
+        } finally {
+            SpendStore(app).save(SpendCaps(), null)
         }
     }
 }

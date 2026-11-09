@@ -17,12 +17,35 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
-/** Rule 6 poll cadence: one /proc walk every two seconds (plan §5). The first walk is
- * early so a command that forks a burst and exits is still seen. */
-private const val TREE_POLL_MS = 2_000L
-private const val FIRST_TREE_POLL_MS = 250L
+/** Rule 6 poll cadence. The first walk is immediate so a command that forks a burst
+ * and exits is still seen, and later walks are short enough for the memory cap to
+ * stop an allocation loop before system pressure builds. */
+// A fast allocation loop can add a gigabyte between two slow samples. The old
+// two-second poll saw the tree under the cap once and over it only after the
+// device was already reclaiming memory. Keep the loop's own interval short; the
+// PSS read is a handful of files for a normal command tree.
+private const val TREE_POLL_MS = 100L
+private const val FIRST_TREE_POLL_MS = 100L
+
+/** RLIMIT_AS is a backstop, not the PSS comparison. Virtual address space is
+ * always larger than PSS/RSS, and threaded interpreters can carry several times
+ * their resident size in mappings. Leave headroom so a normal CPython process
+ * does not fail before the 100 ms watchdog sees its true PSS. */
+internal const val ADDRESS_SPACE_HEADROOM = 3L
+
+/** Zero means no rlimit, matching a missing/zero PSS cap. */
+internal fun addressSpaceLimitBytes(memoryCapBytes: Long?): Long =
+    memoryCapBytes?.takeIf { it > 0L }?.let { it * ADDRESS_SPACE_HEADROOM } ?: 0L
 
 internal enum class TreeWatchStop { TooManyChildren, MemoryLimit }
+
+/** RLIMIT_AS turns an allocation loop into an ordinary interpreter error on some
+ * kernels; treat that as the same governor stop as a watchdog kill. */
+internal fun reportsMemoryFailure(stderr: String): Boolean =
+    stderr.contains("MemoryError", ignoreCase = true) ||
+        stderr.contains("Cannot allocate memory", ignoreCase = true) ||
+        stderr.contains("can't allocate memory", ignoreCase = true) ||
+        stderr.contains("out of memory", ignoreCase = true)
 
 /** The rule 6/7 watchdog, shared by every command path (agent, terminal panel). */
 internal suspend fun watchCommandTree(
@@ -64,7 +87,8 @@ internal suspend fun watchCommandTree(
 
 internal object CommandNative {
     init { System.loadLibrary("termux") }
-    external fun start(command: String, cwd: String, environment: Array<String>): IntArray
+    external fun start(command: String, cwd: String, environment: Array<String>,
+                       addressSpaceLimitBytes: Long): IntArray
     external fun waitFor(pid: Int): Int
     external fun signalGroup(pid: Int, signal: Int)
     external fun signalLeader(pid: Int, signal: Int)
@@ -105,7 +129,12 @@ internal class CommandProcess {
                     onOutput: ((String, String) -> Unit)? = null,
                     memoryCapBytes: Long? = null): CommandOutput =
         coroutineScope {
-            val started = CommandNative.start(command, cwd, environment)
+            // The PSS watchdog compares the true cap. The rlimit only stops a process
+            // that allocates faster than the sampler can run, so it gets 3x headroom
+            // for virtual mappings; setting it to the PSS cap false-kills normal
+            // threaded interpreters whose VSZ is naturally larger than their RSS.
+            val addressSpaceLimit = addressSpaceLimitBytes(memoryCapBytes)
+            val started = CommandNative.start(command, cwd, environment, addressSpaceLimit)
             check(started.size == 3 && started[0] > 0)
             val pid = started[0]
             val stdoutFd = try { ParcelFileDescriptor.adoptFd(started[1]) }
@@ -204,7 +233,8 @@ internal class CommandProcess {
                     stderrReader.cancel()
                 }
                 CommandOutput(exitCode, stdout.text(), stderr.text(), stdout.truncated,
-                    stderr.truncated, timedOut, tooManyChildren.get(), memoryLimit.get())
+                    stderr.truncated, timedOut, tooManyChildren.get(),
+                    memoryLimit.get() || reportsMemoryFailure(stderr.text()))
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     rememberCurrentTree()

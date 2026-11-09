@@ -4,6 +4,7 @@ import android.util.Log
 import com.termux.terminal.TerminalEmulator
 import com.termux.terminal.TerminalSession
 import com.termux.terminal.TerminalSessionClient
+import java.io.File
 import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
@@ -116,6 +117,16 @@ internal class InteractiveTerminalSession(
 
     /** Called by the New terminal card; an ended session is cleared for a fresh start. */
     fun open(projectIdentity: String? = null) {
+        // A mirror can move/recreate its worktree while this object (or its saved
+        // panel) outlives the directory the PTY was started in. Re-resolve on restore:
+        // a dead cwd is unusable, so close that shell and let ensureStarted launch a
+        // fresh one in the current worktree.
+        val liveCwd = launch?.cwd
+        if (engine != null && !liveCwd.isNullOrEmpty() && !File(liveCwd).isDirectory) {
+            closeInternal(markEnded = false)
+            finished = false
+            requested = true
+        }
         val existing = launch?.workspaceIdentity
         if (engine != null && projectIdentity != null && existing != null &&
             existing != projectIdentity) close()
@@ -222,6 +233,17 @@ internal class InteractiveTerminalSession(
         if (finished) return
         if (columns == appliedColumns && rows == appliedRows &&
             cellWidthPx == appliedCellWidthPx && cellHeightPx == appliedCellHeightPx) {
+            resizeJob?.cancel()
+            resizeJob = null
+            return
+        }
+        // IME show/hide only changes the number of rows. ash treats every SIGWINCH
+        // as a reason to print another prompt; there is nothing useful to reflow at
+        // the prompt, so accept the new row count without waking the PTY. A later
+        // column change still applies the current rows in one resize.
+        if (columns == appliedColumns && cellWidthPx == appliedCellWidthPx &&
+            cellHeightPx == appliedCellHeightPx && rows != appliedRows) {
+            appliedRows = rows
             resizeJob?.cancel()
             resizeJob = null
             return
