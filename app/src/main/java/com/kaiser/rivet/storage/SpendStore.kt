@@ -79,7 +79,7 @@ class SpendStore(context: Context) {
 
         fun isLocal(baseUrl: String): Boolean {
             val value = baseUrl.lowercase(Locale.ROOT)
-            return value.contains("localhost") || value.contains("127.0.0.1") ||
+            return value.startsWith("local://") || value.contains("localhost") || value.contains("127.0.0.1") ||
                 value.contains("[::1]") || value.contains("10.0.2.2") ||
                 value.contains("://10.") || value.contains("://192.168.") ||
                 value.contains("://172.16.") || value.contains("://172.17.") ||

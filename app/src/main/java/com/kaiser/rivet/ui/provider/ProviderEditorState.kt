@@ -39,6 +39,7 @@ internal fun providerDefaultName(type: ProviderType): String = when (type) {
     ProviderType.Gemini -> "Gemini"
     ProviderType.OpenRouter -> "OpenRouter"
     ProviderType.ChatGptPlan -> "ChatGPT plan"
+    ProviderType.Local -> "Local model"
 }
 
 internal fun chatGptSignInErrorMessage(result: ChatGptSignInResult): String? = when (result) {

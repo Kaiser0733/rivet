@@ -259,6 +259,10 @@ private class StoredProviderRuntimeSource(app: Application) : ProviderRuntimeSou
             ?: return ProviderRuntimeResult.Failure("Choose a model first. Add one in Settings.")
         val config = providerStore.configSnapshot().firstOrNull { it.id == activeId }
             ?: return ProviderRuntimeResult.Failure("The selected provider no longer exists.")
+        if (config.type == ProviderType.Local) {
+            // Local GGUF models have no API key and never touch a remote endpoint.
+            return ProviderRuntimeResult.Ready(config, "")
+        }
         if (config.type == ProviderType.ChatGptPlan) {
             // OAuth access token (refreshed if expired); the factory's String
             // slot already carries token-shaped values, so no signature change.
@@ -1297,6 +1301,16 @@ class ChatViewModel private constructor(
                     throw e
                 } catch (_: Exception) {
                     workspaceAccessFailed = true
+                }
+            }
+            if (workspaceId != null && snapshot.config.type == ProviderType.Local) {
+                val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
+                if (local?.toolCalling == com.kaiser.rivet.local.LocalToolCalling.None) {
+                    failBeforeStart(
+                        "This local model can chat but can't use tools. Pick a model marked for coding.",
+                        wasInterrupted,
+                    )
+                    return@launch
                 }
             }
             val current = _uiState.value

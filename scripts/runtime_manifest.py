@@ -5,6 +5,7 @@ from xml.etree import ElementTree
 
 ANDROID = "{http://schemas.android.com/apk/res/android}"
 EXPECTED_SERVICE = "com.kaiser.rivet.runtime.PersistentProcessService"
+MODEL_DOWNLOAD_SERVICE = "com.kaiser.rivet.local.ModelDownloadService"
 EXISTING_STARTUP_PROVIDER = "androidx.startup.InitializationProvider"
 EXISTING_PROFILE_RECEIVER = "androidx.profileinstaller.ProfileInstallReceiver"
 ALLOWED_PERMISSIONS = {
@@ -78,8 +79,21 @@ def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
 
     services = _elements(xmltree, "service")
     matches = [service for service in services if EXPECTED_SERVICE in service]
-    assert len(matches) == 1 and len(services) == 1, "APK must declare only Rivet's process service"
+    downloads = [service for service in services if MODEL_DOWNLOAD_SERVICE in service]
+    assert len(matches) == 1 and len(downloads) == 1 and len(services) == 2, (
+        "APK must declare only Rivet's process and model-download services")
     service = matches[0]
+    download = downloads[0]
+    assert _is_false(_attribute(download, "android:exported")), (
+        "model download service must be explicitly non-exported")
+    download_type = _attribute(download, "android:foregroundServiceType") or ""
+    download_types = {piece.strip() for piece in download_type.split("|") if piece.strip()}
+    encoded = re.search(r"0x([0-9a-fA-F]+)$", download_type)
+    if encoded:
+        download_ok = int(encoded.group(1), 16) == 0x00000001
+    else:
+        download_ok = download_types == {"dataSync"}
+    assert download_ok, "model download service must use foregroundServiceType=dataSync"
     exported = _attribute(service, "android:exported")
     assert _is_false(exported), (
         f"process service must be explicitly non-exported (exported={exported!r})"
@@ -126,11 +140,16 @@ def verify_release_runtime_manifest(manifest_xml: str) -> None:
     application = manifest.find("application")
     assert application is not None
     services = application.findall("service")
-    assert len(services) == 1, "release must declare only Rivet's process service"
-    service = services[0]
-    assert service.get(ANDROID + "name", "").endswith(".runtime.PersistentProcessService"), (
-        "release process service identity changed"
-    )
+    assert len(services) == 2, "release must declare only Rivet's process and model-download services"
+    service = next((item for item in services if item.get(ANDROID + "name", "").endswith(
+        ".runtime.PersistentProcessService")), None)
+    assert service is not None, "release process service identity changed"
+    download = next((item for item in services if item.get(ANDROID + "name", "").endswith(
+        ".local.ModelDownloadService")), None)
+    assert download is not None and download.get(ANDROID + "exported") == "false", (
+        "release model-download service must be non-exported")
+    assert download.get(ANDROID + "foregroundServiceType") == "dataSync", (
+        "release model-download service must use dataSync")
     assert service.get(ANDROID + "exported") == "false", "release process service must be non-exported"
     release_type = service.get(ANDROID + "foregroundServiceType") or ""
     release_types = {piece.strip() for piece in release_type.split("|") if piece.strip()}

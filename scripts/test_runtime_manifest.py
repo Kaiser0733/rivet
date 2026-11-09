@@ -21,6 +21,10 @@ E: manifest
       E: property
         A: android:name(0x01010003)="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
         A: android:value(0x01010024)="User-visible loopback-only preview server for a selected project in the external browser."
+    E: service
+      A: android:name(0x01010003)="com.kaiser.rivet.local.ModelDownloadService"
+      A: android:exported(0x01010010)=(type 0x12)0x00000000
+      A: android:foregroundServiceType(0x010105e9)=(type 0x11)0x00000001
     E: provider
       A: android:name(0x01010003)="androidx.startup.InitializationProvider"
       A: android:exported(0x01010010)=(type 0x12)0x00000000
@@ -44,6 +48,8 @@ RELEASE_MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/re
             <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-visible loopback-only preview server in Rivet." />
         </service>
+        <service android:name=".local.ModelDownloadService" android:exported="false"
+            android:foregroundServiceType="dataSync" />
         <provider android:name="androidx.startup.InitializationProvider" android:exported="false" />
         <receiver android:name="androidx.profileinstaller.ProfileInstallReceiver"
             android:permission="android.permission.DUMP" android:exported="true" />

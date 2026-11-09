@@ -3,6 +3,8 @@ package com.kaiser.rivet.provider
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentToolDefinition
+import com.kaiser.rivet.local.LocalProviderClient
+import com.kaiser.rivet.local.LocalRuntime
 
 data class ModelInfo(
     val id: String,
@@ -41,4 +43,21 @@ fun providerClient(config: ProviderConfig, apiKey: String): ProviderClient =
         ProviderType.Anthropic -> AnthropicClient(config, apiKey)
         ProviderType.Gemini -> GeminiClient(config, apiKey)
         ProviderType.ChatGptPlan -> ChatGptPlanClient(config, apiKey)
+        ProviderType.Local -> {
+            val manager = LocalRuntime.models()
+            if (manager == null) UnavailableLocalClient else
+                LocalProviderClient(config, manager, manager.app)
+        }
     }
+
+private object UnavailableLocalClient : ProviderClient {
+    private fun unavailable(): Nothing =
+        throw ProviderError.ProviderMessage("Local models aren't available in this build.")
+    override suspend fun listModels(): List<ModelInfo> = unavailable()
+    override suspend fun testConnection(): TestResult = unavailable()
+    override suspend fun streamAgent(
+        request: AgentRequest,
+        onReasoning: (String) -> Unit,
+        onDelta: (String) -> Unit,
+    ): AgentResponse = unavailable()
+}
