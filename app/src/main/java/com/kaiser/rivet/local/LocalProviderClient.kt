@@ -87,9 +87,14 @@ class LocalProviderClient(
                 if (parsed.calls.isEmpty() && tools.isNotEmpty() &&
                     entry.toolCalling == LocalToolCalling.Prompted &&
                     LocalToolProtocol.looksLikeToolAttempt(text)) {
+                    val correction = "Your previous reply could not be parsed as a tool call. " +
+                        "Return exactly one JSON object with \"name\" and \"arguments\" keys. " +
+                        "Previous reply: " + text.take(200)
+                    val retryPrompt = buildPrompt(entry, system,
+                        request.messages + AgentMessage(AgentRole.User, text = correction))
                     text = manager.generate(
                         entry = entry,
-                        prompt = prompt,
+                        prompt = retryPrompt,
                         maxTokens = maxTokens,
                         temperature = 0.2f,
                         topP = 0.95f,
