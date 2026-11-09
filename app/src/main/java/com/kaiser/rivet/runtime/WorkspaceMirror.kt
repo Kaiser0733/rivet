@@ -64,6 +64,14 @@ private data class PartialCreate(
 
 private val emptyFile = MirrorEntry(false, 0, MessageDigest.getInstance("SHA-256").digest().toHex())
 
+// A project that becomes a git repository must not mirror its object database
+// through SAF. It is large, changes constantly, and has no user-visible copy value.
+private val VCS_DIRECTORIES = setOf(".git", ".hg", ".svn", ".jj", "_darcs")
+
+/** True for a VCS metadata path at any depth; `.gitignore` is not VCS metadata. */
+internal fun isVcsPath(path: String): Boolean =
+    path.split('/').any { it in VCS_DIRECTORIES }
+
 /** One SAF tree has one private worktree. The baseline names bytes confirmed at the last sync. */
 class WorkspaceMirror(
     context: Context,
@@ -320,7 +328,12 @@ class WorkspaceMirror(
         if (value.tree != workspace.tree.toString() || value.entries[""]?.directory != true) {
             throw MirrorFailure("baseline_invalid")
         }
-        return value
+        // A baseline written by an older build may still list .git. Ignore those
+        // entries instead of reporting a permanent dirty tree after the exclusion.
+        return value.copy(
+            entries = value.entries.filterKeys { !isVcsPath(it) },
+            excluded = value.excluded.filterNot(::isVcsPath).toSet(),
+        )
     }
 
     private fun writeBaseline(directory: File, value: MirrorBaseline) {
@@ -481,6 +494,7 @@ class WorkspaceMirror(
             for (entry in workspace.listDirectory(parent)) {
                 selected()
                 val path = entry.path.value
+                if (isVcsPath(path)) continue
                 if (path in entries) throw MirrorFailure("duplicate", path)
                 val dest = target?.let { File(it, path) }
                 if (entry.directory) {
@@ -517,6 +531,8 @@ class WorkspaceMirror(
                     selected()
                     val path = relative.child(child.fileName.toString())
                     val name = path.value
+                    // Terminal-run git commands create this at the worktree root.
+                    if (isVcsPath(name)) continue
                     when {
                         Files.isSymbolicLink(child) -> skipped?.add(name)
                         Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS) -> {

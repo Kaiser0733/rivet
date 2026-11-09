@@ -423,10 +423,12 @@ class WorkspaceMirrorTest {
             .putString("tree", tree.toString()).commit()
         val mirror = mirror()
         File(mirror.prepare().worktree, "file.txt").writeText("pending")
-        val runtime = RuntimeController(runtimeContext, selection)
-        assertEquals("sync_required", runtime.commandBlocker())
         val newer = "newer external".toByteArray()
         provider.nodes.values.first { it.name == "file.txt" }.bytes.writeBytes(newer)
+        val runtime = RuntimeController(runtimeContext, selection)
+        // Local-only work is settled by commandBlocker now; a same-path edit on
+        // both sides is the case that still has to be resolved by a person.
+        assertEquals("sync_required", runtime.commandBlocker())
         assertEquals(MirrorSync.Conflict, runtime.retryPendingChanges(tree.toString())!!.state)
 
         val otherTree = DocumentsContract.buildTreeDocumentUri(tree.authority!!, "other")
@@ -737,5 +739,30 @@ class WorkspaceMirrorTest {
         assertFalse(ready.dirty)
         assertEquals("print('terminal')", String(bytes("script.py")))
         assertFalse(mirror.hasLocalChanges())
+    }
+
+    @Test fun gitMetadataStaysLocalAndNeverLooksLikePendingWork() = runBlocking {
+        source("README.md", "base".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, ".git/objects/ab").mkdirs()
+        File(root, ".git/objects/ab/cdef").writeText("object bytes")
+        File(root, ".git/index").writeText("index")
+
+        assertFalse(mirror.hasLocalChanges())
+        assertEquals(MirrorSync.NoChanges, mirror.sync().state)
+        assertTrue(File(root, ".git").isDirectory)
+        try {
+            workspace.stat(path(".git"))
+            fail(".git must not be mirrored into SAF")
+        } catch (_: Exception) { }
+    }
+
+    @Test fun vcsPathsAreRecognisedAtAnyDepthOnlyAsMetadata() {
+        assertTrue(isVcsPath(".git"))
+        assertTrue(isVcsPath("nested/.git/objects/ab/cdef"))
+        assertTrue(isVcsPath(".hg/store"))
+        assertFalse(isVcsPath(".gitignore"))
+        assertFalse(isVcsPath("src/.gitkeep"))
     }
 }

@@ -142,6 +142,11 @@ class PersistentProcessService : Service() {
             Intent(this, PersistentProcessService::class.java).setAction(ACTION_STOP_ALL),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val statusText = when {
+            turnActive && state.approvalToken != null && state.approvalDangerous ->
+                "Approval needed in Rivet — open the app to approve or deny."
+            turnActive && state.approvalToken != null ->
+                state.approvalTitle?.takeIf { it.isNotBlank() }?.let { "Approval needed: $it" }
+                    ?: "Approval needed — approve or deny from this notification."
             turnActive -> state.runAction?.takeIf { it.isNotBlank() }
                 ?: TURN_NOTIFICATION_TEXT
             state.activePreviews == 1 -> "1 local preview is running"
@@ -158,7 +163,7 @@ class PersistentProcessService : Service() {
             .setContentIntent(open)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, stopLabel, stop)
         if (turnActive && state.runStartedAt > 0) {
-            builder.setWhen(state.runStartedAt).setUsesChronometer(true)
+            builder.setShowWhen(true).setWhen(state.runStartedAt).setUsesChronometer(true)
         }
         if (turnActive) {
             val pause = PendingIntent.getService(this, REQUEST_PAUSE,

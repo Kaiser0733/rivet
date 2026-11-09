@@ -6,6 +6,7 @@
 #include <signal.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/resource.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -28,7 +29,8 @@ static void close_child_descriptors(void) {
 }
 
 JNIEXPORT jintArray JNICALL Java_com_kaiser_rivet_runtime_CommandNative_start(
-    JNIEnv* env, jobject instance, jstring command, jstring cwd, jobjectArray environment) {
+    JNIEnv* env, jobject instance, jstring command, jstring cwd, jobjectArray environment,
+    jlong address_space_limit) {
     (void) instance;
     if (!command || !cwd || !environment) {
         fail(env, "Invalid command arguments");
@@ -65,6 +67,14 @@ JNIEXPORT jintArray JNICALL Java_com_kaiser_rivet_runtime_CommandNative_start(
         int input = open("/dev/null", O_RDONLY);
         if (input < 0 || dup2(input, 0) < 0 || dup2(out[1], 1) < 0 || dup2(err[1], 2) < 0) _exit(126);
         close_child_descriptors();
+        if (address_space_limit > 0) {
+            struct rlimit limit;
+            limit.rlim_cur = (rlim_t) address_space_limit;
+            limit.rlim_max = (rlim_t) address_space_limit;
+            // Best effort: kernels that do not enforce RLIMIT_AS still have the
+            // PSS watchdog in the parent.
+            (void) setrlimit(RLIMIT_AS, &limit);
+        }
         if (chdir(cwd_utf8) != 0) _exit(126);
         // No login shell: the launcher passes the complete environment, and a device
         // profile must not replace PATH/HOME with developer or vendor defaults.

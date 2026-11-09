@@ -103,4 +103,16 @@ object SpendGuard {
 
     fun liveLabel(costUsd: Double?): String? =
         costUsd?.takeIf { it > 0 }?.let { "$%.2f".format(Locale.US, it) }
+
+    /**
+     * A deliberately coarse token estimate used when a provider omits usage. Four
+     * characters per token is the usual English/code rule of thumb; rounding up keeps
+     * the cap from being under-counted by a few tokens.
+     */
+    fun estimatedUsage(inputChars: Long, outputChars: Long): AgentUsage {
+        val input = ((inputChars.coerceAtLeast(0L) + 3L) / 4L).coerceAtLeast(1L)
+        val output = ((outputChars.coerceAtLeast(0L) + 3L) / 4L).coerceAtLeast(1L)
+        return AgentUsage(inputTokens = input, outputTokens = output,
+            totalTokens = input + output)
+    }
 }
