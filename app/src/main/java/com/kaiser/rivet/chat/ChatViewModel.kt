@@ -51,8 +51,10 @@ import com.kaiser.rivet.runtime.ManagedProcessStatus
 import com.kaiser.rivet.runtime.ProjectDownloader
 import com.kaiser.rivet.runtime.CheckpointFailure
 import com.kaiser.rivet.runtime.CheckpointRecord
+import com.kaiser.rivet.runtime.InteractiveTerminalSession
 import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.MirrorSync
+import com.kaiser.rivet.runtime.RuntimeCommandResult
 import com.kaiser.rivet.runtime.ToolchainAvailability
 import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
@@ -396,6 +398,18 @@ class ChatViewModel private constructor(
         _uiState.value.projectName
     }
 
+    // ONE interactive terminal. It lives in the view model, so closing the slide or
+    // rotating keeps the PTY and its scrollback; a project switch closes it explicitly.
+    internal val terminalSession = InteractiveTerminalSession(
+        scope = viewModelScope,
+        launchFactory = { job -> runtimeController.openTerminal(job) },
+        onNaturalExit = { id, code -> managedProcesses.finishCommand(id,
+            RuntimeCommandResult(exitCode = code, sync = "not_started")) },
+        onClosed = { id -> managedProcesses.failCommand(id) },
+        onStopRecorded = runtimeController::recordTerminalStop,
+        onSync = { identity -> runtimeController.syncTerminal(identity) },
+    )
+
     // Plan §5 rule 14: one plain state sentence, refreshed while observed so the thermal
     // and battery readings are current whenever the Tools slide is open.
     val terminalStatusLine: StateFlow<String> = combine(
@@ -409,12 +423,6 @@ class ChatViewModel private constructor(
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
             runtimeController.terminalStateLine(managedProcesses.activeCount()))
 
-    // The user terminal's run state. It lives here, not in the slide composable, so
-    // closing the panel or rotating neither stops the command nor loses its output.
-    private val _terminalState = MutableStateFlow(TerminalUiState())
-    val terminalState: StateFlow<TerminalUiState> = _terminalState.asStateFlow()
-    private var terminalJob: Job? = null
-
     /** The mode at the decision, not the mode when this turn began. */
     private suspend fun readAutonomyMode(): AutonomyMode = try {
         autonomyStore.mode.first()
@@ -422,41 +430,6 @@ class ChatViewModel private constructor(
         throw e
     } catch (_: Exception) {
         AutonomyMode.Ask
-    }
-
-    /** Runs through the same RuntimeController path as run_command, governor included. */
-    fun runTerminalCommand(command: String) {
-        val trimmed = command.trim()
-        if (trimmed.isEmpty() || _terminalState.value.running || terminalJob?.isActive == true) return
-        _terminalState.value = TerminalUiState(command = trimmed, running = true)
-        terminalJob = viewModelScope.launch {
-            val result = try {
-                runtimeController.runCommand(trimmed, cwd = "", timeoutMs = TERMINAL_TIMEOUT_MS) { stdout, stderr ->
-                    _terminalState.update { it.copy(output = terminalText(stdout, stderr)) }
-                }
-            } catch (e: CancellationException) {
-                _terminalState.update {
-                    it.copy(running = false, status = terminalStatus(null, cancelled = true))
-                }
-                throw e
-            } catch (_: Exception) {
-                _terminalState.update {
-                    it.copy(running = false, status = "Could not run the command. Try again.")
-                }
-                return@launch
-            }
-            _terminalState.update {
-                it.copy(
-                    running = false,
-                    output = terminalText(result.stdout, result.stderr).ifBlank { it.output },
-                    status = terminalStatus(result, cancelled = false),
-                )
-            }
-        }
-    }
-
-    fun stopTerminalCommand() {
-        terminalJob?.cancel()
     }
 
     private var activeMessages: List<AgentMessage> = emptyList()
@@ -565,6 +538,8 @@ class ChatViewModel private constructor(
         viewModelScope.launch {
             try {
                 val workspace = workspaceSelection.select(uri, flags)
+                // An interactive shell belongs to the project it was opened in.
+                terminalSession.close()
                 val name = try { workspace.displayName() }
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { "Selected project" }
@@ -1714,6 +1689,11 @@ class ChatViewModel private constructor(
                 if (ticket == generation) _uiState.update { it.copy(error = "Could not open the session.") }
             }
         }
+    }
+
+    override fun onCleared() {
+        terminalSession.close()
+        super.onCleared()
     }
 
     companion object {

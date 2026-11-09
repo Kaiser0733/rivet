@@ -158,16 +158,11 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
-                                val terminalState by chatViewModel.terminalState.collectAsState()
-                                val workspaceName by chatViewModel.projectName.collectAsState()
                                 val stateLine by chatViewModel.terminalStatusLine.collectAsState()
                                 ToolsPane(
                                     processes = chatViewModel.managedProcesses,
-                                    terminal = terminalState,
-                                    workspaceName = workspaceName,
+                                    terminal = chatViewModel.terminalSession,
                                     stateLine = stateLine,
-                                    onRunTerminal = chatViewModel::runTerminalCommand,
-                                    onStopTerminal = chatViewModel::stopTerminalCommand,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             }
