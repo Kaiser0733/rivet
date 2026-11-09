@@ -148,7 +148,8 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
-               onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit) {
+               onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit,
+               onStartOffline: () -> Unit = {}) {
     val landscape = showsHistoryPane(LocalConfiguration.current.orientation)
     val state by chatViewModel.uiState.collectAsState()
     val userSkills by chatViewModel.userSkills.collectAsState()
@@ -533,11 +534,13 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 }
                 if (providers.configs.isEmpty()) {
                     EmptyState(RivetDoodle.Provider, "Choose a model to get started.",
-                        "Add a provider first. Then choose the project you want Rivet to work on.",
+                        "Add a provider, use ChatGPT, or run a model on this phone. Then choose a project.",
                         "Open Settings", onOpenSettings, Modifier.weight(1f),
                         secondaryAction = stringResource(R.string.start_free),
                         onSecondaryAction = { showStartFree = true },
                         tertiaryAction = stringResource(R.string.continue_with_chatgpt),
+                        offlineAction = "Start offline",
+                        onOfflineAction = onStartOffline,
                         onTertiaryAction = {
                             // Cancel any in-flight attempt first: no orphaned
                             // loopback listeners from repeated taps.
@@ -663,7 +666,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
 private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action: String?,
                        onAction: () -> Unit, modifier: Modifier = Modifier,
                       secondaryAction: String? = null, onSecondaryAction: (() -> Unit)? = null,
-                      tertiaryAction: String? = null, onTertiaryAction: (() -> Unit)? = null) {
+                      tertiaryAction: String? = null, onTertiaryAction: (() -> Unit)? = null,
+                      offlineAction: String? = null, onOfflineAction: (() -> Unit)? = null) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Column(Modifier.widthIn(max = 390.dp).verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 20.dp),
@@ -689,17 +693,14 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
                         AssistChip(onClick = onSecondaryAction, label = { Text(secondaryAction) })
                     if (tertiaryAction != null && onTertiaryAction != null)
                         AssistChip(onClick = onTertiaryAction, label = { Text(tertiaryAction) })
+                    if (offlineAction != null && onOfflineAction != null)
+                        AssistChip(onClick = onOfflineAction, label = { Text(offlineAction) })
                 }
             }
-            StartOfflineSlot()
         }
     }
 }
 
-// Reserved for the local-model entry ("Start offline"). It renders nothing until that
-// feature exists, so the empty state does not shift when it arrives.
-@Composable
-private fun StartOfflineSlot() = Unit
 
 // The composer's one quiet control: current model, and its effort when the provider
 // offers a choice. Both are changed in ModelSheet; this only shows and opens it.
@@ -707,8 +708,10 @@ private fun StartOfflineSlot() = Unit
 private fun ModelSelector(providersViewModel: ProvidersViewModel, onOpen: () -> Unit) {
     val state by providersViewModel.listState.collectAsState()
     val active = state.configs.firstOrNull { it.id == state.activeId }
-    val modelLabel = active?.let { displayModelName(it.model) }
-        ?: stringResource(R.string.model_switch)
+    val modelLabel = active?.let {
+        if (it.type == ProviderType.Local) it.name.removePrefix("Local · ")
+        else displayModelName(it.model)
+    } ?: stringResource(R.string.model_switch)
     val effortLabel = active?.takeIf { offeredReasoning(it).size > 1 }
         ?.let { stringResource(it.reasoning.labelRes()) }
     TextButton(onClick = onOpen) {
