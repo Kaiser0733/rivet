@@ -9,7 +9,7 @@ class CheckpointLimitsHintTest {
     @Test fun namesTheRealLimitsAndTheWayOut() {
         val hint = ChatViewModel.CHECKPOINT_LIMITS_HINT
         assertTrue(hint, hint.contains("50,000 items"))
-        assertTrue(hint, hint.contains("1 GiB"))
+        assertTrue(hint, hint.contains("500 MB"))
         assertTrue(hint, hint.contains(".rivetignore"))
     }
 }

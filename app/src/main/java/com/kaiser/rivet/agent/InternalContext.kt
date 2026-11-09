@@ -28,7 +28,7 @@ data class InternalContext(
     fun valid(): Boolean {
         if (version != 1 || kind !in setOf("project", "project_notice", "project_snapshot", "summary",
                 SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND, ToolchainContext.KIND,
-                GoalMemoryContext.KIND) ||
+                GoalMemoryContext.KIND, RunContext.KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
@@ -75,6 +75,7 @@ data class InternalContext(
             SKILL_CATALOG_KIND -> append(content)
             ToolchainContext.KIND -> append(content)
             GoalMemoryContext.KIND -> append(content)
+            RunContext.KIND -> append(content)
             SKILL_INVOCATION_KIND -> {
                 append("The user loaded this skill for the current request. Follow its instructions ")
                 append("while answering the task that follows them.\n")
@@ -127,12 +128,18 @@ fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
             it.kind == GoalMemoryContext.KIND && (!enforceWorkspace || it.workspaceId == workspace)
         } == true
     }
+    val lastRun = messages.lastOrNull { message ->
+        message.validatedContext()?.let {
+            it.kind == RunContext.KIND && (!enforceWorkspace || it.workspaceId == workspace)
+        } == true
+    }
     return messages.mapNotNull { message ->
         if (message.role != AgentRole.Context) message.takeIf { it.internalContext == null }
         else message.validatedContext()?.takeIf { !enforceWorkspace || it.workspaceId == workspace }
             ?.takeIf { (it.kind != SKILL_CATALOG_KIND || message === lastCatalog) &&
                 (it.kind != ToolchainContext.KIND || message === lastToolchain) &&
-                (it.kind != GoalMemoryContext.KIND || message === lastGoalMemory) }
+                (it.kind != GoalMemoryContext.KIND || message === lastGoalMemory) &&
+                (it.kind != RunContext.KIND || message === lastRun) }
             ?.let { AgentMessage.user(it.modelText()) }
     }
 }
@@ -163,7 +170,7 @@ internal object ProjectContext {
         val latestRetained = source.lastOrNull { message ->
             val data = message.validatedContext()
             data != null && data.kind in setOf(SKILL_CATALOG_KIND, ToolchainContext.KIND,
-                GoalMemoryContext.KIND)
+                GoalMemoryContext.KIND, RunContext.KIND)
         }?.validatedContext()
         val prefix = mutableListOf<AgentMessage>()
         val workspace = workspaceOverride ?: latestProject?.workspaceId ?: priorSummary?.workspaceId
@@ -184,7 +191,7 @@ internal object ProjectContext {
         }
         // Goal, memory, run journal and availability are snapshots, not deltas; keep the
         // newest of each through compaction so a long turn cannot summarize the goal away.
-        for (kind in listOf(GoalMemoryContext.KIND, ToolchainContext.KIND)) {
+        for (kind in listOf(GoalMemoryContext.KIND, RunContext.KIND, ToolchainContext.KIND)) {
             source.lastOrNull { it.validatedContext()?.let { data ->
                 data.workspaceId == workspace && data.kind == kind } == true }
                 ?.let { prefix += it }

@@ -193,7 +193,7 @@ object MemoryFormat {
 
     fun lineCount(markdown: String): Int = facts(markdown).size
 
-    fun needsGardening(markdown: String): Boolean = lineCount(markdown) > SOFT_LINES
+    fun needsGardening(markdown: String): Boolean = lineCount(markdown) >= SOFT_LINES
 
     fun atHardCap(markdown: String): Boolean = lineCount(markdown) >= HARD_LINES
 
@@ -256,7 +256,7 @@ internal object GoalMemoryContext {
             if (facts.isNotEmpty()) {
                 append("Project memory (durable facts; correct stale lines instead of repeating them):\n")
                 facts.take(200).forEach { append("- ").append(it.take(300)).append('\n') }
-                if (facts.size > MemoryFormat.SOFT_LINES) {
+                if (facts.size >= MemoryFormat.SOFT_LINES) {
                     append("Memory is above ").append(MemoryFormat.SOFT_LINES)
                         .append(" lines. Garden it soon: merge related facts and cut stale lines; ")
                         .append("it is never truncated silently.\n")
@@ -265,7 +265,7 @@ internal object GoalMemoryContext {
         }
     }
 
-    fun updates(messages: List<AgentMessage>, workspace: String, goal: GoalDocument?,
+    fun updates(messages: List<AgentMessage>, workspace: String?, goal: GoalDocument?,
                 memory: String): List<AgentMessage> {
         val text = content(goal, memory)
         if (text.isEmpty()) return emptyList()

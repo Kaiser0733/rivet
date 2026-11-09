@@ -11,6 +11,9 @@ import android.os.Build
 import android.os.IBinder
 import com.kaiser.rivet.MainActivity
 import com.kaiser.rivet.R
+import com.kaiser.rivet.agent.AgentRunControl
+import com.kaiser.rivet.agent.NotificationApprovals
+import com.kaiser.rivet.agent.RunPauseReason
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -33,10 +36,24 @@ class PersistentProcessService : Service() {
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         latestStartId = startId
-        if (intent?.action == ACTION_STOP_ALL) {
-            processes.stopAll()
-            stopIfIdle()
-            return START_NOT_STICKY
+        when (intent?.action) {
+            ACTION_STOP_ALL -> {
+                processes.stopAll()
+                stopIfIdle()
+                return START_NOT_STICKY
+            }
+            ACTION_PAUSE -> {
+                AgentRunControl.requestPause()
+                return START_NOT_STICKY
+            }
+            ACTION_APPROVE -> {
+                NotificationApprovals.resolve(intent?.getLongExtra(EXTRA_APPROVAL_TOKEN, -1) ?: -1, true)
+                return START_NOT_STICKY
+            }
+            ACTION_DENY -> {
+                NotificationApprovals.resolve(intent?.getLongExtra(EXTRA_APPROVAL_TOKEN, -1) ?: -1, false)
+                return START_NOT_STICKY
+            }
         }
         if (intent?.action != ACTION_START) return START_NOT_STICKY
         val initial = processes.foregroundState.value
@@ -93,10 +110,19 @@ class PersistentProcessService : Service() {
         }
     }
 
+    /** Android 15 caps dataSync work. Pause the run and let the user continue; never lose it. */
+    override fun onTimeout(startId: Int) {
+        AgentRunControl.requestPause(RunPauseReason.SystemTimeout)
+        stopSelf(startId)
+    }
+
     private fun updateForegroundNotification(state: ForegroundServiceState) {
         val notification = notification(state)
         if (Build.VERSION.SDK_INT >= 34) {
-            startForeground(NOTIFICATION_ID, notification, ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
+            val type = if (state.activeTurns > 0 && state.activePreviews == 0) {
+                ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
+            } else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
+            startForeground(NOTIFICATION_ID, notification, type)
         } else startForeground(NOTIFICATION_ID, notification)
     }
 
@@ -111,21 +137,46 @@ class PersistentProcessService : Service() {
             Intent(this, PersistentProcessService::class.java).setAction(ACTION_STOP_ALL),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val statusText = when {
-            turnActive -> TURN_NOTIFICATION_TEXT
+            turnActive -> state.runAction?.takeIf { it.isNotBlank() }
+                ?: TURN_NOTIFICATION_TEXT
             state.activePreviews == 1 -> "1 local preview is running"
             else -> "${state.activePreviews} local previews are running"
         }
         val stopLabel = if (turnActive && state.activePreviews == 0) "Stop" else "Stop all"
-        return Notification.Builder(this, CHANNEL_ID)
+        val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_processes)
-            .setContentTitle("Rivet")
+            .setContentTitle(state.runTitle?.takeIf { turnActive }?.let { "Rivet · $it" } ?: "Rivet")
             .setContentText(statusText)
             .setCategory(Notification.CATEGORY_SERVICE)
             .setVisibility(Notification.VISIBILITY_PRIVATE)
             .setOngoing(true)
             .setContentIntent(open)
             .addAction(android.R.drawable.ic_menu_close_clear_cancel, stopLabel, stop)
-            .build()
+        if (turnActive && state.runStartedAt > 0) {
+            builder.setWhen(state.runStartedAt).setUsesChronometer(true)
+        }
+        if (turnActive) {
+            val pause = PendingIntent.getService(this, REQUEST_PAUSE,
+                Intent(this, PersistentProcessService::class.java).setAction(ACTION_PAUSE),
+                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+            builder.addAction(android.R.drawable.ic_media_pause, "Pause", pause)
+            // Sensitive approvals need the app (and its own confirmation); normal
+            // non-YOLO approvals can be answered here. YOLO never creates a pending one.
+            val token = state.approvalToken
+            if (token != null && !state.approvalDangerous) {
+                fun decision(code: Int, action: String, label: String, approved: Boolean) {
+                    val pending = PendingIntent.getService(this, code,
+                        Intent(this, PersistentProcessService::class.java).setAction(action)
+                            .putExtra(EXTRA_APPROVAL_TOKEN, token),
+                        PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                    builder.addAction(if (approved) android.R.drawable.ic_menu_save
+                        else android.R.drawable.ic_menu_close_clear_cancel, label, pending)
+                }
+                decision(REQUEST_APPROVE, ACTION_APPROVE, "Approve", approved = true)
+                decision(REQUEST_DENY, ACTION_DENY, "Deny", approved = false)
+            }
+        }
+        return builder.build()
     }
 
     companion object {
@@ -133,8 +184,15 @@ class PersistentProcessService : Service() {
         internal const val NOTIFICATION_ID = 110
         private const val REQUEST_OPEN = 111
         private const val REQUEST_STOP = 112
+        private const val REQUEST_PAUSE = 113
+        private const val REQUEST_APPROVE = 114
+        private const val REQUEST_DENY = 115
+        private const val EXTRA_APPROVAL_TOKEN = "approval_token"
         internal const val TURN_NOTIFICATION_TEXT = "Rivet is working — tap to return"
         internal const val ACTION_START = "com.kaiser.rivet.action.START_PROCESSES"
         internal const val ACTION_STOP_ALL = "com.kaiser.rivet.action.STOP_ALL_PROCESSES"
+        internal const val ACTION_PAUSE = "com.kaiser.rivet.action.PAUSE_RUN"
+        internal const val ACTION_APPROVE = "com.kaiser.rivet.action.APPROVE_STEP"
+        internal const val ACTION_DENY = "com.kaiser.rivet.action.DENY_STEP"
     }
 }

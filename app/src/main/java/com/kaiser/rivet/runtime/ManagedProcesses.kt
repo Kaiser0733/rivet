@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.Intent
 import android.os.Build
 import com.kaiser.rivet.RivetApplication
+import com.kaiser.rivet.agent.AgentApprovalRequest
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -22,6 +23,12 @@ enum class ManagedProcessStatus { Starting, Running, Stopping, Completed, Failed
 internal data class ForegroundServiceState(
     val activeTurns: Int = 0,
     val activePreviews: Int = 0,
+    val runTitle: String? = null,
+    val runAction: String? = null,
+    val runStartedAt: Long = 0L,
+    val approvalTitle: String? = null,
+    val approvalToken: Long? = null,
+    val approvalDangerous: Boolean = false,
 ) {
     val hasActiveWork: Boolean get() = activeTurns > 0 || activePreviews > 0
 }
@@ -58,6 +65,12 @@ class ManagedProcesses {
     private val activeTurns = linkedMapOf<String, () -> Unit>()
     private var serviceStarted = false
     private var serviceWaiter: CompletableDeferred<Boolean>? = null
+    private var runTitle: String? = null
+    private var runAction: String? = null
+    private var runStartedAt = 0L
+    private var approvalTitle: String? = null
+    private var approvalToken: Long? = null
+    private var approvalDangerous = false
     private val mutableProcesses = MutableStateFlow<List<ManagedProcessInfo>>(emptyList())
     val processes: StateFlow<List<ManagedProcessInfo>> = mutableProcesses.asStateFlow()
     private val mutableForegroundState = MutableStateFlow(ForegroundServiceState())
@@ -273,8 +286,32 @@ class ManagedProcesses {
 
     fun finishTurn(id: String) = synchronized(lock) {
         if (activeTurns.remove(id) != null) {
+            if (activeTurns.isEmpty()) {
+                runTitle = null
+                runAction = null
+                runStartedAt = 0L
+                approvalTitle = null
+                approvalToken = null
+                approvalDangerous = false
+            }
             publishLocked()
         }
+    }
+
+    /** The persistent notification's public face while a run is active. */
+    fun updateRunStatus(title: String?, action: String?, startedAt: Long = 0L) =
+        synchronized(lock) {
+            runTitle = title?.take(160)
+            runAction = action?.take(200)
+            runStartedAt = if (startedAt > 0) startedAt else runStartedAt
+            publishLocked()
+        }
+
+    fun updateApproval(request: AgentApprovalRequest?) = synchronized(lock) {
+        approvalTitle = request?.title?.take(160)
+        approvalToken = request?.approvalToken
+        approvalDangerous = request?.dangerous == true
+        publishLocked()
     }
 
     internal fun activeTurnCount(): Int = synchronized(lock) {
@@ -375,6 +412,12 @@ class ManagedProcesses {
         mutableForegroundState.value = ForegroundServiceState(
             activeTurns = activeTurns.size,
             activePreviews = activePersistentCountLocked(),
+            runTitle = runTitle,
+            runAction = runAction,
+            runStartedAt = runStartedAt,
+            approvalTitle = approvalTitle,
+            approvalToken = approvalToken,
+            approvalDangerous = approvalDangerous,
         )
     }
 
