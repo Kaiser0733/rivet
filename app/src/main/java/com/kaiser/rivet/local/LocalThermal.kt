@@ -21,7 +21,7 @@ object LocalThermal {
         val level = battery?.getIntExtra(BatteryManager.EXTRA_LEVEL, -1) ?: -1
         val scale = battery?.getIntExtra(BatteryManager.EXTRA_SCALE, -1) ?: -1
         val plugged = battery?.getIntExtra(BatteryManager.EXTRA_PLUGGED, 0) ?: 0
-        if (level >= 0 && scale > 0 && plugged == 0 && level * 100 / scale <= 10) {
+        if (level >= 0 && scale > 0 && plugged == 0 && level * 100 / scale < 15) {
             return "The battery is low, so Rivet paused this local run. Charge the phone or pick a cloud model."
         }
         return null
