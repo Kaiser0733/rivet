@@ -1839,10 +1839,12 @@ class ChatViewModel private constructor(
                 }
                 // A provider that explains itself gets to say so, in its own words.
                 val detail = (e as? ProviderError.ProviderMessage)?.let { providerMessageText(it.text) }
-                stableFailure(ticket, durable, detail ?: e.text(),
-                    if (e is ProviderError.Unauthorized || e is ProviderError.Forbidden ||
-                        e is ProviderError.ModelNotFound) ChatErrorAction.OpenSettings
-                    else ChatErrorAction.RetryTurn)
+                val action = if (snapshot.config.type == ProviderType.Local ||
+                    e is ProviderError.Unauthorized || e is ProviderError.Forbidden ||
+                    e is ProviderError.ModelNotFound) {
+                    ChatErrorAction.OpenSettings
+                } else ChatErrorAction.RetryTurn
+                stableFailure(ticket, durable, detail ?: e.text(), action)
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent turn failed: ${e.javaClass.simpleName}")
                 stableFailure(ticket, durable,

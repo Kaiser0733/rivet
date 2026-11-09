@@ -36,13 +36,12 @@ class ModelDownloadService : Service() {
 
     override fun onCreate() {
         super.onCreate()
-        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O) {
-            val manager = getSystemService(NotificationManager::class.java)
-            manager.createNotificationChannel(NotificationChannel(
-                CHANNEL, "Model downloads", NotificationManager.IMPORTANCE_LOW).apply {
-                description = "Progress for local model downloads"
-            })
-        }
+        // minSdk is 26, so the notification channel API is always available.
+        val manager = getSystemService(NotificationManager::class.java)
+        manager.createNotificationChannel(NotificationChannel(
+            CHANNEL, "Model downloads", NotificationManager.IMPORTANCE_LOW).apply {
+            description = "Progress for local model downloads"
+        })
     }
 
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
