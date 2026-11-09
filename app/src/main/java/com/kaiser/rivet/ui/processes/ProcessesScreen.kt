@@ -7,7 +7,6 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.activity.compose.BackHandler
-import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -34,7 +33,9 @@ import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
+import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -47,7 +48,9 @@ import com.kaiser.rivet.R
 import com.kaiser.rivet.runtime.ManagedProcessInfo
 import com.kaiser.rivet.runtime.ManagedProcessKind
 import com.kaiser.rivet.runtime.ManagedProcessStatus
+import com.kaiser.rivet.runtime.InteractiveTerminalSession
 import com.kaiser.rivet.runtime.ManagedProcesses
+import com.kaiser.rivet.ui.terminal.TerminalPane
 import kotlinx.coroutines.delay
 
 @Composable
@@ -55,14 +58,36 @@ fun ProcessesScreen(processes: ManagedProcesses, onBack: () -> Unit) {
     ProcessesContent(processes, Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(), onBack)
 }
 
-// Panel form: the slide-over supplies the scrim and Back handling, so no back arrow here.
+/**
+ * Panel form: the right slide's tools surface. The New terminal card comes first, in the
+ * same card chrome as the process rows, then the live process list, so a notification's
+ * deep link still lands on processes and the terminal is one tap away.
+ */
 @Composable
-fun ProcessesPane(processes: ManagedProcesses, modifier: Modifier = Modifier) {
-    ProcessesContent(processes, modifier.background(MaterialTheme.colorScheme.surfaceContainerLow), null)
+internal fun ToolsPane(
+    processes: ManagedProcesses,
+    terminal: InteractiveTerminalSession,
+    stateLine: String,
+    modifier: Modifier = Modifier,
+) {
+    var terminalOpen by rememberSaveable { mutableStateOf(false) }
+    if (terminalOpen) {
+        BackHandler { terminalOpen = false }
+        TerminalPane(terminal, stateLine,
+            onBack = { terminalOpen = false }, modifier = modifier)
+    } else {
+        ProcessesContent(processes, modifier, null, stateLine = stateLine,
+            onOpenTerminal = {
+                terminal.open()
+                terminalOpen = true
+            })
+    }
 }
 
 @Composable
-private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, onBack: (() -> Unit)?) {
+private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, onBack: (() -> Unit)?,
+                             stateLine: String? = null,
+                             onOpenTerminal: (() -> Unit)? = null) {
     val context = LocalContext.current
     val processItems by processes.processes.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
@@ -82,9 +107,34 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                 Icon(painterResource(R.drawable.ic_back), "Back to chat",
                     tint = MaterialTheme.colorScheme.onBackground)
             } else Spacer(Modifier.size(16.dp))
-            Text("Processes", style = MaterialTheme.typography.titleLarge)
+            Column {
+                Text(if (onOpenTerminal == null) "Processes" else "Tools",
+                    style = MaterialTheme.typography.titleLarge)
+                if (stateLine != null) {
+                    Text(stateLine, style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))
+        if (onOpenTerminal != null) {
+            Surface(
+                onClick = onOpenTerminal,
+                modifier = Modifier.fillMaxWidth().padding(start = 16.dp, end = 16.dp, top = 12.dp),
+                color = MaterialTheme.colorScheme.surface,
+                border = androidx.compose.foundation.BorderStroke(1.dp,
+                    MaterialTheme.colorScheme.onBackground.copy(alpha = 0.18f)),
+                shape = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
+            ) {
+                Column(Modifier.fillMaxWidth().padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    Text("New terminal", style = MaterialTheme.typography.titleMedium)
+                    Text("Run commands in the Session workspace",
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
         if (processItems.isEmpty()) {
             Column(Modifier.fillMaxSize().padding(28.dp),
                 verticalArrangement = Arrangement.Center, horizontalAlignment = Alignment.CenterHorizontally) {

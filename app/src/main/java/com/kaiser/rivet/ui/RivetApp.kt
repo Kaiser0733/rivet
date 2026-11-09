@@ -35,7 +35,7 @@ import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.storage.AutonomyStore
 import com.kaiser.rivet.ui.chat.ChatScreen
 import com.kaiser.rivet.ui.history.HistoryPane
-import com.kaiser.rivet.ui.processes.ProcessesPane
+import com.kaiser.rivet.ui.processes.ToolsPane
 import com.kaiser.rivet.ui.provider.ProviderEditor
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.provider.SettingsScreen
@@ -158,8 +158,13 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
-                                ProcessesPane(chatViewModel.managedProcesses,
-                                    Modifier.fillMaxSize())
+                                val stateLine by chatViewModel.terminalStatusLine.collectAsState()
+                                ToolsPane(
+                                    processes = chatViewModel.managedProcesses,
+                                    terminal = chatViewModel.terminalSession,
+                                    stateLine = stateLine,
+                                    modifier = Modifier.fillMaxSize(),
+                                )
                             }
                         }
                     }

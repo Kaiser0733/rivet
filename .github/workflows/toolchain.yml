@@ -1,0 +1,53 @@
+name: Toolchain binaries
+
+on:
+  workflow_dispatch:
+  push:
+    branches: [terminal]
+    paths: ['.github/workflows/toolchain.yml', 'toolchain/busybox.config']
+
+permissions:
+  contents: read
+
+jobs:
+  busybox:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Set up NDK
+        uses: nttld/setup-ndk@v1
+        with:
+          ndk-version: r27c
+          add-to-path: false
+
+      - name: Fetch BusyBox 1.36.1
+        run: |
+          curl -sL -o busybox.tar.bz2 https://busybox.net/downloads/busybox-1.36.1.tar.bz2
+          sha256sum busybox.tar.bz2
+          tar -xf busybox.tar.bz2
+          mv busybox-1.36.1 busybox-src
+
+      - name: Cross-compile for arm64-v8a (API 26) from the committed config
+        working-directory: busybox-src
+        run: |
+          LLVM="$ANDROID_NDK_HOME/toolchains/llvm/prebuilt/linux-x86_64/bin"
+          mkdir -p /tmp/shim
+          printf '#!/bin/sh\nexec "%s/aarch64-linux-android26-clang" "$@"\n' "$LLVM" > /tmp/shim/aarch64-linux-android-gcc
+          printf '#!/bin/sh\nexec "%s/aarch64-linux-android26-clang++" "$@"\n' "$LLVM" > /tmp/shim/aarch64-linux-android-g++
+          chmod +x /tmp/shim/aarch64-linux-android-gcc /tmp/shim/aarch64-linux-android-g++
+          ln -s "$LLVM/llvm-ar" /tmp/shim/aarch64-linux-android-ar
+          ln -s "$LLVM/llvm-strip" /tmp/shim/aarch64-linux-android-strip
+          ln -s "$LLVM/llvm-ranlib" /tmp/shim/aarch64-linux-android-ranlib
+          export PATH="/tmp/shim:$LLVM:$PATH"
+          cp "$GITHUB_WORKSPACE/toolchain/busybox.config" .config
+          make -j"$(nproc)" CROSS_COMPILE=aarch64-linux-android-
+          file busybox
+          "$LLVM/llvm-readelf" -l busybox | grep -E "LOAD|INTERP" | head -6
+          cp busybox "$GITHUB_WORKSPACE/libbusybox.so"
+
+      - name: Upload BusyBox
+        uses: actions/upload-artifact@v4
+        with:
+          name: libbusybox-arm64
+          path: libbusybox.so

@@ -65,7 +65,9 @@ class AgentLoop(
         tools: List<AgentToolDefinition>,
         onText: (String) -> Unit = {},
         onMessage: suspend (AgentMessage) -> Unit = {},
-        autonomyMode: AutonomyMode = AutonomyMode.Ask,
+        // Read at every tool decision. Capturing the mode when the loop starts is the
+        // bug this parameter exists to prevent: a Settings flip must reach this turn.
+        currentAutonomyMode: suspend () -> AutonomyMode = { AutonomyMode.Ask },
         onToolLifecycle: (AgentToolLifecycle) -> Unit = {},
     ): AgentRunResult {
         val messages = initial.toMutableList()
@@ -280,7 +282,8 @@ class AgentLoop(
                         break
                     }
                     if (previous != null) deterministicFailures.removeAll { it.first == denialKey }
-                    val decision = ApprovalPolicy.decide(autonomyMode, prepared)
+                    val mode = currentAutonomyMode()
+                    val decision = ApprovalPolicy.decide(mode, prepared)
                     if (decision is ApprovalDecision.Blocked) {
                         val rejected = stopped(call, decision.reason)
                         val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "not_executed") }
@@ -302,7 +305,7 @@ class AgentLoop(
                     // already asks for this command the existing prompt carries the skill
                     // line; YOLO removes approvals entirely, so the gate is inert there.
                     val scriptHit = prepared.skillScript
-                    val scriptGate = skillScriptGate(autonomyMode, scriptHit, scriptApprovals,
+                    val scriptGate = skillScriptGate(mode, scriptHit, scriptApprovals,
                         baseAsks = decision == ApprovalDecision.AskUser)
                     val skillInserted = scriptGate == SkillScriptGate.InsertApproval &&
                         prepared.approval != null

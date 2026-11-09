@@ -66,7 +66,9 @@ JNIEXPORT jintArray JNICALL Java_com_kaiser_rivet_runtime_CommandNative_start(
         if (input < 0 || dup2(input, 0) < 0 || dup2(out[1], 1) < 0 || dup2(err[1], 2) < 0) _exit(126);
         close_child_descriptors();
         if (chdir(cwd_utf8) != 0) _exit(126);
-        char* const argv[] = {"/system/bin/sh", "-lc", (char*) command_utf8, NULL};
+        // No login shell: the launcher passes the complete environment, and a device
+        // profile must not replace PATH/HOME with developer or vendor defaults.
+        char* const argv[] = {"/system/bin/sh", "-c", (char*) command_utf8, NULL};
         execve("/system/bin/sh", argv, envp);
         _exit(127);
     }

@@ -635,7 +635,8 @@ class ChatViewModelTest {
         assertEquals(call.id, unknown.callId)
         assertTrue(unknown.error)
         assertTrue(unknown.content.contains("outcome is unknown"))
-        assertEquals(3, CodingSessions(app).fullEventCount(header.id))
+        // Per-turn toolchain availability is one durable context event now.
+        assertEquals(4, CodingSessions(app).fullEventCount(header.id))
 
         val nextProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Continuing"))))
         val resumed = newChatViewModel(app, CodingSessions(app),

@@ -164,7 +164,7 @@ class SkillScriptGateTest {
             requestApproval = { approvals += it; allow },
             approvedSkillScripts = approved,
             recordSkillScriptApproval = { recorded += it },
-        ).run(listOf(AgentMessage.user("Run the script")), emptyList(), autonomyMode = mode)
+        ).run(listOf(AgentMessage.user("Run the script")), emptyList(), currentAutonomyMode = { mode })
         return GateRun(result, approvals, recorded, executed)
     }
 
@@ -211,5 +211,86 @@ class SkillScriptGateTest {
         assertTrue(run.approvals.isEmpty())
         assertTrue(run.recorded.isEmpty())
         assertEquals(1, run.executed)
+    }
+
+    @Test fun askToYoloMidRunStopsTheSkillGatePrompt() = runTest {
+        val first = hit(skill("alpha"))
+        val second = hit(skill("beta"))
+        val calls = listOf(
+            AgentToolCall("first", "run_command", """{"command":"sh script"}"""),
+            AgentToolCall("second", "run_command", """{"command":"sh script"}"""),
+        )
+        var mode = AutonomyMode.Ask
+        var requests = 0
+        var approvals = 0
+        var executions = 0
+        val recorded = mutableListOf<String>()
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = calls)
+                else AgentResponse(text = "Done")
+            },
+            prepareTool = { call ->
+                val script = if (call.id == "first") first else second
+                PreparedAgentTool(call, AgentApprovalRequest(call, "Run command", "sh script"),
+                    effect = AgentToolEffect.ForegroundCommand,
+                    basicAutonomyRisk = BasicAutonomyRisk.Routine,
+                    skillScript = script) {
+                    executions++
+                    AgentToolResult(call.id, call.name, """{"exit_code":0}""")
+                }
+            },
+            requestApproval = {
+                approvals++
+                mode = AutonomyMode.Yolo
+                true
+            },
+            recordSkillScriptApproval = { recorded += it },
+        ).run(listOf(AgentMessage.user("Run the script")), emptyList(),
+            currentAutonomyMode = { mode })
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(1, approvals)
+        assertEquals(2, executions)
+        assertEquals(listOf("alpha"), recorded)
+    }
+
+    @Test fun yoloToAskMidRunRearmsTheSkillGatePrompt() = runTest {
+        val first = hit(skill("alpha"))
+        val second = hit(skill("beta"))
+        val calls = listOf(
+            AgentToolCall("first", "run_command", """{"command":"sh script"}"""),
+            AgentToolCall("second", "run_command", """{"command":"sh script"}"""),
+        )
+        var mode = AutonomyMode.Yolo
+        var requests = 0
+        var approvals = 0
+        var executions = 0
+        val recorded = mutableListOf<String>()
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = calls)
+                else AgentResponse(text = "Done")
+            },
+            prepareTool = { call ->
+                val script = if (call.id == "first") first else second
+                PreparedAgentTool(call, AgentApprovalRequest(call, "Run command", "sh script"),
+                    effect = AgentToolEffect.ForegroundCommand,
+                    basicAutonomyRisk = BasicAutonomyRisk.Routine,
+                    skillScript = script) {
+                    executions++
+                    if (executions == 1) mode = AutonomyMode.Ask
+                    AgentToolResult(call.id, call.name, """{"exit_code":0}""")
+                }
+            },
+            requestApproval = { approvals++; true },
+            recordSkillScriptApproval = { recorded += it },
+        ).run(listOf(AgentMessage.user("Run the script")), emptyList(),
+            currentAutonomyMode = { mode })
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(1, approvals)
+        assertEquals(2, executions)
+        assertEquals(listOf("beta"), recorded)
     }
 }

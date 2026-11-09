@@ -390,7 +390,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         )
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
+    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
         val sidebarWidth = landscapeSidebarWidth(maxWidth.value).dp
         Row(Modifier.fillMaxSize()) {
             if (landscape) {
@@ -1444,7 +1444,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     BackHandler(enabled = showCommands) { dismissedCommand = draft }
     // One container for the whole composer: the field inside carries no outline of its
     // own, and the selector shares the quiet second row with send/stop.
-    Column(modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 9.dp)) {
+    Column(modifier.fillMaxWidth().imePadding().padding(horizontal = 14.dp, vertical = 9.dp)) {
         if (showCommands) {
             SkillCommandSheet(commandMatches) { skill ->
                 dismissedCommand = null
