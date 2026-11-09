@@ -8,6 +8,7 @@ import java.nio.charset.StandardCharsets
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -24,6 +25,8 @@ internal data class TerminalLaunch(
     val memoryCapBytes: Long? = null,
     val error: String? = null,
 )
+
+internal const val TERMINAL_RESIZE_DEBOUNCE_MS = 150L
 
 internal data class InteractiveTerminalState(
     val running: Boolean = false,
@@ -95,6 +98,14 @@ internal class InteractiveTerminalSession(
     private var cellWidthPx = 1
     private var cellHeightPx = 1
 
+    // The PTY sees only a stable grid. IME and layout animations emit several
+    // intermediate sizes; sending each one makes ash reprint its prompt.
+    private var appliedColumns = 0
+    private var appliedRows = 0
+    private var appliedCellWidthPx = 0
+    private var appliedCellHeightPx = 0
+    private var resizeJob: Job? = null
+
     val emulator: TerminalEmulator? get() = engine?.emulator
 
     /** Called by the New terminal card; an ended session is cleared for a fresh start. */
@@ -119,7 +130,7 @@ internal class InteractiveTerminalSession(
         this.cellHeightPx = cellHeightPx.coerceAtLeast(1)
         val live = engine
         if (live != null) {
-            live.resize(this.columns, this.rows, this.cellWidthPx, this.cellHeightPx)
+            requestResize(live)
             return
         }
         if (!requested || starting || finished) return
@@ -165,6 +176,10 @@ internal class InteractiveTerminalSession(
             try {
                 created.resize(this@InteractiveTerminalSession.columns,
                     this@InteractiveTerminalSession.rows, cellWidthPx, cellHeightPx)
+                appliedColumns = this@InteractiveTerminalSession.columns
+                appliedRows = this@InteractiveTerminalSession.rows
+                appliedCellWidthPx = this@InteractiveTerminalSession.cellWidthPx
+                appliedCellHeightPx = this@InteractiveTerminalSession.cellHeightPx
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
@@ -194,7 +209,38 @@ internal class InteractiveTerminalSession(
         this.rows = rows.coerceAtLeast(2)
         this.cellWidthPx = cellWidthPx.coerceAtLeast(1)
         this.cellHeightPx = cellHeightPx.coerceAtLeast(1)
-        engine?.resize(this.columns, this.rows, this.cellWidthPx, this.cellHeightPx)
+        engine?.let(::requestResize)
+    }
+
+    private fun requestResize(live: TerminalEngine) {
+        if (finished) return
+        if (columns == appliedColumns && rows == appliedRows &&
+            cellWidthPx == appliedCellWidthPx && cellHeightPx == appliedCellHeightPx) {
+            resizeJob?.cancel()
+            resizeJob = null
+            return
+        }
+        resizeJob?.cancel()
+        resizeJob = scope.launch {
+            delay(TERMINAL_RESIZE_DEBOUNCE_MS)
+            if (finished) return@launch
+            val current = engine ?: return@launch
+            if (columns == appliedColumns && rows == appliedRows &&
+                cellWidthPx == appliedCellWidthPx && cellHeightPx == appliedCellHeightPx) {
+                return@launch
+            }
+            try {
+                current.resize(columns, rows, cellWidthPx, cellHeightPx)
+                appliedColumns = columns
+                appliedRows = rows
+                appliedCellWidthPx = cellWidthPx
+                appliedCellHeightPx = cellHeightPx
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                closeInternal(markEnded = true)
+            }
+        }
     }
 
     fun close() = closeInternal(markEnded = true)
@@ -250,6 +296,8 @@ internal class InteractiveTerminalSession(
         generation++
         watcherJob?.cancel()
         watcherJob = null
+        resizeJob?.cancel()
+        resizeJob = null
         val ended = engine
         engine = null
         val previous = launch
@@ -273,6 +321,8 @@ internal class InteractiveTerminalSession(
         generation++
         watcherJob?.cancel()
         watcherJob = null
+        resizeJob?.cancel()
+        resizeJob = null
         val ended = engine
         engine = null
         val previous = launch

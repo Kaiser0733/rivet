@@ -1,6 +1,7 @@
 package com.kaiser.rivet.runtime
 
 import com.termux.terminal.TerminalEmulator
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
@@ -19,10 +20,13 @@ class InteractiveTerminalTest {
             private set
         var resizes = 0
             private set
+        var lastSize: Triple<Int, Int, Int>? = null
+            private set
 
         override fun write(text: String) = Unit
         override fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) {
             resizes++
+            lastSize = Triple(columns, rows, cellWidthPx)
         }
         override fun close() { closed = true }
         fun exit(code: Int) = observer.exited(code)
@@ -79,7 +83,7 @@ class InteractiveTerminalTest {
 
         harness.holder.open("A")
         harness.holder.ensureStarted(100, 30, 8, 16)
-        settle()
+        delay(TERMINAL_RESIZE_DEBOUNCE_MS + 1)
 
         assertEquals(1, harness.launches())
         assertEquals(1, harness.engines.size)
@@ -105,6 +109,29 @@ class InteractiveTerminalTest {
         assertEquals(listOf("m1"), harness.closed)
         assertEquals("A", old.launch.workspaceIdentity)
         assertEquals("B", harness.engines.last().launch.workspaceIdentity)
+    }
+
+    @Test fun rapidSizeChangesReachThePtyOnceAtTheFinalSize() = runTest {
+        val harness = harness(this)
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+        val engine = harness.engines.single()
+        assertEquals(1, engine.resizes)
+
+        harness.holder.ensureStarted(81, 24, 8, 16)
+        harness.holder.ensureStarted(95, 27, 8, 16)
+        harness.holder.ensureStarted(100, 30, 8, 16)
+        delay(149)
+        assertEquals(1, engine.resizes)
+
+        delay(2)
+        assertEquals(2, engine.resizes)
+        assertEquals(Triple(100, 30, 8), engine.lastSize)
+
+        harness.holder.ensureStarted(100, 30, 8, 16)
+        delay(200)
+        assertEquals(2, engine.resizes)
     }
 
     @Test fun aShellExitBecomesTheEndedStateAndFinishesTheManagedEntry() = runTest {
