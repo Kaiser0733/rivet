@@ -1,0 +1,41 @@
+diff --git a/Modules/getpath.py b/Modules/getpath.py
+index 9913fcb..700fa04 100644
+--- a/Modules/getpath.py
++++ b/Modules/getpath.py
+@@ -426,6 +426,18 @@ if not executable_dir and os_name == 'darwin' and library:
+         executable_dir = realpath(library_dir)
+         real_executable_dir = executable_dir
+ 
++# Rivet Two-Zone layout: if invoked via a Zone D symlink (e.g.
++# filesDir/toolchain/bin/python3 -> nativeLibraryDir/libpython3.so),
++# check relative to the unresolved symlink path in Zone D before
++# falling back to real_executable_dir (Zone E nativeLibraryDir).
++if not executable_dir and executable:
++    _sym_dir = dirname(executable)
++    _sym_parent = dirname(_sym_dir)
++    if any(isfile(joinpath(_sym_parent, p)) for p in STDLIB_LANDMARKS):
++        executable_dir = _sym_dir
++    elif any(isfile(joinpath(joinpath(_sym_parent, 'python'), p)) for p in STDLIB_LANDMARKS):
++        executable_dir = joinpath(joinpath(_sym_parent, 'python'), 'bin')
++
+ # If we do not have the executable's directory, we can calculate it.
+ # This is the directory used to find prefix/exec_prefix if necessary.
+ if not executable_dir:
+diff --git a/Python/dynload_shlib.c b/Python/dynload_shlib.c
+index 6761bba..3c9f610 100644
+--- a/Python/dynload_shlib.c
++++ b/Python/dynload_shlib.c
+@@ -77,7 +77,12 @@ _PyImport_FindSharedFuncptr(const char *prefix,
+ 
+     dlopenflags = _PyImport_GetDLOpenFlags(_PyInterpreterState_GET());
+ 
+-    handle = dlopen(pathname, dlopenflags);
++    char resolved_path[4096];
++    const char *dlopen_path = pathname;
++    if (realpath(pathname, resolved_path) != NULL) {
++        dlopen_path = resolved_path;
++    }
++    handle = dlopen(dlopen_path, dlopenflags);
+ 
+     if (handle == NULL) {
+         PyObject *mod_name;

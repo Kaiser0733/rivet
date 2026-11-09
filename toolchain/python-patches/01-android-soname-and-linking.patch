@@ -1,0 +1,67 @@
+diff --git a/Makefile.pre.in b/Makefile.pre.in
+index 27a26c2..a3db67c 100644
+--- a/Makefile.pre.in
++++ b/Makefile.pre.in
+@@ -815,9 +815,9 @@ $(LIBRARY): $(LIBRARY_OBJS)
+ libpython$(LDVERSION).so: $(LIBRARY_OBJS) $(DTRACE_OBJS)
+ 	if test $(INSTSONAME) != $(LDLIBRARY); then \
+ 		$(BLDSHARED) -Wl,-h$(INSTSONAME) -o $(INSTSONAME) $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM); \
+-		$(LN) -f $(INSTSONAME) $@; \
++		$(LN) -sf $(INSTSONAME) $@; \
+ 	else \
+-		$(BLDSHARED) -o $@ $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM); \
++		$(BLDSHARED) -Wl,-h$(INSTSONAME) -o $@ $(LIBRARY_OBJS) $(MODLIBS) $(SHLIBS) $(LIBC) $(LIBM); \
+ 	fi
+ 
+ libpython3.so:	libpython$(LDVERSION).so
+@@ -1969,7 +1969,7 @@ altbininstall: $(BUILDPYTHON) @FRAMEWORKPYTHONW@
+ 		if test -f $(DESTDIR)$(BINDIR)/python$(VERSION)$(EXE) -o -h $(DESTDIR)$(BINDIR)/python$(VERSION)$(EXE); \
+ 		then rm -f $(DESTDIR)$(BINDIR)/python$(VERSION)$(EXE); \
+ 		fi; \
+-		(cd $(DESTDIR)$(BINDIR); $(LN) python$(LDVERSION)$(EXE) python$(VERSION)$(EXE)); \
++		(cd $(DESTDIR)$(BINDIR); $(LN) -s python$(LDVERSION)$(EXE) python$(VERSION)$(EXE)); \
+ 	fi
+ 	@if test "$(PY_ENABLE_SHARED)" = 1 -o "$(STATIC_LIBPYTHON)" = 1; then \
+ 		if test -f $(LDLIBRARY) && test "$(PYTHONFRAMEWORKDIR)" = "no-framework" ; then \
+diff --git a/Modules/makesetup b/Modules/makesetup
+index f000c9c..0545849 100755
+--- a/Modules/makesetup
++++ b/Modules/makesetup
+@@ -285,8 +285,8 @@ sed -e 's/[ 	]*#.*//' -e '/^[ 	]*$/d' |
+ 				BUILT_SHARED="$BUILT_SHARED $mod"
+ 				;;
+ 			esac
+-			rule="$file: $objs"
+-			rule="$rule; \$(BLDSHARED) $objs $libs $ExtraLibs -o $file"
++			rule="$file: $objs \$(LDLIBRARY)"
++			rule="$rule; \$(BLDSHARED) $objs $libs $ExtraLibs \$(BLDLIBRARY) -o $file"
+ 			echo "$rule" >>$rulesf
+ 		done
+ 	done
+diff --git a/configure b/configure
+index be783fa..d015d8e 100755
+--- a/configure
++++ b/configure
+@@ -6951,6 +6951,8 @@ rm -f conftest.c conftest.out
+ { printf "%s\n" "$as_me:${as_lineno-$LINENO}: checking for multiarch" >&5
+ printf %s "checking for multiarch... " >&6; }
+ case $ac_sys_system in #(
++  Linux-android*) :
++    MULTIARCH="" ;; #(
+   Darwin*) :
+     MULTIARCH="" ;; #(
+   FreeBSD*) :
+@@ -7504,11 +7506,8 @@ printf "%s\n" "#define Py_ENABLE_SHARED 1" >>confdefs.h
+ 	  LDLIBRARY='libpython$(LDVERSION).so'
+ 	  BLDLIBRARY='-L. -lpython$(LDVERSION)'
+ 	  RUNSHARED=LD_LIBRARY_PATH=`pwd`${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}
+-	  INSTSONAME="$LDLIBRARY".$SOVERSION
+-	  if test "$with_pydebug" != yes
+-          then
+-	      PY3LIBRARY=libpython3.so
+-	  fi
++	  INSTSONAME="$LDLIBRARY"
++	  PY3LIBRARY=""
+ 	  ;;
+     hp*|HP*)
+ 	  case `uname -m` in
