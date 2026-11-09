@@ -93,6 +93,12 @@ internal fun ToolsPane(
     }
 }
 
+private data class RestoreTarget(val checkpoint: RunCheckpointInfo, val undoRun: Boolean)
+
+/** The dialog action name follows the intent: restore a checkpoint, or undo one run. */
+internal fun restorePrimaryLabel(undoRun: Boolean): String =
+    if (undoRun) "Undo this run" else "Restore"
+
 @Composable
 private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, onBack: (() -> Unit)?,
                              stateLine: String? = null,
@@ -101,7 +107,7 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                              onRestoreCheckpoint: (String) -> Unit = {},
                              checkpointNotice: String? = null) {
     val context = LocalContext.current
-    var confirmRestore by remember { mutableStateOf<RunCheckpointInfo?>(null) }
+    var restoreTarget by remember { mutableStateOf<RestoreTarget?>(null) }
     val processItems by processes.processes.collectAsState()
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     val activeIds = processItems.filter { it.status in ACTIVE }.map { it.id }
@@ -163,7 +169,9 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                     Text("Run checkpoints", style = MaterialTheme.typography.titleMedium,
                         modifier = Modifier.weight(1f))
                     runStart?.let {
-                        TextButton(onClick = { confirmRestore = it }) { Text("Undo this run") }
+                        TextButton(onClick = { restoreTarget = RestoreTarget(it, undoRun = true) }) {
+                            Text("Undo this run")
+                        }
                     }
                 }
                 checkpoints.take(6).forEach { checkpoint ->
@@ -180,11 +188,16 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                                 maxLines = 2, overflow = TextOverflow.Ellipsis)
                         }
-                        TextButton(onClick = { confirmRestore = checkpoint }) { Text("Restore") }
+                        TextButton(onClick = {
+                            restoreTarget = RestoreTarget(checkpoint, undoRun = false)
+                        }) { Text("Restore") }
                     }
                 }
-                checkpointNotice?.let { Text(it, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                checkpointNotice?.let {
+                    Text(it, style = MaterialTheme.typography.bodySmall,
+                        color = if (it.startsWith("Not restored")) MaterialTheme.colorScheme.error
+                        else MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 if (checkpoints.size > 6) Text("Showing the latest 6 checkpoints",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -211,16 +224,20 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
             }
         }
     }
-    confirmRestore?.let { checkpoint ->
+    restoreTarget?.let { target ->
+        val checkpoint = target.checkpoint
         AlertDialog(
-            onDismissRequest = { confirmRestore = null },
-            title = { Text("Restore this checkpoint?") },
-            text = { Text("Rivet restores only the files it changed. If anything changed outside Rivet, it stops and lists those files instead of overwriting them.") },
+            onDismissRequest = { restoreTarget = null },
+            title = { Text(if (target.undoRun) "Undo this run?" else "Restore this checkpoint?") },
+            text = { Text(if (target.undoRun)
+                "This undoes the project changes from the latest run and keeps the conversation history."
+            else
+                "Rivet restores only the files it changed. If anything changed outside Rivet, it stops and lists those files instead of overwriting them.") },
             confirmButton = { TextButton(onClick = {
-                confirmRestore = null
+                restoreTarget = null
                 onRestoreCheckpoint(checkpoint.id)
-            }) { Text("Undo this run") } },
-            dismissButton = { TextButton(onClick = { confirmRestore = null }) { Text("Cancel") } },
+            }) { Text(restorePrimaryLabel(target.undoRun)) } },
+            dismissButton = { TextButton(onClick = { restoreTarget = null }) { Text("Cancel") } },
         )
     }
 }
