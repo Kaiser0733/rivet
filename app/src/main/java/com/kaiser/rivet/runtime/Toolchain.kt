@@ -85,6 +85,7 @@ internal class Toolchain(context: Context) {
     val dataRoot: File? get() = filesDir?.let { File(it, "toolchain") }
     val binDir: File? get() = dataRoot?.let { File(it, "bin") }
     val pythonHome: File? get() = dataRoot?.let { File(it, "python") }
+    val pythonBinDir: File? get() = pythonHome?.let { File(it, "bin") }
     val pythonTmp: File? get() = dataRoot?.let { File(it, "tmp") }
     val git: File? get() = nativeDir?.let { File(it, "libgit.so") }
     val gitRemoteHttps: File? get() = nativeDir?.let { File(it, "libgit-remote-https.so") }
@@ -184,7 +185,7 @@ internal class Toolchain(context: Context) {
     /** The command PATH: the farm first when it exists, today's value otherwise. */
     fun path(systemPath: String = SYSTEM_PATH): String {
         val farm = binDir ?: return systemPath
-        return commandPath(busybox, farm, systemPath, pythonExecutable, git)
+        return commandPath(busybox, farm, systemPath, pythonExecutable, git, pythonBinDir)
     }
 
     /** Toolchain environment; the exact input when neither Python nor git is ready. */
@@ -324,10 +325,18 @@ internal data class ToolchainAvailability(
 
 /** PATH composition, kept pure so the no-binary case is provably byte-identical. */
 internal fun commandPath(busybox: File?, farm: File, systemPath: String = SYSTEM_PATH,
-                         python: File? = null, git: File? = null): String =
+                         python: File? = null, git: File? = null,
+                         pythonBin: File? = null): String =
     if ((busybox?.isFile == true || python?.isFile == true || git?.isFile == true) &&
         farm.isDirectory) {
-        "${farm.absolutePath}:$systemPath"
+        // ensurepip writes its pip/pip3 scripts next to CPython, not into the farm.
+        // Keep that directory on PATH so bare `pip` works without a shell alias.
+        val extras = buildList {
+            add(farm.absolutePath)
+            if (pythonBin?.isDirectory == true) add(pythonBin.absolutePath)
+            add(systemPath)
+        }
+        extras.joinToString(":")
     } else systemPath
 
 /** What one farm pass has to do, relative to the links already on disk. */

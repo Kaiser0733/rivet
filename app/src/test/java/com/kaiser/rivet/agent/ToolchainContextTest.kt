@@ -11,6 +11,8 @@ class ToolchainContextTest {
 
     @Test fun theLineReflectsTheAvailabilityItIsGiven() {
         val present = ToolchainContext.line(all)
+        assertTrue(present.contains("wget"))
+        assertTrue(present.contains("curl is not part"))
         assertTrue(present.contains("BusyBox available"))
         assertTrue(present.contains("Python 3.12.3 available"))
         assertTrue(present.contains("Git 2.56 available"))
