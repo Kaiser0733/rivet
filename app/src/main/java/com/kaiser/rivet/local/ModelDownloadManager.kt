@@ -110,7 +110,7 @@ class ModelDownloadManager(
         get() = prefs.getBoolean("wifi_only", true)
         private set(value) { prefs.edit().putBoolean("wifi_only", value).apply() }
 
-    fun setWifiOnly(enabled: Boolean) {
+    fun setWifiOnlyPreference(enabled: Boolean) {
         wifiOnly = enabled
     }
 
@@ -137,8 +137,9 @@ class ModelDownloadManager(
             downloaded = offset,
             total = entry.size,
             error = null,
-            wifiOnly = if (prior == null) (wifiOnly && DownloadPolicy.wifiOnlyByDefault(entry.size))
-            else (prior.wifiOnly && !allowMobile),
+            wifiOnly = if (allowMobile) false
+            else if (prior == null) (wifiOnly && DownloadPolicy.wifiOnlyByDefault(entry.size))
+            else prior.wifiOnly,
             allowMobile = allowMobile,
             updatedAt = System.currentTimeMillis(),
         )
