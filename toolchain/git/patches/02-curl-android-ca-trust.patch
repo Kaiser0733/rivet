@@ -1,0 +1,110 @@
+--- /home/hatch/.gemini/antigravity-cli/brain/f0fb5747-395a-41a0-a1a0-86dc144ff087/scratch/gitbuild/src/clean_unpack/curl-8.23.0/lib/vtls/openssl.c	2026-10-14 05:54:05.000000000 +0000
++++ /home/hatch/.gemini/antigravity-cli/brain/f0fb5747-395a-41a0-a1a0-86dc144ff087/scratch/gitbuild/src/curl-8.23.0/lib/vtls/openssl.c	2026-11-08 12:56:34.425862889 +0000
+@@ -2983,6 +2983,47 @@
+ 
+ #endif /* USE_WIN32_CRYPTO */
+ 
++#ifdef __ANDROID__
++#include <dirent.h>
++#include <sys/stat.h>
++
++static int ossl_load_file_or_dir(X509_STORE *store, const char *path)
++{
++  struct stat st;
++  if(!path || !*path)
++    return 0;
++  if(stat(path, &st) != 0)
++    return 0;
++  if(S_ISDIR(st.st_mode)) {
++    DIR *dir = opendir(path);
++    struct dirent *ent;
++    int loaded = 0;
++    if(dir) {
++      while((ent = readdir(dir)) != NULL) {
++        char fullpath[1024];
++        if(ent->d_name[0] == '.')
++          continue;
++        snprintf(fullpath, sizeof(fullpath), "%s/%s", path, ent->d_name);
++        if(X509_STORE_load_file(store, fullpath))
++          loaded++;
++        else
++          ERR_clear_error();
++      }
++      closedir(dir);
++    }
++    if(X509_STORE_load_path(store, path))
++      loaded++;
++    else
++      ERR_clear_error();
++    return loaded > 0 ? 1 : 0;
++  }
++  if(X509_STORE_load_file(store, path))
++    return 1;
++  ERR_clear_error();
++  return 0;
++}
++#endif
++
+ static CURLcode ossl_load_trust_anchors(struct Curl_cfilter *cf,
+                                         struct Curl_easy *data,
+                                         struct ossl_ctx *octx,
+@@ -3025,7 +3066,28 @@
+   }
+ 
+   if(ssl_cafile || ssl_capath) {
+-#ifdef HAVE_OPENSSL3
++#ifdef __ANDROID__
++    if(ssl_cafile) {
++      if(ossl_load_file_or_dir(store, ssl_cafile)) {
++        infof(data, "  CAfile: %s", ssl_cafile);
++        octx->store_is_empty = FALSE;
++      }
++      else {
++        infof(data, "error setting certificate file %s, trying fallbacks",
++              ssl_cafile);
++      }
++    }
++    if(ssl_capath) {
++      if(ossl_load_file_or_dir(store, ssl_capath)) {
++        infof(data, "  CApath: %s", ssl_capath);
++        octx->store_is_empty = FALSE;
++      }
++      else {
++        infof(data, "error setting certificate path %s, trying fallbacks",
++              ssl_capath);
++      }
++    }
++#elif defined(HAVE_OPENSSL3)
+     /* OpenSSL 3.0.0 has deprecated SSL_CTX_load_verify_locations */
+     if(ssl_cafile) {
+       if(!X509_STORE_load_file(store, ssl_cafile)) {
+@@ -3078,6 +3140,29 @@
+ #endif
+   }
+ 
++#ifdef __ANDROID__
++  if(octx->store_is_empty) {
++    const char *env_cafile = getenv("SSL_CERT_FILE");
++    const char *env_capath = getenv("SSL_CERT_DIR");
++    if(env_cafile && ossl_load_file_or_dir(store, env_cafile))
++      octx->store_is_empty = FALSE;
++    if(env_capath && ossl_load_file_or_dir(store, env_capath))
++      octx->store_is_empty = FALSE;
++    if(octx->store_is_empty &&
++       ossl_load_file_or_dir(store, "/system/etc/security/cacerts"))
++      octx->store_is_empty = FALSE;
++    if(octx->store_is_empty &&
++       ossl_load_file_or_dir(store, "/apex/com.android.conscrypt/cacerts"))
++      octx->store_is_empty = FALSE;
++    if(octx->store_is_empty && (ssl_cafile || ssl_capath) && !have_native_check) {
++      failf(data, "error adding trust anchors from CAfile: %s CApath: %s",
++            ssl_cafile ? ssl_cafile : "none",
++            ssl_capath ? ssl_capath : "none");
++      return CURLE_SSL_CACERT_BADFILE;
++    }
++  }
++#endif
++
+ #ifdef CURL_CA_FALLBACK
+   if(octx->store_is_empty) {
+     /* verifying the peer without any CA certificates does not
