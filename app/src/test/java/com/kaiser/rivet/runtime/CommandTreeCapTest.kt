@@ -5,6 +5,7 @@ import kotlinx.coroutines.delay
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Assume.assumeTrue
 import org.junit.Test
@@ -61,5 +62,61 @@ class CommandTreeCapTest {
             shell.waitFor()
             pidFile.delete()
         }
+    }
+
+    @Test fun watcherStopsARealMemoryLoopBeforeTheDeviceRunsOut() = runBlocking {
+        assumeTrue("needs /proc", File("/proc").isDirectory)
+        assumeTrue("needs a POSIX shell", File("/bin/sh").canExecute())
+        assumeTrue("needs setsid", File("/usr/bin/setsid").canExecute() ||
+            File("/bin/setsid").canExecute())
+        assumeTrue("needs python3", File("/usr/bin/python3").canExecute() ||
+            File("/bin/python3").canExecute())
+
+        val pidFile = File.createTempFile("rivet-memory-", ".pid")
+        val script = "echo \$\$ > '${pidFile.absolutePath}'; " +
+            "exec python3 -c 'x=[b\"x\"*1048576 for _ in range(120)]; import time; time.sleep(30)'"
+        val shell = ProcessBuilder("setsid", "/bin/sh", "-c", script).start()
+        val pid = withTimeout(10_000) {
+            var found: Int? = null
+            while (found == null) {
+                found = pidFile.takeIf { it.isFile }?.readText()?.trim()?.toIntOrNull()
+                if (found == null) delay(25)
+            }
+            found
+        }!!
+        fun killGroup() {
+            ProcessBuilder("/bin/kill", "-s", "KILL", "--", "-$pid").start().waitFor()
+        }
+        var stopped = false
+        try {
+            val stop = withTimeout(20_000) {
+                watchCommandTree(
+                    root = pid,
+                    memoryCapBytes = 32L * 1024 * 1024,
+                    onSample = {},
+                    onTooManyChildren = {},
+                    onMemoryLimit = {},
+                    terminate = {
+                        stopped = true
+                        killGroup()
+                    },
+                )
+            }
+
+            assertEquals(TreeWatchStop.MemoryLimit, stop)
+            assertTrue(stopped)
+        } finally {
+            killGroup()
+            shell.destroyForcibly()
+            shell.waitFor()
+            pidFile.delete()
+        }
+    }
+
+    @Test fun allocationFailureIsReportedAsTheGovernorStop() {
+        assertTrue(reportsMemoryFailure("Traceback...\nMemoryError"))
+        assertTrue(reportsMemoryFailure("python: can't allocate memory"))
+        assertTrue(reportsMemoryFailure("sh: Cannot allocate memory"))
+        assertFalse(reportsMemoryFailure("command exited 1"))
     }
 }
