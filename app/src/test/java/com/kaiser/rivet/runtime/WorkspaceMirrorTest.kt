@@ -423,10 +423,12 @@ class WorkspaceMirrorTest {
             .putString("tree", tree.toString()).commit()
         val mirror = mirror()
         File(mirror.prepare().worktree, "file.txt").writeText("pending")
-        val runtime = RuntimeController(runtimeContext, selection)
-        assertEquals("sync_required", runtime.commandBlocker())
         val newer = "newer external".toByteArray()
         provider.nodes.values.first { it.name == "file.txt" }.bytes.writeBytes(newer)
+        val runtime = RuntimeController(runtimeContext, selection)
+        // Local-only work is settled by commandBlocker now; a same-path edit on
+        // both sides is the case that still has to be resolved by a person.
+        assertEquals("sync_required", runtime.commandBlocker())
         assertEquals(MirrorSync.Conflict, runtime.retryPendingChanges(tree.toString())!!.state)
 
         val otherTree = DocumentsContract.buildTreeDocumentUri(tree.authority!!, "other")
