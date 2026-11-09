@@ -8,9 +8,12 @@ import kotlinx.coroutines.flow.asSharedFlow
 object AgentRunControl {
     private val mutablePauses = MutableSharedFlow<RunPauseReason>(extraBufferCapacity = 1)
     val pauses: SharedFlow<RunPauseReason> = mutablePauses.asSharedFlow()
+    private val mutableRaises = MutableSharedFlow<Unit>(extraBufferCapacity = 1)
+    val raises: SharedFlow<Unit> = mutableRaises.asSharedFlow()
     fun requestPause(reason: RunPauseReason = RunPauseReason.User) {
         mutablePauses.tryEmit(reason)
     }
+    fun requestRaise() { mutableRaises.tryEmit(Unit) }
 }
 
 object NotificationApprovals {
