@@ -13,6 +13,7 @@ ALLOWED_PERMISSIONS = {
     "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
     "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
     "android.permission.POST_NOTIFICATIONS",
+    "android.permission.ACCESS_NETWORK_STATE",
     "com.kaiser.rivet.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
 }
 REQUIRED_PERMISSIONS = {
@@ -21,6 +22,7 @@ REQUIRED_PERMISSIONS = {
     "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
     "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
     "android.permission.POST_NOTIFICATIONS",
+    "android.permission.ACCESS_NETWORK_STATE",
 }
 FORBIDDEN_PERMISSIONS = {
     "android.permission.MANAGE_EXTERNAL_STORAGE",

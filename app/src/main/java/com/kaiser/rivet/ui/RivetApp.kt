@@ -159,10 +159,14 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
                                 val stateLine by chatViewModel.terminalStatusLine.collectAsState()
+                                val conversation by chatViewModel.uiState.collectAsState()
                                 ToolsPane(
                                     processes = chatViewModel.managedProcesses,
                                     terminal = chatViewModel.terminalSession,
                                     stateLine = stateLine,
+                                    checkpoints = conversation.runCheckpoints,
+                                    onRestoreCheckpoint = chatViewModel::restoreRunCheckpoint,
+                                    checkpointNotice = conversation.runCheckpointNotice,
                                     modifier = Modifier.fillMaxSize(),
                                 )
                             }
@@ -190,6 +194,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     hasProject = conversation.projectName != null,
                     onUpdateMemory = chatViewModel::updateMemory,
                     onForgetMemoryLine = chatViewModel::forgetMemoryLine,
+                    spendCaps = conversation.spendCaps,
+                    userPricePerMillionUsd = conversation.userPricePerMillionUsd,
+                    onSaveSpend = chatViewModel::saveSpendCaps,
                     onRefreshSkills = chatViewModel::refreshSkillCatalog,
                     onLoadSkillFiles = chatViewModel::skillBundledFiles,
                     onInstallSkill = {
