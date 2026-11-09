@@ -333,18 +333,23 @@ private object GitCheckpoint {
                         .setAuthor(who)
                         .setCommitter(who)
                         .call()
-                    it.updateRef(ref).setNewObjectId(commit.id).setForceUpdate(true).call()
+                    it.updateRef(ref).apply {
+                        setNewObjectId(commit.id)
+                        setForceUpdate(true)
+                    }.forceUpdate()
                     // Put the visible branch back exactly where it was, then restore the
                     // index; only the hidden ref keeps the checkpoint commit.
-                    if (original != null) {
-                        it.updateRef(branch).setNewObjectId(original).setForceUpdate(true).call()
-                    }
+                    it.updateRef(branch).apply {
+                        setNewObjectId(original)
+                        setForceUpdate(true)
+                    }.forceUpdate()
                     return commit.name
                 } finally {
                     try {
-                        if (original != null) {
-                            it.updateRef(branch).setNewObjectId(original).setForceUpdate(true).call()
-                        }
+                        it.updateRef(branch).apply {
+                            setNewObjectId(original)
+                            setForceUpdate(true)
+                        }.forceUpdate()
                     } catch (_: Exception) { }
                     try {
                         val restore = original?.name ?: Constants.HEAD
