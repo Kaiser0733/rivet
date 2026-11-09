@@ -120,4 +120,10 @@ class CommandTreeCapTest {
         assertTrue(reportsMemoryFailure("sh: Cannot allocate memory"))
         assertFalse(reportsMemoryFailure("command exited 1"))
     }
+
+    @Test fun addressSpaceBackstopHasHeadroomAndZeroMeansOff() {
+        assertEquals(0L, addressSpaceLimitBytes(null))
+        assertEquals(0L, addressSpaceLimitBytes(0L))
+        assertEquals(3L * 256L * 1024L * 1024L, addressSpaceLimitBytes(256L * 1024L * 1024L))
+    }
 }

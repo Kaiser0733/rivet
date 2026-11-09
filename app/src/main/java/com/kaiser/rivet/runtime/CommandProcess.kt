@@ -27,6 +27,16 @@ import kotlinx.coroutines.withTimeoutOrNull
 private const val TREE_POLL_MS = 100L
 private const val FIRST_TREE_POLL_MS = 100L
 
+/** RLIMIT_AS is a backstop, not the PSS comparison. Virtual address space is
+ * always larger than PSS/RSS, and threaded interpreters can carry several times
+ * their resident size in mappings. Leave headroom so a normal CPython process
+ * does not fail before the 100 ms watchdog sees its true PSS. */
+internal const val ADDRESS_SPACE_HEADROOM = 3L
+
+/** Zero means no rlimit, matching a missing/zero PSS cap. */
+internal fun addressSpaceLimitBytes(memoryCapBytes: Long?): Long =
+    memoryCapBytes?.takeIf { it > 0L }?.let { it * ADDRESS_SPACE_HEADROOM } ?: 0L
+
 internal enum class TreeWatchStop { TooManyChildren, MemoryLimit }
 
 /** RLIMIT_AS turns an allocation loop into an ordinary interpreter error on some
@@ -119,9 +129,12 @@ internal class CommandProcess {
                     onOutput: ((String, String) -> Unit)? = null,
                     memoryCapBytes: Long? = null): CommandOutput =
         coroutineScope {
-            // The rlimit is a hard backstop for a process that allocates faster than
-            // the PSS sampler can run. It bounds the command tree to the same cap.
-            val started = CommandNative.start(command, cwd, environment, memoryCapBytes ?: 0L)
+            // The PSS watchdog compares the true cap. The rlimit only stops a process
+            // that allocates faster than the sampler can run, so it gets 3x headroom
+            // for virtual mappings; setting it to the PSS cap false-kills normal
+            // threaded interpreters whose VSZ is naturally larger than their RSS.
+            val addressSpaceLimit = addressSpaceLimitBytes(memoryCapBytes)
+            val started = CommandNative.start(command, cwd, environment, addressSpaceLimit)
             check(started.size == 3 && started[0] > 0)
             val pid = started[0]
             val stdoutFd = try { ParcelFileDescriptor.adoptFd(started[1]) }
