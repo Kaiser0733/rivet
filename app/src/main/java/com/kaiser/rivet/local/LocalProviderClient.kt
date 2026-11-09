@@ -56,12 +56,11 @@ class LocalProviderClient(
         val tools = if (entry.toolCalling == LocalToolCalling.None) emptyList()
         else LocalToolProtocol.profile(request.tools)
         val system = request.system + LocalToolProtocol.systemSuffix(tools)
-        val messages = listOf(AgentMessage(AgentRole.Context, text = system)) + request.messages
         val maxTokens = config.resolvedManualMaxOutputTokens() ?: 512
 
         return withContext(Dispatchers.IO) {
             try {
-                val prompt = buildPrompt(entry, messages)
+                val prompt = buildPrompt(entry, system, request.messages)
                 var thermalPause: String? = null
                 var emitted = 0
                 var text = manager.generate(
@@ -117,9 +116,10 @@ class LocalProviderClient(
         }
     }
 
-    private fun buildPrompt(entry: LocalModelEntry, messages: List<AgentMessage>): String {
-        val roles = mutableListOf<String>()
-        val contents = mutableListOf<String>()
+    private fun buildPrompt(entry: LocalModelEntry, system: String,
+                            messages: List<AgentMessage>): String {
+        val roles = mutableListOf("system")
+        val contents = mutableListOf(system)
         for (message in messages) {
             when (message.role) {
                 AgentRole.User -> {
