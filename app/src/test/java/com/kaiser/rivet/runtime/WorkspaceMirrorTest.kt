@@ -699,4 +699,43 @@ class WorkspaceMirrorTest {
             context.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
                 .putString("tree", tree.toString()).commit()
         }
+    @Test fun externalOnlyChangeIsAdoptedByAnExplicitSync() = runBlocking {
+        source("file.txt", "base".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        provider.nodes.values.first { it.name == "file.txt" }.bytes.writeText("outside")
+
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        assertEquals("outside", File(root, "file.txt").readText())
+        assertFalse(mirror.hasLocalChanges())
+    }
+
+    @Test fun pendingChangeSyncsWithAnExternalChangeToADifferentFile() = runBlocking {
+        source("local.txt", "base local".toByteArray())
+        source("external.txt", "base external".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, "local.txt").writeText("mirror edit")
+        provider.nodes.values.first { it.name == "external.txt" }.bytes.writeText("outside edit")
+
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        assertEquals("mirror edit", String(bytes("local.txt")))
+        assertEquals("outside edit", String(bytes("external.txt")))
+        assertEquals("outside edit", File(root, "external.txt").readText())
+        assertFalse(mirror.hasLocalChanges())
+    }
+
+    @Test fun terminalWriteThenCommandSyncsBeforeTheCommandStarts() = runBlocking {
+        source("script.py", "base".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, "script.py").writeText("print('terminal')")
+        assertTrue(mirror.prepare().dirty)
+
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        val ready = mirror.prepare()
+        assertFalse(ready.dirty)
+        assertEquals("print('terminal')", String(bytes("script.py")))
+        assertFalse(mirror.hasLocalChanges())
+    }
 }

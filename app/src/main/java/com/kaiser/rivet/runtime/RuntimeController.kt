@@ -69,7 +69,21 @@ class RuntimeController(
             return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = code)
         }
         governor.commandStarted()
-        val ready = active.prepare()
+        var ready = active.prepare()
+        if (ready.dirty) {
+            // The interactive terminal is the user's own hands: its mirror edits
+            // are user changes and must reach SAF before an agent command starts.
+            // A genuine same-path overlap still blocks; non-overlapping external
+            // changes are adopted by sync() so retry makes progress.
+            when (val synced = active.sync().state) {
+                MirrorSync.Conflict -> return@withLock RuntimeCommandResult(
+                    cwd = cwd, sync = "pending", error = "sync_required")
+                MirrorSync.Failed -> return@withLock RuntimeCommandResult(
+                    cwd = cwd, sync = "pending", error = "sync_failed")
+                MirrorSync.Ok, MirrorSync.NoChanges -> Unit
+            }
+            ready = active.prepare()
+        }
         if (ready.dirty) {
             return@withLock RuntimeCommandResult(cwd = cwd, sync = "pending", error = "sync_required")
         }
