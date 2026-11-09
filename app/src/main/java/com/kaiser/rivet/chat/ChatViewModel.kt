@@ -545,7 +545,7 @@ class ChatViewModel private constructor(
 
     /**
      * Read goal, memory and the newest run journal from the selected project. Every call
-     * goes to SAF, so a user editing .rivet/*.md outside Rivet is visible immediately.
+     * goes to SAF, so edits to the .rivet goal and memory files outside Rivet are visible immediately.
      */
     private suspend fun refreshGoalMemory(workspace: SafWorkspace?, sessionId: String?,
                                           recoverRun: Boolean = true) {
