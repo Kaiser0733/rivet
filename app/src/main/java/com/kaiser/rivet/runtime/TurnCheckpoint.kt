@@ -36,6 +36,7 @@ data class CheckpointRecord(
     val after: Map<String, CheckpointEntry>? = null,
     val complete: Boolean = false,
     val undone: Boolean = false,
+    val runId: String? = null,
     // Set when Undo restored Rivet's copy but could not write it back to the
     // project. Not a success, so it is not recorded as `undone`.
     val desynced: Boolean = false,
@@ -50,7 +51,7 @@ data class CheckpointChange(val path: String, val kind: String, val beforeSize: 
 class TurnCheckpoint(private val storage: File, private val workspace: String) {
     private val directory = File(storage, sha256(workspace.toByteArray()))
 
-    suspend fun begin(worktree: File): String = withContext(Dispatchers.IO) {
+    suspend fun begin(worktree: File, runId: String? = null): String = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val staging = File(directory, ".$id.tmp")
         if (!staging.mkdirs()) throw CheckpointFailure("storage")
@@ -68,7 +69,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
                 }
             }
             writeRecord(staging, CheckpointRecord(id, workspace, System.currentTimeMillis(), before,
-                skipped = skipped))
+                skipped = skipped, runId = runId))
             Files.move(staging.toPath(), File(directory, id).toPath(), StandardCopyOption.ATOMIC_MOVE)
             id
         } catch (error: Exception) {
@@ -102,6 +103,14 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
     suspend fun matchesPost(id: String, worktree: File): Boolean = withContext(Dispatchers.IO) {
         val post = readRecord(folder(id)).after
         post == null || scan(worktree) == post
+    }
+
+    suspend fun history(limit: Int = 50): List<CheckpointRecord> = withContext(Dispatchers.IO) {
+        directory.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") }
+            ?.mapNotNull { folder -> try { readRecord(folder) } catch (_: Exception) { null } }
+            ?.sortedByDescending { it.createdAt }
+            ?.take(limit.coerceIn(1, 200))
+            .orEmpty()
     }
 
     suspend fun latest(): CheckpointRecord? = withContext(Dispatchers.IO) {
@@ -368,8 +377,8 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
 
     companion object {
         private const val MAX_ENTRIES = 50_000
-        private const val MAX_CONTENT_BYTES = 1024L * 1024 * 1024
-        private const val MAX_HISTORY_BYTES = 2L * 1024 * 1024 * 1024
+        private const val MAX_CONTENT_BYTES = 500L * 1024 * 1024
+        private const val MAX_HISTORY_BYTES = 500L * 1024 * 1024
         private const val MAX_RETAINED = 3
         private const val PENDING_GRACE_MS = 7L * 24 * 60 * 60 * 1000
 

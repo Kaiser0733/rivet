@@ -12,7 +12,7 @@ class WorkspaceLimitInstructionTest {
     private val briefing = ChatViewModel.systemInstruction(workspace = true)
 
     @Test fun namesTheShippedRuntimeLimits() {
-        listOf("16 MiB", "128 KiB", "120 seconds", "2000", "1 MiB", "50,000", "1 GiB")
+        listOf("16 MiB", "128 KiB", "120 seconds", "2000", "1 MiB", "50,000", "500 MB")
             .forEach { assertTrue(it, briefing.contains(it)) }
     }
 

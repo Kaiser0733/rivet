@@ -900,7 +900,11 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         if (showInterruptedTurn) item(key = "interrupted-turn") {
-            InterruptedTurnRow(onRetry = onRetryInterruptedTurn, onDismiss = onDismissInterruptedTurn)
+            InterruptedTurnRow(
+                recovery = state.runRecovery,
+                onRetry = onRetryInterruptedTurn,
+                onDismiss = onDismissInterruptedTurn,
+            )
         }
         state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         state.error?.let { error -> item {
@@ -1331,21 +1335,26 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
 }
 
 @Composable
-private fun InterruptedTurnRow(onRetry: () -> Unit, onDismiss: () -> Unit) {
+private fun InterruptedTurnRow(recovery: String?, onRetry: () -> Unit, onDismiss: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(6.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(
-                ChatViewModel.INTERRUPTED_TURN_PROMPT,
-                modifier = Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    ChatViewModel.INTERRUPTED_TURN_PROMPT,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                recovery?.let {
+                    Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall)
+                }
+            }
             Row {
-                TextButton(onClick = onRetry) { Text("Retry") }
+                TextButton(onClick = onRetry) { Text(if (recovery == null) "Retry" else "Resume") }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_error_dismiss)) }
             }
         }
