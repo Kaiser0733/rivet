@@ -61,4 +61,24 @@ class AgentApprovalGateTest {
         assertFalse(gate.resolve(token, approved = true))
         assertTrue(gate.pending.value == null)
     }
+
+    @Test
+    fun pendingApprovalHoldsAcrossALongBackgroundWait() = runTest {
+        val gate = AgentApprovalGate()
+        val waiting = async {
+            gate.await(AgentApprovalRequest(
+                AgentToolCall("call-bg", "create_file", "{}"), "Create file", "notes.txt",
+            ))
+        }
+        yield()
+        val token = gate.pending.value!!.approvalToken
+
+        // Backgrounding the app must not turn the wait into an implicit denial.
+        kotlinx.coroutines.delay(60_000)
+        assertTrue(gate.pending.value != null)
+        assertFalse(waiting.isCompleted)
+
+        assertTrue(gate.resolve(token, approved = true))
+        assertTrue(waiting.await())
+    }
 }
