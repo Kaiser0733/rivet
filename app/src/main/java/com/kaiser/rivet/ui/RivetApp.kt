@@ -185,6 +185,11 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 SettingsScreen(
                     conversationUsage = conversation.usage,
                     skillCatalog = skillCatalog,
+                    memoryLines = conversation.memoryLines,
+                    memoryMarkdown = conversation.memoryMarkdown,
+                    hasProject = conversation.projectName != null,
+                    onUpdateMemory = chatViewModel::updateMemory,
+                    onForgetMemoryLine = chatViewModel::forgetMemoryLine,
                     onRefreshSkills = chatViewModel::refreshSkillCatalog,
                     onLoadSkillFiles = chatViewModel::skillBundledFiles,
                     onInstallSkill = {

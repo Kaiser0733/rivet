@@ -18,7 +18,14 @@ import com.kaiser.rivet.agent.AgentToolExecutor
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentToolEffect
 import com.kaiser.rivet.agent.AgentToolLifecycle
+import com.kaiser.rivet.agent.GoalCommand
+import com.kaiser.rivet.agent.GoalDocument
+import com.kaiser.rivet.agent.GoalMemoryContext
+import com.kaiser.rivet.agent.GoalState
+import com.kaiser.rivet.agent.MemoryFormat
 import com.kaiser.rivet.agent.PreparedAgentTool
+import com.kaiser.rivet.agent.ProjectStateFiles
+import com.kaiser.rivet.agent.parseGoalCommand
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.InternalContext
 import com.kaiser.rivet.agent.ProjectContext
@@ -66,6 +73,8 @@ import com.kaiser.rivet.storage.SessionUsage
 import com.kaiser.rivet.storage.SkillScriptApprovalStore
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
+import com.kaiser.rivet.storage.SessionGoalStore
+import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.workspace.WorkspaceFailure
@@ -142,6 +151,11 @@ data class ChatUiState(
     // A shell command holds the project lock for as long as it runs, so Undo and
     // retry cannot complete until it ends. The UI says so instead of ignoring taps.
     val commandRunning: Boolean = false,
+    val goal: GoalDocument? = null,
+    val goalLine: String? = null,
+    val goalAttachOffer: Boolean = false,
+    val memoryMarkdown: String = "",
+    val memoryLines: List<String> = emptyList(),
 )
 
 enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn }
@@ -405,6 +419,11 @@ class ChatViewModel private constructor(
 
     private var activeMessages: List<AgentMessage> = emptyList()
     private var activeSummary: String = ""
+    private val sessionGoals = SessionGoalStore(app)
+    private var projectState: ProjectStateFiles? = null
+    private var projectGoal: GoalDocument? = null
+    private var sessionGoal: GoalDocument? = null
+    private var memoryMarkdown: String = ""
 
     init {
         viewModelScope.launch { loadProject() }
@@ -444,6 +463,8 @@ class ChatViewModel private constructor(
                             interruptedTurn = interruptedTurn,
                         )
                     }
+                    val restoredWorkspace = workspaceSelection.restore()?.first
+                    if (ticket == generation) refreshGoalMemory(restoredWorkspace, restored.id)
                     // A turn that finished before the process died leaves its checkpoint on
                     // disk; the Undo row has to come back with the conversation.
                     if (ticket == generation) rehydrateUndo(restored.workspaceId)
@@ -487,6 +508,7 @@ class ChatViewModel private constructor(
                     catch (_: Exception) { "Selected project" }
                 _uiState.update { it.copy(projectName = name, projectIdentity = workspace.tree.toString(),
                     projectLoading = false, projectError = null) }
+                refreshGoalMemory(workspace, _uiState.value.currentSessionId)
                 val pending = try { runtimeController.commandBlocker() in SYNC_RECOVERY_CODES }
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { false }
@@ -498,6 +520,27 @@ class ChatViewModel private constructor(
         } catch (_: Exception) {
             _uiState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
                 projectError = "Rivet couldn't open this project. Choose the folder again.") }
+        }
+    }
+
+    /**
+     * Read goal, memory and the newest run journal from the selected project. Every call
+     * goes to SAF, so a user editing .rivet/*.md outside Rivet is visible immediately.
+     */
+    private suspend fun refreshGoalMemory(workspace: SafWorkspace?, sessionId: String?) {
+        projectState = workspace?.let(::ProjectStateFiles)
+        projectGoal = try { projectState?.loadGoal()?.takeIf { it.state != GoalState.Dropped } }
+            catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+        sessionGoal = try { sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped } }
+            catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+        memoryMarkdown = try { projectState?.loadMemory().orEmpty() }
+            catch (e: CancellationException) { throw e } catch (_: Exception) { "" }
+        val goal = projectGoal ?: sessionGoal
+        _uiState.update {
+            it.copy(goal = goal, goalLine = goal?.calmLine(),
+                goalAttachOffer = workspace != null && projectGoal == null && sessionGoal != null,
+                memoryMarkdown = memoryMarkdown,
+                memoryLines = MemoryFormat.facts(memoryMarkdown))
         }
     }
 
@@ -531,6 +574,7 @@ class ChatViewModel private constructor(
                             interruptedTurn = false) }
                     }
                 }
+                refreshGoalMemory(workspace, _uiState.value.currentSessionId)
                 _uiState.update { it.copy(projectLoading = false, error = null) }
                 // Switching to a project also has to offer what that project can still undo;
                 // inside the same project the row was cleared a few lines up only because the
@@ -557,7 +601,194 @@ class ChatViewModel private constructor(
         val trimmed = text.trim()
         if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready ||
             _uiState.value.recoveringProjectChanges) return
+        val command = parseGoalCommand(trimmed)
+        if (command != null) {
+            handleGoalCommand(command)
+            return
+        }
         startTurn(trimmed, retryingInterrupted = false)
+    }
+
+    private fun handleGoalCommand(command: GoalCommand) {
+        viewModelScope.launch {
+            try {
+                val workspace = workspaceSelection.restore()?.first
+                val files = workspace?.let(::ProjectStateFiles)
+                projectState = files
+                val sessionId = _uiState.value.currentSessionId
+                val projectStored = files?.loadGoal()?.takeIf { it.state != GoalState.Dropped }
+                val sessionStored = sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped }
+                var goal = projectStored ?: sessionStored
+                when (command) {
+                    is GoalCommand.Set -> {
+                        if (command.text.isBlank()) return@launch
+                        val next = GoalDocument.replaceGoal(goal, command.text, sessionId)
+                        if (files != null) files.saveGoal(next)
+                        else sessionGoals.save(sessionId, next)
+                        projectGoal = if (files != null) next else projectGoal
+                        sessionGoal = if (files == null) next else sessionGoal
+                        goal = next
+                        _uiState.update { it.copy(goal = next, goalLine = next.calmLine(),
+                            notice = "Goal set: ${next.text.take(160)}", error = null) }
+                    }
+                    GoalCommand.Status -> _uiState.update {
+                        it.copy(notice = goal?.statusLine()
+                            ?: "No goal is set. Use /goal <what you want to achieve>.",
+                            error = null)
+                    }
+                    GoalCommand.Pause, GoalCommand.Resume, GoalCommand.Done, GoalCommand.Clear -> {
+                        if (goal == null) {
+                            _uiState.update { it.copy(notice = "No goal is set.", error = null) }
+                            return@launch
+                        }
+                        val state = when (command) {
+                            GoalCommand.Pause -> GoalState.Paused
+                            GoalCommand.Resume -> GoalState.Active
+                            GoalCommand.Done -> GoalState.Done
+                            else -> GoalState.Dropped
+                        }
+                        val next = goal.withState(state, sessionId)
+                        if (state == GoalState.Dropped) {
+                            if (files != null) files.saveGoal(next) else sessionGoals.save(sessionId, null)
+                        } else {
+                            if (files != null) files.saveGoal(next) else sessionGoals.save(sessionId, next)
+                        }
+                        projectGoal = if (files != null) next.takeIf { state != GoalState.Dropped } else projectGoal
+                        sessionGoal = if (files == null) next.takeIf { state != GoalState.Dropped } else sessionGoal
+                        val shown = if (state == GoalState.Dropped) null else next
+                        _uiState.update { it.copy(goal = shown, goalLine = shown?.calmLine(),
+                            notice = when (state) {
+                                GoalState.Paused -> "Goal paused."
+                                GoalState.Active -> "Goal resumed."
+                                GoalState.Done -> "Goal marked done."
+                                GoalState.Dropped -> "Goal cleared."
+                            }, error = null) }
+                    }
+                }
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                _uiState.update { it.copy(error = "Rivet couldn't update the goal. Try again.",
+                    errorAction = null) }
+            }
+        }
+    }
+
+    /** Move a no-project goal into the folder the user just opened. */
+    fun attachGoalToProject() {
+        val sessionId = _uiState.value.currentSessionId ?: return
+        viewModelScope.launch {
+            try {
+                val workspace = workspaceSelection.restore()?.first ?: return@launch
+                val files = ProjectStateFiles(workspace)
+                val existing = files.loadGoal()?.takeIf { it.state != GoalState.Dropped }
+                if (existing != null) {
+                    _uiState.update { it.copy(goalAttachOffer = false,
+                        notice = "This project already has a goal.") }
+                    return@launch
+                }
+                val pending = sessionGoals.load(sessionId) ?: return@launch
+                val attached = pending.withProgress("Attached to this project", sessionId)
+                files.saveGoal(attached)
+                sessionGoals.save(sessionId, null)
+                projectState = files
+                projectGoal = attached
+                sessionGoal = null
+                _uiState.update { it.copy(goal = attached, goalLine = attached.calmLine(),
+                    goalAttachOffer = false, notice = "Goal attached to this project.") }
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                _uiState.update { it.copy(error = "Rivet couldn't attach the goal to this project.") }
+            }
+        }
+    }
+
+    fun updateMemory(content: String) {
+        viewModelScope.launch {
+            val message = tryEditMemory(content)
+            _uiState.update {
+                if (message == null) it.copy(notice = "Memory updated.", error = null)
+                else it.copy(notice = null, error = message)
+            }
+        }
+    }
+
+    fun forgetMemoryLine(index: Int) {
+        viewModelScope.launch {
+            try {
+                val files = projectState ?: return@launch
+                val next = MemoryFormat.forget(memoryMarkdown, index)
+                files.saveMemory(next)
+                memoryMarkdown = next
+                _uiState.update { it.copy(memoryMarkdown = next,
+                    memoryLines = MemoryFormat.facts(next), notice = "Memory line forgotten.") }
+            } catch (e: CancellationException) { throw e
+            } catch (_: Exception) {
+                _uiState.update { it.copy(error = "Rivet couldn't update project memory.") }
+            }
+        }
+    }
+
+    private suspend fun tryEditMemory(content: String): String? {
+        val files = projectState ?: return "Open a project before editing project memory."
+        if (content.length > 400_000) return "Project memory is too large to edit here."
+        return when (val result = MemoryFormat.replaceAll(memoryMarkdown, content)) {
+            is MemoryFormat.Append.Refused -> when (result.code) {
+                "secret" -> "Refused: secrets never go into project memory."
+                "garden_first" -> "Garden memory below the hard cap before adding more."
+                else -> "Rivet couldn't update project memory."
+            }
+            is MemoryFormat.Append.Saved -> {
+                files.saveMemory(result.markdown)
+                memoryMarkdown = result.markdown
+                _uiState.update { it.copy(memoryMarkdown = result.markdown,
+                    memoryLines = MemoryFormat.facts(result.markdown)) }
+                null
+            }
+        }
+    }
+
+    private suspend fun goalMemoryUpdates(candidate: List<AgentMessage>, workspaceId: String,
+                                          workspace: SafWorkspace): List<AgentMessage> {
+        val updates = mutableListOf<AgentMessage>()
+        try {
+            val files = ProjectStateFiles(workspace)
+            val project = files.loadGoal()?.takeIf { it.state != GoalState.Dropped }
+            val session = sessionGoals.load(_uiState.value.currentSessionId)
+                ?.takeIf { it.state != GoalState.Dropped }
+            val goal = project ?: session
+            val memory = files.loadMemory()
+            projectState = files
+            projectGoal = project
+            sessionGoal = session
+            memoryMarkdown = memory
+            _uiState.update {
+                if (it.goal == goal && it.memoryMarkdown == memory) it
+                else it.copy(goal = goal, goalLine = goal?.calmLine(),
+                    memoryMarkdown = memory, memoryLines = MemoryFormat.facts(memory),
+                    goalAttachOffer = project == null && session != null)
+            }
+            updates += GoalMemoryContext.updates(candidate, workspaceId, goal, memory)
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            // A transient SAF failure must not turn a model step into a project failure;
+            // the next step retries the read.
+        }
+        return updates
+    }
+
+    private suspend fun appendGoalProgress(note: String) {
+        val sessionId = _uiState.value.currentSessionId
+        val files = projectState
+        val stored = try { files?.loadGoal()?.takeIf { it.state != GoalState.Dropped } }
+            catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+        val goal = stored ?: sessionGoal ?: projectGoal ?: return
+        if (goal.state != GoalState.Active || note.isBlank()) return
+        val next = goal.withProgress(note, sessionId)
+        if (files != null) files.saveGoal(next) else sessionGoals.save(sessionId, next)
+        projectGoal = if (files != null) next else projectGoal
+        sessionGoal = if (files == null) next else sessionGoal
+        _uiState.update { it.copy(goal = next, goalLine = next.calmLine()) }
     }
 
     // The model refused an effort. Saving the chosen level and running the same prompt
@@ -732,6 +963,8 @@ class ChatViewModel private constructor(
                 if (workspaceId != null) addAll(SkillContext.updates(messages, workspaceId, skills))
                 if (workspaceId != null) addAll(ToolchainContext.updates(messages, workspaceId,
                     runtime.toolchainAvailability()))
+                if (workspaceId != null && workspace != null) addAll(goalMemoryUpdates(
+                    messages, workspaceId, workspace))
                 if (gesture != null && workspaceId != null) {
                     add(SkillContext.invocation(gesture.skill, workspaceId))
                 }
@@ -753,6 +986,23 @@ class ChatViewModel private constructor(
                     currentWorkspaceIdentity = workspaceSelection::currentIdentity,
                     skills = skills,
                     loadedSkills = gesture?.let { setOf(it.skill.name) }.orEmpty(),
+                    rememberMemory = { fact ->
+                        val files = ProjectStateFiles(selectedWorkspace)
+                        val result = MemoryFormat.append(files.loadMemory(), fact)
+                        if (result is MemoryFormat.Append.Saved) {
+                            files.saveMemory(result.markdown)
+                            projectState = files
+                            memoryMarkdown = result.markdown
+                            _uiState.update {
+                                it.copy(memoryMarkdown = result.markdown,
+                                    memoryLines = MemoryFormat.facts(result.markdown),
+                                    notice = if (result.garden)
+                                        "Memory updated. It is over the soft cap; garden it soon."
+                                    else "Memory updated.")
+                            }
+                        }
+                        result
+                    },
                 )
             }
             val tools = if (executor == null) emptyList() else AgentToolExecutor.definitions
@@ -972,7 +1222,9 @@ class ChatViewModel private constructor(
                         ProjectContext.updates(candidate, workspaceId, requireNotNull(instructions)) +
                             SkillContext.updates(candidate, workspaceId, skills) +
                             ToolchainContext.updates(candidate, workspaceId,
-                                runtime.toolchainAvailability())
+                                runtime.toolchainAvailability()) +
+                            (workspace?.let { goalMemoryUpdates(candidate, workspaceId, it) }
+                                ?: emptyList())
                     }
                 },
                 approvedSkillScripts = approvedSkillScripts,
@@ -1305,6 +1557,13 @@ class ChatViewModel private constructor(
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
         persistTurn(persisted, interrupted = false)
         activeMessages = persisted
+        val progressNote = result.messages.lastOrNull {
+            it.role == AgentRole.Assistant && it.text.isNotBlank() && it.toolCalls.isEmpty()
+        }?.text?.take(200)
+        if (progressNote != null) {
+            try { appendGoalProgress(if (result.stopReason == AgentStopReason.Completed) progressNote
+                else "Stopped: $progressNote") } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
         val renameRevision = titleRenameRevision
         val history = sessions?.list()
         val usage = _uiState.value.currentSessionId?.let { sessions?.usage(it) }
@@ -1559,6 +1818,8 @@ class ChatViewModel private constructor(
                     currentSessionWorkspaceId = selected.workspaceId, usage = usage,
                     projectName = project.projectName, projectIdentity = project.projectIdentity,
                     projectLoading = project.projectLoading, projectError = project.projectError)
+                val restoredWorkspace = try { workspaceSelection.restore()?.first } catch (_: Exception) { null }
+                refreshGoalMemory(restoredWorkspace, selected.id)
                 // Clearing the transcript does not clear the project: a change this project
                 // can still undo must keep its row instead of becoming unreachable.
                 rehydrateUndo(selected.workspaceId)
@@ -1657,7 +1918,12 @@ class ChatViewModel private constructor(
                     interruptedTurn = interruptedTurn,
                     undoCheckpointId = if (keepUndo) project.undoCheckpointId else null,
                     lastTurnFiles = if (keepUndo) project.lastTurnFiles else emptyList(),
-                    lastTurnFileCount = if (keepUndo) project.lastTurnFileCount else 0)
+                    lastTurnFileCount = if (keepUndo) project.lastTurnFileCount else 0,
+                    goal = project.goal, goalLine = project.goalLine,
+                    goalAttachOffer = project.goalAttachOffer,
+                    memoryMarkdown = project.memoryMarkdown, memoryLines = project.memoryLines)
+                refreshGoalMemory(
+                    try { workspaceSelection.restore()?.first } catch (_: Exception) { null }, selected.id)
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
                 if (ticket == generation) _uiState.update { it.copy(error = "Could not open the session.") }
@@ -1699,7 +1965,7 @@ class ChatViewModel private constructor(
         // size. Say the real numbers and the way out, the same ones the model is told.
         internal const val CHECKPOINT_LIMITS_HINT = " Undo covers up to 50,000 items and 1 GiB per project. Adding generated folders to .rivetignore can bring a large project under that."
         private val MUTATION_TOOLS = setOf("write_file", "apply_patch", "create_file", "create_directory",
-            "rename_path", "move_path", "delete_path", "run_command", "download_file")
+            "rename_path", "move_path", "delete_path", "run_command", "download_file", "remember")
         internal fun systemInstruction(
             workspace: Boolean,
             terminalState: String? = null,
