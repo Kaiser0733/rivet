@@ -738,4 +738,29 @@ class WorkspaceMirrorTest {
         assertEquals("print('terminal')", String(bytes("script.py")))
         assertFalse(mirror.hasLocalChanges())
     }
+
+    @Test fun gitMetadataStaysLocalAndNeverLooksLikePendingWork() = runBlocking {
+        source("README.md", "base".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, ".git/objects/ab").mkdirs()
+        File(root, ".git/objects/ab/cdef").writeText("object bytes")
+        File(root, ".git/index").writeText("index")
+
+        assertFalse(mirror.hasLocalChanges())
+        assertEquals(MirrorSync.NoChanges, mirror.sync().state)
+        assertTrue(File(root, ".git").isDirectory)
+        try {
+            workspace.stat(path(".git"))
+            fail(".git must not be mirrored into SAF")
+        } catch (_: Exception) { }
+    }
+
+    @Test fun vcsPathsAreRecognisedAtAnyDepthOnlyAsMetadata() {
+        assertTrue(isVcsPath(".git"))
+        assertTrue(isVcsPath("nested/.git/objects/ab/cdef"))
+        assertTrue(isVcsPath(".hg/store"))
+        assertFalse(isVcsPath(".gitignore"))
+        assertFalse(isVcsPath("src/.gitkeep"))
+    }
 }
