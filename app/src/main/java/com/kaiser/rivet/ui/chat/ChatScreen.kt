@@ -638,9 +638,12 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     if (providers.configs.isNotEmpty()) {
                         { ModelSelector(providersViewModel) { modelSheetVisible = true } }
                     } else null
-                InputBar(streaming = state.streaming, ready = state.ready && state.projectName != null &&
-                    projectBinding == ProjectBindingState.Matched &&
-                    providers.configs.isNotEmpty() && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges,
+                InputBar(streaming = state.streaming,
+                    ready = state.ready && !state.projectLoading && !state.undoing &&
+                        !state.recoveringProjectChanges,
+                    hasProject = state.projectName != null &&
+                        projectBinding == ProjectBindingState.Matched,
+                    hasProvider = providers.configs.isNotEmpty(),
                     acceptedMessageCount = state.acceptedMessageCount,
                     error = state.error, notice = state.notice, sessionId = state.currentSessionId,
                     skills = userSkills,
@@ -881,6 +884,18 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 GoalLine(line, state.goalAttachOffer, onAttachGoal)
             }
         }
+        // Goal first, then the interruption notice, then the transcript: restoring a
+        // saved session must never put the recovery banner above the user's goal.
+        if (showInterruptedTurn) item(key = "interrupted-turn") {
+            InterruptedTurnRow(
+                recovery = state.runRecovery,
+                spendLabel = state.spendLabel,
+                budgetPaused = state.budgetPaused,
+                onRaiseBudget = onRaiseBudget,
+                onRetry = onRetryInterruptedTurn,
+                onDismiss = onDismissInterruptedTurn,
+            )
+        }
         items(timeline) { entry ->
             when (val item = entry.item) {
                 is AgentConversationItem.Message -> MessageRow(
@@ -914,16 +929,6 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         }
         if (showActivity) state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-        if (showInterruptedTurn) item(key = "interrupted-turn") {
-            InterruptedTurnRow(
-                recovery = state.runRecovery,
-                spendLabel = state.spendLabel,
-                budgetPaused = state.budgetPaused,
-                onRaiseBudget = onRaiseBudget,
-                onRetry = onRetryInterruptedTurn,
-                onDismiss = onDismissInterruptedTurn,
-            )
         }
         state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         state.error?.let { error -> item {
@@ -1455,8 +1460,14 @@ private val DRAFT_SAVER: Saver<Map<String, String>, Any> = mapSaver(
     restore = { saved -> saved.mapNotNull { (key, value) -> (value as? String)?.let { key to it } }.toMap() },
 )
 
+internal fun isGoalCommand(text: String): Boolean {
+    val trimmed = text.trimStart()
+    return trimmed == "/goal" || trimmed.startsWith("/goal ")
+}
+
 @Composable
 private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
+                     hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
@@ -1485,7 +1496,13 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // While a reply runs the view model refuses a send, so the composer must not offer
     // one: the keyboard's Send action goes through `submit`, and a refused send used to
     // leave `pendingText` latched with no accepted message to clear it.
-    val canSend = ready && !streaming && draft.isNotBlank() && pendingText == null
+    // /goal is a session command and must work before a project (or even a model)
+    // exists. Plain text still needs a project and a provider; without a provider the
+    // send is allowed so the view model can explain what to choose instead of the
+    // button silently refusing the tap.
+    val goalCommand = isGoalCommand(draft)
+    val canSend = ready && !streaming && draft.isNotBlank() && pendingText == null &&
+        (goalCommand || (hasProject && hasProvider) || !hasProvider)
     // Trailing newlines and spaces are noise; the model never wanted them.
     val submit = {
         val text = draftToSend(draft, canSend)
@@ -1595,8 +1612,15 @@ private fun StatusFooter(state: ChatUiState, providers: com.kaiser.rivet.ui.prov
             )
         }
         state.spendLabel?.let {
-            Text(if (it == "unknown pricing") it else "Spend $it",
+            Text(if (it == "unknown pricing") it else
+                "Spend $it" + if (state.spendFromEstimate) " (estimated)" else "",
                 style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        if (active != null && state.userPricePerMillionUsd == null &&
+            com.kaiser.rivet.agent.PricingTable.price(active.model) == null &&
+            state.spendLabel == null) {
+            Text("unknown pricing", style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         state.spendEstimate?.let {
