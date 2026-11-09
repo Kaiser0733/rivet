@@ -31,6 +31,37 @@ jobs:
       - name: Set up Gradle
         uses: gradle/actions/setup-gradle@v6
 
+      - name: Build pinned llama.cpp JNI library (arm64-v8a, CPU)
+        # llama.cpp is pinned in app/src/main/cpp/CMakeLists.txt. The tag and
+        # checkout are also echoed in the release notes so a source archive can
+        # reproduce this exact engine.
+        env:
+          LLAMA_CPP_TAG: v0.9.0
+          LLAMA_CPP_COMMIT: cd959bae99ff4bed22bef2604f45241c09bbb8c8
+          NDK_VERSION: 27.2.12479018
+        run: |
+          set -euo pipefail
+          NDK="${ANDROID_NDK_HOME:-${ANDROID_HOME}/ndk/${NDK_VERSION}}"
+          if [ ! -d "$NDK" ]; then
+            SDKMANAGER="${ANDROID_HOME}/cmdline-tools/latest/bin/sdkmanager"
+            yes | "$SDKMANAGER" --licenses >/dev/null || true
+            "$SDKMANAGER" --install "ndk;${NDK_VERSION}"
+          fi
+          rm -rf .native/llama.cpp build/llama-android
+          mkdir -p .native
+          git clone --depth 1 --branch "${LLAMA_CPP_TAG}" https://github.com/ggml-org/llama.cpp.git .native/llama.cpp
+          test "$(git -C .native/llama.cpp rev-parse HEAD)" = "${LLAMA_CPP_COMMIT}"
+          cmake -S app/src/main/cpp -B build/llama-android \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DCMAKE_TOOLCHAIN_FILE="$NDK/build/cmake/android.toolchain.cmake" \
+            -DANDROID_ABI=arm64-v8a \
+            -DANDROID_PLATFORM=android-26 \
+            -DLLAMA_CPP_DIR="$PWD/.native/llama.cpp"
+          cmake --build build/llama-android --target rivet_llama -j2
+          mkdir -p app/src/main/jniLibs/arm64-v8a
+          find build/llama-android -name librivet_llama.so -exec cp {} app/src/main/jniLibs/arm64-v8a/ \;
+          file app/src/main/jniLibs/arm64-v8a/librivet_llama.so
+
       - name: Python identity and network checks
         run: python3 -m unittest discover -s scripts -p 'test_*.py'
 

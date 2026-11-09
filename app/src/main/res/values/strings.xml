@@ -11,6 +11,7 @@
     <string name="type_gemini">Gemini</string>
     <string name="type_openrouter">OpenRouter</string>
     <string name="type_chatgpt_plan">ChatGPT plan</string>
+    <string name="type_local">Local</string>
 
     <string name="provider_section">Providers</string>
     <string name="provider_add">Add provider</string>
