@@ -1030,7 +1030,7 @@ class ChatViewModel private constructor(
             val gesture = if (retryingInterrupted) null else skillGesture(trimmed, skills)
             val prompt = gesture?.task ?: trimmed
             if (workspaceId != null) startRun(workspaceId, prompt, retryingInterrupted)
-            fun initialContext(messages: List<AgentMessage>): List<AgentMessage> = buildList {
+            suspend fun initialContext(messages: List<AgentMessage>): List<AgentMessage> = buildList {
                 if (activeSummary.isNotBlank() && messages.none { it.role == AgentRole.Context &&
                         it.internalContext?.kind == "summary" }) add(InternalContext.summary(activeSummary, workspaceId))
                 if (workspaceId != null && instructions != null) addAll(ProjectContext.updates(messages,
