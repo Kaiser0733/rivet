@@ -69,12 +69,13 @@ class CommandTreeCapTest {
         assumeTrue("needs a POSIX shell", File("/bin/sh").canExecute())
         assumeTrue("needs setsid", File("/usr/bin/setsid").canExecute() ||
             File("/bin/setsid").canExecute())
-        assumeTrue("needs python3", File("/usr/bin/python3").canExecute() ||
-            File("/bin/python3").canExecute())
+        val python = listOf(File("/usr/bin/python3"), File("/bin/python3"))
+            .firstOrNull { it.canExecute() }
+        assumeTrue("needs python3", python != null)
 
         val pidFile = File.createTempFile("rivet-memory-", ".pid")
         val script = "echo \$\$ > '${pidFile.absolutePath}'; " +
-            "exec python3 -c 'x=[b\"x\"*1048576 for _ in range(120)]; import time; time.sleep(30)'"
+            "exec '${python!!.absolutePath}' -c 'x=[b\"x\"*1048576 for _ in range(120)]; import time; time.sleep(30)'"
         val shell = ProcessBuilder("setsid", "/bin/sh", "-c", script).start()
         val pid = withTimeout(10_000) {
             var found: Int? = null
