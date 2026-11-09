@@ -439,6 +439,7 @@ class ChatViewModel private constructor(
     private var sessionGoal: GoalDocument? = null
     private var memoryMarkdown: String = ""
     private var currentRun: RunRecord? = null
+    private var runResumeContext = false
 
     init {
         viewModelScope.launch { loadProject() }
@@ -566,6 +567,7 @@ class ChatViewModel private constructor(
         val goal = projectGoal ?: sessionGoal
         val run = currentRun
         val resumable = run?.resumable == true
+        runResumeContext = resumable
         _uiState.update {
             it.copy(goal = goal, goalLine = goal?.calmLine(),
                 goalAttachOffer = workspace != null && projectGoal == null && sessionGoal != null,
@@ -804,7 +806,9 @@ class ChatViewModel private constructor(
                     goalAttachOffer = project == null && session != null)
             }
             updates += GoalMemoryContext.updates(candidate, workspaceId, goal, memory)
-            currentRun?.let { updates += RunContext.updates(candidate, workspaceId, it) }
+            if (runResumeContext) currentRun?.let {
+                updates += RunContext.updates(candidate, workspaceId, it)
+            }
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
@@ -822,7 +826,9 @@ class ChatViewModel private constructor(
         val next = if (resumed != null) RunMachine.resume(resumed)
         else RunMachine.start(RunMachine.begin(UUID.randomUUID().toString(), workspaceId, title))
         currentRun = next
-        try { journal.save(next) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        runResumeContext = resumed != null
+        // Save on the first completed step, not at start: a run that never gets a
+        // step must not create project files or a checkpoint-sized journal.
         managedProcesses.updateRunStatus(next.title, "Getting ready…", next.startedAt)
         _uiState.update { it.copy(run = next, runRecovery = null) }
         return next
@@ -845,7 +851,10 @@ class ChatViewModel private constructor(
         val next = try { RunMachine.finish(run, phase, failure) }
             catch (_: IllegalStateException) { return }
         currentRun = next
-        try { runJournal?.save(next) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        runResumeContext = false
+        if (next.lastCompletedStep > 0 || next.phase == RunPhase.Paused) {
+            try { runJournal?.save(next) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
         managedProcesses.updateRunStatus(null, null, 0)
         _uiState.update { it.copy(run = next) }
     }
@@ -1547,6 +1556,7 @@ class ChatViewModel private constructor(
                         if (pauseRequestedTicket == ticket && live.phase == RunPhase.Running) {
                             val paused = RunMachine.pause(live, pauseReason)
                             currentRun = paused
+                            runResumeContext = true
                             try { runJournal?.save(paused) } catch (_: Exception) { }
                             try { sessionStore.markInterrupted(true) } catch (_: Exception) { }
                             managedProcesses.updateRunStatus(null, null, 0)
