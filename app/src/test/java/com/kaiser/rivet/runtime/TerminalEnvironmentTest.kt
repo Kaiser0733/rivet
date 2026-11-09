@@ -23,12 +23,13 @@ class TerminalEnvironmentTest {
     @Test fun addsTermAndAFolderOnlyDollarPrompt() {
         val env = terminalEnvironment(base)
 
+        assertEquals("ENV=/dev/null", env[env.size - 3])
         assertEquals("TERM=xterm-256color", env[env.size - 2])
         assertEquals("PS1=\\W \\$ ", env.last())
         assertFalse(env.last().contains("@"))
         assertFalse(env.last().contains("\\u"))
         assertFalse(env.last().contains("\\h"))
-        assertEquals(base.dropLast(1), env.dropLast(2))
+        assertEquals(base.dropLast(1), env.dropLast(3))
     }
 
     @Test fun absentToolchainLeavesPathAtTheSystemBase() {

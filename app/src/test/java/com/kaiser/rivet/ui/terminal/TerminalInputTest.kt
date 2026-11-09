@@ -30,9 +30,9 @@ class TerminalInputTest {
         assertEquals('\u007f', controlCode('?'))
     }
 
-    @Test fun gridSizeUsesTheCellSizeAndNeverGoesBelowOne() {
+    @Test fun gridSizeUsesTheCellSizeAndRespectsTheEmulatorMinimum() {
         assertEquals(100 to 30, terminalGridSize(800f, 480f, 8f, 16f))
-        assertEquals(1 to 1, terminalGridSize(1f, 1f, 8f, 16f))
+        assertEquals(2 to 2, terminalGridSize(1f, 1f, 8f, 16f))
         assertEquals(80 to 24, terminalGridSize(800f, 480f, 0f, 0f))
     }
 }
