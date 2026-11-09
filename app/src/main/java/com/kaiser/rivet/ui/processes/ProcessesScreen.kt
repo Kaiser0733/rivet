@@ -45,10 +45,10 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
-import com.kaiser.rivet.chat.TerminalUiState
 import com.kaiser.rivet.runtime.ManagedProcessInfo
 import com.kaiser.rivet.runtime.ManagedProcessKind
 import com.kaiser.rivet.runtime.ManagedProcessStatus
+import com.kaiser.rivet.runtime.InteractiveTerminalSession
 import com.kaiser.rivet.runtime.ManagedProcesses
 import com.kaiser.rivet.ui.terminal.TerminalPane
 import kotlinx.coroutines.delay
@@ -64,23 +64,23 @@ fun ProcessesScreen(processes: ManagedProcesses, onBack: () -> Unit) {
  * deep link still lands on processes and the terminal is one tap away.
  */
 @Composable
-fun ToolsPane(
+internal fun ToolsPane(
     processes: ManagedProcesses,
-    terminal: TerminalUiState,
-    workspaceName: String?,
+    terminal: InteractiveTerminalSession,
     stateLine: String,
-    onRunTerminal: (String) -> Unit,
-    onStopTerminal: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     var terminalOpen by rememberSaveable { mutableStateOf(false) }
     if (terminalOpen) {
         BackHandler { terminalOpen = false }
-        TerminalPane(terminal, workspaceName, stateLine, onRunTerminal, onStopTerminal,
+        TerminalPane(terminal, stateLine,
             onBack = { terminalOpen = false }, modifier = modifier)
     } else {
         ProcessesContent(processes, modifier, null, stateLine = stateLine,
-            onOpenTerminal = { terminalOpen = true })
+            onOpenTerminal = {
+                terminal.open()
+                terminalOpen = true
+            })
     }
 }
 

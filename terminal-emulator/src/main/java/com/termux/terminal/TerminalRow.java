@@ -287,4 +287,46 @@ public final class TerminalRow {
         return mStyle[column];
     }
 
+    /**
+     * The text of one display cell, with any combining characters attached. Empty for the
+     * second half of a wide character and for a column outside the row.
+     */
+    public String getCellText(int column) {
+        if (column < 0 || column >= mColumns) return "";
+        int currentColumn = 0;
+        int charIndex = 0;
+        while (charIndex < mSpaceUsed) {
+            int start = charIndex;
+            char c = mText[charIndex++];
+            int codePoint;
+            if (Character.isHighSurrogate(c) && charIndex < mSpaceUsed) {
+                codePoint = Character.toCodePoint(c, mText[charIndex++]);
+            } else {
+                codePoint = c;
+            }
+            int width = WcWidth.width(codePoint);
+            if (width <= 0) continue;
+            if (column < currentColumn + width) {
+                if (column != currentColumn) return "";
+                int end = charIndex;
+                while (end < mSpaceUsed) {
+                    char next = mText[end];
+                    int nextCodePoint;
+                    int nextLength = 1;
+                    if (Character.isHighSurrogate(next) && end + 1 < mSpaceUsed) {
+                        nextCodePoint = Character.toCodePoint(next, mText[end + 1]);
+                        nextLength = 2;
+                    } else {
+                        nextCodePoint = next;
+                    }
+                    if (WcWidth.width(nextCodePoint) > 0) break;
+                    end += nextLength;
+                }
+                return new String(mText, start, end - start);
+            }
+            currentColumn += width;
+        }
+        return " ";
+    }
+
 }

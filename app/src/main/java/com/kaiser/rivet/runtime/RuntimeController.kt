@@ -131,6 +131,56 @@ class RuntimeController(
     /** Plan §5 rule 14: the one plain terminal state sentence. */
     fun terminalStateLine(activeCount: Int): String = governor.stateLine(activeCount)
 
+    /** One interactive shell: the command environment plus a folder-only prompt. */
+    internal suspend fun openTerminal(job: Job): TerminalLaunch = operations.withLock {
+        val active = currentMirror()
+            ?: return@withLock TerminalLaunch(error = "workspace_unavailable")
+        val readings = governor.readings()
+        managedProcesses?.setActiveLimit(effectiveSlots(readings.thermalStatus))
+        // No timeout inside the session; admission still treats it as a long-running job.
+        commandGate(Long.MAX_VALUE, readings)?.let { code ->
+            return@withLock TerminalLaunch(error = code)
+        }
+        governor.commandStarted()
+        val ready = active.prepare()
+        if (ready.dirty) return@withLock TerminalLaunch(error = "sync_required")
+        toolchain.ensurePrepared()
+        val credentialFile = if (toolchain.gitReady) {
+            withContext(Dispatchers.IO) { gitHub.refresh() }
+        } else null
+        val directory = runtimeDirectory(ready.worktree, "")
+        val environment = terminalEnvironment(
+            environment(active, directory, credentialFile).toList())
+        val identity = mirrorIdentity
+            ?: return@withLock TerminalLaunch(error = "workspace_unavailable")
+        val shell = if (toolchain.availability().busybox) {
+            terminalShellPath(toolchain.binDir)
+        } else SYSTEM_SHELL
+        val managedId = managedProcesses?.let { registry ->
+            registry.registerCommand("Terminal", "", identity, projectName(), job)
+                ?: return@withLock TerminalLaunch(error = "process_limit")
+        }
+        TerminalLaunch(
+            shellPath = shell,
+            cwd = directory.absolutePath,
+            environment = environment.toTypedArray(),
+            managedId = managedId,
+            workspaceIdentity = identity,
+            memoryCapBytes = governor.memoryCapBytes(),
+        )
+    }
+
+    /** Best effort: the interactive shell's mirrored edits reach SAF when it ends. */
+    internal suspend fun syncTerminal(identity: String) {
+        operations.withLock {
+            if (mirrorIdentity != identity) return@withLock
+            try { mirror?.sync() } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { }
+        }
+    }
+
+    internal fun recordTerminalStop(reason: String) = governor.recordStop(reason)
+
     /** What the prompt may honestly claim about the shipped toolchain right now. */
     internal fun toolchainAvailability(): ToolchainAvailability = toolchain.availability()
 
@@ -356,4 +406,16 @@ class RuntimeController(
         if (!target.isDirectory) throw MirrorFailure("invalid_cwd")
         return target
     }
+}
+
+internal const val SYSTEM_SHELL = "/system/bin/sh"
+
+/** The BusyBox ash symlink when the farm is real, otherwise the platform shell. */
+internal fun terminalShellPath(binDir: File?): String =
+    binDir?.let { File(it, "ash") }?.takeIf { it.isFile }?.absolutePath ?: SYSTEM_SHELL
+
+/** TERM and a folder-only, dollar prompt: no user, host, or absolute path. */
+internal fun terminalEnvironment(base: List<String>): List<String> {
+    val kept = base.filterNot { it.startsWith("TERM=") || it.startsWith("PS1=") }
+    return kept + "TERM=xterm-256color" + "PS1=\\W \\$ "
 }
