@@ -595,7 +595,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     EmptyState(RivetDoodle.Project, "Opening your project…",
                         "Rivet is restoring access to the folder you selected.",
                         null, {}, Modifier.weight(1f))
-                } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null && !state.interruptedTurn) {
+                } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null && !state.interruptedTurn && state.goalLine == null) {
                     EmptyState(RivetDoodle.Ready, "Tell Rivet what you want to change.",
                         "Rivet can inspect this project and will ask before changing files.",
                         null, {}, Modifier.weight(1f))
@@ -607,6 +607,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                             onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
                             onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
                             onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
+                            onAttachGoal = chatViewModel::attachGoalToProject,
                             onRetryTurn = chatViewModel::retryFailedTurn,
                             onChooseReasoning = chatViewModel::chooseReasoningLevel,
                             modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
@@ -714,6 +715,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onDiscardProjectChanges: () -> Unit,
                         onRetryInterruptedTurn: () -> Unit,
                         onDismissInterruptedTurn: () -> Unit,
+                        onAttachGoal: () -> Unit,
                         onRetryTurn: () -> Unit,
                         onChooseReasoning: (ReasoningLevel) -> Unit,
                         modifier: Modifier = Modifier) {
@@ -784,6 +786,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     val showActivity = !streaming && state.activity != null
     val showInterruptedTurn = state.interruptedTurn && !state.streaming
     val totalItems = timeline.size +
+        (if (state.goalLine != null) 1 else 0) +
         (if (streamingReasoning.isNotBlank()) 1 else 0) +
         (if (streamingText.isNotBlank()) 1 else 0) +
         (if (liveStatusStart != null) 1 else 0) +
@@ -857,6 +860,11 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        state.goalLine?.let { line ->
+            item(key = "goal-line") {
+                GoalLine(line, state.goalAttachOffer, onAttachGoal)
+            }
+        }
         items(timeline) { entry ->
             when (val item = entry.item) {
                 is AgentConversationItem.Message -> MessageRow(
@@ -892,7 +900,11 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
         if (showInterruptedTurn) item(key = "interrupted-turn") {
-            InterruptedTurnRow(onRetry = onRetryInterruptedTurn, onDismiss = onDismissInterruptedTurn)
+            InterruptedTurnRow(
+                recovery = state.runRecovery,
+                onRetry = onRetryInterruptedTurn,
+                onDismiss = onDismissInterruptedTurn,
+            )
         }
         state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
         state.error?.let { error -> item {
@@ -1323,23 +1335,42 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
 }
 
 @Composable
-private fun InterruptedTurnRow(onRetry: () -> Unit, onDismiss: () -> Unit) {
+private fun InterruptedTurnRow(recovery: String?, onRetry: () -> Unit, onDismiss: () -> Unit) {
     Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(6.dp)) {
         Row(
             Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.SpaceBetween,
         ) {
-            Text(
-                ChatViewModel.INTERRUPTED_TURN_PROMPT,
-                modifier = Modifier.weight(1f),
-                color = MaterialTheme.colorScheme.onSurface,
-                style = MaterialTheme.typography.bodyMedium,
-            )
+            Column(Modifier.weight(1f)) {
+                Text(
+                    ChatViewModel.INTERRUPTED_TURN_PROMPT,
+                    color = MaterialTheme.colorScheme.onSurface,
+                    style = MaterialTheme.typography.bodyMedium,
+                )
+                recovery?.let {
+                    Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        style = MaterialTheme.typography.bodySmall)
+                }
+            }
             Row {
-                TextButton(onClick = onRetry) { Text("Retry") }
+                TextButton(onClick = onRetry) { Text(if (recovery == null) "Retry" else "Resume") }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_error_dismiss)) }
             }
+        }
+    }
+}
+
+@Composable
+private fun GoalLine(line: String, attachOffer: Boolean, onAttach: () -> Unit) {
+    Surface(color = MaterialTheme.colorScheme.surfaceContainer, shape = RoundedCornerShape(6.dp)) {
+        Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 8.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.SpaceBetween) {
+            Text(displaySafeText(line), modifier = Modifier.weight(1f),
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                style = MaterialTheme.typography.bodySmall)
+            if (attachOffer) TextButton(onClick = onAttach) { Text("Attach to project") }
         }
     }
 }

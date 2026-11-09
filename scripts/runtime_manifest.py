@@ -11,12 +11,16 @@ ALLOWED_PERMISSIONS = {
     "android.permission.INTERNET",
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+    "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+    "android.permission.POST_NOTIFICATIONS",
     "com.kaiser.rivet.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
 }
 REQUIRED_PERMISSIONS = {
     "android.permission.INTERNET",
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
+    "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+    "android.permission.POST_NOTIFICATIONS",
 }
 FORBIDDEN_PERMISSIONS = {
     "android.permission.MANAGE_EXTERNAL_STORAGE",
@@ -79,9 +83,14 @@ def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
         f"process service must be explicitly non-exported (exported={exported!r})"
     )
     service_type = _attribute(service, "android:foregroundServiceType") or ""
-    assert service_type.endswith("0x40000000") or service_type.endswith("specialUse"), (
-        "process service must use only foregroundServiceType= specialUse"
-    )
+    encoded = re.search(r"0x([0-9a-fA-F]+)$", service_type)
+    if encoded:
+        bits = int(encoded.group(1), 16)
+        allowed = bits & ~(0x40000000 | 0x00000001) == 0 and bits & 0x40000000 != 0
+    else:
+        names = {piece.strip() for piece in service_type.split("|") if piece.strip()}
+        allowed = "specialUse" in names and names <= {"specialUse", "dataSync"}
+    assert allowed, "process service must use foregroundServiceType=specialUse or specialUse|dataSync"
     properties = _elements(service, "property")
     subtype = [item for item in properties if "PROPERTY_SPECIAL_USE_FGS_SUBTYPE" in item]
     assert len(subtype) == 1, "specialUse service must declare its subtype"
@@ -121,8 +130,10 @@ def verify_release_runtime_manifest(manifest_xml: str) -> None:
         "release process service identity changed"
     )
     assert service.get(ANDROID + "exported") == "false", "release process service must be non-exported"
-    assert service.get(ANDROID + "foregroundServiceType") == "specialUse", (
-        "release process service must use only specialUse"
+    release_type = service.get(ANDROID + "foregroundServiceType") or ""
+    release_types = {piece.strip() for piece in release_type.split("|") if piece.strip()}
+    assert release_types and release_types <= {"specialUse", "dataSync"} and "specialUse" in release_types, (
+        "release process service must use specialUse or specialUse|dataSync"
     )
     subtypes = [node for node in service.findall("property")
                 if node.get(ANDROID + "name") == "android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"]
