@@ -61,7 +61,7 @@ class PersistentProcessServiceTest {
         ))
 
         assertTrue(notification.extras.getBoolean(Notification.EXTRA_SHOW_CHRONOMETER))
-        assertTrue(notification.extras.getLong(Notification.EXTRA_WHEN) > 0L)
+        assertTrue(notification.extras.getLong("android.when") > 0L)
     }
 
     @Test
