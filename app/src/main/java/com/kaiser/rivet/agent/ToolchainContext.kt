@@ -17,7 +17,7 @@ internal object ToolchainContext {
         append(if (availability.python) "available" else "unavailable")
         append("; Git 2.56 ")
         append(if (availability.git) "available" else "unavailable")
-        append('.')
+        append(". HTTP downloads use busybox wget; curl is not part of this toolchain.")
     }
 
     fun updates(messages: List<AgentMessage>, workspace: String,

@@ -71,4 +71,12 @@ class ToolchainTest {
 
         assertTrue(plan.isEmpty)
     }
+
+    @Test fun pythonScriptDirectoryFollowsTheFarmOnPath() {
+        val farm = temp.newFolder("bin")
+        val pythonBin = temp.newFolder("python", "bin")
+
+        assertEquals("${farm.absolutePath}:${pythonBin.absolutePath}:$SYSTEM_PATH",
+            commandPath(busybox(), farm, pythonBin = pythonBin))
+    }
 }
