@@ -32,9 +32,11 @@ import androidx.compose.ui.platform.LocalView
 import androidx.core.view.WindowCompat
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.chat.ChatViewModel
+import com.kaiser.rivet.local.ModelsViewModel
 import com.kaiser.rivet.storage.AutonomyStore
 import com.kaiser.rivet.ui.chat.ChatScreen
 import com.kaiser.rivet.ui.history.HistoryPane
+import com.kaiser.rivet.ui.local.ModelsScreen
 import com.kaiser.rivet.ui.processes.ToolsPane
 import com.kaiser.rivet.ui.provider.ProviderEditor
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
@@ -46,7 +48,8 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
-             providersViewModel: ProvidersViewModel, processNavigationRequest: Int = 0,
+             providersViewModel: ProvidersViewModel, modelsViewModel: ModelsViewModel,
+             processNavigationRequest: Int = 0,
              sharedZip: android.net.Uri? = null, onSharedZipConsumed: () -> Unit = {}) {
     val context = LocalContext.current.applicationContext
     val appearanceStore = remember(context) { AppearanceStore(context) }
@@ -85,10 +88,12 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         // with a separate flag.
         var processesOpen by rememberSaveable { mutableStateOf(false) }
         var settingsOpen by rememberSaveable { mutableStateOf(false) }
+        var modelsOpen by rememberSaveable { mutableStateOf(false) }
         var installOpen by rememberSaveable { mutableStateOf(false) }
         var installZip by remember { mutableStateOf<android.net.Uri?>(null) }
         val drawerState = rememberDrawerState(DrawerValue.Closed)
         val settingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val modelsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val saveableStates = rememberSaveableStateHolder()
         LaunchedEffect(processNavigationRequest) {
             if (processNavigationRequest > 0) {
@@ -107,6 +112,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
         val editor by providersViewModel.editorState.collectAsState()
+        val providerList by providersViewModel.listState.collectAsState()
         if (editing && editor.config.id.isEmpty()) editing = false
         // Stable instances so ChatScreen can skip: these only change shell state, which
         // rememberSaveable keeps across recompositions.
@@ -118,10 +124,17 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             { coroutineScope.launch { drawerState.close() }; Unit }
         }
         val openProcesses = remember { { processesOpen = true } }
+        val openModels = remember {
+            {
+                settingsOpen = false
+                modelsOpen = true
+            }
+        }
 
         val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open || processesOpen
-        BackHandler(editing || settingsOpen || panelOpen) {
+        BackHandler(editing || settingsOpen || modelsOpen || panelOpen) {
             when {
+                modelsOpen -> modelsOpen = false
                 editing -> {
                     providersViewModel.closeEditor()
                     editing = false
@@ -154,7 +167,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 ChatScreen(chatViewModel, providersViewModel,
                                     onOpenSettings = openSettings,
                                     onOpenHistory = openHistory,
-                                    onOpenProcesses = openProcesses)
+                                    onOpenProcesses = openProcesses,
+                                    onStartOffline = openModels)
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
@@ -173,6 +187,21 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                         }
                     }
                 }
+            }
+        }
+
+        // Models is reachable before any provider exists, so it gets its own sheet
+        // rather than hiding inside Settings.
+        if (modelsOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { modelsOpen = false },
+                sheetState = modelsSheetState,
+            ) {
+                ModelsScreen(
+                    viewModel = modelsViewModel,
+                    firstRun = providerList.configs.isEmpty(),
+                    onClose = { modelsOpen = false },
+                )
             }
         }
 
@@ -216,6 +245,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                         providersViewModel.startNewProvider(it)
                         editing = true
                     },
+                    onOpenModels = openModels,
                     themeMode = themeMode,
                     themeSaving = themeSaving,
                     onThemeChange = { value ->

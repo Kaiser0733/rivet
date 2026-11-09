@@ -14,6 +14,10 @@ val packagedNotices by tasks.registering(Sync::class) {
 }
 
 android {
+    // Local inference is pinned to llama.cpp v0.9.0
+    // (cd959bae99ff4bed22bef2604f45241c09bbb8c8). CI clones that tag, builds
+    // app/src/main/cpp for arm64-v8a only (CPU; no Vulkan/OpenCL), and packages
+    // the resulting librivet_llama.so from app/src/main/jniLibs.
     namespace = "com.kaiser.rivet"
     compileSdk = 35
 
@@ -25,8 +29,8 @@ android {
         applicationId = "com.kaiser.rivet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 26
-        versionName = "1.2.0"
+        versionCode = 27
+        versionName = "1.3.0"
     }
 
     buildFeatures {

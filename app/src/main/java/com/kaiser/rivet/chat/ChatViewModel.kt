@@ -259,6 +259,10 @@ private class StoredProviderRuntimeSource(app: Application) : ProviderRuntimeSou
             ?: return ProviderRuntimeResult.Failure("Choose a model first. Add one in Settings.")
         val config = providerStore.configSnapshot().firstOrNull { it.id == activeId }
             ?: return ProviderRuntimeResult.Failure("The selected provider no longer exists.")
+        if (config.type == ProviderType.Local) {
+            // Local GGUF models have no API key and never touch a remote endpoint.
+            return ProviderRuntimeResult.Ready(config, "")
+        }
         if (config.type == ProviderType.ChatGptPlan) {
             // OAuth access token (refreshed if expired); the factory's String
             // slot already carries token-shaped values, so no signature change.
@@ -1299,6 +1303,14 @@ class ChatViewModel private constructor(
                     workspaceAccessFailed = true
                 }
             }
+            if (workspaceId != null && snapshot.config.type == ProviderType.Local) {
+                val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
+                val block = local?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)
+                if (block != null) {
+                    failBeforeStart(block, wasInterrupted)
+                    return@launch
+                }
+            }
             val current = _uiState.value
             val binding = projectBindingState(current.currentSessionId,
                 current.currentSessionWorkspaceId, workspaceId, projectLoading = false)
@@ -1827,10 +1839,12 @@ class ChatViewModel private constructor(
                 }
                 // A provider that explains itself gets to say so, in its own words.
                 val detail = (e as? ProviderError.ProviderMessage)?.let { providerMessageText(it.text) }
-                stableFailure(ticket, durable, detail ?: e.text(),
-                    if (e is ProviderError.Unauthorized || e is ProviderError.Forbidden ||
-                        e is ProviderError.ModelNotFound) ChatErrorAction.OpenSettings
-                    else ChatErrorAction.RetryTurn)
+                val action = if (snapshot.config.type == ProviderType.Local ||
+                    e is ProviderError.Unauthorized || e is ProviderError.Forbidden ||
+                    e is ProviderError.ModelNotFound) {
+                    ChatErrorAction.OpenSettings
+                } else ChatErrorAction.RetryTurn
+                stableFailure(ticket, durable, detail ?: e.text(), action)
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent turn failed: ${e.javaClass.simpleName}")
                 stableFailure(ticket, durable,

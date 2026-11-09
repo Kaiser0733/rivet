@@ -72,7 +72,7 @@ private val MAX_WIDTH = 680.dp
 
 // The section that is open at level 2. Remembered by RivetApp, so Android Back can step
 // detail -> list -> dismiss instead of closing the sheet in one go.
-internal enum class SettingsSection { Providers, Appearance, Agent, Memory, GitHub, Skills, Updates, About }
+internal enum class SettingsSection { Providers, Models, Appearance, Agent, Memory, GitHub, Skills, Updates, About }
 
 /**
  * The body of the settings modal sheet: a two-level page — a section list, and one
@@ -107,6 +107,7 @@ fun SettingsScreen(
     spendCaps: SpendCaps = SpendCaps(),
     userPricePerMillionUsd: Double? = null,
     onSaveSpend: (SpendCaps, Double?) -> Unit = { _, _ -> },
+    onOpenModels: () -> Unit = {},
 ) {
     val state by viewModel.listState.collectAsState()
     val gitHubState by viewModel.gitHubState.collectAsState()
@@ -247,8 +248,11 @@ fun SettingsScreen(
                         else -> "Not connected"
                     },
                     versionSummary = stringResource(R.string.provider_hint_version, versionName),
-                    onSelect = { section = it },
+                    onSelect = {
+                        if (it == SettingsSection.Models) onOpenModels() else section = it
+                    },
                 )
+                SettingsSection.Models -> Unit
                 SettingsSection.Providers -> ProviderDetail(
                     loadError = state.loadError,
                     headerNotice = state.headerNotice,
@@ -340,6 +344,7 @@ private fun SheetTopBar(
 
 private fun SettingsSection.title(): String = when (this) {
     SettingsSection.Providers -> "Providers"
+    SettingsSection.Models -> "Models"
     SettingsSection.Appearance -> "Appearance"
     SettingsSection.Agent -> "Agent"
     SettingsSection.Memory -> "Memory"
@@ -370,6 +375,7 @@ private fun SectionList(
         SettingsSection.entries.forEachIndexed { index, section ->
             val (title, summary) = when (section) {
                 SettingsSection.Providers -> "Providers" to providerSummary
+                SettingsSection.Models -> "Models" to "Download and run a model on this phone"
                 SettingsSection.Appearance -> "Appearance" to themeSummary
                 SettingsSection.Agent -> "Agent" to autonomySummary
                 SettingsSection.Memory -> "Memory" to memorySummary
@@ -380,6 +386,7 @@ private fun SectionList(
             }
             val iconRes = when (section) {
                 SettingsSection.Providers -> R.drawable.ic_settings // gear = providers config
+                SettingsSection.Models -> R.drawable.ic_processes // local inference
                 SettingsSection.Appearance -> R.drawable.ic_visibility // sun/moon for theme
                 SettingsSection.Agent -> R.drawable.ic_processes // robot/processes for agent
                 SettingsSection.Memory -> R.drawable.ic_files // durable project facts
@@ -895,18 +902,28 @@ private fun ProviderRow(
             RadioButton(selected = isActive, onClick = if (isActive) null else onSelect)
             Column(Modifier.weight(1f).padding(start = 4.dp, end = 4.dp)) {
                 Text(provider.name, style = MaterialTheme.typography.titleMedium)
-                Text("${typeDisplayName(provider.type)} · ${provider.model}",
+                val providerDetail = if (provider.type == ProviderType.Local) {
+                    "${typeDisplayName(provider.type)} · installed model"
+                } else {
+                    "${typeDisplayName(provider.type)} · ${provider.model}"
+                }
+                Text(providerDetail,
                     style = MaterialTheme.typography.bodySmall,
                     maxLines = 1, overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            IconButton(onClick = onEdit) {
-                Icon(painterResource(R.drawable.ic_edit), stringResource(R.string.provider_edit_action),
-                    tint = MaterialTheme.colorScheme.onBackground)
-            }
-            IconButton(onClick = onDelete) {
-                Icon(painterResource(R.drawable.ic_delete), stringResource(R.string.provider_delete_action),
-                    tint = MaterialTheme.colorScheme.onBackground)
+            if (provider.type == ProviderType.Local) {
+                Text("Managed in Models", style = MaterialTheme.typography.labelSmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            } else {
+                IconButton(onClick = onEdit) {
+                    Icon(painterResource(R.drawable.ic_edit), stringResource(R.string.provider_edit_action),
+                        tint = MaterialTheme.colorScheme.onBackground)
+                }
+                IconButton(onClick = onDelete) {
+                    Icon(painterResource(R.drawable.ic_delete), stringResource(R.string.provider_delete_action),
+                        tint = MaterialTheme.colorScheme.onBackground)
+                }
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
@@ -921,4 +938,5 @@ fun typeDisplayName(type: ProviderType): String = when (type) {
     ProviderType.Gemini -> stringResource(R.string.type_gemini)
     ProviderType.OpenRouter -> stringResource(R.string.type_openrouter)
     ProviderType.ChatGptPlan -> stringResource(R.string.type_chatgpt_plan)
+    ProviderType.Local -> stringResource(R.string.type_local)
 }

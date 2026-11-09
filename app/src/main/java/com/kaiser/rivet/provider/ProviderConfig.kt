@@ -11,6 +11,8 @@ enum class ProviderType(val defaultBaseUrl: String) {
     @SerialName("gemini") Gemini("https://generativelanguage.googleapis.com"),
     @SerialName("openrouter") OpenRouter("https://openrouter.ai/api/v1"),
     @SerialName("chatgpt_plan") ChatGptPlan("https://api.openai.com/v1"),
+    /** An installed GGUF run by Rivet's llama.cpp JNI layer. No API key exists. */
+    @SerialName("local") Local("local://"),
 }
 
 @Serializable
