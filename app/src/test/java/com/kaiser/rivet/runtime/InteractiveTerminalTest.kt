@@ -38,13 +38,22 @@ class InteractiveTerminalTest {
         val launches: () -> Int,
         val closed: MutableList<String>,
         val exits: MutableList<Pair<String, Int>>,
+        val stops: MutableList<String>,
         val setIdentity: (String) -> Unit,
     )
 
-    private fun harness(scope: kotlinx.coroutines.CoroutineScope): Harness {
+    private fun harness(
+        scope: kotlinx.coroutines.CoroutineScope,
+        treeWatcher: TerminalTreeWatcher = object : TerminalTreeWatcher {
+            override suspend fun watch(pid: Int, memoryCapBytes: Long?,
+                                       terminate: suspend () -> Unit): String? = null
+        },
+        killDescendants: (Int) -> Unit = {},
+    ): Harness {
         val engines = mutableListOf<FakeEngine>()
         val closed = mutableListOf<String>()
         val exits = mutableListOf<Pair<String, Int>>()
+        val stops = mutableListOf<String>()
         var launches = 0
         var identity = "A"
         val holder = InteractiveTerminalSession(
@@ -58,13 +67,12 @@ class InteractiveTerminalTest {
             },
             onNaturalExit = { id, code -> exits += id to code },
             onClosed = { id -> closed += id },
-            treeWatcher = object : TerminalTreeWatcher {
-                override suspend fun watch(pid: Int, memoryCapBytes: Long?,
-                                           terminate: suspend () -> Unit): String? = null
-            },
+            onStopRecorded = { reason -> stops += reason },
+            treeWatcher = treeWatcher,
             killGroup = { _ -> },
+            killDescendants = killDescendants,
         )
-        return Harness(holder, engines, { launches }, closed, exits,
+        return Harness(holder, engines, { launches }, closed, exits, stops,
             { value -> identity = value })
     }
 
@@ -132,6 +140,30 @@ class InteractiveTerminalTest {
         harness.holder.ensureStarted(100, 30, 8, 16)
         delay(200)
         assertEquals(2, engine.resizes)
+    }
+
+    @Test fun watchdogStopsDescendantsButLeavesTheShellPromptAlive() = runTest {
+        val stops = mutableListOf<String>()
+        val killed = mutableListOf<Int>()
+        var calls = 0
+        val watcher = object : TerminalTreeWatcher {
+            override suspend fun watch(pid: Int, memoryCapBytes: Long?,
+                                       terminate: suspend () -> Unit): String? {
+                calls++
+                if (calls == 1) terminate()
+                return if (calls == 1) "memory limit" else null
+            }
+        }
+        val harness = harness(this, watcher) { root -> killed += root }
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+        val engine = harness.engines.single()
+
+        assertTrue(harness.holder.state.value.running)
+        assertFalse(engine.closed)
+        assertEquals(listOf(4242), killed)
+        assertEquals(listOf("memory limit"), harness.stops)
     }
 
     @Test fun aShellExitBecomesTheEndedStateAndFinishesTheManagedEntry() = runTest {
