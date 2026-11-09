@@ -7,6 +7,10 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class LocalToolProtocolTest {
+    private fun catalogueFile(): java.io.File =
+        listOf(java.io.File("src/main/assets/local-models.json"),
+            java.io.File("app/src/main/assets/local-models.json")).first { it.isFile }
+
     @Test
     fun parsesQwenTaggedToolCallsAndLeavesTheText() {
         val parsed = LocalToolProtocol.parse("""
@@ -36,6 +40,16 @@ class LocalToolProtocolTest {
         assertTrue(grammar.contains("\"read_file\""))
         assertTrue(grammar.contains("\"run_command\""))
         assertTrue(grammar.contains("root ::="))
+    }
+
+    @Test
+    fun aNoneCapabilityModelIsRefusedInPlainWords() {
+        val entry = com.kaiser.rivet.local.ModelCatalogue.parse(
+            catalogueFile().readText()).first()
+            .copy(toolCalling = LocalToolCalling.None)
+        val reason = LocalToolProtocol.agentBlockReason(entry)
+        assertTrue(reason != null && reason.contains("can't use tools"))
+        assertTrue(LocalToolProtocol.agentBlockReason(entry.copy(toolCalling = LocalToolCalling.Verified)) == null)
     }
 
     @Test

@@ -27,6 +27,12 @@ object LocalToolProtocol {
     fun profile(tools: List<AgentToolDefinition>): List<AgentToolDefinition> =
         tools.filter { it.name in coreTools }
 
+    /** Null means the model may run the agent; otherwise this is the one-line refusal. */
+    fun agentBlockReason(entry: LocalModelEntry): String? =
+        if (entry.toolCalling == LocalToolCalling.None) {
+            "This local model can chat but can't use tools. Pick a model marked for coding."
+        } else null
+
     fun systemSuffix(tools: List<AgentToolDefinition>): String {
         if (tools.isEmpty()) return ""
         return buildString {
