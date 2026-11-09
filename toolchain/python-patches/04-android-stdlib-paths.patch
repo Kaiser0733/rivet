@@ -1,0 +1,91 @@
+diff --git a/Lib/ctypes/util.py b/Lib/ctypes/util.py
+index c550883..71f01fa 100644
+--- a/Lib/ctypes/util.py
++++ b/Lib/ctypes/util.py
+@@ -175,7 +175,7 @@ elif os.name == "posix":
+             # assuming GNU binutils / ELF
+             if not f:
+                 return None
+-            objdump = shutil.which('objdump')
++            objdump = shutil.which('llvm-objdump')
+             if not objdump:
+                 # objdump is not available, give up
+                 return None
+@@ -207,12 +207,26 @@ elif os.name == "posix":
+             return nums or [sys.maxsize]
+ 
+         def find_library(name):
++            if hasattr(sys, 'getandroidapilevel'):
++                search_dirs = []
++                try:
++                    search_dirs.append(os.path.dirname(os.path.realpath(sys.executable)))
++                except Exception:
++                    pass
++                if os.environ.get('LD_LIBRARY_PATH'):
++                    search_dirs.extend(os.environ['LD_LIBRARY_PATH'].split(':'))
++                search_dirs.extend(['/system/lib64', '/vendor/lib64'])
++                for d in search_dirs:
++                    if d:
++                        candidate = os.path.join(d, f'lib{name}.so')
++                        if os.path.isfile(candidate):
++                            return candidate
+             ename = re.escape(name)
+             expr = r':-l%s\.\S+ => \S*/(lib%s\.\S+)' % (ename, ename)
+             expr = os.fsencode(expr)
+ 
+             try:
+-                proc = subprocess.Popen(('/sbin/ldconfig', '-r'),
++                proc = subprocess.Popen(('@TERMUX_PREFIX@/bin/ldconfig', '-r'),
+                                         stdout=subprocess.PIPE,
+                                         stderr=subprocess.DEVNULL)
+             except OSError:  # E.g. command not found
+@@ -303,7 +317,7 @@ elif os.name == "posix":
+         def _findLib_ld(name):
+             # See issue #9998 for why this is needed
+             expr = r'[^\(\)\s]*lib%s\.[^\(\)\s]*' % re.escape(name)
+-            cmd = ['ld', '-t']
++            cmd = ['ld.lld', '-t']
+             libpath = os.environ.get('LD_LIBRARY_PATH')
+             if libpath:
+                 for d in libpath.split(':'):
+diff --git a/Lib/http/server.py b/Lib/http/server.py
+index ca6240d..b4f3b97 100644
+--- a/Lib/http/server.py
++++ b/Lib/http/server.py
+@@ -1183,10 +1183,6 @@ class CGIHTTPRequestHandler(SimpleHTTPRequestHandler):
+                 return
+             # Child
+             try:
+-                try:
+-                    os.setuid(nobody)
+-                except OSError:
+-                    pass
+                 os.dup2(self.rfile.fileno(), 0)
+                 os.dup2(self.wfile.fileno(), 1)
+                 os.execve(scriptfile, args, env)
+diff --git a/Lib/posixpath.py b/Lib/posixpath.py
+index e4f155e..7b280a7 100644
+--- a/Lib/posixpath.py
++++ b/Lib/posixpath.py
+@@ -18,7 +18,7 @@ pardir = '..'
+ extsep = '.'
+ sep = '/'
+ pathsep = ':'
+-defpath = '/bin:/usr/bin'
++defpath = '/data/data/com.kaiser.rivet/files/toolchain/bin:/system/bin'
+ altsep = None
+ devnull = '/dev/null'
+ 
+diff --git a/Lib/tempfile.py b/Lib/tempfile.py
+index cbfc172..2e03a9f 100644
+--- a/Lib/tempfile.py
++++ b/Lib/tempfile.py
+@@ -170,7 +170,7 @@ def _candidate_tempdir_list():
+                          _os.path.expandvars(r'%SYSTEMROOT%\Temp'),
+                          r'c:\temp', r'c:\tmp', r'\temp', r'\tmp' ])
+     else:
+-        dirlist.extend([ '/tmp', '/var/tmp', '/usr/tmp' ])
++        dirlist.extend([ '/data/data/com.kaiser.rivet/files/toolchain/tmp', '/tmp', '/var/tmp' ])
+ 
+     # As a last resort, the current directory.
+     try:
