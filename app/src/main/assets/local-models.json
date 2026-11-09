@@ -1,0 +1,83 @@
+{
+  "schema": 1,
+  "models": [
+    {
+      "name": "Qwen3 0.6B",
+      "repo": "unsloth/Qwen3-0.6B-GGUF",
+      "file": "Qwen3-0.6B-Q4_K_M.gguf",
+      "size": 396705472,
+      "params": "0.6B",
+      "ramFloor": 4096,
+      "contextMax": 4096,
+      "categories": ["General", "Coding"],
+      "toolCalling": "prompted",
+      "blurb": "The smallest option. Good for quick questions and short notes on a 4 GB phone.",
+      "sha256": "ac2d97712095a558e31573f62f466a3f9d93990898b0ec79d7c974c1780d524a"
+    },
+    {
+      "name": "Llama 3.2 1B Instruct",
+      "repo": "unsloth/Llama-3.2-1B-Instruct-GGUF",
+      "file": "Llama-3.2-1B-Instruct-Q4_K_M.gguf",
+      "size": 807694368,
+      "params": "1B",
+      "ramFloor": 6144,
+      "contextMax": 8192,
+      "categories": ["General", "Coding"],
+      "toolCalling": "prompted",
+      "blurb": "Fast replies and simple edits. A good fit when 8 GB is not available.",
+      "sha256": "3f5a22426976ab26cfe84dba63c1d08391717abb1af893e10f1b2968d862dcc1"
+    },
+    {
+      "name": "Qwen3 1.7B",
+      "repo": "unsloth/Qwen3-1.7B-GGUF",
+      "file": "Qwen3-1.7B-Q4_K_M.gguf",
+      "size": 1107409472,
+      "params": "1.7B",
+      "ramFloor": 6144,
+      "contextMax": 8192,
+      "categories": ["Coding", "General"],
+      "toolCalling": "prompted",
+      "blurb": "A small coding model with room for short project files and follow-up questions.",
+      "sha256": "b139949c5bd74937ad8ed8c8cf3d9ffb1e99c866c823204dc42c0d91fa181897"
+    },
+    {
+      "name": "Llama 3.2 3B Instruct",
+      "repo": "unsloth/Llama-3.2-3B-Instruct-GGUF",
+      "file": "Llama-3.2-3B-Instruct-Q4_K_M.gguf",
+      "size": 2019377600,
+      "params": "3B",
+      "ramFloor": 8192,
+      "contextMax": 16384,
+      "categories": ["General", "Coding"],
+      "toolCalling": "prompted",
+      "blurb": "A useful balance of answer quality and speed on an 8 GB phone.",
+      "sha256": "6c99cc00ae910f6a532a80022cb4bc1939094527a089c29294b841c0bd87f74d"
+    },
+    {
+      "name": "Qwen3 4B Instruct",
+      "repo": "unsloth/Qwen3-4B-Instruct-2507-GGUF",
+      "file": "Qwen3-4B-Instruct-2507-Q4_K_M.gguf",
+      "size": 2497281120,
+      "params": "4B",
+      "ramFloor": 8192,
+      "contextMax": 16384,
+      "categories": ["Coding", "General"],
+      "toolCalling": "verified",
+      "blurb": "The best coding choice for most 8 GB phones, with a 16K working window.",
+      "sha256": "3605803b982cb64aead44f6c1b2ae36e3acdb41d8e46c8a94c6533bc4c67e597"
+    },
+    {
+      "name": "Qwen3 8B",
+      "repo": "Qwen/Qwen3-8B-GGUF",
+      "file": "Qwen3-8B-Q4_K_M.gguf",
+      "size": 5027783488,
+      "params": "8B",
+      "ramFloor": 12288,
+      "contextMax": 16384,
+      "categories": ["Coding", "General"],
+      "toolCalling": "verified",
+      "blurb": "The strongest option here, for 12 GB phones that can spare the memory.",
+      "sha256": "d98cdcbd03e17ce47681435b5150e34c1417f50b5c0019dd560e4882c5745785"
+    }
+  ]
+}
