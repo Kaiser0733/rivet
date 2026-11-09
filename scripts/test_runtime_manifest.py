@@ -36,6 +36,7 @@ RELEASE_MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/re
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE_DATA_SYNC" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
+    <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
     <application>
         <activity android:name=".MainActivity" android:exported="true" />
         <service android:name=".runtime.PersistentProcessService" android:exported="false"
