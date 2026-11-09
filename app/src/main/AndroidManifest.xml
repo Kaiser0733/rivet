@@ -47,5 +47,9 @@
                 android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
                 android:value="User-visible loopback-only preview server for a selected project in the external browser." />
         </service>
+        <service
+            android:name=".local.ModelDownloadService"
+            android:exported="false"
+            android:foregroundServiceType="dataSync" />
     </application>
 </manifest>
