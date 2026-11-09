@@ -156,3 +156,9 @@ THE SOFTWARE.
 The modern [`termux-play-store/termux-exec`](https://github.com/termux-play-store/termux-exec)
 implementation was reviewed at `47633d5df2db3dfea34cef568c6c82a7ba8dcc2e`
 (Apache-2.0). No `termux-exec` code or binaries are included in this APK.
+
+Rivet ships the curl.se Mozilla CA certificate extract
+(`https://curl.se/ca/cacert.pem`) as `toolchain/src/main/assets/ca-certificates.pem`.
+The bundle is MPL-2.0; each root certificate retains its own notice inside the
+PEM. Rivet extracts it to app-private storage and points `SSL_CERT_FILE` at it.
+The pinned hash and refresh procedure are in `toolchain/CA-BUNDLE.md`.

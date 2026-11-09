@@ -8,6 +8,7 @@ import java.io.BufferedInputStream
 import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -48,6 +49,11 @@ internal const val PYTHON_MARKER = ".rivet-python-version"
 internal const val SYSTEM_CA_PATH = "/system/etc/security/cacerts"
 private const val PYTHON_ASSET = "python-stdlib.zip"
 
+/** Bumped with the bundled Mozilla extract so an app update refreshes it. */
+internal const val CA_BUNDLE_VERSION = "mozilla-cacert-2026-11-09"
+internal const val CA_BUNDLE_MARKER = ".rivet-ca-version"
+private const val CA_BUNDLE_ASSET = "ca-certificates.pem"
+
 /** Bumped whenever `git-templates.zip` changes, so an app update re-extracts it once. */
 internal const val GIT_TEMPLATES_VERSION = "2.56.0-rivet1"
 internal const val GIT_TEMPLATES_MARKER = ".git-templates-version"
@@ -84,6 +90,7 @@ internal class Toolchain(context: Context) {
     val gitRemoteHttps: File? get() = nativeDir?.let { File(it, "libgit-remote-https.so") }
     val gitExecDir: File? get() = dataRoot?.let { File(it, "libexec/git-core") }
     val gitTemplateDir: File? get() = dataRoot?.let { File(it, "share/git-core/templates") }
+    val caBundle: File? get() = dataRoot?.let { File(it, "etc/ssl/cert.pem") }
 
     /** Which shipped toolchain pieces are actually on disk; the prompt and Settings
      * copy are composed from this rather than from what the app intended to ship. */
@@ -116,20 +123,27 @@ internal class Toolchain(context: Context) {
         val python = pythonExecutable?.takeIf { it.isFile }
         val gitBinary = git?.takeIf { it.isFile }
         val gitRemote = gitRemoteHttps?.takeIf { it.isFile }
-        if (binary == null && python == null && gitBinary == null) {
-            // The module ships arm64 binaries; a build or device where none is visible
-            // must not silently pretend the toolchain exists.
-            Log.w("Toolchain", "No toolchain binaries under " +
-                (nativeDir?.absolutePath ?: "an unavailable native directory") +
-                "; commands use the legacy shell environment.")
-            prepared = true
-            return
-        }
         withContext(Dispatchers.IO) {
             try {
                 // Plan §5 rule 10: Zone D takes no new bytes at the 1 GB cap. The farm and
                 // the stdlib are the Zone D writers; installs use the same gate.
                 if (!ToolchainStorage.admits(dataRoot, 0L)) {
+                    prepared = true
+                    return@withContext
+                }
+                // The CA file is independent of the binaries; extract it even when a
+                // device is missing the toolchain so the next update can use it.
+                try {
+                    prepareCaBundle()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) { }
+                if (binary == null && python == null && gitBinary == null) {
+                    // The module ships arm64 binaries; a build or device where none is visible
+                    // must not silently pretend the toolchain exists.
+                    Log.w("Toolchain", "No toolchain binaries under " +
+                        (nativeDir?.absolutePath ?: "an unavailable native directory") +
+                        "; commands use the legacy shell environment.")
                     prepared = true
                     return@withContext
                 }
@@ -175,10 +189,26 @@ internal class Toolchain(context: Context) {
 
     /** Toolchain environment; the exact input when neither Python nor git is ready. */
     fun commandEnvironment(base: List<String>, credentialFile: File? = null): List<String> {
-        val withPython = if (pythonReady) pythonEnvironment(base, pythonHome, pythonTmp) else base
+        val certificates = caBundle?.takeIf { it.isFile && it.length() > 0 }
+        val withPython = if (pythonReady) {
+            pythonEnvironment(base, pythonHome, pythonTmp, certificates)
+        } else base
         return if (gitReady) {
-            gitEnvironment(withPython, gitExecDir, gitTemplateDir, credentialFile)
+            gitEnvironment(withPython, gitExecDir, gitTemplateDir, credentialFile, certificates)
         } else withPython
+    }
+
+    /** Copies the Mozilla extract once per asset version into Zone D. */
+    private fun prepareCaBundle() {
+        val target = caBundle ?: return
+        val parent = target.parentFile ?: return
+        val marker = File(parent, CA_BUNDLE_MARKER)
+        if (target.isFile && target.length() > 0 &&
+            readMarker(marker) == CA_BUNDLE_VERSION) return
+        app.assets.open(CA_BUNDLE_ASSET).use { input ->
+            if (!extractCaBundle(input, target)) return
+        }
+        marker.writeText(CA_BUNDLE_VERSION)
     }
 
     /**
@@ -437,7 +467,24 @@ internal fun versionedExtraction(
  * Adds PYTHONHOME, SSL_CERT_FILE and the Zone D TMPDIR to the command environment. A null
  * home means Python was not prepared, and the input list is returned unchanged.
  */
-internal fun pythonEnvironment(base: List<String>, home: File?, temporary: File?): List<String> {
+/** Copy one certificate bundle; marker write stays with the caller. */
+internal fun extractCaBundle(input: InputStream, target: File): Boolean {
+    return try {
+        val parent = target.parentFile ?: return false
+        if (!parent.isDirectory && !parent.mkdirs()) return false
+        FileOutputStream(target).use { output -> input.copyTo(output) }
+        target.length() > 0
+    } catch (_: Exception) {
+        false
+    }
+}
+
+internal fun pythonEnvironment(
+    base: List<String>,
+    home: File?,
+    temporary: File?,
+    certificates: File? = null,
+): List<String> {
     if (home == null || temporary == null) return base
     val environment = ArrayList<String>(base.size + 3)
     var temporaryReplaced = false
@@ -451,7 +498,8 @@ internal fun pythonEnvironment(base: List<String>, home: File?, temporary: File?
     }
     if (!temporaryReplaced) environment += "TMPDIR=${temporary.absolutePath}"
     environment += "PYTHONHOME=${home.absolutePath}"
-    environment += "SSL_CERT_FILE=$SYSTEM_CA_PATH"
+    environment.removeAll { it.startsWith("SSL_CERT_FILE=") }
+    environment += "SSL_CERT_FILE=${certificates?.absolutePath ?: SYSTEM_CA_PATH}"
     return environment
 }
 
@@ -465,14 +513,20 @@ internal fun gitEnvironment(
     execPath: File?,
     templateDir: File?,
     credentialFile: File?,
+    certificates: File? = null,
 ): List<String> {
     if (execPath == null || templateDir == null) return base
-    val environment = ArrayList<String>(base.size + 7)
+    val environment = ArrayList<String>(base.size + 9)
     environment += base
     environment += "GIT_EXEC_PATH=${execPath.absolutePath}"
     environment += "GIT_TEMPLATE_DIR=${templateDir.absolutePath}"
     environment += "GIT_SSL_CAPATH=$SYSTEM_CA_PATH"
     environment += "GIT_CONFIG_NOSYSTEM=1"
+    if (certificates != null) {
+        environment.removeAll { it.startsWith("SSL_CERT_FILE=") }
+        environment += "GIT_SSL_CAINFO=${certificates.absolutePath}"
+        environment += "SSL_CERT_FILE=${certificates.absolutePath}"
+    }
     if (credentialFile != null) {
         environment += "GIT_CONFIG_COUNT=1"
         environment += "GIT_CONFIG_KEY_0=credential.helper"
