@@ -8,6 +8,7 @@ import androidx.core.view.WindowCompat
 import androidx.lifecycle.ViewModelProvider
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.ui.RivetApp
+import com.kaiser.rivet.local.ModelsViewModel
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import kotlinx.coroutines.flow.MutableStateFlow
 import androidx.compose.runtime.collectAsState
@@ -40,10 +41,11 @@ class MainActivity : ComponentActivity() {
         val versionName = packageManager.getPackageInfo(packageName, 0).versionName ?: ""
         val chatViewModel = ViewModelProvider(this)[ChatViewModel::class.java]
         val providersViewModel = ViewModelProvider(this)[ProvidersViewModel::class.java]
+        val modelsViewModel = ViewModelProvider(this)[ModelsViewModel::class.java]
         setContent {
             val request by processNavigationRequest.collectAsState()
             val sharedZip by sharedZipRequest.collectAsState()
-            RivetApp(versionName, chatViewModel, providersViewModel, request,
+            RivetApp(versionName, chatViewModel, providersViewModel, modelsViewModel, request,
                 sharedZip = sharedZip,
                 onSharedZipConsumed = { sharedZipRequest.value = null })
         }

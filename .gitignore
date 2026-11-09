@@ -36,3 +36,7 @@ key.properties
 
 # machine-local verification ledger
 .receipts/
+
+# llama.cpp checkout built by the pinned CI step; the .so is packaged from here.
+.native/
+app/src/main/jniLibs/
