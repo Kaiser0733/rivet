@@ -221,7 +221,10 @@ internal class InteractiveTerminalSession(
             engine.close()
             killSession(engine.pid)
         }
-        if (reason != null) onStopRecorded(reason)
+        // A watcher may end without a stop (its coroutine was cancelled, or a test
+        // double has nothing to report); only a real tree stop closes the session.
+        if (reason == null) return
+        onStopRecorded(reason)
         if (ticket != generation || finished) return
         closeInternal(markEnded = true)
     }

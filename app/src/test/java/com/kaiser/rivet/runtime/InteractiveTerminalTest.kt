@@ -1,8 +1,8 @@
 package com.kaiser.rivet.runtime
 
 import com.termux.terminal.TerminalEmulator
-import kotlinx.coroutines.test.advanceUntilIdle
 import kotlinx.coroutines.test.runTest
+import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -64,16 +64,22 @@ class InteractiveTerminalTest {
             { value -> identity = value })
     }
 
+    private suspend fun settle() {
+        // Let the holder's launch, start and watcher coroutines take their turns on the
+        // test dispatcher without depending on an experimental scheduler API.
+        repeat(4) { yield() }
+    }
+
     @Test fun startsOnceAndReusesTheSessionAcrossReopen() = runTest {
         val harness = harness(this)
         harness.holder.open("A")
         harness.holder.ensureStarted(80, 24, 8, 16)
-        advanceUntilIdle()
+        settle()
         val first = harness.engines.single()
 
         harness.holder.open("A")
         harness.holder.ensureStarted(100, 30, 8, 16)
-        advanceUntilIdle()
+        settle()
 
         assertEquals(1, harness.launches())
         assertEquals(1, harness.engines.size)
@@ -86,13 +92,13 @@ class InteractiveTerminalTest {
         val harness = harness(this)
         harness.holder.open("A")
         harness.holder.ensureStarted(80, 24, 8, 16)
-        advanceUntilIdle()
+        settle()
         val old = harness.engines.single()
 
         harness.setIdentity("B")
         harness.holder.open("B")
         harness.holder.ensureStarted(80, 24, 8, 16)
-        advanceUntilIdle()
+        settle()
 
         assertEquals(2, harness.launches())
         assertTrue(old.closed)
@@ -105,11 +111,11 @@ class InteractiveTerminalTest {
         val harness = harness(this)
         harness.holder.open("A")
         harness.holder.ensureStarted(80, 24, 8, 16)
-        advanceUntilIdle()
+        settle()
         val engine = harness.engines.single()
 
         engine.exit(7)
-        advanceUntilIdle()
+        settle()
 
         assertTrue(harness.holder.state.value.ended)
         assertEquals(7, harness.holder.state.value.exitCode)
@@ -122,11 +128,11 @@ class InteractiveTerminalTest {
         val harness = harness(this)
         harness.holder.open("A")
         harness.holder.ensureStarted(80, 24, 8, 16)
-        advanceUntilIdle()
+        settle()
         val engine = harness.engines.single()
 
         harness.holder.close()
-        advanceUntilIdle()
+        settle()
 
         assertTrue(harness.holder.state.value.ended)
         assertTrue(engine.closed)
@@ -138,12 +144,12 @@ class InteractiveTerminalTest {
         val harness = harness(this)
         harness.holder.open("A")
         harness.holder.ensureStarted(80, 24, 8, 16)
-        advanceUntilIdle()
+        settle()
         harness.engines.single().exit(0)
-        advanceUntilIdle()
+        settle()
 
         harness.holder.restart()
-        advanceUntilIdle()
+        settle()
 
         assertEquals(2, harness.launches())
         assertEquals(2, harness.engines.size)
