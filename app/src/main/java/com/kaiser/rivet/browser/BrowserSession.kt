@@ -376,7 +376,16 @@ class BrowserSession(
         }
     }
 
-    fun hideReader() { _state.update { it.copy(readerMode = false) } }
+    fun hideReader() {
+        _state.update { it.copy(readerMode = false) }
+        // Removing the opaque Compose reader must repaint the existing WebView surface.
+        renderer?.let {
+            it.visibility = android.view.View.VISIBLE
+            it.requestLayout()
+            it.invalidate()
+            it.onResume()
+        }
+    }
 
     private suspend fun readRenderedDocument(): ReaderDocument {
         val view = renderer ?: throw BrowserFailure("browser_renderer_unavailable",
