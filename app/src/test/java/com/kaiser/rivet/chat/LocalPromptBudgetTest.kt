@@ -19,11 +19,11 @@ class LocalPromptBudgetTest {
         manualContextWindowTokens = 4096, manualMaxOutputTokens = 1024,
     )
 
-    private fun request(message: String): AgentRequest {
+    private fun request(message: String, window: Int = config.manualContextWindowTokens!!): AgentRequest {
         val wire = LocalPrompt.wire(
             ChatViewModel.systemInstruction(workspace = true),
             AgentToolExecutor.definitions,
-            config.manualContextWindowTokens!!,
+            window,
             workspace = true,
         )
         return AgentRequest(
@@ -45,6 +45,18 @@ class LocalPromptBudgetTest {
             tokens < allowed)
         assertTrue(assembled.tools.map { it.name }.contains("write_file"))
         assertTrue(assembled.tools.size < AgentToolExecutor.definitions.size)
+    }
+
+    @Test
+    fun eightAndSixteenKWindowsStillFitTheFullLocalSystem() {
+        for (window in listOf(8192, 16384)) {
+            val assembled = request("Say hi.", window)
+            val tokens = ContextBudget.estimateRequestTokens(assembled)
+            val allowed = ContextBudget.assess(config.copy(manualContextWindowTokens = window),
+                tokens, TokenEstimateSource.Estimated).allowedInputTokens
+            assertTrue("window=$window estimated=$tokens allowed=$allowed", tokens < allowed)
+            assertTrue(assembled.system.contains("You are a coding agent inside Rivet"))
+        }
     }
 
     @Test
