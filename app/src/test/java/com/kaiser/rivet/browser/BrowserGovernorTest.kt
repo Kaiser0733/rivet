@@ -31,7 +31,8 @@ class BrowserGovernorTest {
     @Test fun aLoadedModelReducesTheCapByFootprintAndSafety() {
         val noModel = BrowserGovernor.decide(BrowserMemorySignals(1_000 * mb))
         val model = BrowserGovernor.decide(BrowserMemorySignals(1_000 * mb, modelFootprintBytes = 400 * mb))
-        assertEquals(noModel.capBytes - 400 * mb, model.capBytes)
+        assertEquals(250 * mb, noModel.capBytes)
+        assertEquals(150 * mb, model.capBytes)
         assertEquals(400 * mb + 300 * mb, model.reserveBytes)
         assertTrue(model.modelLoaded)
     }

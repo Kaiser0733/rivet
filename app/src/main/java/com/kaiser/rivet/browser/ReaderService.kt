@@ -36,9 +36,17 @@ class ReaderService(private val client: OkHttpClient = defaultClient()) {
                 if (BrowserAuthGuard.isAuthSurface(finalUrl)) throw BrowserHandoff(finalUrl, "identity")
                 val body = it.body ?: throw BrowserFailure("browser_empty", "The page returned no content.")
                 val type = body.contentType()?.toString().orEmpty().lowercase(Locale.ROOT)
-                val bytes = body.source().readByteArray(MAX_READ_BYTES + 1L)
-                if (bytes.size > MAX_READ_BYTES) throw BrowserFailure("browser_too_large",
+                val source = body.source()
+                val buffer = okio.Buffer()
+                var total = 0L
+                while (true) {
+                    val read = source.read(buffer, 8192L)
+                    if (read == -1L) break
+                    total += read
+                    if (total > MAX_READ_BYTES) throw BrowserFailure("browser_too_large",
                     "This page is larger than Rivet's reader limit. Open it in your browser or use a smaller page.")
+                }
+                val bytes = buffer.readByteArray()
                 val charset = body.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
                 val text = bytes.toString(charset)
                 if (!type.contains("html") && !type.contains("xml") && !type.startsWith("text/")) {

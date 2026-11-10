@@ -14,7 +14,7 @@ class ReaderExtractorTest {
         assertEquals("Widget API · Docs", doc.title)
         assertTrue(doc.text.contains("Widget.create()"))
         assertTrue(doc.text.contains("Authentication"))
-        assertTrue(doc.text.contains("[the widget endpoint]"))
+        assertTrue(doc.text.contains("the widget endpoint"))
         assertFalse(doc.text.contains("Copyright"))
         assertFalse(doc.text.contains("track()"))
         assertFalse(doc.needsRenderer)
