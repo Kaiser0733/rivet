@@ -375,6 +375,9 @@ private fun ModelCard(
             }
             when {
                 installed != null -> {
+                    Text(downloadVerificationText(installed.checksumVerified),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                     Row(verticalAlignment = Alignment.CenterVertically) {
                         RivetOutlinedButton(onClick = onUse) { Text("Use") }
                         Spacer(Modifier.width(6.dp))
@@ -455,6 +458,9 @@ private fun ModelRow(
                     installed != null -> {
                         Text("Installed", style = MaterialTheme.typography.labelMedium,
                             color = MaterialTheme.colorScheme.primary)
+                        Text(downloadVerificationText(installed.checksumVerified),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
                         Spacer(Modifier.width(8.dp))
                         TextButton(onClick = onClick) { Text("Use") }
                         TextButton(onClick = onExport) { Text("Export") }
@@ -482,8 +488,7 @@ private fun InstalledRow(
         Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
                 Text(model.entry.name, style = MaterialTheme.typography.bodyLarge)
-                Text(if (model.checksumVerified) "Downloaded and checksum verified"
-                else "Downloaded; this repo did not publish a checksum",
+                Text(downloadVerificationText(model.checksumVerified),
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
                 FitLabel(fit)
@@ -559,6 +564,10 @@ private fun FitLabel(fit: ModelFit) {
     }
     Text(fit.badge.label(), style = MaterialTheme.typography.labelMedium, color = color)
 }
+
+internal fun downloadVerificationText(verified: Boolean): String =
+    if (verified) "Downloaded and checksum verified"
+    else "Downloaded; this repo did not publish a checksum"
 
 private fun FitBadge.label(): String = when (this) {
     FitBadge.BestFit -> "Best fit"
