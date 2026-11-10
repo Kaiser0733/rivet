@@ -42,4 +42,31 @@ class LocalThinkingFilterTest {
         }
         assertEquals(" clean", visible)
     }
+    @Test fun nestedThinkingBlocksStayHidden() {
+        assertEquals("A  B", LocalThinkingFilter.strip(
+            "A \u003cthink\u003eone \u003cthinking\u003etwo\u003c/thinking\u003e three\u003c/think\u003e B"))
+    }
+
+    @Test fun anUnmatchedClosingTagIsGenuineText() {
+        assertEquals("Use \u003c/think\u003e literally", LocalThinkingFilter.strip(
+            "Use \u003c/think\u003e literally"))
+    }
+
+    @Test fun theClosingAngleMayArriveInTheNextChunk() {
+        val filter = LocalThinkingFilter()
+        assertEquals("Before ", filter.feed("Before \u003cthink\u003esecret\u003c/think"))
+        assertEquals(" after", filter.feed("> after"))
+        assertEquals("", filter.finish())
+    }
+
+    @Test fun everySplitOfAReasoningBlockKeepsItHidden() {
+        val source = "Before \u003cthink\u003esecret\u003c/think\u003e after"
+        for (cut in 1 until source.length) {
+            val filter = LocalThinkingFilter()
+            val visible = filter.feed(source.substring(0, cut)) +
+                filter.feed(source.substring(cut)) + filter.finish()
+            assertEquals("Before  after", visible)
+        }
+    }
+
 }

@@ -10,7 +10,10 @@ package com.kaiser.rivet.local
  */
 internal class LocalThinkingFilter {
     private val pending = StringBuilder()
-    private var inThinking = false
+    private var thinkingDepth = 0
+    // The short marker "</think" does not include the closing '>'. It can arrive
+    // one callback later, so remember to consume that delimiter.
+    private var consumeClosingBracket = false
 
     fun feed(delta: String): String {
         pending.append(delta)
@@ -20,33 +23,51 @@ internal class LocalThinkingFilter {
     fun finish(): String {
         val visible = drain(final = true)
         pending.clear()
-        inThinking = false
+        thinkingDepth = 0
+        consumeClosingBracket = false
         return visible
     }
 
     private fun drain(final: Boolean): String {
         val out = StringBuilder()
+        if (consumeClosingBracket) {
+            if (pending.startsWith(">")) {
+                pending.deleteCharAt(0)
+                consumeClosingBracket = false
+            } else if (pending.isNotEmpty()) {
+                consumeClosingBracket = false
+            }
+        }
         while (pending.isNotEmpty()) {
-            if (inThinking) {
+            if (thinkingDepth > 0) {
+                val start = earliestStart()
                 val end = earliestEnd()
+                val open = start != null && (end == null || start.first < end.first)
+                if (open) {
+                    pending.delete(0, start.first + start.second)
+                    thinkingDepth++
+                    continue
+                }
                 if (end != null) {
                     pending.delete(0, end.first + end.second)
                     if (pending.startsWith(">")) pending.deleteCharAt(0)
-                    inThinking = false
+                    else consumeClosingBracket = true
+                    thinkingDepth--
                     continue
                 }
                 if (final) {
                     pending.clear()
+                    thinkingDepth = 0
                     break
                 }
-                holdSuffix(END_MARKERS)
+                holdSuffix(START_MARKERS + END_MARKERS)
                 break
             }
             val start = earliestStart()
             if (start != null) {
                 out.append(pending.substring(0, start.first))
                 pending.delete(0, start.first + start.second)
-                inThinking = true
+                thinkingDepth = 1
                 continue
             }
             if (final) {
