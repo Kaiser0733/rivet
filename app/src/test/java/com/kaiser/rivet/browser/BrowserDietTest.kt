@@ -12,11 +12,12 @@ class BrowserDietTest {
         assertTrue(BrowserDiet.shouldBlock("https://example.com/movie.mp4", BrowserResourceKind.Media, 1, rules))
     }
 
-    @Test fun strictDietBlocksFontsAndLargeImages() {
+    @Test fun strictDietTurnsImagesOffButKeepsFonts() {
         val rules = BrowserDiet.rulesFor(BrowserTier.StrictDiet, fullPage = false)
-        assertTrue(BrowserDiet.shouldBlock("https://example.com/font.woff2", BrowserResourceKind.Font, 1, rules))
+        assertFalse(BrowserDiet.shouldBlock("https://example.com/font.woff2", BrowserResourceKind.Font, 1, rules))
         assertTrue(BrowserDiet.shouldBlock("https://example.com/hero.jpg", BrowserResourceKind.Image, 128_000, rules))
-        assertFalse(BrowserDiet.shouldBlock("https://example.com/icon.png", BrowserResourceKind.Image, 3_000, rules))
+        assertTrue(BrowserDiet.shouldBlock("https://example.com/icon.png", BrowserResourceKind.Image, 3_000, rules))
+        assertTrue(BrowserDiet.placeholderPng().isNotEmpty())
     }
 
     @Test fun readerFirstBlocksImagesAndFonts() {

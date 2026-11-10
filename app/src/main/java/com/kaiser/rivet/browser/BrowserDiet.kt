@@ -23,8 +23,8 @@ object BrowserDiet {
         fullPage -> BrowserDietRules(blockTrackers = false, fullPage = true)
         tier == BrowserTier.Normal -> BrowserDietRules(blockImages = false, blockFonts = false,
             blockMedia = true, blockTrackers = true)
-        tier == BrowserTier.StrictDiet -> BrowserDietRules(blockImages = false, blockFonts = true,
-            blockMedia = true, blockTrackers = true, maxImageBytes = 64L * 1024)
+        tier == BrowserTier.StrictDiet -> BrowserDietRules(blockImages = true, blockFonts = false,
+            blockMedia = true, blockTrackers = true, maxImageBytes = 0L)
         else -> BrowserDietRules(blockImages = true, blockFonts = true, blockMedia = true,
             blockTrackers = true, maxImageBytes = 0L)
     }
@@ -33,6 +33,10 @@ object BrowserDiet {
         val lower = host.lowercase()
         return trackers.any { lower == it || lower.endsWith(".$it") }
     }
+
+    /** A layout-preserving 1x1 PNG for strict-tier images, never a broken-image glyph. */
+    fun placeholderPng(): ByteArray = java.util.Base64.getDecoder().decode(
+        "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII=")
 
     fun shouldBlock(url: String, kind: BrowserResourceKind, declaredBytes: Long,
                     rules: BrowserDietRules): Boolean {

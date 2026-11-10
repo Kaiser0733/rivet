@@ -63,6 +63,7 @@ data class BrowserDownloadPrompt(
 )
 
 data class BrowserUiState(
+    /** The full-screen visual browser is on screen. */
     val visible: Boolean = false,
     val url: String = "",
     val title: String = "",
@@ -73,6 +74,10 @@ data class BrowserUiState(
     val chunkAnchor: String = "",
     val needsRenderer: Boolean = false,
     val rendererVisible: Boolean = false,
+    val pageReady: Boolean = false,
+    val readerMode: Boolean = false,
+    val watchVisible: Boolean = false,
+    val visualScreenshot: String? = null,
     val tier: BrowserTier = BrowserTier.Normal,
     val capMb: Int = 250,
     val modelLoaded: Boolean = false,
@@ -148,6 +153,7 @@ class BrowserSession(
     private var pageFinished: CompletableDeferred<Unit>? = null
     private var budget = BrowserGovernor.decide(BrowserMemorySignals(0))
     private var lastRendererStart = 0L
+    private var lastActivityAt = 0L
     private var periodic: kotlinx.coroutines.Job? = null
 
     private val _state = MutableStateFlow(BrowserUiState(
@@ -170,103 +176,177 @@ class BrowserSession(
         }
     }
 
-    fun show() { _state.update { it.copy(visible = true) } }
-    fun close() { _state.update { it.copy(visible = false) } }
+    /** Human open: always the full-screen visual browser, never the reader face. */
+    fun userOpen() {
+        lastActivityAt = System.currentTimeMillis()
+        _state.update { it.copy(visible = true, readerMode = false, error = null) }
+        val target = activeUrl.ifBlank { _state.value.url }
+        if (target.isNotBlank() && renderer == null) {
+            scope.launch { runCatching { openVisual(target, userInitiated = true) } }
+        }
+    }
+
+    fun show() = userOpen()
+
+    /** Watch an existing AI visual session without reloading it. */
+    fun watch() {
+        lastActivityAt = System.currentTimeMillis()
+        if (renderer != null || _state.value.rendererVisible) {
+            _state.update { it.copy(visible = true, readerMode = false) }
+        } else userOpen()
+    }
+
+    /** Closing the screen keeps the visual session alive for the watch card. */
+    fun close() { _state.update { it.copy(visible = false, readerMode = false) } }
+
     fun clearNotice() { _state.update { it.copy(notice = null, error = null) } }
 
     fun contextLine(): String {
         refreshBudget()
         val line = BrowserGovernor.contextLine(budget)
-        return if (_state.value.authNotice != null) "$line Identity sign-in stays in your browser." else line
+        val modes = " Text mode is invisible for reads and find; visual mode is the full-screen page for the user or the watch card for interaction."
+        return if (_state.value.authNotice != null) "$line$modes Identity sign-in stays in your browser."
+        else "$line$modes"
     }
 
-    fun refreshBudget() {
+    fun refreshBudget(publish: Boolean = true) {
         val manager = app.getSystemService(android.app.ActivityManager::class.java)
         val info = android.app.ActivityManager.MemoryInfo()
         manager?.getMemoryInfo(info)
         val loaded = models?.loadedId?.value != null
         val footprint = if (loaded) models?.modelFootprintBytes?.value ?: 0L else 0L
         budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint))
-        _state.update {
+        if (publish) _state.update {
             it.copy(tier = budget.tier, capMb = budget.capMb, modelLoaded = budget.modelLoaded,
                 budgetLine = BrowserGovernor.contextLine(budget))
         }
-        if (!BrowserGovernor.canOpenRenderer(budget.tier, interaction = true) &&
+        if (publish && !BrowserGovernor.canOpenRenderer(budget.tier, interaction = true) &&
             _state.value.rendererVisible) {
             destroyRenderer()
             _state.update {
-                it.copy(mode = BrowserMode.Reader, rendererVisible = false,
+                it.copy(mode = BrowserMode.Reader, rendererVisible = false, watchVisible = false,
                     notice = BrowserGovernor.refusalReason(budget))
             }
         }
     }
 
     suspend fun open(rawUrl: String, newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
+        openText(rawUrl, newWindow, projectPreview)
+
+    /** Invisible AI text path: fetch and parse without touching screen state. */
+    suspend fun openText(rawUrl: String, newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
             val url = BrowserUrlPolicy.validate(rawUrl)
-            refreshBudget()
+            refreshBudget(publish = false)
             if (BrowserAuthGuard.isAuthSurface(url)) {
                 stateHandoff(url, "identity")
                 return@withLock BrowserOpenResult(url, "", 0, false, budget.tier, budget.capMb, handoff = true)
             }
-            if (newWindow || activeWindowId == null) createWindow(url)
+            if (newWindow || activeWindowId == null) createWindow(url, publish = false)
             activeUrl = url
-            _state.update { it.copy(visible = true, url = url, error = null, notice = null,
-                handoff = null, authNotice = null) }
             try {
                 val document = readerService.fetch(url)
                 reader = document
                 activeTitle = document.title
-                recordVisit(url, projectPreview || BrowserAuthGuard.isLoopback(url))
-                updateActiveWindow(url, document.title)
-                _state.update {
-                    it.copy(mode = BrowserMode.Reader, title = document.title,
-                        readerText = document.chunks.firstOrNull()?.text.orEmpty(),
-                        chunkIndex = 0, chunkCount = document.chunks.size,
-                        chunkAnchor = document.chunks.firstOrNull()?.anchor.orEmpty(),
-                        needsRenderer = document.needsRenderer, fidelity = BrowserFidelity.Full,
-                        windows = windowSummaries())
-                }
+                recordVisit(url, projectPreview || BrowserAuthGuard.isLoopback(url), publish = false)
+                updateActiveWindow(url, document.title, publish = false)
                 BrowserOpenResult(url, document.title, document.chunks.size,
                     document.needsRenderer, budget.tier, budget.capMb)
             } catch (handoff: BrowserHandoff) {
                 stateHandoff(handoff.url, handoff.reason)
                 BrowserOpenResult(url, "", 0, false, budget.tier, budget.capMb, handoff = true)
-            } catch (failure: BrowserFailure) {
-                _state.update { it.copy(visible = true, error = failure.message, mode = BrowserMode.Reader) }
-                throw failure
             }
         }
 
+    /** Full visual load for a human or an agent interaction. */
+    suspend fun openVisual(rawUrl: String, userInitiated: Boolean = true,
+                           newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
+        actionLock.withLock {
+            val url = BrowserUrlPolicy.validate(rawUrl)
+            refreshBudget(publish = true)
+            if (BrowserAuthGuard.isAuthSurface(url)) {
+                stateHandoff(url, "identity")
+                return@withLock BrowserOpenResult(url, "", 0, false, budget.tier, budget.capMb, handoff = true)
+            }
+            if (newWindow || activeWindowId == null) createWindow(url, publish = userInitiated)
+            activeUrl = url
+            reader = null
+            _state.update {
+                it.copy(visible = it.visible || userInitiated, rendererVisible = true,
+                    pageReady = false, watchVisible = true, visualScreenshot = null,
+                    url = url, mode = BrowserMode.Renderer,
+                    readerMode = false, error = null, notice = null, handoff = null, authNotice = null)
+            }
+            val view = ensureRenderer(showWatch = !userInitiated, allowUserDriving = userInitiated)
+            loadForInteraction(view, url)
+            activeUrl = view.url ?: url
+            activeTitle = view.title.orEmpty()
+            recordVisit(activeUrl, projectPreview || BrowserAuthGuard.isLoopback(url), publish = userInitiated)
+            updateActiveWindow(activeUrl, activeTitle, publish = userInitiated)
+            _state.update {
+                it.copy(url = activeUrl, title = activeTitle, mode = BrowserMode.Renderer,
+                    pageReady = true, fidelity = BrowserFidelity.Reloaded,
+                    activeWindowId = activeWindowId,
+                    windows = if (userInitiated) windowSummaries() else it.windows)
+            }
+            BrowserOpenResult(activeUrl, activeTitle, 0, false, budget.tier, budget.capMb)
+        }
+
     suspend fun read(chunk: Int = 0): BrowserReadResult = actionLock.withLock {
-        val document = if (renderer != null && activeUrl.isNotBlank() &&
-            (reader?.url != activeUrl || reader?.chunks?.isEmpty() == true)) {
+        val document = if (renderer?.url == activeUrl && activeUrl.isNotBlank() &&
+            (reader?.url != activeUrl || reader?.chunks?.isEmpty() == true ||
+                reader?.needsRenderer == true)) {
             readRenderedDocument()
         } else reader ?: throw BrowserFailure("browser_not_open", "Open a page first.")
-        if (document.chunks.isEmpty()) throw BrowserFailure("browser_needs_renderer",
-            "This page needs the renderer for readable text. Open it for interaction.")
+        if (document.needsRenderer) throw BrowserFailure("browser_needs_renderer",
+            "This page needs the renderer for readable text. Rivet will start a quiet visual session.")
+        if (document.chunks.isEmpty()) throw BrowserFailure("browser_empty",
+            "This page has no readable text.")
         if (chunk !in document.chunks.indices) {
             throw BrowserFailure("browser_chunk_out_of_range",
                 "Chunk ${chunk} is outside 0..${document.chunks.lastIndex}.")
         }
         val selected = document.chunks[chunk]
-        _state.update { it.copy(chunkIndex = chunk, chunkCount = document.chunks.size,
-            chunkAnchor = selected.anchor, readerText = selected.text) }
         BrowserReadResult(document.url, document.title, chunk, document.chunks.size,
             selected.anchor, selected.text, chunk == document.chunks.lastIndex)
     }
 
     suspend fun find(text: String): List<ReaderHit> = actionLock.withLock {
-        val document = if (renderer != null && activeUrl.isNotBlank() &&
-            (reader?.url != activeUrl || reader?.chunks?.isEmpty() == true)) {
+        val document = if (renderer?.url == activeUrl && activeUrl.isNotBlank() &&
+            (reader?.url != activeUrl || reader?.chunks?.isEmpty() == true ||
+                reader?.needsRenderer == true)) {
             readRenderedDocument()
         } else reader ?: throw BrowserFailure("browser_not_open", "Open a page first.")
+        if (document.needsRenderer) throw BrowserFailure("browser_needs_renderer",
+            "This page needs the renderer for searchable text. Rivet will start a quiet visual session.")
         ReaderExtractor.find(document.text, text)
     }
 
+    /** Text read found a DOM-only page: start a quiet visual session, no card yet. */
+    suspend fun escalateForRead() = actionLock.withLock {
+        val view = ensureRenderer(showWatch = false)
+        loadForInteraction(view, activeUrl)
+    }
+
+    /** The explicit in-browser Reader toggle; this is allowed to change screen state. */
+    suspend fun showReader() = actionLock.withLock {
+        if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
+        val document = if (renderer?.url == activeUrl && activeUrl.isNotBlank()) readRenderedDocument()
+        else reader?.takeIf { it.url == activeUrl } ?: readerService.fetch(activeUrl)
+        val first = document.chunks.firstOrNull()
+        _state.update {
+            it.copy(readerMode = true, readerText = first?.text.orEmpty(),
+                chunkIndex = 0, chunkCount = document.chunks.size,
+                chunkAnchor = first?.anchor.orEmpty(), needsRenderer = document.needsRenderer,
+                url = document.url, title = document.title)
+        }
+    }
+
+    fun hideReader() { _state.update { it.copy(readerMode = false) } }
+
     private suspend fun readRenderedDocument(): ReaderDocument {
         val view = renderer ?: throw BrowserFailure("browser_renderer_unavailable",
-            "Open the Browser card so the page renderer can start.")
+            "Open the visual browser so the page renderer can start.")
         val pageUrl = view.url ?: activeUrl
         val rawHtml = evaluate(view, "document.documentElement.outerHTML")
         val html = runCatching { org.json.JSONTokener(rawHtml).nextValue() as? String }
@@ -284,7 +364,7 @@ class BrowserSession(
             fallbackText, ReaderExtractor.chunk(fallbackText), needsRenderer = false)
         if (result.text.isBlank()) throw BrowserFailure("browser_empty", "This page has no readable text.")
         reader = result
-        recordVisit(pageUrl)
+        recordVisit(pageUrl, publish = false)
         return result
     }
 
@@ -373,7 +453,9 @@ class BrowserSession(
         }
         val view = ensureRenderer()
         loadForInteraction(view, activeUrl)
-        withContext(Dispatchers.Main) { captureScreenshot(view) }
+        val shot = withContext(Dispatchers.Main) { captureScreenshot(view) }
+        _state.update { it.copy(visualScreenshot = shot.path, watchVisible = true) }
+        shot
     }
 
     /** Attaches the sheet-hosted WebView. Called on the main thread. */
@@ -389,11 +471,17 @@ class BrowserSession(
         }
         _state.update { it.copy(rendererVisible = true) }
         lastRendererStart = System.currentTimeMillis()
+        lastActivityAt = System.currentTimeMillis()
         periodic?.cancel()
         periodic = scope.launch {
             while (true) {
                 kotlinx.coroutines.delay(15_000)
                 refreshBudget()
+                if (_state.value.visible) lastActivityAt = System.currentTimeMillis()
+                if (_state.value.rendererVisible &&
+                    System.currentTimeMillis() - lastActivityAt > 3 * 60_000L) {
+                    destroyRenderer()
+                }
             }
         }
     }
@@ -444,6 +532,7 @@ class BrowserSession(
     }
 
     fun setDriving(userDriving: Boolean) {
+        lastActivityAt = System.currentTimeMillis()
         _state.update { it.copy(driving = if (userDriving) BrowserDriving.User else BrowserDriving.Agent) }
     }
 
@@ -542,7 +631,7 @@ class BrowserSession(
         }
     }
 
-    private fun createWindow(url: String): String {
+    private fun createWindow(url: String, publish: Boolean = true): String {
         val id = UUID.randomUUID().toString()
         val capped = BrowserSnapshotCodec.capWindows(windows.values.toList(), activeWindowId)
         if (capped.size >= BrowserSnapshotCodec.MAX_WINDOWS) {
@@ -552,12 +641,12 @@ class BrowserSession(
         }
         windows[id] = BrowserSnapshot(id, historyUrls = listOf(url), historyIndex = 0)
         activeWindowId = id
-        _state.update { it.copy(activeWindowId = id, windows = windowSummaries()) }
+        if (publish) _state.update { it.copy(activeWindowId = id, windows = windowSummaries()) }
         return id
     }
 
-    private fun updateActiveWindow(url: String, title: String) {
-        val id = activeWindowId ?: createWindow(url)
+    private fun updateActiveWindow(url: String, title: String, publish: Boolean = true) {
+        val id = activeWindowId ?: createWindow(url, publish)
         val current = windows[id] ?: BrowserSnapshot(id)
         val history = if (current.currentUrl == url) current.historyUrls
         else (current.historyUrls.take(current.historyIndex + 1) + url).takeLast(50)
@@ -566,7 +655,7 @@ class BrowserSession(
             fidelity = BrowserFidelity.Full)
         windows[id] = updated
         snapshots.save(updated)
-        _state.update { it.copy(windows = windowSummaries()) }
+        if (publish) _state.update { it.copy(windows = windowSummaries()) }
     }
 
     private fun saveActiveSnapshot() {
@@ -637,13 +726,13 @@ class BrowserSession(
 
     private fun windowSummaries(): List<BrowserWindowSummary> = windows.values.map {
         BrowserWindowSummary(it.id, it.title.ifBlank { it.currentUrl ?: "Untitled" },
-            it.currentUrl.orEmpty(), it.fidelity, it.id == activeWindowId)
+            it.currentUrl.orEmpty(), it.fidelity, it.id == activeWindowId, it.thumbnailFile)
     }
 
-    private fun recordVisit(url: String, preview: Boolean = false) {
+    private fun recordVisit(url: String, preview: Boolean = false, publish: Boolean = true) {
         if (url.isBlank() || url == "about:blank") return
         trail.record(url, preview)
-        _state.update { it.copy(domains = trail.visits) }
+        if (publish) _state.update { it.copy(domains = trail.visits) }
     }
 
     private fun configure(view: WebView) {
@@ -692,7 +781,8 @@ class BrowserSession(
             pageFinished?.complete(Unit)
             pageFinished = null
             _state.update { it.copy(url = actual, title = activeTitle,
-                mode = BrowserMode.Renderer, rendererVisible = true, fidelity = BrowserFidelity.Reloaded) }
+                mode = BrowserMode.Renderer, rendererVisible = true, pageReady = true,
+                fidelity = BrowserFidelity.Reloaded) }
             if (!BrowserAuthGuard.isLoopback(actual)) {
                 view.evaluateJavascript("document.querySelector('input[type=password]') !== null") { raw ->
                     if (raw.trim('"') == "true") stateHandoff(actual, "sign-in-wall")
@@ -703,14 +793,22 @@ class BrowserSession(
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
             val rules = BrowserDiet.rulesFor(budget.tier, _state.value.fullPage)
             val url = request.url.toString()
+            val tracker = BrowserDiet.isTrackerHost(request.url.host.orEmpty())
             val kind = when {
-                request.requestHeaders["Accept"]?.contains("image", true) == true -> BrowserResourceKind.Image
+                request.requestHeaders["Accept"]?.contains("image", true) == true ||
+                    url.matches(Regex("(?i).*\\.(png|jpe?g|gif|webp|svg|avif)(\\?.*)?$")) ->
+                    BrowserResourceKind.Image
                 url.matches(Regex("(?i).*\\.(woff2?|ttf|otf)(\\?.*)?$")) -> BrowserResourceKind.Font
                 url.matches(Regex("(?i).*\\.(mp4|webm|m4s|mp3)(\\?.*)?$")) -> BrowserResourceKind.Media
-                BrowserDiet.isTrackerHost(request.url.host.orEmpty()) -> BrowserResourceKind.Tracker
+                tracker -> BrowserResourceKind.Tracker
                 else -> BrowserResourceKind.Other
             }
-            if (BrowserDiet.shouldBlock(url, kind, 0, rules)) {
+            val declared = request.requestHeaders["Content-Length"]?.toLongOrNull() ?: 0L
+            if (BrowserDiet.shouldBlock(url, kind, declared, rules)) {
+                if (kind == BrowserResourceKind.Image && !tracker) {
+                    return WebResourceResponse("image/png", "binary",
+                        ByteArrayInputStream(BrowserDiet.placeholderPng()))
+                }
                 return WebResourceResponse("text/plain", "utf-8", ByteArrayInputStream(ByteArray(0)))
             }
             return null
@@ -724,19 +822,22 @@ class BrowserSession(
         }
     }
 
-    private suspend fun ensureRenderer(): WebView {
+    private suspend fun ensureRenderer(showWatch: Boolean = true,
+                                       allowUserDriving: Boolean = false): WebView {
         refreshBudget()
         if (!BrowserGovernor.canOpenRenderer(budget.tier, interaction = true)) {
             throw BrowserFailure("browser_renderer_blocked", BrowserGovernor.refusalReason(budget))
         }
-        if (_state.value.driving == BrowserDriving.User) {
+        if (!allowUserDriving && _state.value.driving == BrowserDriving.User) {
             throw BrowserFailure("browser_user_driving", "The user is driving the browser. Ask them to hand it back.")
         }
         if (_state.value.handoff != null) {
             throw BrowserFailure("browser_handoff",
                 "Identity work moved to the phone's browser. Read-only pages still work; interactive agent actions are paused.")
         }
-        _state.update { it.copy(visible = true, rendererVisible = true) }
+        lastActivityAt = System.currentTimeMillis()
+        _state.update { it.copy(rendererVisible = true,
+            watchVisible = it.watchVisible || showWatch) }
         val existing = renderer
         if (existing != null) return existing
         val ready = CompletableDeferred<WebView>()
@@ -744,7 +845,7 @@ class BrowserSession(
         val attached = withTimeoutOrNull(8_000) { ready.await() }
         if (attached == null) {
             throw BrowserFailure("browser_renderer_unavailable",
-                "Open the Browser card so the page renderer can start.")
+                "The visual browser could not start. Try opening it again.")
         }
         return attached
     }
@@ -874,7 +975,8 @@ class BrowserSession(
         rendererReady?.cancel()
         rendererReady = null
         runCatching { view.stopLoading(); view.destroy() }
-        _state.update { it.copy(rendererVisible = false, mode = BrowserMode.Reader) }
+        _state.update { it.copy(rendererVisible = false, watchVisible = false, pageReady = false,
+            mode = BrowserMode.Reader) }
     }
 
     private fun onDownloadRequested(url: String, disposition: String?, mime: String?, length: Long) {
