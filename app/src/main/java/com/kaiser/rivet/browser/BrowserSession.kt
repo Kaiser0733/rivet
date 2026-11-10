@@ -254,7 +254,7 @@ class BrowserSession(
     fun contextLine(): String {
         refreshBudget()
         val line = BrowserGovernor.contextLine(budget)
-        val modes = " Text mode is invisible for reads and find; visual mode is the full-screen page for the user or the watch card for interaction."
+        val modes = " Browser text reads stay invisible; visual page is for the user."
         return if (_state.value.authNotice != null) "$line$modes Identity sign-in stays in your browser."
         else "$line$modes"
     }
