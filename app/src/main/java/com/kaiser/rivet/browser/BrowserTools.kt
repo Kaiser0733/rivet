@@ -117,7 +117,13 @@ class BrowserTools(private val session: BrowserSession) {
                 "Tap \"${target.description.take(120)}\". It looks like a submit, send, publish, pay, or delete control."),
             effect = AgentToolEffect.BrowserAction,
             basicAutonomyRisk = BasicAutonomyRisk.Elevated,
-        ) { tap(call, x, y) }
+        ) {
+            try { tap(call, x, y) }
+            catch (e: BrowserFailure) {
+                if (e.code == "browser_user_driving") userDriving(call, e.message)
+                else failure(call, e.code, e.message)
+            }
+        }
     }
 
     private suspend fun tap(call: AgentToolCall, x: Int, y: Int): AgentToolResult {
