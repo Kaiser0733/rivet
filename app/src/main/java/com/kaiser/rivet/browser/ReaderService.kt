@@ -49,9 +49,10 @@ class ReaderService(private val client: OkHttpClient = defaultClient()) {
                 val bytes = buffer.readByteArray()
                 val charset = body.contentType()?.charset(Charsets.UTF_8) ?: Charsets.UTF_8
                 val text = bytes.toString(charset)
-                if (!type.contains("html") && !type.contains("xml") && !type.startsWith("text/")) {
+                if (!type.contains("html") && !type.contains("xml")) {
+                    val plain = text.trim()
                     return@withContext ReaderDocument(finalUrl, finalUrl.substringAfterLast('/'),
-                        text.trim(), ReaderExtractor.chunk(text.trim()), needsRenderer = false)
+                        plain, ReaderExtractor.chunk(plain), needsRenderer = false)
                 }
                 return@withContext ReaderExtractor.extract(text, finalUrl)
             }
