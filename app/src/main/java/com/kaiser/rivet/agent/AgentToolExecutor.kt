@@ -225,8 +225,12 @@ class AgentToolExecutor(
                         modelRequestsApproval = args.askUser) {
                         val created = workspace.createFile(path)
                         val content = args.content
-                        val written = if (content != null && created.sha256 != null) {
-                            runCatching { workspace.write(created.path, content, created.sha256) }.getOrNull()
+                        val written = if (content != null) {
+                            // create_file can be called with content by a model that does not
+                            // want a two-step create/write. If the provider omitted the hash,
+                            // read the new file once rather than silently dropping content.
+                            val hash = created.sha256 ?: workspace.read(created.path).sha256
+                            workspace.write(created.path, content, hash)
                         } else null
                         success(call, buildJsonObject {
                             put("path", written?.path ?: created.path)
