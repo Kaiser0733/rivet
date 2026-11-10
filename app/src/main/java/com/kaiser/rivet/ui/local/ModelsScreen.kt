@@ -98,16 +98,6 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
         item {
             DeviceCard(ui.totalRamMb, ui.availableRamMb, ui.freeStorage)
         }
-        if (ui.staleBytes > 0) {
-            item {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${formatBytes(ui.staleBytes)} of old partial downloads",
-                        Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = viewModel::cleanupStale) { Text("Clean up") }
-                }
-            }
-        }
         item {
             Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
@@ -536,11 +526,8 @@ private fun DownloadCard(
                     TextButton(onClick = onPause) { Text("Pause") }
                 } else {
                     TextButton(onClick = onResume) { Text("Resume") }
-                    when {
-                        network?.contains("Wi-Fi", ignoreCase = true) == true ->
-                            TextButton(onClick = onMobile) { Text("Use this Wi-Fi") }
-                        network?.contains("mobile", ignoreCase = true) == true ->
-                            TextButton(onClick = onMobile) { Text("Use mobile data") }
+                    networkAllowLabel(network)?.let { label ->
+                        TextButton(onClick = onMobile) { Text(label) }
                     }
                 }
                 TextButton(onClick = onCancel) { Text("Cancel") }
@@ -568,6 +555,15 @@ private fun FitLabel(fit: ModelFit) {
 internal fun downloadVerificationText(verified: Boolean): String =
     if (verified) "Downloaded and checksum verified"
     else "Downloaded; this repo did not publish a checksum"
+
+/** The one action that can clear a metered-network wait, named for that network. */
+internal fun networkAllowLabel(network: String?): String? = when {
+    network == null -> null
+    network.contains("mobile data", ignoreCase = true) -> "Use mobile data"
+    network.contains("Wi-Fi is set as metered", ignoreCase = true) -> "Use this Wi-Fi"
+    network.contains("metered", ignoreCase = true) -> "Use this network"
+    else -> null
+}
 
 private fun FitBadge.label(): String = when (this) {
     FitBadge.BestFit -> "Best fit"
