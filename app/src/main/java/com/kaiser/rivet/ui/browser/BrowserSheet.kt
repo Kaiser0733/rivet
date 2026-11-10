@@ -6,6 +6,10 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import android.webkit.WebView
+import android.graphics.BitmapFactory
+import androidx.compose.foundation.Image
+import androidx.compose.ui.graphics.asImageBitmap
+import java.io.File
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Column
@@ -15,6 +19,7 @@ import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
@@ -109,7 +114,19 @@ fun BrowserSheet(session: BrowserSession, onDismiss: () -> Unit) {
                 horizontalArrangement = Arrangement.spacedBy(6.dp)) {
                 items(state.windows, key = { it.id }) { window ->
                     AssistChip(onClick = { session.selectWindow(window.id) }, label = {
-                        Text("${window.title.take(18)}${if (window.active) " •" else ""}")
+                        Row(verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                            window.thumbnailFile?.let { path ->
+                                val bitmap = remember(path) {
+                                    runCatching { BitmapFactory.decodeFile(File(path).absolutePath) }.getOrNull()
+                                }
+                                if (bitmap != null) {
+                                    Image(bitmap = bitmap.asImageBitmap(), contentDescription = null,
+                                        modifier = Modifier.size(32.dp))
+                                }
+                            }
+                            Text("${window.title.take(18)}${if (window.active) " •" else ""}")
+                        }
                     })
                 }
             }

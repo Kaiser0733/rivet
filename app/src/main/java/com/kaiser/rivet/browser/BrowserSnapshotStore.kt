@@ -14,6 +14,7 @@ class BrowserSnapshotStore(private val dir: File) {
             target.writeText(temp.readText())
             temp.delete()
         }
+        enforceLimits(snapshot.id)
         true
     }.getOrDefault(false)
 

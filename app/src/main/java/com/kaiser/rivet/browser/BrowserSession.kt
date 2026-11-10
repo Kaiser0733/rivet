@@ -50,6 +50,7 @@ data class BrowserWindowSummary(
     val url: String,
     val fidelity: BrowserFidelity,
     val active: Boolean,
+    val thumbnailFile: String? = null,
 )
 
 data class BrowserHandoffState(val url: String, val reason: String)
@@ -266,16 +267,25 @@ class BrowserSession(
     private suspend fun readRenderedDocument(): ReaderDocument {
         val view = renderer ?: throw BrowserFailure("browser_renderer_unavailable",
             "Open the Browser card so the page renderer can start.")
-        val raw = evaluate(view, "(function(){var m=document.querySelector('main,article');" +
-            "return (m?m.innerText:document.body.innerText)})()")
-        val text = runCatching { org.json.JSONTokener(raw).nextValue() as? String }
-            .getOrNull()?.trim().orEmpty()
-        if (text.isBlank()) throw BrowserFailure("browser_empty", "This page has no readable text.")
-        val document = ReaderDocument(activeUrl, view.title.orEmpty().ifBlank { activeUrl },
-            text, ReaderExtractor.chunk(text), needsRenderer = false)
-        reader = document
-        recordVisit(view.url ?: activeUrl)
-        return document
+        val pageUrl = view.url ?: activeUrl
+        val rawHtml = evaluate(view, "document.documentElement.outerHTML")
+        val html = runCatching { org.json.JSONTokener(rawHtml).nextValue() as? String }
+            .getOrNull().orEmpty()
+        val document = if (html.length in 80..2_000_000) {
+            runCatching { ReaderExtractor.extract(html, pageUrl) }
+                .getOrNull()?.takeIf { it.text.isNotBlank() }?.copy(needsRenderer = false)
+        } else null
+        val fallbackText = if (document == null) {
+            val raw = evaluate(view, "document.body.innerText")
+            runCatching { org.json.JSONTokener(raw).nextValue() as? String }
+                .getOrNull()?.trim().orEmpty()
+        } else ""
+        val result = document ?: ReaderDocument(pageUrl, view.title.orEmpty().ifBlank { pageUrl },
+            fallbackText, ReaderExtractor.chunk(fallbackText), needsRenderer = false)
+        if (result.text.isBlank()) throw BrowserFailure("browser_empty", "This page has no readable text.")
+        reader = result
+        recordVisit(pageUrl)
+        return result
     }
 
     suspend fun classifyClick(selector: String?, text: String?): BrowserClickTarget =
@@ -493,6 +503,9 @@ class BrowserSession(
         refreshBudget()
         if (level >= ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW) {
             renderer?.clearCache(true)
+            val active = activeWindowId
+            windows.keys.filter { it != active }.forEach { windows.remove(it) }
+            _state.update { it.copy(windows = windowSummaries()) }
             if (budget.tier == BrowserTier.ReaderFirst) destroyRenderer()
         }
     }
@@ -550,10 +563,33 @@ class BrowserSession(
                 windows[id] = saved
                 snapshots.save(saved)
             }
+            captureThumbnail(view, id)
         } else {
             val saved = current.copy(title = activeTitle, lastUsedAt = System.currentTimeMillis())
             windows[id] = saved
             snapshots.save(saved)
+        }
+    }
+
+    private fun captureThumbnail(view: WebView, id: String) {
+        scope.launch {
+            val shot = runCatching { captureScreenshot(view) }.getOrNull() ?: return@launch
+            val original = android.graphics.BitmapFactory.decodeFile(shot.path) ?: return@launch
+            val thumb = try {
+                val targetWidth = 320.coerceAtMost(original.width)
+                val targetHeight = (original.height.toFloat() * targetWidth / original.width)
+                    .toInt().coerceAtLeast(1)
+                Bitmap.createScaledBitmap(original, targetWidth, targetHeight, true)
+            } finally { original.recycle() }
+            try {
+                val file = File(app.filesDir, "browser-snapshots/$id.webp")
+                FileOutputStream(file).use { bitmap -> thumb.compress(Bitmap.CompressFormat.WEBP, 70, bitmap) }
+                File(shot.path).delete()
+                val snapshot = windows[id] ?: return@launch
+                windows[id] = snapshot.copy(thumbnailFile = file.absolutePath)
+                snapshots.save(snapshot.copy(thumbnailFile = file.absolutePath))
+                _state.update { it.copy(windows = windowSummaries()) }
+            } finally { thumb.recycle() }
         }
     }
 
