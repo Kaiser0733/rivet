@@ -58,7 +58,7 @@ class BrowserTools(private val session: BrowserSession) {
         } else args.string("url")
         if (url.isBlank()) throw BrowserFailure("browser_invalid_url", "browser_open needs a URL or a preview entry.")
         return readOnly(call) {
-            val preview = previewEntry.isNotBlank()
+            val preview = previewEntry.isNotBlank() || BrowserAuthGuard.isLoopback(url)
             val result = if (preview) {
                 session.openVisual(url, userInitiated = false, projectPreview = true, agentAction = true)
             } else {
