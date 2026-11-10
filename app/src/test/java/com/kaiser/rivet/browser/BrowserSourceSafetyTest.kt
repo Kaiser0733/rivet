@@ -55,7 +55,8 @@ class BrowserSourceSafetyTest {
         val chat = listOf(File("src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt"),
             File("app/src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt")).first { it.isFile }.readText()
         assertTrue(chat.contains("BrowserWatchCard"))
-        assertTrue(chat.contains("browserState.rendererVisible"))
+        assertTrue(chat.contains("BrowserDrivingPolicy.cardVisible"))
+        assertTrue(chat.contains("browserState.agentRunActive"))
     }
 
     @Test fun passwordFieldsAreOnTheRefusalPath() {
