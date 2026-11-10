@@ -220,17 +220,21 @@ class AgentToolExecutor(
                     }
                 }
                 "create_file" -> {
-                    val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
+                    val args = json.decodeFromString<CreateArgs>(call.arguments); val path = path(args.path)
                     mutation(call, "Create file", path, path.length * 2 + 255,
                         modelRequestsApproval = args.askUser) {
                         val created = workspace.createFile(path)
+                        val content = args.content
+                        val written = if (content != null && created.sha256 != null) {
+                            runCatching { workspace.write(created.path, content, created.sha256) }.getOrNull()
+                        } else null
                         success(call, buildJsonObject {
-                            put("path", created.path)
+                            put("path", written?.path ?: created.path)
                             if (created.path != path) put("requested_path", path)
-                            created.sha256?.let { put("sha256", it) }
-                            created.size?.let { put("size", it) }
+                            (written?.sha256 ?: created.sha256)?.let { put("sha256", it) }
+                            (written?.size ?: created.size)?.let { put("size", it) }
                             created.inspectionError?.let { put("inspection_error", it) }
-                        }, "Created  ${created.path}")
+                        }, "Created  ${written?.path ?: created.path}")
                     }
                 }
                 "create_directory" -> {
@@ -653,6 +657,11 @@ class AgentToolExecutor(
 
     @Serializable private data class ListArgs(val path: String = "")
     @Serializable private data class PathArgs(val path: String, @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false)
+    @Serializable private data class CreateArgs(
+        val path: String,
+        val content: String? = null,
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
+    )
     private fun reservedGoalMutation(call: AgentToolCall): Boolean {
         if (call.name !in setOf("write_file", "apply_patch", "create_file", "create_directory",
                 "delete_path", "rename_path", "move_path", "download_file")) return false
@@ -774,7 +783,7 @@ class AgentToolExecutor(
             AgentToolDefinition("apply_patch", "Apply exact unique replacements sequentially in supplied order; each later edit sees earlier edits. All edits validate in memory before the final write, which requires the file hash to still match. In Basic YOLO, set ask_user=true to request confirmation.",
                 schema(listOf("path", "expected_sha256", "edits"), path, "expected_sha256" to string,
                     "edits" to buildJsonObject { put("type", "array"); put("items", schema(listOf("old_text", "new_text"), "old_text" to string, "new_text" to string)) }, askUser)),
-            AgentToolDefinition("create_file", "Create a file; use the returned actual path and sha256 for write_file. If provider inspection fails after creation, inspection_error is returned without a hash; inspect that path before editing. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path"), path, askUser)),
+            AgentToolDefinition("create_file", "Create a file, optionally with initial content. Use the returned actual path and sha256 for later edits. If provider inspection fails after creation, inspection_error is returned without a hash; inspect that path before editing. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path"), path, "content" to string, askUser)),
             AgentToolDefinition("create_directory", "Create a new directory. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path"), path, askUser)),
             AgentToolDefinition("rename_path", "Rename an existing file or directory. Use the returned actual path afterward. In Basic YOLO, set ask_user=true to request confirmation; destructive actions still follow Rivet policy.", schema(listOf("path", "new_name"), path, "new_name" to string, askUser)),
             AgentToolDefinition("move_path", "Move a path into an existing directory; empty destination means root. Use the returned actual path afterward. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path", "destination"), path, "destination" to string, askUser)),

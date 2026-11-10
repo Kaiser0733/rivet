@@ -97,6 +97,19 @@ class AgentToolExecutorTest {
     }
 
     @Test
+    fun createFileKeepsTheContentCarriedThroughApprovalResume() = runTest {
+        val workspace = FakeWorkspace()
+        val result = AgentToolExecutor(workspace)
+            .prepare(AgentToolCall("create", "create_file",
+                """{"path":"local-test.txt","content":"hello from local model"}"""))
+            .execute()
+        assertFalse(result.error)
+        assertTrue(result.content.contains("\"path\":\"local-test.txt\""))
+        assertEquals(1, workspace.writes)
+        assertTrue(result.content.contains("\"size\":22"))
+    }
+
+    @Test
     fun gitInspectionResultsStayCorrelatedAndBounded() = runTest {
         val executor = AgentToolExecutor(FakeWorkspace(),
             gitStatus = { RepositoryStatus(true, "main", "a".repeat(40),
