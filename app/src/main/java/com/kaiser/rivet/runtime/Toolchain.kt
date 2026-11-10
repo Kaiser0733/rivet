@@ -9,6 +9,7 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -173,6 +174,7 @@ internal class Toolchain(context: Context) {
                 }
                 syncLinks(farm, farmTargets(BUSYBOX_APPLETS, binary?.absolutePath,
                     python?.absolutePath, gitBinary?.absolutePath))
+                if (pythonReady) preparePip()
                 prepared = true
             } catch (e: CancellationException) {
                 throw e
@@ -239,6 +241,46 @@ internal class Toolchain(context: Context) {
             try { marker.writeText(PYTHON_STDLIB_VERSION) } catch (_: Exception) { }
         }
         pythonReady = true
+    }
+
+    /**
+     * `--without-ensurepip` means the stdlib carries the ensurepip module and its bundled
+     * wheel but no `python/bin/pip` scripts. Add the PATH entry is not enough on its own;
+     * bootstrap once so bare `pip` exists. Never touches the network: the wheel is bundled.
+     */
+    private fun preparePip() {
+        val home = pythonHome ?: return
+        val executable = pythonExecutable?.takeIf { it.isFile } ?: return
+        val temporary = pythonTmp ?: return
+        if (File(home, "bin/pip").isFile) return
+        try {
+            val base = baseEnvironment(home, path(), temporary, home)
+            val env = pythonEnvironment(base, home, temporary,
+                caBundle?.takeIf { it.isFile && it.length() > 0 })
+            val process = ProcessBuilder(executable.absolutePath, "-m", "ensurepip", "--default-pip")
+                .directory(temporary)
+                .redirectErrorStream(true)
+                .apply {
+                    environment().clear()
+                    env.forEach { entry ->
+                        val split = entry.indexOf('=')
+                        if (split > 0) environment()[entry.substring(0, split)] = entry.substring(split + 1)
+                    }
+                }
+                .start()
+            val finished = process.waitFor(60, TimeUnit.SECONDS)
+            if (!finished) process.destroyForcibly()
+            val output = process.inputStream.bufferedReader().use { it.readText() }
+            if (!finished) {
+                Log.w("Toolchain", "ensurepip timed out; python has no pip scripts")
+            } else if (process.exitValue() != 0) {
+                Log.w("Toolchain", "ensurepip failed (${process.exitValue()}): ${output.takeLast(400)}")
+            }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
+            Log.w("Toolchain", "ensurepip could not run: ${e.javaClass.simpleName}")
+        }
     }
 
     /** Extracts the templates tree and records its version, once per asset version. The

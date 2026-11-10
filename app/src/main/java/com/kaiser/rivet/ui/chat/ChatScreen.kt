@@ -1586,7 +1586,7 @@ private fun StatusFooter(state: ChatUiState, providers: com.kaiser.rivet.ui.prov
     val active = providers.configs.firstOrNull { it.id == providers.activeId }
     val modelName = active?.let { "${displaySafeText(it.name)} ${displayModelName(it.model)}" }
     val usage = state.usage
-    val turns = usage?.reportedRequests ?: 0
+    val turns = footerTurnCount(usage)
     val inputTokens = usage?.reportedInputTokens ?: 0L
     val outputTokens = usage?.reportedOutputTokens ?: 0L
     val totalTokens = inputTokens + outputTokens
@@ -1620,7 +1620,8 @@ private fun StatusFooter(state: ChatUiState, providers: com.kaiser.rivet.ui.prov
                 style = MaterialTheme.typography.labelSmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        if (active != null && state.userPricePerMillionUsd == null &&
+        if (active != null && active.type != ProviderType.Local &&
+            state.userPricePerMillionUsd == null &&
             com.kaiser.rivet.agent.PricingTable.price(active.model) == null &&
             state.spendLabel == null) {
             Text("unknown pricing", style = MaterialTheme.typography.labelSmall,

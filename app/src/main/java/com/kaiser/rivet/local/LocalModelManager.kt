@@ -121,7 +121,8 @@ class LocalModelManager(val app: Application) {
             _installed.value = next
             persist(next)
         }
-        _loadedId.value = null
+        // Removing model A must not erase the loaded id of a different model B.
+        _loadedId.value = active?.entry?.id
         syncProviders()
     }
 
@@ -189,8 +190,12 @@ class LocalModelManager(val app: Application) {
             if (!stateFile.isFile) emptyList()
             else json.decodeFromString(LocalStateDocument.serializer(), stateFile.readText()).installed
         }.getOrDefault(emptyList())
-        // A file deleted outside Rivet must not leave a provider pointing at nothing.
-        return parsed.filter { it.entry.size > 0 && fileFor(it.entry).isFile }
+        // A file deleted or truncated outside Rivet must not leave a provider pointing
+        // at a model that cannot load.
+        return parsed.filter { model ->
+            model.entry.size > 0 &&
+                fileFor(model.entry).let { file -> file.isFile && file.length() == model.entry.size }
+        }
     }
 
     private fun persist(models: List<InstalledLocalModel>) {

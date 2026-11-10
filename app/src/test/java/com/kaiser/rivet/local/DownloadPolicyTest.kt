@@ -26,6 +26,17 @@ class DownloadPolicyTest {
     }
 
     @Test
+    fun meteredWifiIsNeverCalledMobileData() {
+        val wifi = DownloadPolicy.meteredWarning(NetworkKind.Wifi, 1_100_000_000L)
+        assertTrue(wifi.contains("Wi-Fi is set as metered"))
+        assertTrue(!wifi.contains("mobile data", ignoreCase = true))
+        assertTrue(DownloadPolicy.meteredWarning(NetworkKind.Cellular, 1_100_000_000L)
+            .contains("mobile data"))
+        assertTrue(DownloadPolicy.networkWait(NetworkKind.Wifi)
+            .contains("Wi-Fi is set as metered"))
+    }
+
+    @Test
     fun etagChecksumsAreOnlyAcceptedWhenTheyLookLikeSha256() {
         val hash = "a".repeat(64)
         assertEquals(hash, DownloadPolicy.checksumFromEtag("\"$hash\""))

@@ -57,6 +57,8 @@ data class DownloadJob(
 private data class DownloadsDocument(val jobs: List<DownloadJob> = emptyList())
 
 /** Pure policy so storage and mobile-data rules are testable without Android. */
+enum class NetworkKind { Wifi, Cellular, Other }
+
 object DownloadPolicy {
     const val KEEP_FREE_BYTES = 1_000_000_000L
     const val WARN_BELOW_BYTES = 2_500_000_000L
@@ -78,6 +80,25 @@ object DownloadPolicy {
     }
 
     fun wifiOnlyByDefault(sizeBytes: Long): Boolean = sizeBytes > WIFI_DEFAULT_THRESHOLD
+
+    /** A metered Wi-Fi network is never called mobile data. */
+    fun meteredWarning(kind: NetworkKind, sizeBytes: Long): String {
+        val size = String.format(Locale.US, "%.1f GB", sizeBytes / 1_000_000_000.0)
+        return when (kind) {
+            NetworkKind.Cellular ->
+                "This model is $size. On mobile data that can use a lot of your plan."
+            NetworkKind.Wifi ->
+                "This Wi-Fi is set as metered. The model is $size; downloading it can use a lot of your plan."
+            NetworkKind.Other ->
+                "This network is metered. The model is $size; downloading it can use a lot of your plan."
+        }
+    }
+
+    fun networkWait(kind: NetworkKind): String = when (kind) {
+        NetworkKind.Cellular -> "This download waits for Wi-Fi. Use mobile data for this one? It can use a lot."
+        NetworkKind.Wifi -> "This Wi-Fi is set as metered. Download anyway?"
+        NetworkKind.Other -> "This network is metered. Download anyway?"
+    }
 
     fun checksumFromEtag(etag: String?): String? {
         val value = etag?.trim()?.trim('"')?.lowercase(Locale.ROOT) ?: return null
@@ -103,6 +124,8 @@ class ModelDownloadManager(
     private val _jobs = MutableStateFlow(load())
     val jobs: StateFlow<Map<String, DownloadJob>> = _jobs.asStateFlow()
     private var runner: Job? = null
+    private var runSequence = 0L
+    @Volatile private var activeToken = 0L
     @Volatile private var activeCall: Call? = null
     @Volatile private var activeId: String? = null
 
@@ -118,7 +141,12 @@ class ModelDownloadManager(
 
     /** Starts or resumes one download. A second active download is refused plainly. */
     fun start(entry: LocalModelEntry, allowMobile: Boolean = false, byo: Boolean = false): String? {
-        if (runner?.isActive == true) return "Another model is still downloading. Pause it first."
+        if (runner?.isActive == true || _jobs.value.values.any {
+                it.status == DownloadStatus.Downloading || it.status == DownloadStatus.Queued ||
+                    it.status == DownloadStatus.Verifying
+            }) {
+            return "Another model is still downloading or being installed. Pause it first."
+        }
         val installed = models.installedFor(entry.id)
         if (installed != null) return "${entry.name} is already installed."
         val prior = _jobs.value[entry.id]
@@ -154,15 +182,18 @@ class ModelDownloadManager(
         set(job)
         activeId = entry.id
         startService()
-        runner = scope.launch { runJob(job) }
+        val token = ++runSequence
+        activeToken = token
+        runner = scope.launch { runJob(job, token) }
         return null
     }
 
     fun pause(id: String) {
-        if (activeId == id) {
+        if (activeId == id || _jobs.value[id]?.status == DownloadStatus.Verifying) {
             activeCall?.cancel()
             runner?.cancel()
             runner = null
+            activeToken = 0
         }
         val job = _jobs.value[id] ?: return
         val part = models.partFor(job.entry)
@@ -172,10 +203,11 @@ class ModelDownloadManager(
     }
 
     fun cancel(id: String) {
-        if (activeId == id) {
+        if (activeId == id || _jobs.value[id]?.status == DownloadStatus.Verifying) {
             activeCall?.cancel()
             runner?.cancel()
             runner = null
+            activeToken = 0
         }
         _jobs.value[id]?.let { models.partFor(it.entry).delete() }
         _jobs.value = _jobs.value - id
@@ -183,10 +215,10 @@ class ModelDownloadManager(
         stopServiceIfIdle()
     }
 
-    fun resume(id: String, allowMobile: Boolean = false) {
-        val job = _jobs.value[id] ?: return
-        if (job.status == DownloadStatus.Downloading) return
-        start(job.entry, allowMobile = allowMobile, byo = job.byo)
+    fun resume(id: String, allowMobile: Boolean = false): String? {
+        val job = _jobs.value[id] ?: return "That download is no longer queued."
+        if (job.status == DownloadStatus.Downloading) return null
+        return start(job.entry, allowMobile = allowMobile, byo = job.byo)
     }
 
     fun storageWarning(job: DownloadJob): String? =
@@ -202,9 +234,15 @@ class ModelDownloadManager(
         }
         if (job.wifiOnly && !job.allowMobile &&
             !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
-            return "This download waits for Wi-Fi. Use mobile data for this one? It can use a lot."
+            return DownloadPolicy.networkWait(networkKind(caps))
         }
         return null
+    }
+
+    private fun networkKind(caps: NetworkCapabilities): NetworkKind = when {
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkKind.Cellular
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkKind.Wifi
+        else -> NetworkKind.Other
     }
 
     fun staleBytes(): Long {
@@ -242,9 +280,10 @@ class ModelDownloadManager(
         0L
     }
 
-    private suspend fun runJob(job: DownloadJob) {
+    private suspend fun runJob(job: DownloadJob, token: Long) {
         val id = job.entry.id
         val part = models.partFor(job.entry)
+        if (activeToken != token) return
         try {
             set(job.copy(status = DownloadStatus.Downloading, error = null,
                 downloaded = part.length(), updatedAt = System.currentTimeMillis()))
@@ -258,7 +297,7 @@ class ModelDownloadManager(
             activeCall = call
             call.execute().use { response ->
                 if (response.code == 416 && part.length() == job.entry.size) {
-                    finish(job, part, response.header("ETag"), job.entry.sha256)
+                    finish(job, part, response.header("ETag"), job.entry.sha256, token)
                     return
                 }
                 if (!response.isSuccessful) {
@@ -289,20 +328,23 @@ class ModelDownloadManager(
                 set((_jobs.value[id] ?: job).copy(etag = existingEtag ?: etag,
                     total = total, updatedAt = System.currentTimeMillis()))
                 FileOutputStream(part, rangeStart > 0).use { output ->
-                    copy(response.body!!.byteStream(), output, part, total, id)
+                    copy(response.body!!.byteStream(), output, part, total, id, token)
                 }
                 if (part.length() != job.entry.size) {
                     throw IOException("The download stopped early. Resume to finish it.")
                 }
                 finish(job.copy(etag = etag ?: existingEtag), part, etag,
-                    job.entry.sha256)
+                    job.entry.sha256, token)
             }
         } catch (e: CancellationException) {
-            val current = _jobs.value[id] ?: job
+            if (activeToken != token) throw e
+            val current = _jobs.value[id] ?: throw e
             set(current.copy(status = DownloadStatus.Paused, downloaded = part.length(),
                 error = "Paused.", updatedAt = System.currentTimeMillis()))
             throw e
         } catch (e: Exception) {
+            if (activeToken != token) return
+            val current = _jobs.value[id] ?: return
             val message = when (e) {
                 is LocalFailure -> e.message ?: "The model could not be installed."
                 is IOException -> if ((e.message ?: "").contains("space", ignoreCase = true) ||
@@ -312,23 +354,26 @@ class ModelDownloadManager(
                     ?: "The download stopped. Resume when the connection is back."
                 else -> "The download stopped. Resume when the connection is back."
             }
-            set((_jobs.value[id] ?: job).copy(status = DownloadStatus.Paused,
+            set(current.copy(status = DownloadStatus.Paused,
                 downloaded = part.length(), error = message,
                 updatedAt = System.currentTimeMillis()))
         } finally {
-            if (activeId == id) activeId = null
-            activeCall = null
-            runner = null
+            if (activeToken == token) {
+                if (activeId == id) activeId = null
+                activeCall = null
+                runner = null
+            }
             stopServiceIfIdle()
         }
     }
 
     private fun copy(input: InputStream, output: FileOutputStream, part: File,
-                     total: Long, id: String) {
+                     total: Long, id: String, token: Long) {
         val buffer = ByteArray(64 * 1024)
         var lastReport = System.currentTimeMillis()
         while (true) {
             if (Thread.currentThread().isInterrupted) throw CancellationException()
+            if (activeToken != token) throw CancellationException()
             val count = input.read(buffer)
             if (count < 0) break
             output.write(buffer, 0, count)
@@ -336,6 +381,7 @@ class ModelDownloadManager(
             val now = System.currentTimeMillis()
             if (now - lastReport > 250) {
                 val job = _jobs.value[id] ?: return
+                if (activeToken != token) return
                 set(job.copy(downloaded = part.length(), total = if (total > 0) total else job.total,
                     updatedAt = now))
                 lastReport = now
@@ -343,8 +389,12 @@ class ModelDownloadManager(
         }
     }
 
-    private fun finish(job: DownloadJob, part: File, etag: String?, expected: String?) {
+    private fun finish(job: DownloadJob, part: File, etag: String?, expected: String?,
+                       token: Long) {
         val id = job.entry.id
+        // Cancel/delete can happen while the response is being finalized. Do not
+        // resurrect a journal row for a model the user just removed.
+        if (activeToken != token || _jobs.value[id] == null) return
         set(job.copy(status = DownloadStatus.Verifying, downloaded = part.length(),
             etag = job.etag ?: etag, updatedAt = System.currentTimeMillis()))
         if (job.entry.size > 0 && part.length() != job.entry.size) {
@@ -355,9 +405,14 @@ class ModelDownloadManager(
             val actual = digest(part)
             if (!actual.equals(checksum, ignoreCase = true)) {
                 part.delete()
-                set(job.copy(status = DownloadStatus.Failed, downloaded = 0,
-                    error = "The downloaded model didn't match its published checksum.",
-                    updatedAt = System.currentTimeMillis()))
+                if (activeToken != token || _jobs.value[id] == null) return
+                val message = if (job.byo) {
+                    "The upstream file no longer matches the checksum. Add the link again to use the new file."
+                } else {
+                    "The downloaded model didn't match its published checksum. Start the download again."
+                }
+                set(job.copy(status = DownloadStatus.Failed, downloaded = 0, etag = null,
+                    error = message, updatedAt = System.currentTimeMillis()))
                 return
             }
         }
@@ -367,13 +422,21 @@ class ModelDownloadManager(
             part.copyTo(target, overwrite = true)
             part.delete()
         }
+        if (activeToken != token) return
         scope.launch {
+            if (activeToken != token || _jobs.value[id] == null) {
+                target.delete()
+                return@launch
+            }
             val failure = runCatching {
                 models.install(job.entry, job.byo, checksum != null)
                 models.activate(job.entry)
             }.exceptionOrNull()
-            if (failure != null) {
-                set((_jobs.value[id] ?: job).copy(status = DownloadStatus.Failed,
+            if (_jobs.value[id] == null) {
+                runCatching { models.remove(job.entry) }
+                target.delete()
+            } else if (failure != null) {
+                set(job.copy(status = DownloadStatus.Failed,
                     error = failure.message ?: "The model could not be registered."))
             } else {
                 _jobs.value = _jobs.value - id
@@ -417,15 +480,19 @@ class ModelDownloadManager(
             if (!journal.isFile) emptyList()
             else json.decodeFromString(DownloadsDocument.serializer(), journal.readText()).jobs
         }.getOrDefault(emptyList())
-        return parsed.associateBy { it.entry.id }.mapValues { (_, job) ->
-            if (job.status == DownloadStatus.Downloading || job.status == DownloadStatus.Queued ||
-                job.status == DownloadStatus.Verifying) {
-                val part = models.partFor(job.entry)
-                job.copy(status = DownloadStatus.Paused, downloaded = part.length(),
-                    error = "Rivet closed while this was downloading. Resume to finish it.",
-                    updatedAt = System.currentTimeMillis())
-            } else job
-        }
+        return parsed.associateBy { it.entry.id }
+            // A crash after the file was installed but before the journal row was
+            // removed must not leave a download row for an already usable model.
+            .filterValues { models.installedFor(it.entry.id) == null }
+            .mapValues { (_, job) ->
+                if (job.status == DownloadStatus.Downloading || job.status == DownloadStatus.Queued ||
+                    job.status == DownloadStatus.Verifying) {
+                    val part = models.partFor(job.entry)
+                    job.copy(status = DownloadStatus.Paused, downloaded = part.length(),
+                        error = "Rivet closed while this was downloading. Resume to finish it.",
+                        updatedAt = System.currentTimeMillis())
+                } else job
+            }
     }
 
     private fun startService() {

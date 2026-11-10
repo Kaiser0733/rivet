@@ -62,6 +62,7 @@ import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.ReasoningLevel
+import com.kaiser.rivet.local.LocalPrompt
 import com.kaiser.rivet.provider.isUnsupportedReasoningError
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.provider.providerClient
@@ -1423,14 +1424,19 @@ class ChatViewModel private constructor(
             catch (_: Exception) { false }
             val context = ContextPreparation(sessions, sessionId, client, snapshot.config,
                 turnId, activeSummary, workspaceId) { messages, _ ->
+                val baseSystem = systemInstruction(workspace != null,
+                    runtime.terminalStateLine(managedProcesses.activeCount())
+                        .takeIf { it != "Terminal: ready" })
+                val wire = if (snapshot.config.type == ProviderType.Local) {
+                    LocalPrompt.wire(baseSystem, tools, snapshot.config.resolvedContextWindowTokens(),
+                        workspace != null)
+                } else null
                 AgentRequest(
                     model = snapshot.config.model,
                     messages = modelMessages(messages, workspaceId, enforceWorkspace = true),
-                    system = systemInstruction(workspace != null,
-                        runtime.terminalStateLine(managedProcesses.activeCount())
-                            .takeIf { it != "Terminal: ready" }),
+                    system = wire?.system ?: baseSystem,
                     reasoning = snapshot.config.reasoning,
-                    tools = tools,
+                    tools = wire?.tools ?: tools,
                 )
             }
             // A retry always re-runs the transcript that is already there. The failed
@@ -1839,12 +1845,18 @@ class ChatViewModel private constructor(
                 }
                 // A provider that explains itself gets to say so, in its own words.
                 val detail = (e as? ProviderError.ProviderMessage)?.let { providerMessageText(it.text) }
-                val action = if (snapshot.config.type == ProviderType.Local ||
+                val message = detail ?: e.text()
+                // A thermal/battery pause is temporary; opening settings does not resume it.
+                val localPause = snapshot.config.type == ProviderType.Local &&
+                    message.contains("paused this local run", ignoreCase = true)
+                val action = if (localPause) {
+                    ChatErrorAction.RetryTurn
+                } else if (snapshot.config.type == ProviderType.Local ||
                     e is ProviderError.Unauthorized || e is ProviderError.Forbidden ||
                     e is ProviderError.ModelNotFound) {
                     ChatErrorAction.OpenSettings
                 } else ChatErrorAction.RetryTurn
-                stableFailure(ticket, durable, detail ?: e.text(), action)
+                stableFailure(ticket, durable, message, action)
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent turn failed: ${e.javaClass.simpleName}")
                 stableFailure(ticket, durable,

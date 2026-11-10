@@ -34,6 +34,7 @@ class AgentToolExecutorTest {
         var searchBytesScanned = 5L
         var searchSkipped = 1
         var createdPath: String? = null
+        var createdHash: String? = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
         var downloadedBytes: ByteArray? = null
         val directories = mutableSetOf<String>()
 
@@ -75,7 +76,7 @@ class AgentToolExecutorTest {
         }
         override suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>) =
             write(path, edits.single().newText, expectedHash)
-        override suspend fun createFile(path: String) = AgentCreatedFile(createdPath ?: path, "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855", 0)
+        override suspend fun createFile(path: String) = AgentCreatedFile(createdPath ?: path, createdHash, 0)
         override suspend fun createDirectory(path: String): AgentWorkspaceEntry {
             directories += path
             return AgentWorkspaceEntry(path, directory = true, size = null)
@@ -94,6 +95,41 @@ class AgentToolExecutorTest {
         override suspend fun delete(path: String, approved: WorkspaceStructuralStamp) {
             deletes++; directories.remove(path)
         }
+    }
+
+    @Test
+    fun createFileKeepsTheContentCarriedThroughApprovalResume() = runTest {
+        val workspace = FakeWorkspace()
+        val result = AgentToolExecutor(workspace)
+            .prepare(AgentToolCall("create", "create_file",
+                """{"path":"local-test.txt","content":"hello from local model"}"""))
+            .execute()
+        assertFalse(result.error)
+        assertTrue(result.content.contains("\"path\":\"local-test.txt\""))
+        assertEquals(1, workspace.writes)
+        assertTrue(result.content.contains("\"size\":22"))
+    }
+
+    @Test
+    fun createFileWithContentReadsTheHashIfTheProviderOmittedIt() = runTest {
+        val workspace = FakeWorkspace().apply { createdHash = null }
+        val result = AgentToolExecutor(workspace)
+            .prepare(AgentToolCall("create", "create_file",
+                """{"path":"local-test.txt","content":"hello"}"""))
+            .execute()
+        assertFalse(result.error)
+        assertEquals(1, workspace.writes)
+    }
+
+    @Test
+    fun createFileWithContentDoesNotSwallowAWriteFailure() = runTest {
+        val workspace = FakeWorkspace().apply { failure = "write" }
+        val result = AgentToolExecutor(workspace)
+            .prepare(AgentToolCall("create", "create_file",
+                """{"path":"local-test.txt","content":"hello"}"""))
+            .execute()
+        assertTrue(result.error)
+        assertTrue(result.content.contains("\"error\""))
     }
 
     @Test

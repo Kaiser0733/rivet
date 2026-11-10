@@ -30,8 +30,8 @@ class PersistentProcessServiceTest {
             approvalDangerous = false,
         ))
 
-        assertTrue(actions(notification).contains("Approve"))
-        assertTrue(actions(notification).contains("Deny"))
+        assertEquals(listOf("Stop", "Approve", "Deny"), actions(notification))
+        assertFalse(actions(notification).contains("Pause"))
         assertTrue(notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
             .contains("Approval needed"))
     }

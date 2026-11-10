@@ -29,7 +29,7 @@ android {
         applicationId = "com.kaiser.rivet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 27
+        versionCode = 28
         versionName = "1.3.0"
     }
 

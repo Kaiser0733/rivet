@@ -6,11 +6,13 @@ import android.net.Uri
 import android.os.StatFs
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 
 data class ModelsUiState(
@@ -28,7 +30,8 @@ data class ModelsUiState(
     val byoError: String? = null,
     val staleBytes: Long = 0,
 ) {
-    fun fitFor(entry: LocalModelEntry): ModelFit = fits[entry.id] ?: ModelFit(entry, FitBadge.TooBig, "")
+    fun fitFor(entry: LocalModelEntry): ModelFit = fits[entry.id] ?: ModelRecommender.fit(
+        entry, totalRamMb, availableRamMb.toLong() * 1024 * 1024)
     val hasDeviceFacts: Boolean get() = totalRamMb > 0
 }
 
@@ -81,7 +84,12 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
         val network = manager.activeNetwork ?: return null
         val caps = manager.getNetworkCapabilities(network) ?: return null
         if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) return null
-        return "This model is ${entry.size / 1_000_000_000.0} GB. On mobile data that can use a lot of your plan."
+        val kind = when {
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkKind.Cellular
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> NetworkKind.Wifi
+            else -> NetworkKind.Other
+        }
+        return DownloadPolicy.meteredWarning(kind, entry.size)
     }
 
     fun download(entry: LocalModelEntry, allowMobile: Boolean = false) {
@@ -92,14 +100,20 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
             })
             return
         }
-        val error = downloads?.start(entry, allowMobile = allowMobile)
+        val downloader = downloads
+        if (downloader == null) {
+            _ui.value = _ui.value.copy(notice = "Downloads are unavailable in this build.")
+            return
+        }
+        val error = downloader.start(entry, allowMobile = allowMobile)
         if (error != null) {
-            _ui.value = _ui.value.copy(notice = error, wifiOnly = downloads?.wifiOnly ?: _ui.value.wifiOnly)
+            _ui.value = _ui.value.copy(notice = error, wifiOnly = downloader.wifiOnly)
         }
     }
 
     fun resume(job: DownloadJob, allowMobile: Boolean = false) {
-        downloads?.resume(job.entry.id, allowMobile)
+        val error = downloads?.resume(job.entry.id, allowMobile)
+        if (error != null) _ui.value = _ui.value.copy(notice = error)
     }
 
     fun pause(job: DownloadJob) {
@@ -112,6 +126,12 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun remove(entry: LocalModelEntry) {
         viewModelScope.launch {
+            // A running download holds the .part file open; cancel it first so the
+            // journal cannot resurrect a row for a model the user just deleted.
+            downloads?.cancel(entry.id)
+            // A loaded model can be mid-generation under the native lock. Stop the
+            // token loop before waiting for that lock, so Delete does not look hung.
+            if (manager.loadedId.value == entry.id) manager.stopGeneration()
             runCatching { manager.remove(entry) }
                 .onFailure { _ui.value = _ui.value.copy(notice = it.message) }
         }
@@ -131,15 +151,24 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
         if (rawUrl.isBlank()) return
         viewModelScope.launch {
             _ui.value = _ui.value.copy(byoBusy = true, byoError = null)
-            val resolved = withContext(Dispatchers.IO) {
-                runCatching { resolver.resolve(rawUrl) }
-            }
-            _ui.value = _ui.value.copy(byoBusy = false)
-            resolved.onFailure {
-                _ui.value = _ui.value.copy(byoError = it.message ?: "That link could not be used.")
+            val resolved = try {
+                withContext(Dispatchers.IO) {
+                    withTimeoutOrNull(45_000) { resolver.resolve(rawUrl) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(byoBusy = false,
+                    byoError = e.message ?: "That link could not be used.")
                 return@launch
             }
-            val entry = resolved.getOrThrow().entry
+            _ui.value = _ui.value.copy(byoBusy = false)
+            if (resolved == null) {
+                _ui.value = _ui.value.copy(byoError =
+                    "Hugging Face took too long to answer. Check the link and connection, then try again.")
+                return@launch
+            }
+            val entry = resolved.entry
             val fit = ModelRecommender.fit(entry, _ui.value.totalRamMb,
                 _ui.value.availableRamMb.toLong() * 1024 * 1024)
             if (!fit.canDownload) {
@@ -148,9 +177,16 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
                 })
                 return@launch
             }
-            val error = downloads?.start(entry, byo = true)
+            val downloader = downloads
+            if (downloader == null) {
+                _ui.value = _ui.value.copy(byoError = "Downloads are unavailable in this build.")
+                return@launch
+            }
+            val error = downloader.start(entry, byo = true)
             if (error != null) {
                 _ui.value = _ui.value.copy(byoError = error)
+            } else if (downloader.job(entry.id) == null) {
+                _ui.value = _ui.value.copy(byoError = "The download did not start. Try again.")
             } else {
                 _ui.value = _ui.value.copy(notice = "Downloading ${entry.name}.")
             }

@@ -10,6 +10,7 @@ import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.TestResult
+import com.kaiser.rivet.provider.resolvedContextWindowTokens
 import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.CancellationException
@@ -54,7 +55,9 @@ class LocalProviderClient(
 
         val tools = if (entry.toolCalling == LocalToolCalling.None) emptyList()
         else LocalToolProtocol.profile(request.tools)
-        val system = request.system + LocalToolProtocol.systemSuffix(tools)
+        val compact = config.resolvedContextWindowTokens() <= 4096
+        val system = if (LocalPrompt.isWired(request.system)) request.system
+        else request.system + LocalToolProtocol.systemSuffix(tools, compact = compact)
         val maxTokens = config.resolvedManualMaxOutputTokens() ?: 512
 
         return withContext(Dispatchers.IO) {
@@ -62,6 +65,7 @@ class LocalProviderClient(
                 val prompt = buildPrompt(entry, system, request.messages)
                 var thermalPause: String? = null
                 var emitted = 0
+                val visible = LocalThinkingFilter()
                 var text = manager.generate(
                     entry = entry,
                     prompt = prompt,
@@ -70,7 +74,7 @@ class LocalProviderClient(
                     topP = 0.95f,
                     grammar = null,
                     onToken = { delta ->
-                        onDelta(delta)
+                        visible.feed(delta).takeIf { it.isNotEmpty() }?.let(onDelta)
                         emitted++
                         // Sustained generation is where throttling actually happens. Check
                         // periodically and stop the native loop at the next token boundary.
@@ -81,6 +85,7 @@ class LocalProviderClient(
                     },
                 )
                 thermalPause?.let { throw ProviderError.ProviderMessage(it) }
+                visible.finish().takeIf { it.isNotEmpty() }?.let(onDelta)
                 var parsed = LocalToolProtocol.parse(text, tools.map { it.name }.toSet())
                 // Prompted tool formats are the fallback path. If a model starts a tool
                 // call but does not produce parseable JSON, constrain one retry with GBNF.
@@ -103,11 +108,12 @@ class LocalProviderClient(
                     )
                     parsed = LocalToolProtocol.parse(text, tools.map { it.name }.toSet())
                 }
-                if (text.isBlank() && parsed.calls.isEmpty()) {
+                val answer = stripUntaggedToolMusing(LocalThinkingFilter.strip(parsed.text))
+                if (answer.isBlank() && parsed.calls.isEmpty()) {
                     throw ProviderError.EmptyResponse
                 }
                 AgentResponse(
-                    text = parsed.text,
+                    text = answer,
                     toolCalls = parsed.calls,
                     transportState = "local:${entry.toolCalling.name.lowercase()}",
                 )

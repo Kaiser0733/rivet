@@ -50,6 +50,7 @@ internal object AgentToolError {
         "download_failed" to "The server could not provide this file. Check the address and try again.",
         "network_error" to "Rivet couldn't reach the download server. Check the address and connection, then try again.",
         "invalid_checksum" to "Use a 64-character SHA-256 checksum or leave the checksum blank.",
+        "invalid_arguments" to "The tool arguments did not match this tool's JSON contract. Re-read the argument names and send one complete JSON object.",
         "invalid_offset" to "Read the file from a different offset. This one is past the end or splits a character.",
         "output_limit" to "Ask for a smaller part of this file. The requested range is too large for one result.",
     )

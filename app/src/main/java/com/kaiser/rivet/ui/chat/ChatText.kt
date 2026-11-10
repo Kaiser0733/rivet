@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.storage.SessionUsage
 import java.util.Locale
 
 internal const val COMMAND_APPROVAL_WARNING =
@@ -27,6 +28,17 @@ private fun escapeBidi(value: String): String = buildString(value.length) {
 // Vendor-qualified ids ("anthropic/claude-sonnet-4-5") are unreadable in a
 // one-line selector. Claude ids become words, GPT ids keep their shape, and
 // everything else is left exactly as the provider spelled it.
+/** Completed turns shown in the footer. Local providers report no token usage, but
+ * the turn still happened, so unknown-usage requests count too. */
+internal fun footerTurnCount(usage: SessionUsage?): Int {
+    if (usage == null) return 0
+    // Usage also records title generation and compaction. They are requests, not
+    // user turns, and the local title pass would otherwise double the footer count.
+    val requests = usage.reportedRequests + usage.unknownRequests -
+        usage.titleRequests - usage.compactionRequests
+    return requests.coerceAtLeast(0)
+}
+
 internal fun displayModelName(modelId: String): String {
     val tail = modelId.substringAfterLast('/')
     val lower = tail.lowercase(Locale.ROOT)
