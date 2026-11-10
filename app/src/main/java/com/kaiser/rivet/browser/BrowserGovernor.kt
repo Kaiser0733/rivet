@@ -27,6 +27,8 @@ data class BrowserMemorySignals(
     val modelFootprintBytes: Long = 0L,
     val trimLevel: Int = 0,
     val rendererActive: Boolean = false,
+    /** Measured growth of this app and, where available, its renderer. */
+    val observedBrowserBytes: Long = 0L,
 )
 
 private const val BYTES_PER_MIB = 1024L * 1024L
@@ -37,8 +39,10 @@ data class BrowserBudget(
     val reserveBytes: Long,
     val headroomBytes: Long,
     val modelLoaded: Boolean,
+    val observedBrowserBytes: Long = 0L,
 ) {
     val capMb: Int get() = (capBytes / BYTES_PER_MIB).toInt()
+    val observedMb: Int get() = (observedBrowserBytes / BYTES_PER_MIB).toInt()
 }
 
 object BrowserGovernor {
@@ -52,8 +56,20 @@ object BrowserGovernor {
         val reserve = model + SAFETY_BYTES
         val headroom = (signals.availableRamBytes.coerceAtLeast(0L) - reserve).coerceAtLeast(0L)
         val cap = (headroom - WORKING_MARGIN_BYTES).coerceIn(0L, MAX_BROWSER_BYTES)
-        return BrowserBudget(cap, tierFor(cap), reserve, headroom, model > 0L)
+        val observed = signals.observedBrowserBytes.coerceAtLeast(0L)
+        val tier = moreSevere(tierFor(cap), observedTier(observed))
+        return BrowserBudget(cap, tier, reserve, headroom, model > 0L, observed)
     }
+
+    fun observedTier(bytes: Long): BrowserTier = when {
+        bytes >= 250L * MIB -> BrowserTier.NoRenderer
+        bytes >= 200L * MIB -> BrowserTier.ReaderFirst
+        bytes >= 120L * MIB -> BrowserTier.StrictDiet
+        else -> BrowserTier.Normal
+    }
+
+    private fun moreSevere(a: BrowserTier, b: BrowserTier): BrowserTier =
+        if (a.ordinal >= b.ordinal) a else b
 
     /** Boundaries are inclusive on the lower end: 200 normal, 120 strict, 60 reader. */
     fun tierFor(capBytes: Long): BrowserTier = when {

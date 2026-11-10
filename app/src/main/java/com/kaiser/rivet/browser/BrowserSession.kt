@@ -156,6 +156,10 @@ class BrowserSession(
     private var lastRendererStart = 0L
     private var lastActivityAt = 0L
     private var userControlAt = 0L
+    private val memoryProbe = BrowserMemoryProbe()
+    private var baselineOwnPss = 0L
+    private var observedBrowserBytes = 0L
+    private var idleJob: kotlinx.coroutines.Job? = null
     private var releaseJob: kotlinx.coroutines.Job? = null
     private var periodic: kotlinx.coroutines.Job? = null
 
@@ -192,6 +196,7 @@ class BrowserSession(
 
     /** Human open: always the full-screen visual browser, never the reader face. */
     fun userOpen() {
+        idleJob?.cancel(); idleJob = null
         lastActivityAt = System.currentTimeMillis()
         _state.update { it.copy(visible = true, readerMode = false, error = null) }
         val target = activeUrl.ifBlank { _state.value.url }
@@ -204,19 +209,29 @@ class BrowserSession(
 
     /** Watch an existing AI visual session without reloading it. */
     fun watch() {
+        idleJob?.cancel(); idleJob = null
         lastActivityAt = System.currentTimeMillis()
         if (renderer != null || _state.value.rendererVisible) {
             _state.update { it.copy(visible = true, readerMode = false) }
         } else userOpen()
     }
 
-    /** Closing the screen keeps the visual session alive for the watch card. */
-    fun close() { _state.update { it.copy(visible = false, readerMode = false) } }
+    /** Closing the screen keeps the visual session alive for the watch card, then idle-expires it. */
+    fun close() {
+        _state.update { it.copy(visible = false, readerMode = false) }
+        idleJob?.cancel()
+        idleJob = scope.launch {
+            kotlinx.coroutines.delay(BrowserIdleTimer.IDLE_MS)
+            if (!_state.value.visible) endSession()
+        }
+    }
 
     /** The visible Close control and browser_close: save, destroy, free, clear the card. */
     fun endSession() {
         releaseJob?.cancel()
         releaseJob = null
+        idleJob?.cancel()
+        idleJob = null
         val id = activeWindowId
         val current = id?.let { windows[it] }
         if (id != null && current != null) {
@@ -242,16 +257,31 @@ class BrowserSession(
         else "$line$modes"
     }
 
-    fun refreshBudget(publish: Boolean = true) {
+    fun refreshBudget(publish: Boolean = true, observedBytes: Long? = null) {
+        if (observedBytes != null) observedBrowserBytes = observedBytes.coerceAtLeast(0L)
         val manager = app.getSystemService(android.app.ActivityManager::class.java)
         val info = android.app.ActivityManager.MemoryInfo()
         manager?.getMemoryInfo(info)
         val loaded = models?.loadedId?.value != null
         val footprint = if (loaded) models?.modelFootprintBytes?.value ?: 0L else 0L
-        budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint))
-        if (publish) _state.update {
-            it.copy(tier = budget.tier, capMb = budget.capMb, modelLoaded = budget.modelLoaded,
-                budgetLine = BrowserGovernor.contextLine(budget))
+        val previousTier = budget.tier
+        budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint,
+            observedBrowserBytes = observedBrowserBytes))
+        if (publish) {
+            if (budget.tier.ordinal > previousTier.ordinal) {
+                if (budget.tier.ordinal >= BrowserTier.StrictDiet.ordinal) {
+                    _state.update { it.copy(fullPage = false) }
+                }
+                if (budget.tier.ordinal >= BrowserTier.ReaderFirst.ordinal) unloadInactiveWindows()
+                _state.update {
+                    it.copy(notice = "Browser memory: ${budget.observedMb}MB used; " +
+                        "${budget.tier.name.lowercase()} mode.")
+                }
+            }
+            _state.update {
+                it.copy(tier = budget.tier, capMb = budget.capMb, modelLoaded = budget.modelLoaded,
+                    budgetLine = BrowserGovernor.contextLine(budget))
+            }
         }
         if (publish && !BrowserGovernor.canOpenRenderer(budget.tier, interaction = true) &&
             _state.value.rendererVisible) {
@@ -261,6 +291,12 @@ class BrowserSession(
                     notice = BrowserGovernor.refusalReason(budget))
             }
         }
+    }
+
+    private fun unloadInactiveWindows() {
+        val active = activeWindowId
+        windows.keys.filter { it != active }.forEach { windows.remove(it) }
+        _state.update { it.copy(windows = windowSummaries()) }
     }
 
     suspend fun open(rawUrl: String, newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
@@ -295,6 +331,7 @@ class BrowserSession(
     suspend fun openVisual(rawUrl: String, userInitiated: Boolean = true,
                            newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
+            idleJob?.cancel(); idleJob = null
             val url = BrowserUrlPolicy.validate(rawUrl)
             refreshBudget(publish = true)
             if (BrowserAuthGuard.isAuthSurface(url)) {
@@ -506,6 +543,7 @@ class BrowserSession(
         if (renderer === view) return
         renderer?.let { old -> runCatching { old.destroy() } }
         renderer = view
+        baselineOwnPss = memoryProbe.sample().ownPssBytes
         view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
         configure(view)
         rendererReady?.complete(view)
@@ -519,13 +557,13 @@ class BrowserSession(
         periodic?.cancel()
         periodic = scope.launch {
             while (true) {
-                kotlinx.coroutines.delay(15_000)
-                refreshBudget()
+                kotlinx.coroutines.delay(5_000)
+                val sample = withContext(Dispatchers.Default) { memoryProbe.sample() }
+                val observed = if (baselineOwnPss > 0L) {
+                    memoryProbe.browserGrowthBytes(baselineOwnPss, sample)
+                } else 0L
+                refreshBudget(observedBytes = observed)
                 if (_state.value.visible) lastActivityAt = System.currentTimeMillis()
-                if (_state.value.rendererVisible &&
-                    System.currentTimeMillis() - lastActivityAt > 3 * 60_000L) {
-                    destroyRenderer()
-                }
             }
         }
     }
@@ -1040,6 +1078,8 @@ class BrowserSession(
         periodic?.cancel(); periodic = null
         val view = renderer ?: return
         renderer = null
+        baselineOwnPss = 0L
+        observedBrowserBytes = 0L
         rendererReady?.cancel()
         rendererReady = null
         runCatching { view.stopLoading(); view.destroy() }
