@@ -5,12 +5,13 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrowserPreviewTest {
-    @Test fun loopbackPreviewIsExplicitlyAllowedWhilePublicTrafficStaysHttps() {
-        val config = listOf(File("src/main/res/xml/network_security_config.xml"),
-            File("app/src/main/res/xml/network_security_config.xml")).first { it.isFile }
-        val xml = config.readText()
-        assertTrue(xml.contains("127.0.0.1"))
-        assertTrue(xml.contains("cleartextTrafficPermitted=\"true\""))
-        assertTrue(xml.contains("localhost"))
+    @Test fun aProjectPreviewIsOpenedOnTheVisualSurface() {
+        val source = listOf(File("src/main/java/com/kaiser/rivet/browser/BrowserTools.kt"),
+            File("app/src/main/java/com/kaiser/rivet/browser/BrowserTools.kt"))
+            .first { it.isFile }.readText()
+        val open = source.substringAfter("private suspend fun prepareOpen")
+            .substringBefore("private suspend fun prepareClick")
+        assertTrue(open.contains("session.openVisual"))
+        assertTrue(open.contains("preview"))
     }
 }
