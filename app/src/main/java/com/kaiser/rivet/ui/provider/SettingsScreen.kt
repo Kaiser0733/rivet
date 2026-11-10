@@ -108,6 +108,7 @@ fun SettingsScreen(
     userPricePerMillionUsd: Double? = null,
     onSaveSpend: (SpendCaps, Double?) -> Unit = { _, _ -> },
     onOpenModels: () -> Unit = {},
+    onSendFeedback: () -> Unit = {},
 ) {
     val state by viewModel.listState.collectAsState()
     val gitHubState by viewModel.gitHubState.collectAsState()
@@ -231,7 +232,8 @@ fun SettingsScreen(
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
             when (section) {
-                null -> SectionList(
+                null -> Column {
+                    SectionList(
                     providerSummary = when {
                         state.loadError != null -> "Problem loading providers"
                         active == null -> "Not set"
@@ -251,7 +253,12 @@ fun SettingsScreen(
                     onSelect = {
                         if (it == SettingsSection.Models) onOpenModels() else section = it
                     },
-                )
+                    )
+                    TextButton(onClick = onSendFeedback,
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, top = 8.dp)) {
+                        Text("Send feedback")
+                    }
+                }
                 SettingsSection.Models -> Unit
                 SettingsSection.Providers -> ProviderDetail(
                     loadError = state.loadError,

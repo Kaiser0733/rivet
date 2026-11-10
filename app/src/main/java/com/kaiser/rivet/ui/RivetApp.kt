@@ -108,6 +108,15 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val browserState by chatViewModel.browser.state.collectAsState()
         val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
         val navigationBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val sendFeedback: () -> Unit = {
+            settingsOpen = false
+            coroutineScope.launch {
+                runCatching {
+                    chatViewModel.browser.openVisual("https://vastraalabs.online/feedback",
+                        userInitiated = true)
+                }
+            }
+        }
         val saveableStates = rememberSaveableStateHolder()
         LaunchedEffect(processNavigationRequest) {
             if (processNavigationRequest > 0) {
@@ -184,7 +193,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                     onOpenHistory = openHistory,
                                     onOpenProcesses = openProcesses,
                                     onStartOffline = openModels,
-                                    onOpenBrowser = { chatViewModel.browser.userOpen() })
+                                    onOpenBrowser = { chatViewModel.browser.userOpen() },
+                                    onSendFeedback = sendFeedback)
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
@@ -276,6 +286,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                         editing = true
                     },
                     onOpenModels = openModels,
+                    onSendFeedback = sendFeedback,
                     themeMode = themeMode,
                     themeSaving = themeSaving,
                     onThemeChange = { value ->

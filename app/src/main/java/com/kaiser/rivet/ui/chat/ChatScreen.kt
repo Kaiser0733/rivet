@@ -154,7 +154,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit,
-               onStartOffline: () -> Unit = {}, onOpenBrowser: () -> Unit = {}) {
+               onStartOffline: () -> Unit = {}, onOpenBrowser: () -> Unit = {},
+               onSendFeedback: () -> Unit = {}) {
     val landscape = showsHistoryPane(LocalConfiguration.current.orientation)
     val state by chatViewModel.uiState.collectAsState()
     val browserState by chatViewModel.browser.state.collectAsState()
@@ -174,6 +175,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val onIHaveAKey: () -> Unit = { showKeyInput = true }
     var showStartFree by remember { mutableStateOf(false) }
     var modelSheetVisible by remember { mutableStateOf(false) }
+    var feedbackMenu by remember { mutableStateOf(false) }
     val planNotGrantedMsg = stringResource(R.string.chatgpt_plan_not_granted)
     val networkMsg = stringResource(R.string.chatgpt_signin_network)
     val failedMsg = stringResource(R.string.chatgpt_signin_failed)
@@ -476,6 +478,19 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
                             tint = MaterialTheme.colorScheme.onBackground)
+                    }
+                    Box {
+                        IconButton(onClick = { feedbackMenu = true }, modifier = Modifier.size(48.dp)) {
+                            Icon(painterResource(R.drawable.ic_more), "More",
+                                tint = MaterialTheme.colorScheme.onBackground)
+                        }
+                        DropdownMenu(expanded = feedbackMenu,
+                            onDismissRequest = { feedbackMenu = false }) {
+                            DropdownMenuItem(text = { Text("Send feedback") }, onClick = {
+                                feedbackMenu = false
+                                onSendFeedback()
+                            })
+                        }
                     }
                     // New session action
                     IconButton(onClick = chatViewModel::newSession, modifier = Modifier.size(48.dp),
