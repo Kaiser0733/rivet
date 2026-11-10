@@ -38,7 +38,7 @@ data class BrowserSnapshot(
 object BrowserSnapshotCodec {
     const val MAX_WINDOWS = 8
     const val MAX_STORE_BYTES = 20L * 1024 * 1024
-    private val json = Json { ignoreUnknownKeys = true; prettyPrint = false }
+    private val json = Json { ignoreUnknownKeys = true; prettyPrint = false; encodeDefaults = true }
 
     fun encode(snapshot: BrowserSnapshot): String = json.encodeToString(BrowserSnapshot.serializer(), snapshot)
 
