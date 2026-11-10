@@ -82,7 +82,12 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
         val network = manager.activeNetwork ?: return null
         val caps = manager.getNetworkCapabilities(network) ?: return null
         if (caps.hasCapability(android.net.NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) return null
-        return "This model is ${entry.size / 1_000_000_000.0} GB. On mobile data that can use a lot of your plan."
+        val kind = when {
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkKind.Cellular
+            caps.hasTransport(android.net.NetworkCapabilities.TRANSPORT_WIFI) -> NetworkKind.Wifi
+            else -> NetworkKind.Other
+        }
+        return DownloadPolicy.meteredWarning(kind, entry.size)
     }
 
     fun download(entry: LocalModelEntry, allowMobile: Boolean = false) {

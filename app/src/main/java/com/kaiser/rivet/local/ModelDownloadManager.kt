@@ -57,6 +57,8 @@ data class DownloadJob(
 private data class DownloadsDocument(val jobs: List<DownloadJob> = emptyList())
 
 /** Pure policy so storage and mobile-data rules are testable without Android. */
+enum class NetworkKind { Wifi, Cellular, Other }
+
 object DownloadPolicy {
     const val KEEP_FREE_BYTES = 1_000_000_000L
     const val WARN_BELOW_BYTES = 2_500_000_000L
@@ -78,6 +80,25 @@ object DownloadPolicy {
     }
 
     fun wifiOnlyByDefault(sizeBytes: Long): Boolean = sizeBytes > WIFI_DEFAULT_THRESHOLD
+
+    /** A metered Wi-Fi network is never called mobile data. */
+    fun meteredWarning(kind: NetworkKind, sizeBytes: Long): String {
+        val size = String.format(Locale.US, "%.1f GB", sizeBytes / 1_000_000_000.0)
+        return when (kind) {
+            NetworkKind.Cellular ->
+                "This model is $size. On mobile data that can use a lot of your plan."
+            NetworkKind.Wifi ->
+                "This Wi-Fi is set as metered. The model is $size; downloading it can use a lot of your plan."
+            NetworkKind.Other ->
+                "This network is metered. The model is $size; downloading it can use a lot of your plan."
+        }
+    }
+
+    fun networkWait(kind: NetworkKind): String = when (kind) {
+        NetworkKind.Cellular -> "This download waits for Wi-Fi. Use mobile data for this one? It can use a lot."
+        NetworkKind.Wifi -> "This Wi-Fi is set as metered. Download anyway?"
+        NetworkKind.Other -> "This network is metered. Download anyway?"
+    }
 
     fun checksumFromEtag(etag: String?): String? {
         val value = etag?.trim()?.trim('"')?.lowercase(Locale.ROOT) ?: return null
@@ -202,9 +223,15 @@ class ModelDownloadManager(
         }
         if (job.wifiOnly && !job.allowMobile &&
             !caps.hasCapability(NetworkCapabilities.NET_CAPABILITY_NOT_METERED)) {
-            return "This download waits for Wi-Fi. Use mobile data for this one? It can use a lot."
+            return DownloadPolicy.networkWait(networkKind(caps))
         }
         return null
+    }
+
+    private fun networkKind(caps: NetworkCapabilities): NetworkKind = when {
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_CELLULAR) -> NetworkKind.Cellular
+        caps.hasTransport(NetworkCapabilities.TRANSPORT_WIFI) -> NetworkKind.Wifi
+        else -> NetworkKind.Other
     }
 
     fun staleBytes(): Long {

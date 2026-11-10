@@ -285,9 +285,8 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
     mobileTarget?.let { target ->
         AlertDialog(
             onDismissRequest = { mobileTarget = null },
-            title = { Text("Download on mobile data?") },
-            text = { Text("${target.name} is ${formatBytes(target.size)}. " +
-                "That can use a large part of your mobile plan. Wi-Fi is the safer choice.") },
+            title = { Text("Download on this network?") },
+            text = { Text(viewModel.mobileWarning(target) ?: "This download can use a lot of data.") },
             confirmButton = {
                 TextButton(onClick = {
                     mobileTarget = null
@@ -532,8 +531,11 @@ private fun DownloadCard(
                     TextButton(onClick = onPause) { Text("Pause") }
                 } else {
                     TextButton(onClick = onResume) { Text("Resume") }
-                    if (network?.contains("Wi-Fi", ignoreCase = true) == true) {
-                        TextButton(onClick = onMobile) { Text("Use mobile data") }
+                    when {
+                        network?.contains("Wi-Fi", ignoreCase = true) == true ->
+                            TextButton(onClick = onMobile) { Text("Use this Wi-Fi") }
+                        network?.contains("mobile", ignoreCase = true) == true ->
+                            TextButton(onClick = onMobile) { Text("Use mobile data") }
                     }
                 }
                 TextButton(onClick = onCancel) { Text("Cancel") }
