@@ -12,8 +12,9 @@ class BrowserDesktopModeTest {
     }
 
     @Test fun textReaderHasNoDesktopUserAgentPath() {
-        val source = java.io.File("app/src/main/java/com/kaiser/rivet/browser/ReaderService.kt")
-            .takeIf { it.isFile }?.readText().orEmpty()
+        val source = listOf(java.io.File("src/main/java/com/kaiser/rivet/browser/ReaderService.kt"),
+            java.io.File("app/src/main/java/com/kaiser/rivet/browser/ReaderService.kt"))
+            .first { it.isFile }.readText()
         assertTrue(source.isNotEmpty())
         assertEquals(false, source.contains("userAgent"))
     }

@@ -6,8 +6,8 @@ import org.junit.Test
 
 class BrowserPreviewTest {
     @Test fun loopbackPreviewIsExplicitlyAllowedWhilePublicTrafficStaysHttps() {
-        val config = File("app/src/main/res/xml/network_security_config.xml")
-        assertTrue(config.isFile)
+        val config = listOf(File("src/main/res/xml/network_security_config.xml"),
+            File("app/src/main/res/xml/network_security_config.xml")).first { it.isFile }
         val xml = config.readText()
         assertTrue(xml.contains("127.0.0.1"))
         assertTrue(xml.contains("cleartextTrafficPermitted=\"true\""))
