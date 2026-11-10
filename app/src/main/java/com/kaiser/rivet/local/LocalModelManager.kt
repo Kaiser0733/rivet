@@ -1,6 +1,7 @@
 package com.kaiser.rivet.local
 
 import android.app.Application
+import android.os.Debug
 import android.net.Uri
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
@@ -44,6 +45,10 @@ class LocalModelManager(val app: Application) {
     val installed: StateFlow<List<InstalledLocalModel>> = _installed.asStateFlow()
     private val _loadedId = MutableStateFlow<String?>(null)
     val loadedId: StateFlow<String?> = _loadedId.asStateFlow()
+    // Own-process PSS delta across load; the browser governor reserves this. It is a
+    // measurement of OUR process, not a claim about the WebView renderer's PSS.
+    private val _modelFootprintBytes = MutableStateFlow(0L)
+    val modelFootprintBytes: StateFlow<Long> = _modelFootprintBytes.asStateFlow()
     @Volatile private var active: LoadedLocal? = null
 
     private data class LoadedLocal(val entry: LocalModelEntry, val model: LlamaModel)
@@ -163,10 +168,15 @@ class LocalModelManager(val app: Application) {
             throw LocalFailure("Local inference isn't available in this build of Rivet.")
         }
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
+        val before = ownPssBytes()
         val loaded = LlamaBridge.load(file.absolutePath, entry.contextMax, threads)
             ?: throw LocalFailure("Rivet couldn't load this model. The file may be damaged.")
         active = LoadedLocal(entry, loaded)
         _loadedId.value = entry.id
+        // The delta is noisy and can be negative after GC. Keep the weights size as a
+        // floor so the governor never reserves less than the file it just loaded.
+        val delta = (ownPssBytes() - before).coerceAtLeast(0L)
+        _modelFootprintBytes.value = delta.coerceAtLeast(entry.size)
         return loaded
     }
 
@@ -174,6 +184,7 @@ class LocalModelManager(val app: Application) {
         active?.let { LlamaBridge.free(it.model) }
         active = null
         _loadedId.value = null
+        _modelFootprintBytes.value = 0L
     }
 
     fun close() {
@@ -184,6 +195,12 @@ class LocalModelManager(val app: Application) {
         val model = synchronized(nativeLock) { ensureLoadedLocked(entry) }
         return LlamaBridge.tokenize(model, text, true).size
     }
+
+    private fun ownPssBytes(): Long = runCatching {
+        val info = Debug.MemoryInfo()
+        Debug.getMemoryInfo(info)
+        info.totalPss.toLong() * 1024L
+    }.getOrDefault(0L)
 
     private fun loadInstalled(): List<InstalledLocalModel> {
         val parsed = runCatching {

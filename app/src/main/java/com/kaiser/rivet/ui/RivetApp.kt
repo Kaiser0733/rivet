@@ -34,6 +34,7 @@ import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.local.ModelsViewModel
 import com.kaiser.rivet.storage.AutonomyStore
+import com.kaiser.rivet.ui.browser.BrowserSheet
 import com.kaiser.rivet.ui.chat.ChatScreen
 import com.kaiser.rivet.ui.history.HistoryPane
 import com.kaiser.rivet.ui.local.ModelsScreen
@@ -89,11 +90,15 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         var processesOpen by rememberSaveable { mutableStateOf(false) }
         var settingsOpen by rememberSaveable { mutableStateOf(false) }
         var modelsOpen by rememberSaveable { mutableStateOf(false) }
+        var browserOpen by rememberSaveable { mutableStateOf(false) }
         var installOpen by rememberSaveable { mutableStateOf(false) }
         var installZip by remember { mutableStateOf<android.net.Uri?>(null) }
         val drawerState = rememberDrawerState(DrawerValue.Closed)
         val settingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val modelsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val browserSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
+        val browserVisible by chatViewModel.browser.state.collectAsState()
+        LaunchedEffect(browserVisible.visible) { if (browserVisible.visible) browserOpen = true }
         val saveableStates = rememberSaveableStateHolder()
         LaunchedEffect(processNavigationRequest) {
             if (processNavigationRequest > 0) {
@@ -132,8 +137,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         }
 
         val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open || processesOpen
-        BackHandler(editing || settingsOpen || modelsOpen || panelOpen) {
+        BackHandler(editing || settingsOpen || modelsOpen || browserOpen || panelOpen) {
             when {
+                browserOpen -> { chatViewModel.browser.close(); browserOpen = false }
                 modelsOpen -> modelsOpen = false
                 editing -> {
                     providersViewModel.closeEditor()
@@ -168,7 +174,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                     onOpenSettings = openSettings,
                                     onOpenHistory = openHistory,
                                     onOpenProcesses = openProcesses,
-                                    onStartOffline = openModels)
+                                    onStartOffline = openModels,
+                                    onOpenBrowser = { chatViewModel.browser.show(); browserOpen = true })
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
@@ -202,6 +209,16 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     firstRun = providerList.configs.isEmpty(),
                     onClose = { modelsOpen = false },
                 )
+            }
+        }
+
+        if (browserOpen) {
+            ModalBottomSheet(
+                onDismissRequest = { chatViewModel.browser.close(); browserOpen = false },
+                sheetState = browserSheetState,
+            ) {
+                BrowserSheet(chatViewModel.browser,
+                    onDismiss = { chatViewModel.browser.close(); browserOpen = false })
             }
         }
 

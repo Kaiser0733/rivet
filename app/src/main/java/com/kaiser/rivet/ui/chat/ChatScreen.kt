@@ -149,7 +149,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit,
-               onStartOffline: () -> Unit = {}) {
+               onStartOffline: () -> Unit = {}, onOpenBrowser: () -> Unit = {}) {
     val landscape = showsHistoryPane(LocalConfiguration.current.orientation)
     val state by chatViewModel.uiState.collectAsState()
     val userSkills by chatViewModel.userSkills.collectAsState()
@@ -455,6 +455,11 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     // Subagent chip slot (empty for now, filled by subagents feature later)
                     // Reserved space, renders nothing until subagents exist
                     Box(Modifier.size(48.dp)) { }
+                    // Browser action
+                    IconButton(onClick = onOpenBrowser, modifier = Modifier.size(48.dp)) {
+                        Icon(painterResource(R.drawable.ic_browser), "Browser",
+                            tint = MaterialTheme.colorScheme.onBackground)
+                    }
                     // Processes action
                     IconButton(onClick = onOpenProcesses, modifier = Modifier.size(48.dp)) {
                         Icon(painterResource(R.drawable.ic_processes), "Processes",
