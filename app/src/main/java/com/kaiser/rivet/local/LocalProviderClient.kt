@@ -108,7 +108,7 @@ class LocalProviderClient(
                     )
                     parsed = LocalToolProtocol.parse(text, tools.map { it.name }.toSet())
                 }
-                val answer = LocalThinkingFilter.strip(parsed.text)
+                val answer = stripUntaggedToolMusing(LocalThinkingFilter.strip(parsed.text))
                 if (answer.isBlank() && parsed.calls.isEmpty()) {
                     throw ProviderError.EmptyResponse
                 }
