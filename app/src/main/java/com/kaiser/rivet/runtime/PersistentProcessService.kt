@@ -166,12 +166,9 @@ class PersistentProcessService : Service() {
             builder.setShowWhen(true).setWhen(state.runStartedAt).setUsesChronometer(true)
         }
         if (turnActive) {
-            val pause = PendingIntent.getService(this, REQUEST_PAUSE,
-                Intent(this, PersistentProcessService::class.java).setAction(ACTION_PAUSE),
-                PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-            builder.addAction(android.R.drawable.ic_media_pause, "Pause", pause)
-            // Sensitive approvals need the app (and its own confirmation); normal
-            // non-YOLO approvals can be answered here. YOLO never creates a pending one.
+            // Android shows at most three actions while collapsed. A pending
+            // non-sensitive approval therefore takes the third slot instead of a
+            // Pause action; both decisions must be reachable from the notification.
             val token = state.approvalToken
             if (token != null && !state.approvalDangerous) {
                 fun decision(code: Int, action: String, label: String, approved: Boolean) {
@@ -184,6 +181,11 @@ class PersistentProcessService : Service() {
                 }
                 decision(REQUEST_APPROVE, ACTION_APPROVE, "Approve", approved = true)
                 decision(REQUEST_DENY, ACTION_DENY, "Deny", approved = false)
+            } else {
+                val pause = PendingIntent.getService(this, REQUEST_PAUSE,
+                    Intent(this, PersistentProcessService::class.java).setAction(ACTION_PAUSE),
+                    PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+                builder.addAction(android.R.drawable.ic_media_pause, "Pause", pause)
             }
         }
         return builder.build()
