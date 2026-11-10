@@ -54,7 +54,8 @@ class BrowserTools(private val session: BrowserSession) {
         } else args.string("url")
         if (url.isBlank()) throw BrowserFailure("browser_invalid_url", "browser_open needs a URL or a preview entry.")
         return readOnly(call) {
-            val result = session.open(url, args.bool("new_window"), projectPreview = previewEntry.isNotBlank())
+            val result = session.openText(url, args.bool("new_window"),
+                projectPreview = previewEntry.isNotBlank())
             value(call, buildJsonObject {
                 put("url", result.url)
                 put("title", result.title)
@@ -97,7 +98,13 @@ class BrowserTools(private val session: BrowserSession) {
 
     private suspend fun read(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val chunk = args.int("chunk") ?: 0
-        val result = session.read(chunk)
+        val result = try {
+            session.read(chunk)
+        } catch (e: BrowserFailure) {
+            if (e.code != "browser_needs_renderer") throw e
+            session.escalateForRead()
+            session.read(chunk)
+        }
         return value(call, buildJsonObject {
             put("url", result.url)
             put("title", result.title)
@@ -112,7 +119,13 @@ class BrowserTools(private val session: BrowserSession) {
     private suspend fun find(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val query = args.string("text")
         if (query.isBlank()) throw BrowserFailure("invalid_arguments", "browser_find needs text.")
-        val hits = session.find(query)
+        val hits = try {
+            session.find(query)
+        } catch (e: BrowserFailure) {
+            if (e.code != "browser_needs_renderer") throw e
+            session.escalateForRead()
+            session.find(query)
+        }
         return value(call, buildJsonObject {
             put("query", query)
             put("hits", JsonArray(hits.map { hit -> buildJsonObject {
@@ -204,11 +217,11 @@ class BrowserTools(private val session: BrowserSession) {
 
         val definitions = listOf(
             AgentToolDefinition("browser_open",
-                "Open a public http/https page in Rivet's browser. Read-only tasks use the reader without starting a WebView. For an agent-built page, pass preview_root/preview_entry instead of url to start the existing local preview server. file:// is not accepted. Sign-in and checkout surfaces stop for handoff.",
+                "Open a public http/https page in the invisible text browser. This never shows browser UI and never starts a renderer. For an agent-built page, pass preview_root/preview_entry instead of url to start the existing local preview server. file:// is not accepted. Sign-in and checkout surfaces stop for handoff.",
                 schema(emptyList(), "url" to string, "new_window" to boolean,
                     "preview_root" to string, "preview_entry" to string)),
             AgentToolDefinition("browser_read",
-                "Read the current page as clean chunked text. Pass chunk=0 first, then increment. Never returns the whole page at once. If needs_renderer is true, open the Browser card and use interaction tools.",
+                "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
                 schema(emptyList(), "chunk" to integer)),
             AgentToolDefinition("browser_find",
                 "Find text in the current page's reader text and return bounded snippets with offsets.",
