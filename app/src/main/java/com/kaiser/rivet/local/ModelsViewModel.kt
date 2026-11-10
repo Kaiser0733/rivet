@@ -6,11 +6,13 @@ import android.net.Uri
 import android.os.StatFs
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.withContext
 
 data class ModelsUiState(
@@ -137,15 +139,24 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
         if (rawUrl.isBlank()) return
         viewModelScope.launch {
             _ui.value = _ui.value.copy(byoBusy = true, byoError = null)
-            val resolved = withContext(Dispatchers.IO) {
-                runCatching { resolver.resolve(rawUrl) }
-            }
-            _ui.value = _ui.value.copy(byoBusy = false)
-            resolved.onFailure {
-                _ui.value = _ui.value.copy(byoError = it.message ?: "That link could not be used.")
+            val resolved = try {
+                withContext(Dispatchers.IO) {
+                    withTimeoutOrNull(45_000) { resolver.resolve(rawUrl) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                _ui.value = _ui.value.copy(byoBusy = false,
+                    byoError = e.message ?: "That link could not be used.")
                 return@launch
             }
-            val entry = resolved.getOrThrow().entry
+            _ui.value = _ui.value.copy(byoBusy = false)
+            if (resolved == null) {
+                _ui.value = _ui.value.copy(byoError =
+                    "Hugging Face took too long to answer. Check the link and connection, then try again.")
+                return@launch
+            }
+            val entry = resolved.entry
             val fit = ModelRecommender.fit(entry, _ui.value.totalRamMb,
                 _ui.value.availableRamMb.toLong() * 1024 * 1024)
             if (!fit.canDownload) {
@@ -154,9 +165,16 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
                 })
                 return@launch
             }
-            val error = downloads?.start(entry, byo = true)
+            val downloader = downloads
+            if (downloader == null) {
+                _ui.value = _ui.value.copy(byoError = "Downloads are unavailable in this build.")
+                return@launch
+            }
+            val error = downloader.start(entry, byo = true)
             if (error != null) {
                 _ui.value = _ui.value.copy(byoError = error)
+            } else if (downloader.job(entry.id) == null) {
+                _ui.value = _ui.value.copy(byoError = "The download did not start. Try again.")
             } else {
                 _ui.value = _ui.value.copy(notice = "Downloading ${entry.name}.")
             }
