@@ -95,7 +95,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifi
         if (!state.rendererVisible || state.readerMode) Modifier.background(MaterialTheme.colorScheme.surface)
         else Modifier)) {
         if (state.readerMode) {
-            ReaderPane(state.readerText, Modifier.fillMaxSize().padding(top = 72.dp, bottom = 60.dp)) { url ->
+            ReaderPane(state.readerText, Modifier.fillMaxSize().padding(
+                top = BrowserChrome.topPadding(0.dp), bottom = BrowserChrome.bottomPadding(0.dp))) { url ->
                 scope.launch { runCatching { session.openVisual(url, userInitiated = true) } }
             }
         } else if (state.url.isBlank() && !state.rendererVisible) {
