@@ -100,14 +100,20 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
             })
             return
         }
-        val error = downloads?.start(entry, allowMobile = allowMobile)
+        val downloader = downloads
+        if (downloader == null) {
+            _ui.value = _ui.value.copy(notice = "Downloads are unavailable in this build.")
+            return
+        }
+        val error = downloader.start(entry, allowMobile = allowMobile)
         if (error != null) {
-            _ui.value = _ui.value.copy(notice = error, wifiOnly = downloads?.wifiOnly ?: _ui.value.wifiOnly)
+            _ui.value = _ui.value.copy(notice = error, wifiOnly = downloader.wifiOnly)
         }
     }
 
     fun resume(job: DownloadJob, allowMobile: Boolean = false) {
-        downloads?.resume(job.entry.id, allowMobile)
+        val error = downloads?.resume(job.entry.id, allowMobile)
+        if (error != null) _ui.value = _ui.value.copy(notice = error)
     }
 
     fun pause(job: DownloadJob) {
@@ -120,6 +126,12 @@ class ModelsViewModel(app: Application) : AndroidViewModel(app) {
 
     fun remove(entry: LocalModelEntry) {
         viewModelScope.launch {
+            // A running download holds the .part file open; cancel it first so the
+            // journal cannot resurrect a row for a model the user just deleted.
+            downloads?.cancel(entry.id)
+            // A loaded model can be mid-generation under the native lock. Stop the
+            // token loop before waiting for that lock, so Delete does not look hung.
+            if (manager.loadedId.value == entry.id) manager.stopGeneration()
             runCatching { manager.remove(entry) }
                 .onFailure { _ui.value = _ui.value.copy(notice = it.message) }
         }
