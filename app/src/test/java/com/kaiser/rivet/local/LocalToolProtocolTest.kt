@@ -19,7 +19,7 @@ class LocalToolProtocolTest {
             {"name":"read_file","arguments":{"path":"src/Main.kt"}}
             </tool_call>
         """.trimIndent(), setOf("read_file"))
-        assertEquals("I will inspect it.", parsed.text)
+        assertEquals("", parsed.text)
         assertEquals(1, parsed.calls.size)
         assertEquals("read_file", parsed.calls.single().name)
         assertEquals("{\"path\":\"src/Main.kt\"}", parsed.calls.single().arguments)
@@ -50,6 +50,36 @@ class LocalToolProtocolTest {
         val reason = LocalToolProtocol.agentBlockReason(entry)
         assertTrue(reason != null && reason.contains("can't use tools"))
         assertTrue(LocalToolProtocol.agentBlockReason(entry.copy(toolCalling = LocalToolCalling.Verified)) == null)
+    }
+
+    @Test
+    fun argumentsCarriedAsAJsonStringAreUnpacked() {
+        val parsed = LocalToolProtocol.parse(
+            """{"name":"write_file","arguments":"{\"path\":\"local-test.txt\",\"content\":\"hello\",\"expected_sha256\":\"${"a".repeat(64)}\"}"}""",
+            setOf("write_file"))
+        val call = parsed.calls.single()
+        assertEquals("write_file", call.name)
+        assertTrue(call.arguments.contains("\"path\":\"local-test.txt\""))
+        assertTrue(call.arguments.contains("\"content\":\"hello\""))
+    }
+
+    @Test
+    fun flatArgumentKeysBecomeTheArgumentsObject() {
+        val parsed = LocalToolProtocol.parse(
+            """{"name":"create_file","path":"local-test.txt","content":"hello"}""",
+            setOf("create_file"))
+        val call = parsed.calls.single()
+        assertEquals("{\"path\":\"local-test.txt\",\"content\":\"hello\"}", call.arguments)
+    }
+
+    @Test
+    fun anUnclosedToolCallTagStillParsesItsJson() {
+        val parsed = LocalToolProtocol.parse(
+            """<tool_call>{"name":"read_file","arguments":{"path":"src/Main.kt"}}""",
+            setOf("read_file"))
+        val call = parsed.calls.single()
+        assertEquals("read_file", call.name)
+        assertEquals("{\"path\":\"src/Main.kt\"}", call.arguments)
     }
 
     @Test
