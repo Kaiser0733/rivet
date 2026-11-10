@@ -255,7 +255,8 @@ fun SettingsScreen(
                     },
                     )
                     TextButton(onClick = onSendFeedback,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp, top = 8.dp)) {
+                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
+                            .padding(top = 8.dp)) {
                         Text("Send feedback")
                     }
                 }

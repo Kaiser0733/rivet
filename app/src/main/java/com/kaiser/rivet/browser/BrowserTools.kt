@@ -41,7 +41,7 @@ class BrowserTools(private val session: BrowserSession) {
                 else -> null
             }
         } catch (e: BrowserFailure) {
-            if (e.code == "browser_user_driving") userDriving(call, e.message)
+            if (e.code == "browser_user_driving") userDrivingTool(call, e.message)
             else failed(call, e.code, e.message)
         } catch (_: Exception) {
             failed(call, "browser_error", "The browser action could not be prepared.")
@@ -276,6 +276,11 @@ class BrowserTools(private val session: BrowserSession) {
 
     private fun failed(call: AgentToolCall, code: String, message: String) =
         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) { failure(call, code, message) }
+
+    private fun userDrivingTool(call: AgentToolCall, message: String) =
+        PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
+            userDriving(call, message)
+        }
 
     private fun userDriving(call: AgentToolCall, message: String) = AgentToolResult(
         call.id, call.name,
