@@ -4,6 +4,11 @@ import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.WindowInsets
+import androidx.compose.foundation.layout.asPaddingValues
+import androidx.compose.foundation.layout.navigationBars
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBars
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
@@ -35,6 +40,7 @@ import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.local.ModelsViewModel
 import com.kaiser.rivet.storage.AutonomyStore
+import com.kaiser.rivet.ui.browser.BrowserChrome
 import com.kaiser.rivet.ui.browser.BrowserHost
 import com.kaiser.rivet.ui.browser.BrowserScreen
 import com.kaiser.rivet.ui.chat.ChatScreen
@@ -98,6 +104,17 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val settingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val modelsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val browserState by chatViewModel.browser.state.collectAsState()
+        val statusBarTop = WindowInsets.statusBars.asPaddingValues().calculateTopPadding()
+        val navigationBarBottom = WindowInsets.navigationBars.asPaddingValues().calculateBottomPadding()
+        val sendFeedback: () -> Unit = {
+            settingsOpen = false
+            coroutineScope.launch {
+                runCatching {
+                    chatViewModel.browser.openVisual("https://vastraalabs.online/feedback",
+                        userInitiated = true)
+                }
+            }
+        }
         val saveableStates = rememberSaveableStateHolder()
         LaunchedEffect(processNavigationRequest) {
             if (processNavigationRequest > 0) {
@@ -174,7 +191,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                     onOpenHistory = openHistory,
                                     onOpenProcesses = openProcesses,
                                     onStartOffline = openModels,
-                                    onOpenBrowser = { chatViewModel.browser.userOpen() })
+                                    onOpenBrowser = { chatViewModel.browser.userOpen() },
+                                    onSendFeedback = sendFeedback)
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
@@ -196,10 +214,16 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
             BrowserHost(
                 chatViewModel.browser,
-                Modifier.fillMaxSize().zIndex(if (browserState.visible) 1f else -1f),
+                Modifier.fillMaxSize().zIndex(if (browserState.visible) 1f else -1f).then(
+                    if (browserState.visible) Modifier.padding(
+                        top = BrowserChrome.topPadding(statusBarTop),
+                        bottom = BrowserChrome.bottomPadding(navigationBarBottom),
+                    ) else Modifier),
             )
             if (browserState.visible) {
-                BrowserScreen(chatViewModel.browser, onClose = { chatViewModel.browser.close() },
+                BrowserScreen(chatViewModel.browser,
+                    onClose = { chatViewModel.browser.close() },
+                    onCloseSession = { chatViewModel.browser.endSession() },
                     modifier = Modifier.fillMaxSize().zIndex(2f))
             }
         }
@@ -260,6 +284,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                         editing = true
                     },
                     onOpenModels = openModels,
+                    onSendFeedback = sendFeedback,
                     themeMode = themeMode,
                     themeSaving = themeSaving,
                     onThemeChange = { value ->

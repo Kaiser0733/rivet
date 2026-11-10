@@ -70,7 +70,9 @@ import kotlinx.coroutines.launch
  * overlay, so opening/closing the screen does not recreate the WebView.
  */
 @Composable
-fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifier = Modifier) {
+fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
+                  onCloseSession: () -> Unit = { session.endSession() },
+                  modifier: Modifier = Modifier) {
     val state by session.state.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -95,7 +97,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifi
         if (!state.rendererVisible || state.readerMode) Modifier.background(MaterialTheme.colorScheme.surface)
         else Modifier)) {
         if (state.readerMode) {
-            ReaderPane(state.readerText, Modifier.fillMaxSize().padding(top = 72.dp, bottom = 60.dp)) { url ->
+            ReaderPane(state.readerText, Modifier.fillMaxSize().padding(
+                top = BrowserChrome.topPadding(0.dp), bottom = BrowserChrome.bottomPadding(0.dp))) { url ->
                 scope.launch { runCatching { session.openVisual(url, userInitiated = true) } }
             }
         } else if (state.url.isBlank() && !state.rendererVisible) {
@@ -117,6 +120,9 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifi
                     verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onClose) {
                         Icon(painterResource(R.drawable.ic_back), "Back to chat")
+                    }
+                    IconButton(onClick = onCloseSession) {
+                        Icon(painterResource(R.drawable.ic_close), "Close browser")
                     }
                     OutlinedTextField(
                         value = address,
@@ -192,7 +198,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifi
                     }
                 }
             }
-            if (state.driving == BrowserDriving.User) {
+            if (com.kaiser.rivet.browser.BrowserDrivingPolicy.bannerVisible(
+                    state.agentRunActive, state.agentVisualActive, state.driving)) {
                 BrowserNotice(MaterialTheme.colorScheme.primaryContainer) {
                     Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically) {
@@ -223,6 +230,10 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifi
                 }) { Text(if (state.readerMode) "Page" else "Reader") }
                 TextButton(onClick = { domainsOpen = true }) {
                     Text("Sites (${state.domains.map { it.host }.distinct().size})")
+                }
+                if (state.agentRunActive && state.agentVisualActive &&
+                    state.driving == BrowserDriving.Agent) {
+                    TextButton(onClick = { session.takeControl() }) { Text("Take control") }
                 }
                 Spacer(Modifier.weight(1f))
                 Text(

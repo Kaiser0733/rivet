@@ -11,12 +11,13 @@ class BrowserSourceSafetyTest {
             File("app/src/main/java/com/kaiser/rivet/browser/$name"))
             .first { it.isFile }.readText()
 
-    @Test fun theBrowserPackageNeverSpoofsAUserAgent() {
+    @Test fun onlyTheVisualDesktopPathSetsAUserAgent() {
         val files = listOf(File("src/main/java/com/kaiser/rivet/browser"),
             File("app/src/main/java/com/kaiser/rivet/browser")).first { it.isDirectory }
             .walkTopDown().filter { it.extension == "kt" }
         assertTrue(files.toList().isNotEmpty())
-        assertFalse(files.any { it.readText().contains("setUserAgentString") })
+        val readers = files.filter { it.name == "ReaderService.kt" }
+        assertTrue(readers.none { it.readText().contains("userAgent") })
     }
 
     @Test fun thereIsNoRawEvalToolAndNoFileOpen() {
@@ -25,6 +26,13 @@ class BrowserSourceSafetyTest {
         val policy = source("ReaderService.kt")
         assertTrue(policy.contains("Project previews use the local preview server"))
         assertFalse(policy.contains("scheme in setOf(\"http\", \"https\", \"file\")"))
+    }
+
+    @Test fun touchNeverStartsTakeover() {
+        val host = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt")).first { it.isFile }.readText()
+        assertFalse(host.contains("setDriving"))
+        assertTrue(host.contains("AndroidView"))
     }
 
     @Test fun textOpenAndReadDoNotTouchVisibleState() {
@@ -47,7 +55,8 @@ class BrowserSourceSafetyTest {
         val chat = listOf(File("src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt"),
             File("app/src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt")).first { it.isFile }.readText()
         assertTrue(chat.contains("BrowserWatchCard"))
-        assertTrue(chat.contains("browserState.rendererVisible"))
+        assertTrue(chat.contains("BrowserDrivingPolicy.cardVisible"))
+        assertTrue(chat.contains("browserState.agentRunActive"))
     }
 
     @Test fun passwordFieldsAreOnTheRefusalPath() {

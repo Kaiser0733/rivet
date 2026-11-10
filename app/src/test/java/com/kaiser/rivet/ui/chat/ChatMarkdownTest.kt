@@ -75,6 +75,7 @@ class ChatMarkdownTest {
                     is ChatMarkdownBlock.Quote -> parseInlineMarkdown(block.text)
                     is ChatMarkdownBlock.ListItems -> block.items.forEach(::parseInlineMarkdown)
                     is ChatMarkdownBlock.Code -> Unit
+                    is ChatMarkdownBlock.Image -> Unit
                 }
             }
         }

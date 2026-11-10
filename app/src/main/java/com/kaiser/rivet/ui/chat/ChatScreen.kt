@@ -1,6 +1,7 @@
 package com.kaiser.rivet.ui.chat
 
 import android.app.Activity
+import android.graphics.BitmapFactory
 import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
@@ -38,6 +39,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
@@ -82,6 +84,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -150,7 +154,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit,
-               onStartOffline: () -> Unit = {}, onOpenBrowser: () -> Unit = {}) {
+               onStartOffline: () -> Unit = {}, onOpenBrowser: () -> Unit = {},
+               onSendFeedback: () -> Unit = {}) {
     val landscape = showsHistoryPane(LocalConfiguration.current.orientation)
     val state by chatViewModel.uiState.collectAsState()
     val browserState by chatViewModel.browser.state.collectAsState()
@@ -170,6 +175,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val onIHaveAKey: () -> Unit = { showKeyInput = true }
     var showStartFree by remember { mutableStateOf(false) }
     var modelSheetVisible by remember { mutableStateOf(false) }
+    var feedbackMenu by remember { mutableStateOf(false) }
     val planNotGrantedMsg = stringResource(R.string.chatgpt_plan_not_granted)
     val networkMsg = stringResource(R.string.chatgpt_signin_network)
     val failedMsg = stringResource(R.string.chatgpt_signin_failed)
@@ -473,6 +479,19 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
                             tint = MaterialTheme.colorScheme.onBackground)
                     }
+                    Box {
+                        IconButton(onClick = { feedbackMenu = true }, modifier = Modifier.size(48.dp)) {
+                            Icon(painterResource(R.drawable.ic_more), "More",
+                                tint = MaterialTheme.colorScheme.onBackground)
+                        }
+                        DropdownMenu(expanded = feedbackMenu,
+                            onDismissRequest = { feedbackMenu = false }) {
+                            DropdownMenuItem(text = { Text("Send feedback") }, onClick = {
+                                feedbackMenu = false
+                                onSendFeedback()
+                            })
+                        }
+                    }
                     // New session action
                     IconButton(onClick = chatViewModel::newSession, modifier = Modifier.size(48.dp),
                         enabled = state.ready && !state.projectLoading && !state.streaming &&
@@ -510,7 +529,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 HorizontalDivider(Modifier.fillMaxWidth()
                     .align(Alignment.CenterHorizontally).padding(top = 2.dp),
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.23f))
-                if (browserState.rendererVisible && browserState.watchVisible && !browserState.visible) {
+                if (com.kaiser.rivet.browser.BrowserDrivingPolicy.cardVisible(
+                        browserState.agentRunActive, browserState.agentVisualActive,
+                        browserState.watchVisible, browserState.visible)) {
                     BrowserWatchCard(browserState, onWatch = { chatViewModel.browser.watch() })
                 }
                 if (state.projectError != null && projectBinding != ProjectBindingState.AccessLost &&
@@ -1212,6 +1233,28 @@ private fun ThinkingBlock(text: String, streaming: Boolean, id: String) {
 }
 
 @Composable
+private fun BrowserImage(image: ChatMarkdownBlock.Image) {
+    val context = LocalContext.current
+    val bitmap = remember(image.source) {
+        val file = java.io.File(image.source.removePrefix("file://"))
+        val allowed = file.canonicalPath.startsWith(context.filesDir.canonicalPath + "/") ||
+            file.canonicalPath.startsWith(context.cacheDir.canonicalPath + "/")
+        if (allowed) BitmapFactory.decodeFile(file.absolutePath) else null
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = image.alt.ifBlank { "Browser screenshot" },
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)),
+            contentScale = ContentScale.FillWidth,
+        )
+    } else {
+        Text("Browser screenshot unavailable.", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun AssistantMessage(text: String, streaming: Boolean) {
     Surface(
         modifier = Modifier.fillMaxWidth(0.94f),
@@ -1264,6 +1307,7 @@ private fun AssistantMarkdown(text: String) {
                         }
                     }
                 }
+                is ChatMarkdownBlock.Image -> BrowserImage(block)
                 is ChatMarkdownBlock.Code -> Column(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         if (block.language.isNotBlank()) Text(displaySafeText(block.language),

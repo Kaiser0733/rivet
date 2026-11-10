@@ -6,6 +6,7 @@ internal sealed interface ChatMarkdownBlock {
     data class Quote(val text: String) : ChatMarkdownBlock
     data class ListItems(val ordered: Boolean, val start: Int, val items: List<String>) : ChatMarkdownBlock
     data class Code(val language: String, val text: String) : ChatMarkdownBlock
+    data class Image(val alt: String, val source: String) : ChatMarkdownBlock
 }
 
 internal data class InlineRun(
@@ -50,6 +51,13 @@ private fun parseBlocks(source: String): Pair<List<ChatMarkdownBlock>, IntArray>
             blocks += ChatMarkdownBlock.Code(language, code.joinToString("\n"))
             continue
         }
+        val image = image(trimmed)
+        if (image != null) {
+            blockStarts += lineStarts[line]
+            blocks += image
+            line++
+            continue
+        }
         val heading = heading(trimmed)
         if (heading != null) {
             blockStarts += lineStarts[line]
@@ -89,7 +97,7 @@ private fun parseBlocks(source: String): Pair<List<ChatMarkdownBlock>, IntArray>
         while (line < lines.size && lines[line].isNotBlank()) {
             val value = lines[line].trimStart()
             if (paragraph.isNotEmpty() && (value.startsWith("```") || heading(value) != null ||
-                    value.startsWith(">") || listItem(value) != null)) break
+                    value.startsWith(">") || listItem(value) != null || image(value) != null)) break
             paragraph += lines[line]
             line++
         }
@@ -146,6 +154,16 @@ internal class MarkdownBlocks {
         starts = fullStarts
         return full
     }
+}
+
+/** A standalone screenshot line is an attachment, not raw markdown in a paragraph. */
+private fun image(line: String): ChatMarkdownBlock.Image? {
+    if (!line.startsWith("![")) return null
+    val close = line.indexOf("](")
+    if (close <= 1 || !line.endsWith(")")) return null
+    val source = line.substring(close + 2, line.length - 1).trim()
+    if (source.isBlank() || source.any { it.isWhitespace() }) return null
+    return ChatMarkdownBlock.Image(line.substring(2, close), source)
 }
 
 private fun heading(line: String): ChatMarkdownBlock.Heading? {

@@ -12,7 +12,8 @@ class BrowserToolsTest {
 
     @Test fun theDefinitionsCarryEveryTypedAction() {
         assertEquals(setOf("browser_open", "browser_read", "browser_find", "browser_click",
-            "browser_type", "browser_scroll", "browser_back", "browser_shot"),
+            "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
+            "browser_tap", "browser_swipe"),
             BrowserTools.definitions.map { it.name }.toSet())
     }
 

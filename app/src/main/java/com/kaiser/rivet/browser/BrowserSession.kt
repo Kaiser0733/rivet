@@ -42,7 +42,6 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 enum class BrowserMode { Reader, Renderer }
-enum class BrowserDriving { Agent, User }
 
 data class BrowserWindowSummary(
     val id: String,
@@ -86,6 +85,8 @@ data class BrowserUiState(
     val windows: List<BrowserWindowSummary> = emptyList(),
     val activeWindowId: String? = null,
     val driving: BrowserDriving = BrowserDriving.Agent,
+    val agentRunActive: Boolean = false,
+    val agentVisualActive: Boolean = false,
     val handoff: BrowserHandoffState? = null,
     val authNotice: String? = null,
     val downloadPrompt: BrowserDownloadPrompt? = null,
@@ -116,6 +117,7 @@ data class BrowserReadResult(
     val anchor: String,
     val text: String,
     val isLast: Boolean,
+    val refs: List<BrowserElementRef> = emptyList(),
 )
 
 data class BrowserClickTarget(
@@ -154,12 +156,19 @@ class BrowserSession(
     private var budget = BrowserGovernor.decide(BrowserMemorySignals(0))
     private var lastRendererStart = 0L
     private var lastActivityAt = 0L
+    private var userControlAt = 0L
+    private val memoryProbe = BrowserMemoryProbe()
+    private var baselineOwnPss = 0L
+    private var observedBrowserBytes = 0L
+    private var elementRefs: List<BrowserElementRef> = emptyList()
+    private var idleJob: kotlinx.coroutines.Job? = null
+    private var releaseJob: kotlinx.coroutines.Job? = null
     private var periodic: kotlinx.coroutines.Job? = null
 
     private val _state = MutableStateFlow(BrowserUiState(
         allowJs = prefs.getBoolean("allow_js", true),
         blockThirdParty = prefs.getBoolean("block_third_party", true),
-        desktopMode = prefs.getBoolean("desktop", false),
+        desktopMode = prefs.getBoolean("desktop", BrowserDesktopMode.DEFAULT_DESKTOP),
     ))
     val state: StateFlow<BrowserUiState> = _state.asStateFlow()
 
@@ -176,8 +185,20 @@ class BrowserSession(
         }
     }
 
+    fun beginAgentRun() {
+        _state.update { it.copy(agentRunActive = true, driving = BrowserDriving.Agent) }
+    }
+
+    fun endAgentRun() {
+        releaseJob?.cancel()
+        releaseJob = null
+        _state.update { it.copy(agentRunActive = false, agentVisualActive = false,
+            driving = BrowserDriving.Agent) }
+    }
+
     /** Human open: always the full-screen visual browser, never the reader face. */
     fun userOpen() {
+        idleJob?.cancel(); idleJob = null
         lastActivityAt = System.currentTimeMillis()
         _state.update { it.copy(visible = true, readerMode = false, error = null) }
         val target = activeUrl.ifBlank { _state.value.url }
@@ -190,35 +211,81 @@ class BrowserSession(
 
     /** Watch an existing AI visual session without reloading it. */
     fun watch() {
+        idleJob?.cancel(); idleJob = null
         lastActivityAt = System.currentTimeMillis()
         if (renderer != null || _state.value.rendererVisible) {
             _state.update { it.copy(visible = true, readerMode = false) }
         } else userOpen()
     }
 
-    /** Closing the screen keeps the visual session alive for the watch card. */
-    fun close() { _state.update { it.copy(visible = false, readerMode = false) } }
+    /** Closing the screen keeps the visual session alive for the watch card, then idle-expires it. */
+    fun close() {
+        _state.update { it.copy(visible = false, readerMode = false) }
+        idleJob?.cancel()
+        idleJob = scope.launch {
+            kotlinx.coroutines.delay(BrowserIdleTimer.IDLE_MS)
+            if (!_state.value.visible) endSession()
+        }
+    }
+
+    /** The visible Close control and browser_close: save, destroy, free, clear the card. */
+    fun endSession() {
+        releaseJob?.cancel()
+        releaseJob = null
+        idleJob?.cancel()
+        idleJob = null
+        val id = activeWindowId
+        val current = id?.let { windows[it] }
+        if (id != null && current != null) {
+            snapshots.save(current.copy(title = activeTitle,
+                lastUsedAt = System.currentTimeMillis()))
+        }
+        saveActiveSnapshot()
+        destroyRenderer()
+        _state.update {
+            it.copy(visible = false, readerMode = false, watchVisible = false,
+                agentVisualActive = false, visualScreenshot = null,
+                pageReady = false, driving = BrowserDriving.Agent)
+        }
+    }
 
     fun clearNotice() { _state.update { it.copy(notice = null, error = null) } }
 
     fun contextLine(): String {
         refreshBudget()
         val line = BrowserGovernor.contextLine(budget)
-        val modes = " Text mode is invisible for reads and find; visual mode is the full-screen page for the user or the watch card for interaction."
+        val modes = " Browser text reads stay invisible; visual page is for the user."
         return if (_state.value.authNotice != null) "$line$modes Identity sign-in stays in your browser."
         else "$line$modes"
     }
 
-    fun refreshBudget(publish: Boolean = true) {
+    fun refreshBudget(publish: Boolean = true, observedBytes: Long? = null) {
+        if (observedBytes != null) observedBrowserBytes = observedBytes.coerceAtLeast(0L)
         val manager = app.getSystemService(android.app.ActivityManager::class.java)
         val info = android.app.ActivityManager.MemoryInfo()
         manager?.getMemoryInfo(info)
         val loaded = models?.loadedId?.value != null
         val footprint = if (loaded) models?.modelFootprintBytes?.value ?: 0L else 0L
-        budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint))
-        if (publish) _state.update {
-            it.copy(tier = budget.tier, capMb = budget.capMb, modelLoaded = budget.modelLoaded,
-                budgetLine = BrowserGovernor.contextLine(budget))
+        val previousTier = budget.tier
+        budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint,
+            observedBrowserBytes = observedBrowserBytes))
+        if (publish) {
+            if (budget.tier.ordinal > previousTier.ordinal) {
+                if (budget.tier.ordinal >= BrowserTier.StrictDiet.ordinal) {
+                    val wasFullPage = _state.value.fullPage
+                    _state.update { it.copy(fullPage = false) }
+                    if (wasFullPage) renderer?.reload()
+                }
+                if (budget.tier.ordinal >= BrowserTier.ReaderFirst.ordinal) unloadInactiveWindows()
+                _state.update {
+                    it.copy(notice = "Browser memory: ${budget.observedMb}MB used; " +
+                        "${budget.tier.name.lowercase()} mode.")
+                }
+            }
+            _state.update {
+                it.copy(tier = budget.tier, capMb = budget.capMb, modelLoaded = budget.modelLoaded,
+                    budgetLine = BrowserGovernor.contextLine(budget))
+            }
         }
         if (publish && !BrowserGovernor.canOpenRenderer(budget.tier, interaction = true) &&
             _state.value.rendererVisible) {
@@ -228,6 +295,14 @@ class BrowserSession(
                     notice = BrowserGovernor.refusalReason(budget))
             }
         }
+    }
+
+    private fun unloadInactiveWindows() {
+        val active = activeWindowId
+        val farthest = windows.filterKeys { it != active }
+            .minByOrNull { it.value.lastUsedAt }?.key ?: return
+        windows.remove(farthest)
+        _state.update { it.copy(windows = windowSummaries()) }
     }
 
     suspend fun open(rawUrl: String, newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
@@ -260,8 +335,10 @@ class BrowserSession(
 
     /** Full visual load for a human or an agent interaction. */
     suspend fun openVisual(rawUrl: String, userInitiated: Boolean = true,
-                           newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
+                           newWindow: Boolean = false, projectPreview: Boolean = false,
+                           agentAction: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
+            idleJob?.cancel(); idleJob = null
             val url = BrowserUrlPolicy.validate(rawUrl)
             refreshBudget(publish = true)
             if (BrowserAuthGuard.isAuthSurface(url)) {
@@ -277,7 +354,8 @@ class BrowserSession(
                     url = url, mode = BrowserMode.Renderer,
                     readerMode = false, error = null, notice = null, handoff = null, authNotice = null)
             }
-            val view = ensureRenderer(showWatch = !userInitiated, allowUserDriving = userInitiated)
+            val view = ensureRenderer(showWatch = !userInitiated,
+                allowUserDriving = userInitiated, agentAction = agentAction)
             loadForInteraction(view, url)
             activeUrl = view.url ?: url
             activeTitle = view.title.orEmpty()
@@ -308,7 +386,7 @@ class BrowserSession(
         }
         val selected = document.chunks[chunk]
         BrowserReadResult(document.url, document.title, chunk, document.chunks.size,
-            selected.anchor, selected.text, chunk == document.chunks.lastIndex)
+            selected.anchor, selected.text, chunk == document.chunks.lastIndex, elementRefs)
     }
 
     suspend fun find(text: String): List<ReaderHit> = actionLock.withLock {
@@ -342,7 +420,16 @@ class BrowserSession(
         }
     }
 
-    fun hideReader() { _state.update { it.copy(readerMode = false) } }
+    fun hideReader() {
+        _state.update { it.copy(readerMode = false) }
+        // Removing the opaque Compose reader must repaint the existing WebView surface.
+        renderer?.let {
+            it.visibility = android.view.View.VISIBLE
+            it.requestLayout()
+            it.invalidate()
+            it.onResume()
+        }
+    }
 
     private suspend fun readRenderedDocument(): ReaderDocument {
         val view = renderer ?: throw BrowserFailure("browser_renderer_unavailable",
@@ -362,10 +449,86 @@ class BrowserSession(
         } else ""
         val result = document ?: ReaderDocument(pageUrl, view.title.orEmpty().ifBlank { pageUrl },
             fallbackText, ReaderExtractor.chunk(fallbackText), needsRenderer = false)
+        elementRefs = runCatching {
+            val raw = evaluate(view, """
+                JSON.stringify([].slice.call(document.querySelectorAll(
+                  'a,button,input,[role=button]')).slice(0,40).map(function(e){
+                  return {label:(e.innerText||e.value||e.getAttribute('aria-label')||'').trim(),tag:(e.tagName||'').toLowerCase()};
+                }))
+            """.trimIndent())
+            BrowserElementRefs.fromJson(raw.trim().trim('"').replace("\\\"", "\""))
+        }.getOrDefault(emptyList())
         if (result.text.isBlank()) throw BrowserFailure("browser_empty", "This page has no readable text.")
         reader = result
         recordVisit(pageUrl, publish = false)
         return result
+    }
+
+    fun currentUrl(): String = _state.value.url
+    fun changeLine(beforeUrl: String, beforeTitle: String): String {
+        val state = _state.value
+        val url = if (state.url != beforeUrl) "URL ${state.url}" else "URL unchanged"
+        val title = if (state.title != beforeTitle && state.title.isNotBlank()) "title ${state.title}" else ""
+        return listOf(url, title).filter { it.isNotBlank() }.joinToString(" · ")
+    }
+
+    suspend fun classifyTap(x: Int, y: Int): BrowserClickTarget = actionLock.withLock {
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        val px = BrowserCoordinates.pixel(x, view.width)
+        val py = BrowserCoordinates.pixel(y, view.height)
+        parseClickTarget(evaluate(view, tapTargetScript(px, py)))
+    }
+
+    suspend fun tap(x: Int, y: Int): String = actionLock.withLock {
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        val px = BrowserCoordinates.pixel(x, view.width)
+        val py = BrowserCoordinates.pixel(y, view.height)
+        dispatchTouch(view, px, py)
+        recordVisit(view.url ?: activeUrl)
+        _state.update { it.copy(title = view.title.orEmpty(), url = view.url ?: activeUrl,
+            mode = BrowserMode.Renderer, rendererVisible = true) }
+        evaluate(view, "JSON.stringify({url:location.href,title:document.title})")
+    }
+
+    suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int): String = actionLock.withLock {
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        val x1 = BrowserCoordinates.pixel(fromX, view.width)
+        val y1 = BrowserCoordinates.pixel(fromY, view.height)
+        val x2 = BrowserCoordinates.pixel(toX, view.width)
+        val y2 = BrowserCoordinates.pixel(toY, view.height)
+        dispatchSwipe(view, x1, y1, x2, y2)
+        recordVisit(view.url ?: activeUrl)
+        evaluate(view, "JSON.stringify({url:location.href,title:document.title,y:scrollY})")
+    }
+
+    private suspend fun dispatchTouch(view: WebView, x: Float, y: Float) {
+        withContext(Dispatchers.Main) {
+            val t = android.os.SystemClock.uptimeMillis()
+            android.view.MotionEvent.obtain(t, t, android.view.MotionEvent.ACTION_DOWN, x, y, 0)
+                .also { view.dispatchTouchEvent(it); it.recycle() }
+            android.view.MotionEvent.obtain(t, t + 40, android.view.MotionEvent.ACTION_UP, x, y, 0)
+                .also { view.dispatchTouchEvent(it); it.recycle() }
+        }
+    }
+
+    private suspend fun dispatchSwipe(view: WebView, x1: Float, y1: Float, x2: Float, y2: Float) {
+        withContext(Dispatchers.Main) {
+            val down = android.os.SystemClock.uptimeMillis()
+            android.view.MotionEvent.obtain(down, down, android.view.MotionEvent.ACTION_DOWN,
+                x1, y1, 0).also { view.dispatchTouchEvent(it); it.recycle() }
+            for (step in 1..8) {
+                val t = step / 8f
+                android.view.MotionEvent.obtain(down, down + step * 12L,
+                    android.view.MotionEvent.ACTION_MOVE,
+                    x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, 0)
+                    .also { view.dispatchTouchEvent(it); it.recycle() }
+            }
+            android.view.MotionEvent.obtain(down, down + 120L, android.view.MotionEvent.ACTION_UP,
+                x2, y2, 0).also { view.dispatchTouchEvent(it); it.recycle() }
+        }
     }
 
     suspend fun classifyClick(selector: String?, text: String?): BrowserClickTarget =
@@ -463,6 +626,10 @@ class BrowserSession(
         if (renderer === view) return
         renderer?.let { old -> runCatching { old.destroy() } }
         renderer = view
+        scope.launch(Dispatchers.Default) {
+            baselineOwnPss = runCatching { memoryProbe.sample().ownPssBytes }.getOrDefault(0L)
+        }
+        view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
         configure(view)
         rendererReady?.complete(view)
         view.webViewClient = clientFor(view)
@@ -475,13 +642,13 @@ class BrowserSession(
         periodic?.cancel()
         periodic = scope.launch {
             while (true) {
-                kotlinx.coroutines.delay(15_000)
-                refreshBudget()
+                kotlinx.coroutines.delay(5_000)
+                val sample = withContext(Dispatchers.Default) { memoryProbe.sample() }
+                val observed = if (baselineOwnPss > 0L) {
+                    memoryProbe.browserGrowthBytes(baselineOwnPss, sample)
+                } else 0L
+                refreshBudget(observedBytes = observed)
                 if (_state.value.visible) lastActivityAt = System.currentTimeMillis()
-                if (_state.value.rendererVisible &&
-                    System.currentTimeMillis() - lastActivityAt > 3 * 60_000L) {
-                    destroyRenderer()
-                }
             }
         }
     }
@@ -507,7 +674,9 @@ class BrowserSession(
         prefs.edit().putBoolean("desktop", enabled).apply()
         _state.update { it.copy(desktopMode = enabled) }
         renderer?.settings?.useWideViewPort = enabled
-        renderer?.settings?.loadWithOverviewMode = !enabled
+        renderer?.settings?.loadWithOverviewMode = enabled
+        renderer?.settings?.userAgentString =
+            if (enabled) BrowserDesktopMode.DESKTOP_USER_AGENT else null
         renderer?.reload()
     }
 
@@ -531,12 +700,25 @@ class BrowserSession(
         if (budget.tier == BrowserTier.ReaderFirst) destroyRenderer()
     }
 
-    fun setDriving(userDriving: Boolean) {
+    fun takeControl() {
+        if (!_state.value.agentRunActive || !_state.value.agentVisualActive) return
         lastActivityAt = System.currentTimeMillis()
-        _state.update { it.copy(driving = if (userDriving) BrowserDriving.User else BrowserDriving.Agent) }
+        userControlAt = lastActivityAt
+        _state.update { it.copy(driving = BrowserDriving.User) }
+        releaseJob?.cancel()
+        releaseJob = scope.launch {
+            kotlinx.coroutines.delay(BrowserDrivingPolicy.RELEASE_CONTROL_AFTER_MS)
+            if (_state.value.driving == BrowserDriving.User) handBack()
+        }
+    }
+
+    fun setDriving(userDriving: Boolean) {
+        if (userDriving) takeControl() else handBack()
     }
 
     fun handBack() {
+        releaseJob?.cancel()
+        releaseJob = null
         _state.update { it.copy(driving = BrowserDriving.Agent, notice = "Rivet can act again.") }
     }
 
@@ -740,7 +922,8 @@ class BrowserSession(
         s.javaScriptEnabled = _state.value.allowJs
         s.domStorageEnabled = true
         s.useWideViewPort = _state.value.desktopMode
-        s.loadWithOverviewMode = !_state.value.desktopMode
+        s.loadWithOverviewMode = _state.value.desktopMode
+        s.userAgentString = if (_state.value.desktopMode) BrowserDesktopMode.DESKTOP_USER_AGENT else null
         s.mediaPlaybackRequiresUserGesture = true
         s.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
         s.allowFileAccess = false
@@ -823,13 +1006,20 @@ class BrowserSession(
     }
 
     private suspend fun ensureRenderer(showWatch: Boolean = true,
-                                       allowUserDriving: Boolean = false): WebView {
+                                       allowUserDriving: Boolean = false,
+                                       agentAction: Boolean = true): WebView {
         refreshBudget()
         if (!BrowserGovernor.canOpenRenderer(budget.tier, interaction = true)) {
             throw BrowserFailure("browser_renderer_blocked", BrowserGovernor.refusalReason(budget))
         }
         if (!allowUserDriving && _state.value.driving == BrowserDriving.User) {
-            throw BrowserFailure("browser_user_driving", "The user is driving the browser. Ask them to hand it back.")
+            withTimeoutOrNull(2_000) {
+                while (_state.value.driving == BrowserDriving.User) kotlinx.coroutines.delay(200)
+            }
+            if (_state.value.driving == BrowserDriving.User) {
+                throw BrowserFailure("browser_user_driving",
+                    "The user is driving the browser. Ask them to hand it back.")
+            }
         }
         if (_state.value.handoff != null) {
             throw BrowserFailure("browser_handoff",
@@ -837,7 +1027,8 @@ class BrowserSession(
         }
         lastActivityAt = System.currentTimeMillis()
         _state.update { it.copy(rendererVisible = true,
-            watchVisible = it.watchVisible || showWatch) }
+            watchVisible = it.watchVisible || showWatch,
+            agentVisualActive = it.agentVisualActive || (agentAction && showWatch)) }
         val existing = renderer
         if (existing != null) return existing
         val ready = CompletableDeferred<WebView>()
@@ -878,11 +1069,24 @@ class BrowserSession(
         return BrowserClickTarget(found, risky, description)
     }
 
+    private fun tapTargetScript(x: Float, y: Float): String = """
+        (function(){
+          var el=document.elementFromPoint($x,$y);
+          if(!el) return JSON.stringify({found:false,risky:false,description:''});
+          var form=el.closest('form'); var tag=(el.tagName||'').toLowerCase();
+          var type=(el.getAttribute('type')||'').toLowerCase();
+          var label=(el.innerText||el.value||el.getAttribute('aria-label')||'').trim();
+          var risky=type==='submit'||(form&&(el.type==='submit'||/submit|send|publish|pay|buy|post|delete|confirm/i.test(label)));
+          return JSON.stringify({found:true,risky:!!risky,inForm:!!form,tag:tag,description:label||tag});
+        })()
+    """.trimIndent()
+
     private fun clickTargetScript(selector: String?, text: String?): String = """
         (function(){
           var sel=${jsonString(selector)};
           var txt=${jsonString(text)};
-          var el=sel?document.querySelector(sel):null;
+          var ref=sel?/^#(\d+)$/.exec(sel):null;
+          var el=ref?[].slice.call(document.querySelectorAll('a,button,input,[role=button]'))[parseInt(ref[1],10)-1]||null:(sel?document.querySelector(sel):null);
           if(!el && txt){var all=[].slice.call(document.querySelectorAll('a,button,input,[role=button]'));
             el=all.filter(function(e){return (e.innerText||e.value||'').toLowerCase().indexOf(txt.toLowerCase())>=0})[0]||null;}
           if(!el) return JSON.stringify({found:false,risky:false,description:''});
@@ -972,6 +1176,8 @@ class BrowserSession(
         periodic?.cancel(); periodic = null
         val view = renderer ?: return
         renderer = null
+        baselineOwnPss = 0L
+        observedBrowserBytes = 0L
         rendererReady?.cancel()
         rendererReady = null
         runCatching { view.stopLoading(); view.destroy() }
