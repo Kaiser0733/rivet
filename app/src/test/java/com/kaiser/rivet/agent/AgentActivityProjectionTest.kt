@@ -75,6 +75,18 @@ class AgentActivityProjectionTest {
         assertTrue(group.summary.contains("Failed"))
     }
 
+    @Test fun aFailedToolShowsItsRealErrorInTheResultCard() {
+        val call = AgentToolCall("bad", "write_file", """{"path":"."}""")
+        val result = AgentToolResult("bad", "write_file",
+            """{"error":"invalid_path","required_action":"Use a workspace-relative path."}""",
+            error = true, summary = "Failed  write_file")
+        val group = (AgentActivityProjection.conversation(listOf(
+            AgentMessage.assistant("", listOf(call)), AgentMessage.tools(listOf(result))))
+            .single() as AgentConversationItem.Activity).group
+        assertEquals(ActivityOutcome.Failed, group.operations.single().outcome)
+        assertEquals("Use a workspace-relative path.", group.operations.single().outcomeDetail)
+    }
+
     @Test fun projectsDownloadsAndPreviewsWithoutUrlsTokensOrProviderSyntax() {
         val calls = listOf(
             AgentToolCall("download", "download_file",

@@ -86,8 +86,11 @@ object AgentActivityProjection {
             else -> live?.stage?.let(::liveOutcome) ?: ActivityOutcome.Unknown
         }
         val exit = value["exit_code"].primitiveContent()?.toIntOrNull()
+        val error = value["error"].primitiveContent()
         val outcomeDetail = when {
             call.name == "run_command" && exit != null -> "Exit $exit"
+            outcome in setOf(ActivityOutcome.Failed, ActivityOutcome.Blocked) && error != null ->
+                value["required_action"].primitiveContent() ?: AgentToolError.action(error) ?: error
             live?.stage == AgentToolLifecycleStage.AwaitingApproval -> "Waiting for approval"
             result == null && live == null -> "Outcome unknown"
             else -> null
