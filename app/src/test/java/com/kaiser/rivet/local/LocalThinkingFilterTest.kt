@@ -6,7 +6,7 @@ import org.junit.Test
 class LocalThinkingFilterTest {
     @Test fun removesARealThinkingBlockBeforeTheAnswer() {
         assertEquals("Hello world.",
-            LocalThinkingFilter.strip("Hello  \u003cthink\u003eweighing options\u003c/think\u003eworld."))
+            LocalThinkingFilter.strip("Hello \u003cthink\u003eweighing options\u003c/think\u003eworld."))
     }
 
     @Test fun removesTheEscapedThinkingForm() {

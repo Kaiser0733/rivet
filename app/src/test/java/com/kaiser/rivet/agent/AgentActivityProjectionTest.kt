@@ -171,7 +171,7 @@ class AgentActivityProjectionTest {
             AgentMessage.assistant("", calls), AgentMessage.tools(results)))
             .single() as AgentConversationItem.Activity).group
         assertTrue(group.operations.all { it.detail.isEmpty() && it.outcome == ActivityOutcome.Failed })
-        assertEquals(null, group.operations.last().outcomeDetail)
+        assertTrue(group.operations.last().outcomeDetail!!.contains("JSON"))
         assertFalse(group.summary.contains("Ran"))
     }
 }
