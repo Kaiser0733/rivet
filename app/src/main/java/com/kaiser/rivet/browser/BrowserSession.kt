@@ -272,7 +272,9 @@ class BrowserSession(
         if (publish) {
             if (budget.tier.ordinal > previousTier.ordinal) {
                 if (budget.tier.ordinal >= BrowserTier.StrictDiet.ordinal) {
+                    val wasFullPage = _state.value.fullPage
                     _state.update { it.copy(fullPage = false) }
+                    if (wasFullPage) renderer?.reload()
                 }
                 if (budget.tier.ordinal >= BrowserTier.ReaderFirst.ordinal) unloadInactiveWindows()
                 _state.update {
@@ -297,7 +299,9 @@ class BrowserSession(
 
     private fun unloadInactiveWindows() {
         val active = activeWindowId
-        windows.keys.filter { it != active }.forEach { windows.remove(it) }
+        val farthest = windows.filterKeys { it != active }
+            .minByOrNull { it.value.lastUsedAt }?.key ?: return
+        windows.remove(farthest)
         _state.update { it.copy(windows = windowSummaries()) }
     }
 
@@ -621,7 +625,9 @@ class BrowserSession(
         if (renderer === view) return
         renderer?.let { old -> runCatching { old.destroy() } }
         renderer = view
-        baselineOwnPss = memoryProbe.sample().ownPssBytes
+        scope.launch(Dispatchers.Default) {
+            baselineOwnPss = runCatching { memoryProbe.sample().ownPssBytes }.getOrDefault(0L)
+        }
         view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
         configure(view)
         rendererReady?.complete(view)
