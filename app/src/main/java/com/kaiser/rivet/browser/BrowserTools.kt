@@ -34,6 +34,8 @@ class BrowserTools(private val session: BrowserSession) {
                 "browser_type" -> readOnly(call) { type(call, args) }
                 "browser_scroll" -> readOnly(call) { scroll(call, args) }
                 "browser_back" -> readOnly(call) { back(call) }
+                "browser_tap" -> prepareTap(call, args)
+                "browser_swipe" -> readOnly(call) { swipe(call, args) }
                 "browser_shot" -> readOnly(call) { shot(call) }
                 "browser_close" -> readOnly(call) { close(call) }
                 else -> null
@@ -82,13 +84,7 @@ class BrowserTools(private val session: BrowserSession) {
             throw BrowserFailure("invalid_arguments", "browser_click needs a selector or visible text.")
         }
         val target = session.classifyClick(selector, text)
-        if (!target.found) {
-            return readOnly(call) {
-                AgentToolResult(call.id, call.name,
-                    """{"error":"browser_target","detail":"Rivet couldn't find that control."}""",
-                    true, "Failed  ${call.name}")
-            }
-        }
+        if (!target.found) return readOnly(call) { targetFailure(call, "Rivet couldn't find that control.") }
         val risky = target.risky
         if (!risky) return readOnly(call) { click(call, selector, text) }
         return PreparedAgentTool(
@@ -105,6 +101,67 @@ class BrowserTools(private val session: BrowserSession) {
             }
         }
     }
+
+    private suspend fun prepareTap(call: AgentToolCall, args: JsonObject): PreparedAgentTool {
+        val x = args.int("x") ?: throw BrowserFailure("invalid_arguments", "browser_tap needs x.")
+        val y = args.int("y") ?: throw BrowserFailure("invalid_arguments", "browser_tap needs y.")
+        if (x !in 0..1000 || y !in 0..1000) {
+            throw BrowserFailure("invalid_arguments", "browser_tap coordinates are 0..1000.")
+        }
+        val target = session.classifyTap(x, y)
+        if (!target.found) return readOnly(call) { targetFailure(call, "Nothing is at those coordinates.") }
+        if (!target.risky) return readOnly(call) { tap(call, x, y) }
+        return PreparedAgentTool(
+            call,
+            AgentApprovalRequest(call, "Approve page action",
+                "Tap \"${target.description.take(120)}\". It looks like a submit, send, publish, pay, or delete control."),
+            effect = AgentToolEffect.BrowserAction,
+            basicAutonomyRisk = BasicAutonomyRisk.Elevated,
+        ) { tap(call, x, y) }
+    }
+
+    private suspend fun tap(call: AgentToolCall, x: Int, y: Int): AgentToolResult {
+        val before = session.currentUrl() to session.state.value.title
+        try {
+            val result = session.tap(x, y)
+            return visualValue(call, before, result, "Tapped page")
+        } finally { session.afterInteraction() }
+    }
+
+    private suspend fun swipe(call: AgentToolCall, args: JsonObject): AgentToolResult {
+        val x1 = args.int("x1") ?: 500
+        val y1 = args.int("y1") ?: 800
+        val x2 = args.int("x2") ?: 500
+        val y2 = args.int("y2") ?: 200
+        if (listOf(x1, y1, x2, y2).any { it !in 0..1000 }) {
+            throw BrowserFailure("invalid_arguments", "browser_swipe coordinates are 0..1000.")
+        }
+        val before = session.currentUrl() to session.state.value.title
+        try {
+            val result = session.swipe(x1, y1, x2, y2)
+            return visualValue(call, before, result, "Swiped page")
+        } finally { session.afterInteraction() }
+    }
+
+    private suspend fun targetFailure(call: AgentToolCall, message: String): AgentToolResult {
+        val shot = runCatching { session.screenshot() }.getOrNull()
+        return AgentToolResult(call.id, call.name, buildJsonObject {
+            put("error", "browser_target")
+            put("detail", message)
+            if (shot != null) {
+                put("screenshot", shot.path)
+                put("markdown", "![browser](${shot.path})")
+            }
+        }.toString(), true, "Failed  ${call.name}")
+    }
+
+    private fun visualValue(call: AgentToolCall, before: Pair<String, String>,
+                            result: String, summary: String): AgentToolResult =
+        value(call, buildJsonObject {
+            put("result", result)
+            put("url", session.currentUrl())
+            put("changed", session.changeLine(before.first, before.second))
+        }, summary)
 
     private suspend fun read(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val chunk = args.int("chunk") ?: 0
@@ -123,6 +180,9 @@ class BrowserTools(private val session: BrowserSession) {
             put("anchor", result.anchor)
             put("text", result.text)
             put("is_last", result.isLast)
+            put("refs", JsonArray(result.refs.map { ref -> buildJsonObject {
+                put("ref", ref.token()); put("label", ref.label); put("tag", ref.tag)
+            } }))
         }, "Read browser chunk ${result.chunk + 1}/${result.total}")
     }
 
@@ -145,9 +205,10 @@ class BrowserTools(private val session: BrowserSession) {
     }
 
     private suspend fun click(call: AgentToolCall, selector: String?, text: String?): AgentToolResult {
+        val before = session.currentUrl() to session.state.value.title
         try {
             val result = session.click(selector, text)
-            return value(call, buildJsonObject { put("result", result) }, "Clicked page control")
+            return visualValue(call, before, result, "Clicked page control")
         } finally { session.afterInteraction() }
     }
 
@@ -155,25 +216,30 @@ class BrowserTools(private val session: BrowserSession) {
         val field = args.string("field")
         val text = args.string("text")
         if (field.isBlank()) throw BrowserFailure("invalid_arguments", "browser_type needs a field selector or name.")
+        val before = session.currentUrl() to session.state.value.title
         try {
             val result = session.type(field, text)
-            return value(call, buildJsonObject { put("result", result) }, "Typed into page field")
+            return visualValue(call, before, result, "Typed into page field")
         } finally { session.afterInteraction() }
     }
 
     private suspend fun scroll(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val direction = args.string("direction").ifBlank { "down" }
         val amount = args.int("amount") ?: 1
+        val before = session.currentUrl() to session.state.value.title
         try {
             val result = session.scroll(direction, amount)
-            return value(call, buildJsonObject { put("result", result) }, "Scrolled page")
+            return visualValue(call, before, result, "Scrolled page")
         } finally { session.afterInteraction() }
     }
 
     private suspend fun back(call: AgentToolCall): AgentToolResult {
+        val before = session.currentUrl() to session.state.value.title
         try {
             val url = session.back()
-            return value(call, buildJsonObject { put("url", url) }, "Went back")
+            return value(call, buildJsonObject {
+                put("url", url); put("changed", session.changeLine(before.first, before.second))
+            }, "Went back")
         } finally { session.afterInteraction() }
     }
 
@@ -229,10 +295,14 @@ class BrowserTools(private val session: BrowserSession) {
 
     companion object {
         val NAMES = setOf("browser_open", "browser_read", "browser_find", "browser_click",
-            "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close")
+            "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
+            "browser_tap", "browser_swipe")
 
         private val string = buildJsonObject { put("type", "string") }
         private val integer = buildJsonObject { put("type", "integer"); put("minimum", 0) }
+        private val coordinate = buildJsonObject {
+            put("type", "integer"); put("minimum", 0); put("maximum", 1000)
+        }
         private val boolean = buildJsonObject { put("type", "boolean") }
 
         private fun schema(required: List<String>, vararg fields: Pair<String, JsonObject>) = buildJsonObject {
@@ -271,6 +341,13 @@ class BrowserTools(private val session: BrowserSession) {
             AgentToolDefinition("browser_close",
                 "Close the visual browser session now: save the window snapshot, destroy the renderer, and free its memory.",
                 schema(emptyList())),
+            AgentToolDefinition("browser_tap",
+                "Tap a page at x,y in 0..1000 coordinates. Rivet resolves elementFromPoint first; submit/send/publish/pay/delete controls require approval. Returns URL and a short change line.",
+                schema(listOf("x", "y"), "x" to coordinate, "y" to coordinate)),
+            AgentToolDefinition("browser_swipe",
+                "Swipe from x1,y1 to x2,y2 in 0..1000 coordinates with real touch events. Returns URL and a short change line.",
+                schema(listOf("x1", "y1", "x2", "y2"), "x1" to coordinate, "y1" to coordinate,
+                    "x2" to coordinate, "y2" to coordinate)),
         )
     }
 }

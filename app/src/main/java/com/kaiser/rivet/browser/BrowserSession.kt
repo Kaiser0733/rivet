@@ -117,6 +117,7 @@ data class BrowserReadResult(
     val anchor: String,
     val text: String,
     val isLast: Boolean,
+    val refs: List<BrowserElementRef> = emptyList(),
 )
 
 data class BrowserClickTarget(
@@ -159,6 +160,7 @@ class BrowserSession(
     private val memoryProbe = BrowserMemoryProbe()
     private var baselineOwnPss = 0L
     private var observedBrowserBytes = 0L
+    private var elementRefs: List<BrowserElementRef> = emptyList()
     private var idleJob: kotlinx.coroutines.Job? = null
     private var releaseJob: kotlinx.coroutines.Job? = null
     private var periodic: kotlinx.coroutines.Job? = null
@@ -380,7 +382,7 @@ class BrowserSession(
         }
         val selected = document.chunks[chunk]
         BrowserReadResult(document.url, document.title, chunk, document.chunks.size,
-            selected.anchor, selected.text, chunk == document.chunks.lastIndex)
+            selected.anchor, selected.text, chunk == document.chunks.lastIndex, elementRefs)
     }
 
     suspend fun find(text: String): List<ReaderHit> = actionLock.withLock {
@@ -443,10 +445,85 @@ class BrowserSession(
         } else ""
         val result = document ?: ReaderDocument(pageUrl, view.title.orEmpty().ifBlank { pageUrl },
             fallbackText, ReaderExtractor.chunk(fallbackText), needsRenderer = false)
+        elementRefs = runCatching {
+            BrowserElementRefs.fromJson(evaluate(view, """
+                JSON.stringify([].slice.call(document.querySelectorAll(
+                  'a,button,input,[role=button]')).slice(0,40).map(function(e){
+                  return {label:(e.innerText||e.value||e.getAttribute('aria-label')||'').trim(),tag:(e.tagName||'').toLowerCase()};
+                }))
+            """.trimIndent()))
+        }.getOrDefault(emptyList())
         if (result.text.isBlank()) throw BrowserFailure("browser_empty", "This page has no readable text.")
         reader = result
         recordVisit(pageUrl, publish = false)
         return result
+    }
+
+    fun currentUrl(): String = _state.value.url
+    fun changeLine(beforeUrl: String, beforeTitle: String): String {
+        val state = _state.value
+        val url = if (state.url != beforeUrl) "URL ${state.url}" else "URL unchanged"
+        val title = if (state.title != beforeTitle && state.title.isNotBlank()) "title ${state.title}" else ""
+        return listOf(url, title).filter { it.isNotBlank() }.joinToString(" · ")
+    }
+
+    suspend fun classifyTap(x: Int, y: Int): BrowserClickTarget = actionLock.withLock {
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        val px = BrowserCoordinates.pixel(x, view.width)
+        val py = BrowserCoordinates.pixel(y, view.height)
+        parseClickTarget(evaluate(view, tapTargetScript(px, py)))
+    }
+
+    suspend fun tap(x: Int, y: Int): String = actionLock.withLock {
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        val px = BrowserCoordinates.pixel(x, view.width)
+        val py = BrowserCoordinates.pixel(y, view.height)
+        dispatchTouch(view, px, py)
+        recordVisit(view.url ?: activeUrl)
+        _state.update { it.copy(title = view.title.orEmpty(), url = view.url ?: activeUrl,
+            mode = BrowserMode.Renderer, rendererVisible = true) }
+        evaluate(view, "JSON.stringify({url:location.href,title:document.title})")
+    }
+
+    suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int): String = actionLock.withLock {
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        val x1 = BrowserCoordinates.pixel(fromX, view.width)
+        val y1 = BrowserCoordinates.pixel(fromY, view.height)
+        val x2 = BrowserCoordinates.pixel(toX, view.width)
+        val y2 = BrowserCoordinates.pixel(toY, view.height)
+        dispatchSwipe(view, x1, y1, x2, y2)
+        recordVisit(view.url ?: activeUrl)
+        evaluate(view, "JSON.stringify({url:location.href,title:document.title,y:scrollY})")
+    }
+
+    private suspend fun dispatchTouch(view: WebView, x: Float, y: Float) {
+        withContext(Dispatchers.Main) {
+            val t = android.os.SystemClock.uptimeMillis()
+            android.view.MotionEvent.obtain(t, t, android.view.MotionEvent.ACTION_DOWN, x, y, 0)
+                .also { view.dispatchTouchEvent(it); it.recycle() }
+            android.view.MotionEvent.obtain(t, t + 40, android.view.MotionEvent.ACTION_UP, x, y, 0)
+                .also { view.dispatchTouchEvent(it); it.recycle() }
+        }
+    }
+
+    private suspend fun dispatchSwipe(view: WebView, x1: Float, y1: Float, x2: Float, y2: Float) {
+        withContext(Dispatchers.Main) {
+            val down = android.os.SystemClock.uptimeMillis()
+            android.view.MotionEvent.obtain(down, down, android.view.MotionEvent.ACTION_DOWN,
+                x1, y1, 0).also { view.dispatchTouchEvent(it); it.recycle() }
+            for (step in 1..8) {
+                val t = step / 8f
+                android.view.MotionEvent.obtain(down, down + step * 12L,
+                    android.view.MotionEvent.ACTION_MOVE,
+                    x1 + (x2 - x1) * t, y1 + (y2 - y1) * t, 0)
+                    .also { view.dispatchTouchEvent(it); it.recycle() }
+            }
+            android.view.MotionEvent.obtain(down, down + 120L, android.view.MotionEvent.ACTION_UP,
+                x2, y2, 0).also { view.dispatchTouchEvent(it); it.recycle() }
+        }
     }
 
     suspend fun classifyClick(selector: String?, text: String?): BrowserClickTarget =
@@ -985,11 +1062,24 @@ class BrowserSession(
         return BrowserClickTarget(found, risky, description)
     }
 
+    private fun tapTargetScript(x: Float, y: Float): String = """
+        (function(){
+          var el=document.elementFromPoint($x,$y);
+          if(!el) return JSON.stringify({found:false,risky:false,description:''});
+          var form=el.closest('form'); var tag=(el.tagName||'').toLowerCase();
+          var type=(el.getAttribute('type')||'').toLowerCase();
+          var label=(el.innerText||el.value||el.getAttribute('aria-label')||'').trim();
+          var risky=type==='submit'||(form&&(el.type==='submit'||/submit|send|publish|pay|buy|post|delete|confirm/i.test(label)));
+          return JSON.stringify({found:true,risky:!!risky,inForm:!!form,tag:tag,description:label||tag});
+        })()
+    """.trimIndent()
+
     private fun clickTargetScript(selector: String?, text: String?): String = """
         (function(){
           var sel=${jsonString(selector)};
           var txt=${jsonString(text)};
-          var el=sel?document.querySelector(sel):null;
+          var ref=sel?/^#(\d+)$/.exec(sel):null;
+          var el=ref?[].slice.call(document.querySelectorAll('a,button,input,[role=button]'))[parseInt(ref[1],10)-1]||null:(sel?document.querySelector(sel):null);
           if(!el && txt){var all=[].slice.call(document.querySelectorAll('a,button,input,[role=button]'));
             el=all.filter(function(e){return (e.innerText||e.value||'').toLowerCase().indexOf(txt.toLowerCase())>=0})[0]||null;}
           if(!el) return JSON.stringify({found:false,risky:false,description:''});
