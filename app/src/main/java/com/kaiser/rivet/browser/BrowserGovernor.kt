@@ -29,6 +29,8 @@ data class BrowserMemorySignals(
     val rendererActive: Boolean = false,
 )
 
+private const val BYTES_PER_MIB = 1024L * 1024L
+
 data class BrowserBudget(
     val capBytes: Long,
     val tier: BrowserTier,
@@ -36,14 +38,14 @@ data class BrowserBudget(
     val headroomBytes: Long,
     val modelLoaded: Boolean,
 ) {
-    val capMb: Int get() = (capBytes / MIB).toInt()
+    val capMb: Int get() = (capBytes / BYTES_PER_MIB).toInt()
 }
 
 object BrowserGovernor {
     const val MAX_BROWSER_BYTES = 250L * 1024 * 1024
     const val SAFETY_BYTES = 300L * 1024 * 1024
     const val WORKING_MARGIN_BYTES = 150L * 1024 * 1024
-    const val MIB = 1024L * 1024L
+    const val MIB = BYTES_PER_MIB
 
     fun decide(signals: BrowserMemorySignals): BrowserBudget {
         val model = signals.modelFootprintBytes.coerceAtLeast(0L)
