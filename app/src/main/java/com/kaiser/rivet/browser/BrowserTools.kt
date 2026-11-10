@@ -56,8 +56,12 @@ class BrowserTools(private val session: BrowserSession) {
         } else args.string("url")
         if (url.isBlank()) throw BrowserFailure("browser_invalid_url", "browser_open needs a URL or a preview entry.")
         return readOnly(call) {
-            val result = session.openText(url, args.bool("new_window"),
-                projectPreview = previewEntry.isNotBlank())
+            val preview = previewEntry.isNotBlank()
+            val result = if (preview) {
+                session.openVisual(url, userInitiated = false, projectPreview = true, agentAction = true)
+            } else {
+                session.openText(url, args.bool("new_window"), projectPreview = false)
+            }
             value(call, buildJsonObject {
                 put("url", result.url)
                 put("title", result.title)
@@ -65,6 +69,7 @@ class BrowserTools(private val session: BrowserSession) {
                 put("needs_renderer", result.needsRenderer)
                 put("tier", result.tier.name.lowercase())
                 put("cap_mb", result.capMb)
+                if (preview) put("visual", true)
                 if (result.handoff) put("handoff", true)
             }, "Opened  ${result.title.ifBlank { result.url }}")
         }

@@ -329,7 +329,8 @@ class BrowserSession(
 
     /** Full visual load for a human or an agent interaction. */
     suspend fun openVisual(rawUrl: String, userInitiated: Boolean = true,
-                           newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
+                           newWindow: Boolean = false, projectPreview: Boolean = false,
+                           agentAction: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
             idleJob?.cancel(); idleJob = null
             val url = BrowserUrlPolicy.validate(rawUrl)
@@ -348,7 +349,7 @@ class BrowserSession(
                     readerMode = false, error = null, notice = null, handoff = null, authNotice = null)
             }
             val view = ensureRenderer(showWatch = !userInitiated,
-                allowUserDriving = userInitiated, agentAction = false)
+                allowUserDriving = userInitiated, agentAction = agentAction)
             loadForInteraction(view, url)
             activeUrl = view.url ?: url
             activeTitle = view.title.orEmpty()
