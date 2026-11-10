@@ -1,6 +1,7 @@
 package com.kaiser.rivet.ui.chat
 
 import android.app.Activity
+import android.graphics.BitmapFactory
 import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
@@ -38,6 +39,7 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
@@ -82,6 +84,8 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -1214,6 +1218,28 @@ private fun ThinkingBlock(text: String, streaming: Boolean, id: String) {
 }
 
 @Composable
+private fun BrowserImage(image: ChatMarkdownBlock.Image) {
+    val context = LocalContext.current
+    val bitmap = remember(image.source) {
+        val file = java.io.File(image.source.removePrefix("file://"))
+        val allowed = file.canonicalPath.startsWith(context.filesDir.canonicalPath + "/") ||
+            file.canonicalPath.startsWith(context.cacheDir.canonicalPath + "/")
+        if (allowed) BitmapFactory.decodeFile(file.absolutePath) else null
+    }
+    if (bitmap != null) {
+        Image(
+            bitmap = bitmap.asImageBitmap(),
+            contentDescription = image.alt.ifBlank { "Browser screenshot" },
+            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)),
+            contentScale = ContentScale.FillWidth,
+        )
+    } else {
+        Text("Browser screenshot unavailable.", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
 private fun AssistantMessage(text: String, streaming: Boolean) {
     Surface(
         modifier = Modifier.fillMaxWidth(0.94f),
@@ -1266,6 +1292,7 @@ private fun AssistantMarkdown(text: String) {
                         }
                     }
                 }
+                is ChatMarkdownBlock.Image -> BrowserImage(block)
                 is ChatMarkdownBlock.Code -> Column(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         if (block.language.isNotBlank()) Text(displaySafeText(block.language),
