@@ -258,6 +258,6 @@ class UpdateResilienceTest {
             .firstOrNull { it.isFile } ?: throw AssertionError("no build.gradle.kts from ${File(".").absolutePath}")
         val text = build.readText()
         assertTrue("versionName must be 1.3.0: $build", text.contains("versionName = \"1.3.0\""))
-        assertTrue("versionCode must be 27: $build", text.contains("versionCode = 27"))
+        assertTrue("versionCode must be 28: $build", text.contains("versionCode = 28"))
     }
 }
