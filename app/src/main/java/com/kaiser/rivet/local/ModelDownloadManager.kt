@@ -124,6 +124,8 @@ class ModelDownloadManager(
     private val _jobs = MutableStateFlow(load())
     val jobs: StateFlow<Map<String, DownloadJob>> = _jobs.asStateFlow()
     private var runner: Job? = null
+    private var runSequence = 0L
+    @Volatile private var activeToken = 0L
     @Volatile private var activeCall: Call? = null
     @Volatile private var activeId: String? = null
 
