@@ -111,6 +111,8 @@ dependencies {
     implementation("com.android.tools.build:apksig:8.9.2")
     implementation("org.jetbrains.kotlinx:kotlinx-serialization-json:1.7.3")
     implementation("org.eclipse.jgit:org.eclipse.jgit:6.10.1.202505221210-r")
+    // Reader-mode HTML extraction. Jsoup is small, maintained, and Android-safe.
+    implementation("org.jsoup:jsoup:1.18.3")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
