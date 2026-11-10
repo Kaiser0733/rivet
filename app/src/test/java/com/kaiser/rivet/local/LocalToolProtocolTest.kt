@@ -82,6 +82,63 @@ class LocalToolProtocolTest {
         assertEquals("{\"path\":\"src/Main.kt\"}", call.arguments)
     }
 
+
+    @Test
+    fun llamasPythonTagAndHermesFencesAllReachTheSameArguments() {
+        for (output in listOf(
+            """<|python_tag|>{"name":"write_file","arguments":{"path":"a.txt","content":"x"}}<|eom_id|>""",
+            """<|tool_call|>{"name":"write_file","parameters":{"path":"a.txt","content":"x"}}<|eot_id|>""",
+            """[TOOL_CALLS] {"name":"write_file","arguments":{"path":"a.txt","content":"x"}}""",
+            """Here is the call:
+```json
+{"name":"write_file","arguments":{"path":"a.txt","content":"x"}}
+```
+That is the call.""",
+        )) {
+            val parsed = LocalToolProtocol.parse(output, setOf("write_file"))
+            assertEquals(output, 1, parsed.calls.size)
+            assertEquals("write_file", parsed.calls.single().name)
+            assertTrue(parsed.calls.single().arguments.contains("\"path\":\"a.txt\""))
+        }
+    }
+
+    @Test
+    fun malformedJsonIsNotAToolCall() {
+        val parsed = LocalToolProtocol.parse(
+            """<tool_call>{"name":"write_file","arguments":{"path":</tool_call>""",
+            setOf("write_file"))
+        assertTrue(parsed.calls.isEmpty())
+        assertTrue(parsed.text.contains("tool_call") || parsed.text.contains("write_file"))
+    }
+
+    @Test
+    fun aBrokenObjectBeforeAValidCallDoesNotHideIt() {
+        val parsed = LocalToolProtocol.parse(
+            """oops {not json
+{"name":"read_file","arguments":{"path":"a"}}""",
+            setOf("read_file"))
+        assertEquals(1, parsed.calls.size)
+        assertEquals("read_file", parsed.calls.single().name)
+    }
+
+    @Test
+    fun aJsonArrayOfCallsIsParsedWhenTheModelUsesThatShape() {
+        val parsed = LocalToolProtocol.parse(
+            """[{"name":"read_file","arguments":{"path":"a"}},{"name":"read_file","arguments":{"path":"b"}}]""",
+            setOf("read_file"))
+        assertEquals(2, parsed.calls.size)
+        assertTrue(parsed.calls.all { it.name == "read_file" })
+    }
+    @Test
+    fun everySplitOfAToolTagStillParsesWhenTheChunksAreJoined() {
+        val source = """<tool_call>{"name":"read_file","arguments":{"path":"a"}}</tool_call>"""
+        for (cut in 1 until source.length) {
+            val parsed = LocalToolProtocol.parse(source.substring(0, cut) + source.substring(cut),
+                setOf("read_file"))
+            assertEquals("cut=$cut", 1, parsed.calls.size)
+        }
+    }
+
     @Test
     fun plainAnswersStayPlain() {
         val parsed = LocalToolProtocol.parse("Here is the answer.", emptySet())

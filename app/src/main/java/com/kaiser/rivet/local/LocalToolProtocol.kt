@@ -26,6 +26,13 @@ object LocalToolProtocol {
         "search_files", "list_directory", "run_command",
     )
 
+    private data class Tag(val open: String, val close: String?)
+    private val TAGS = listOf(
+        Tag("<tool_call>", "</tool_call>"),
+        Tag("<|python_tag|>", null),
+        Tag("<|tool_call|>", null),
+        Tag("[TOOL_CALLS]", null),
+    )
     fun profile(tools: List<AgentToolDefinition>): List<AgentToolDefinition> =
         tools.filter { it.name in coreTools }
 
@@ -80,51 +87,45 @@ object LocalToolProtocol {
 
     fun parse(output: String, allowed: Set<String> = coreTools): ParsedLocalOutput {
         val calls = mutableListOf<AgentToolCall>()
-        val ranges = mutableListOf<IntRange>()
-        val openRegex = Regex("<tool_call\\s*>", setOf(RegexOption.IGNORE_CASE))
-        for (match in openRegex.findAll(output)) {
-            val bodyStart = match.range.last + 1
-            val close = output.indexOf("</tool_call>", bodyStart, ignoreCase = true)
-            val bodyEnd = if (close >= 0) close else output.length
-            val body = output.substring(bodyStart, bodyEnd)
-            val parsed = parseObject(body, allowed)
-            if (parsed != null) {
+        for (tag in TAGS) {
+            var from = 0
+            while (true) {
+                val open = output.indexOf(tag.open, from, ignoreCase = true)
+                if (open < 0) break
+                val bodyStart = open + tag.open.length
+                val close = tag.close?.let { marker ->
+                    output.indexOf(marker, bodyStart, ignoreCase = true).takeIf { it >= 0 }
+                } ?: output.length
+                val bodyEnd = close.coerceAtMost(output.length)
+                val body = output.substring(bodyStart, bodyEnd)
+                val parsed = parseCalls(body, allowed)
                 calls += parsed
-                val objectRange = jsonObjectRanges(body).firstOrNull()
-                ranges += if (objectRange != null) {
-                    bodyStart + objectRange.first..bodyStart + objectRange.second
-                } else match.range
-            } else if (close < 0) {
-                // An unterminated tag with no JSON is prose, not a call.
-                break
+                if (close >= output.length) break
+                from = bodyEnd + (tag.close?.length ?: 0)
             }
         }
         if (calls.isEmpty()) {
             for ((start, end) in jsonObjectRanges(output)) {
-                parseObject(output.substring(start, end + 1), allowed)?.let {
-                    calls += it
-                    ranges += start..end
-                }
+                parseObject(output.substring(start, end + 1), allowed)?.let { calls += it }
             }
         }
         if (calls.isEmpty()) return ParsedLocalOutput(output.trim(), emptyList())
-        val clean = buildString {
-            var cursor = 0
-            for (range in ranges.sortedBy { it.first }) {
-                if (range.first > cursor) append(output.substring(cursor, range.first))
-                cursor = maxOf(cursor, range.last + 1)
-            }
-            if (cursor < output.length) append(output.substring(cursor))
-        }.replace(Regex("<\\|?/?tool_call\\|?>", RegexOption.IGNORE_CASE), "")
-            .trim()
         // Prose around a prompted call is tool musing, not an answer. The final
         // answer arrives in the next model step after the tool result.
-        return ParsedLocalOutput(if (calls.isEmpty()) clean else "", calls)
+        return ParsedLocalOutput("", calls)
     }
 
     fun looksLikeToolAttempt(text: String): Boolean =
-        text.contains("<tool_call", ignoreCase = true) ||
-            (text.contains("\"name\"") && text.contains("\"arguments\""))
+        TAGS.any { text.contains(it.open, ignoreCase = true) } ||
+            (text.contains("\"name\"") && (text.contains("\"arguments\"") || text.contains("\"parameters\"")))
+
+    private fun parseCalls(raw: String, allowed: Set<String>): List<AgentToolCall> {
+        val direct = parseObject(raw, allowed)
+        if (direct != null) return listOf(direct)
+        return jsonObjectRanges(raw).mapNotNull { (start, end) ->
+            parseObject(raw.substring(start, end + 1), allowed)
+        }
+    }
 
     private fun parseObject(raw: String, allowed: Set<String>): AgentToolCall? = runCatching {
         val text = raw.trim().removePrefix("```json").removePrefix("```").removeSuffix("```").trim()
@@ -177,7 +178,11 @@ object LocalToolProtocol {
                     }
                 }
             }
-            if (end < 0) break
+            if (end < 0) {
+                // A broken object earlier in the prose must not hide a complete call later.
+                index++
+                continue
+            }
             result += index to end
             index = end + 1
         }
