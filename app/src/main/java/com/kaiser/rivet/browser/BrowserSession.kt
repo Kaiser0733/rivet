@@ -213,6 +213,25 @@ class BrowserSession(
     /** Closing the screen keeps the visual session alive for the watch card. */
     fun close() { _state.update { it.copy(visible = false, readerMode = false) } }
 
+    /** The visible Close control and browser_close: save, destroy, free, clear the card. */
+    fun endSession() {
+        releaseJob?.cancel()
+        releaseJob = null
+        val id = activeWindowId
+        val current = id?.let { windows[it] }
+        if (id != null && current != null) {
+            snapshots.save(current.copy(title = activeTitle,
+                lastUsedAt = System.currentTimeMillis()))
+        }
+        saveActiveSnapshot()
+        destroyRenderer()
+        _state.update {
+            it.copy(visible = false, readerMode = false, watchVisible = false,
+                agentVisualActive = false, visualScreenshot = null,
+                pageReady = false, driving = BrowserDriving.Agent)
+        }
+    }
+
     fun clearNotice() { _state.update { it.copy(notice = null, error = null) } }
 
     fun contextLine(): String {

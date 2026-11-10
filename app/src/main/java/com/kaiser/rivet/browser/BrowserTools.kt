@@ -35,6 +35,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "browser_scroll" -> readOnly(call) { scroll(call, args) }
                 "browser_back" -> readOnly(call) { back(call) }
                 "browser_shot" -> readOnly(call) { shot(call) }
+                "browser_close" -> readOnly(call) { close(call) }
                 else -> null
             }
         } catch (e: BrowserFailure) {
@@ -167,6 +168,11 @@ class BrowserTools(private val session: BrowserSession) {
         } finally { session.afterInteraction() }
     }
 
+    private fun close(call: AgentToolCall): AgentToolResult {
+        session.endSession()
+        return value(call, buildJsonObject { put("closed", true) }, "Closed visual browser")
+    }
+
     private suspend fun shot(call: AgentToolCall): AgentToolResult {
         try {
             val shot = session.screenshot()
@@ -202,7 +208,7 @@ class BrowserTools(private val session: BrowserSession) {
 
     companion object {
         val NAMES = setOf("browser_open", "browser_read", "browser_find", "browser_click",
-            "browser_type", "browser_scroll", "browser_back", "browser_shot")
+            "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close")
 
         private val string = buildJsonObject { put("type", "string") }
         private val integer = buildJsonObject { put("type", "integer"); put("minimum", 0) }
@@ -240,6 +246,9 @@ class BrowserTools(private val session: BrowserSession) {
                 schema(emptyList())),
             AgentToolDefinition("browser_shot",
                 "Capture the current viewport with PixelCopy, encode it to WebP on disk, release the bitmap, and return the image path.",
+                schema(emptyList())),
+            AgentToolDefinition("browser_close",
+                "Close the visual browser session now: save the window snapshot, destroy the renderer, and free its memory.",
                 schema(emptyList())),
         )
     }

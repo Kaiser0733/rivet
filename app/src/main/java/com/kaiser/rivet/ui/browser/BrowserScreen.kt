@@ -70,7 +70,9 @@ import kotlinx.coroutines.launch
  * overlay, so opening/closing the screen does not recreate the WebView.
  */
 @Composable
-fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifier = Modifier) {
+fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
+                  onCloseSession: () -> Unit = { session.endSession() },
+                  modifier: Modifier = Modifier) {
     val state by session.state.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -118,6 +120,9 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifi
                     verticalAlignment = Alignment.CenterVertically) {
                     IconButton(onClick = onClose) {
                         Icon(painterResource(R.drawable.ic_back), "Back to chat")
+                    }
+                    IconButton(onClick = onCloseSession) {
+                        Icon(painterResource(R.drawable.ic_close), "Close browser")
                     }
                     OutlinedTextField(
                         value = address,

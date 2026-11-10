@@ -213,7 +213,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     ) else Modifier),
             )
             if (browserState.visible) {
-                BrowserScreen(chatViewModel.browser, onClose = { chatViewModel.browser.close() },
+                BrowserScreen(chatViewModel.browser,
+                    onClose = { chatViewModel.browser.close() },
+                    onCloseSession = { chatViewModel.browser.endSession() },
                     modifier = Modifier.fillMaxSize().zIndex(2f))
             }
         }
