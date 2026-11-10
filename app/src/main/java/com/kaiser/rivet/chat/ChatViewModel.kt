@@ -37,6 +37,7 @@ import com.kaiser.rivet.agent.RunPauseReason
 import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.agent.RunRecord
 import com.kaiser.rivet.agent.AgentUsage
+import com.kaiser.rivet.browser.BrowserBookmarkPath
 import com.kaiser.rivet.browser.BrowserRuntime
 import com.kaiser.rivet.browser.BrowserSession
 import com.kaiser.rivet.browser.BrowserTools
@@ -324,15 +325,13 @@ class ChatViewModel private constructor(
         browser.bookmarkWriter = bookmark@{ title, url ->
             val restored = workspaceSelection.restore() ?: return@bookmark null
             val ws = com.kaiser.rivet.agent.SafAgentWorkspace(restored.first)
-            val slug = title.ifBlank { "link" }.lowercase()
-                .replace(Regex("[^a-z0-9]+"), "-").trim('-').take(48).ifBlank { "link" }
             val dir = ".rivet/browser-links"
-            val path = "$dir/$slug-${System.currentTimeMillis()}.url"
+            val path = BrowserBookmarkPath.file(title)
             runCatching {
                 runCatching { ws.createDirectory(dir) }
                 val created = ws.createFile(path)
                 val hash = created.sha256 ?: ws.read(created.path).sha256
-                ws.write(created.path, "[InternetShortcut]\nURL=$url\nTitle=$title\n", hash)
+                ws.write(created.path, BrowserBookmarkPath.contents(title, url), hash)
                 created.path
             }.getOrNull()
         }
