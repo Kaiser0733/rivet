@@ -1440,7 +1440,7 @@ class ChatViewModel private constructor(
                 val identity = workspaceId ?: selected.tree.toString()
                 runtime.startPreview(selected, identity, _uiState.value.projectName, root, entry).url
             }
-            val tools = browserTools.definitions +
+            val tools = BrowserTools.definitions +
                 (if (executor == null) emptyList() else AgentToolExecutor.definitions)
             val client = clientFactory(snapshot.config, snapshot.apiKey)
             val sessionId = _uiState.value.currentSessionId

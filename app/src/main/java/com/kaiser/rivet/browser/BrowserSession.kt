@@ -268,7 +268,7 @@ class BrowserSession(
         if (!target.found) throw BrowserFailure("browser_target", "Rivet couldn't find that control.")
         val result = evaluate(view, clickScript(selector, text))
         recordVisit(view.url ?: activeUrl)
-        _state.update { it.copy(title = view.title, url = view.url ?: activeUrl,
+        _state.update { it.copy(title = view.title.orEmpty(), url = view.url ?: activeUrl,
             mode = BrowserMode.Renderer, rendererVisible = true) }
         result
     }
@@ -536,7 +536,7 @@ class BrowserSession(
             "return JSON.stringify({scrollY:window.scrollY,fields:f});})()"
 
     private fun parseScrollY(raw: String): Int =
-        Regex("\"scrollY\"\s*:\s*(\d+)").find(raw)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+        Regex("\"scrollY\"\\s*:\\s*(\\d+)").find(raw)?.groupValues?.get(1)?.toIntOrNull() ?: 0
 
     private fun parseSafeFields(raw: String): Map<String, String> {
         val json = runCatching {
