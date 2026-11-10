@@ -255,14 +255,14 @@ internal class Toolchain(context: Context) {
         if (File(home, "bin/pip").isFile) return
         try {
             val base = baseEnvironment(home, path(), temporary, home)
-            val environment = pythonEnvironment(base, home, temporary,
+            val env = pythonEnvironment(base, home, temporary,
                 caBundle?.takeIf { it.isFile && it.length() > 0 })
             val process = ProcessBuilder(executable.absolutePath, "-m", "ensurepip", "--default-pip")
                 .directory(temporary)
                 .redirectErrorStream(true)
                 .apply {
                     environment().clear()
-                    environment.forEach { entry ->
+                    env.forEach { entry ->
                         val split = entry.indexOf('=')
                         if (split > 0) environment()[entry.substring(0, split)] = entry.substring(split + 1)
                     }
