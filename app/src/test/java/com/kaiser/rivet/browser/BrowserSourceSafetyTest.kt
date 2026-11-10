@@ -27,6 +27,13 @@ class BrowserSourceSafetyTest {
         assertFalse(policy.contains("scheme in setOf(\"http\", \"https\", \"file\")"))
     }
 
+    @Test fun touchNeverStartsTakeover() {
+        val host = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt")).first { it.isFile }.readText()
+        assertFalse(host.contains("setDriving"))
+        assertTrue(host.contains("AndroidView"))
+    }
+
     @Test fun textOpenAndReadDoNotTouchVisibleState() {
         val session = source("BrowserSession.kt")
         val open = session.substringAfter("suspend fun openText(").substringBefore("suspend fun openVisual(")

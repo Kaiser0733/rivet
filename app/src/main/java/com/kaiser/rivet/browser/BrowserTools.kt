@@ -39,7 +39,8 @@ class BrowserTools(private val session: BrowserSession) {
                 else -> null
             }
         } catch (e: BrowserFailure) {
-            failed(call, e.code, e.message)
+            if (e.code == "browser_user_driving") userDriving(call, e.message)
+            else failed(call, e.code, e.message)
         } catch (_: Exception) {
             failed(call, "browser_error", "The browser action could not be prepared.")
         }
@@ -93,7 +94,10 @@ class BrowserTools(private val session: BrowserSession) {
             basicAutonomyRisk = BasicAutonomyRisk.Elevated,
         ) {
             try { click(call, selector, text) }
-            catch (e: BrowserFailure) { failure(call, e.code, e.message) }
+            catch (e: BrowserFailure) {
+                if (e.code == "browser_user_driving") userDriving(call, e.message)
+                else failure(call, e.code, e.message)
+            }
         }
     }
 
@@ -187,11 +191,23 @@ class BrowserTools(private val session: BrowserSession) {
 
     private fun readOnly(call: AgentToolCall, action: suspend () -> AgentToolResult) =
         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
-            try { action() } catch (e: BrowserFailure) { failure(call, e.code, e.message) }
+            try { action() } catch (e: BrowserFailure) {
+                if (e.code == "browser_user_driving") userDriving(call, e.message)
+                else failure(call, e.code, e.message)
+            }
         }
 
     private fun failed(call: AgentToolCall, code: String, message: String) =
         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) { failure(call, code, message) }
+
+    private fun userDriving(call: AgentToolCall, message: String) = AgentToolResult(
+        call.id, call.name,
+        buildJsonObject {
+            put("state", "browser_user_driving")
+            put("detail", message)
+        }.toString(),
+        error = false, summary = "Browser paused: user driving",
+    )
 
     private fun failure(call: AgentToolCall, code: String, message: String) = AgentToolResult(
         call.id, call.name,
