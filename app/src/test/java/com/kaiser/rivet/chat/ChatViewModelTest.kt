@@ -1538,6 +1538,20 @@ class ChatViewModelTest {
         return await(viewModel) { !it.streaming && it.undoCheckpointId != null }
     }
 
+    @Test fun anApprovedCreateKeepsItsContentOnDisk() = runBlocking {
+        val fixture = undoFixture("com.kaiser.rivet.create-content", listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file",
+                """{"path":"local-test.txt","content":"hello from local model"}"""))),
+            AgentResponse(text = "Done"),
+        ))
+        fixture.viewModel.send("Create local-test.txt")
+        val approval = await(fixture.viewModel) { it.pendingApproval?.call?.id == "create-a" }
+        fixture.viewModel.approve(approval.pendingApproval!!.approvalToken)
+        await(fixture.viewModel) { !it.streaming }
+        val created = fixture.documents.nodes.values.single { it.name == "local-test.txt" }
+        assertEquals("hello from local model", created.bytes.readText())
+    }
+
     // Undo has to outlive the process. The checkpoint is on disk and belongs to the project, so
     // opening the app again in that project must offer the same Undo instead of returning with
     // no row at all — which is what happened before the rehydration read the store.
