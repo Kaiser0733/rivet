@@ -253,7 +253,7 @@ class UpdateResilienceTest {
     }
 
     // (6) The bump this round ships cannot be lost in a merge.
-    @Test fun theBuildDeclaresOneThreeZeroAsVersionCodeTwentySeven() {
+    @Test fun theBuildDeclaresOneThreeZeroAsVersionCodeTwentyEight() {
         val build = listOf(File("build.gradle.kts"), File("app/build.gradle.kts"))
             .firstOrNull { it.isFile } ?: throw AssertionError("no build.gradle.kts from ${File(".").absolutePath}")
         val text = build.readText()
