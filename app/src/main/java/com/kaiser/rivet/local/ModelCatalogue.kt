@@ -5,6 +5,7 @@ import com.kaiser.rivet.provider.http
 import com.kaiser.rivet.provider.quick
 import com.kaiser.rivet.provider.readBoundedBody
 import java.util.Locale
+import java.util.concurrent.TimeUnit
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerialName
@@ -126,11 +127,14 @@ object ModelCatalogue {
 
     private fun loadRemote(client: OkHttpClient): List<LocalModelEntry> {
         val request = Request.Builder().url(REMOTE_URL).get().build()
-        client.quick().newCall(request).execute().use { response ->
-            if (!response.isSuccessful) throw CatalogueFailure("Catalogue request failed.")
-            val text = response.readBoundedBody(2 * 1024 * 1024)
-                ?: throw CatalogueFailure("Catalogue response was empty.")
-            return parse(text)
-        }
+        // The bundled asset is enough to show the funnel. A dead or slow network
+        // must not hold the first screen for the provider client's full read timeout.
+        client.quick().newBuilder().callTimeout(2, TimeUnit.SECONDS).build()
+            .newCall(request).execute().use { response ->
+                if (!response.isSuccessful) throw CatalogueFailure("Catalogue request failed.")
+                val text = response.readBoundedBody(2 * 1024 * 1024)
+                    ?: throw CatalogueFailure("Catalogue response was empty.")
+                return parse(text)
+            }
     }
 }
