@@ -450,12 +450,13 @@ class BrowserSession(
         val result = document ?: ReaderDocument(pageUrl, view.title.orEmpty().ifBlank { pageUrl },
             fallbackText, ReaderExtractor.chunk(fallbackText), needsRenderer = false)
         elementRefs = runCatching {
-            BrowserElementRefs.fromJson(evaluate(view, """
+            val raw = evaluate(view, """
                 JSON.stringify([].slice.call(document.querySelectorAll(
                   'a,button,input,[role=button]')).slice(0,40).map(function(e){
                   return {label:(e.innerText||e.value||e.getAttribute('aria-label')||'').trim(),tag:(e.tagName||'').toLowerCase()};
                 }))
-            """.trimIndent()))
+            """.trimIndent())
+            BrowserElementRefs.fromJson(raw.trim().trim('"').replace("\\\"", "\""))
         }.getOrDefault(emptyList())
         if (result.text.isBlank()) throw BrowserFailure("browser_empty", "This page has no readable text.")
         reader = result
