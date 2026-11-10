@@ -27,6 +27,29 @@ class BrowserSourceSafetyTest {
         assertFalse(policy.contains("scheme in setOf(\"http\", \"https\", \"file\")"))
     }
 
+    @Test fun textOpenAndReadDoNotTouchVisibleState() {
+        val session = source("BrowserSession.kt")
+        val open = session.substringAfter("suspend fun openText(").substringBefore("suspend fun openVisual(")
+        assertFalse(open.contains("_state.update"))
+        val read = session.substringAfter("suspend fun read(").substringBefore("suspend fun find(")
+        assertFalse(read.contains("_state.update"))
+    }
+
+    @Test fun theBrowserIsAFullScreenScreenNotASheet() {
+        val app = listOf(File("src/main/java/com/kaiser/rivet/ui/RivetApp.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/RivetApp.kt")).first { it.isFile }.readText()
+        assertTrue(app.contains("BrowserScreen"))
+        assertTrue(app.contains("BrowserHost"))
+        assertFalse(app.contains("BrowserSheet"))
+    }
+
+    @Test fun chatShowsTheWatchCardForVisualSessions() {
+        val chat = listOf(File("src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt")).first { it.isFile }.readText()
+        assertTrue(chat.contains("BrowserWatchCard"))
+        assertTrue(chat.contains("browserState.rendererVisible"))
+    }
+
     @Test fun passwordFieldsAreOnTheRefusalPath() {
         val safety = source("BrowserFormSafety.kt")
         assertTrue(safety.contains("current-password"))

@@ -138,6 +138,7 @@ import com.kaiser.rivet.provider.runSignIn
 import com.kaiser.rivet.provider.ChatGptSignInSession
 import com.kaiser.rivet.provider.ChatGptSignInResult
 import com.kaiser.rivet.storage.HostIdStore
+import com.kaiser.rivet.ui.browser.BrowserWatchCard
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.history.HistoryPane
 import com.kaiser.rivet.runtime.ManagedProcessStatus
@@ -152,6 +153,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                onStartOffline: () -> Unit = {}, onOpenBrowser: () -> Unit = {}) {
     val landscape = showsHistoryPane(LocalConfiguration.current.orientation)
     val state by chatViewModel.uiState.collectAsState()
+    val browserState by chatViewModel.browser.state.collectAsState()
     val userSkills by chatViewModel.userSkills.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
     val processItems by chatViewModel.managedProcesses.processes.collectAsState()
@@ -508,6 +510,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 HorizontalDivider(Modifier.fillMaxWidth()
                     .align(Alignment.CenterHorizontally).padding(top = 2.dp),
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.23f))
+                if (browserState.rendererVisible && browserState.watchVisible && !browserState.visible) {
+                    BrowserWatchCard(browserState, onWatch = { chatViewModel.browser.watch() })
+                }
                 if (state.projectError != null && projectBinding != ProjectBindingState.AccessLost &&
                     providers.configs.isNotEmpty() && !(state.projectName == null && state.messages.isEmpty())) {
                     Row(Modifier.fillMaxWidth()
