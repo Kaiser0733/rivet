@@ -8,6 +8,7 @@ import com.kaiser.rivet.local.LocalPrompt
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.ReasoningLevel
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -29,6 +30,7 @@ class LocalPromptBudgetTest {
             model = config.model,
             messages = listOf(AgentMessage.user(message)),
             system = wire.system,
+            reasoning = ReasoningLevel.Default,
             tools = wire.tools,
         )
     }
