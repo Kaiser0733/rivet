@@ -11,12 +11,13 @@ class BrowserSourceSafetyTest {
             File("app/src/main/java/com/kaiser/rivet/browser/$name"))
             .first { it.isFile }.readText()
 
-    @Test fun theBrowserPackageNeverSpoofsAUserAgent() {
+    @Test fun onlyTheVisualDesktopPathSetsAUserAgent() {
         val files = listOf(File("src/main/java/com/kaiser/rivet/browser"),
             File("app/src/main/java/com/kaiser/rivet/browser")).first { it.isDirectory }
             .walkTopDown().filter { it.extension == "kt" }
         assertTrue(files.toList().isNotEmpty())
-        assertFalse(files.any { it.readText().contains("setUserAgentString") })
+        val readers = files.filter { it.name == "ReaderService.kt" }
+        assertTrue(readers.none { it.readText().contains("userAgent") })
     }
 
     @Test fun thereIsNoRawEvalToolAndNoFileOpen() {

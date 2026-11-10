@@ -162,7 +162,7 @@ class BrowserSession(
     private val _state = MutableStateFlow(BrowserUiState(
         allowJs = prefs.getBoolean("allow_js", true),
         blockThirdParty = prefs.getBoolean("block_third_party", true),
-        desktopMode = prefs.getBoolean("desktop", false),
+        desktopMode = prefs.getBoolean("desktop", BrowserDesktopMode.DEFAULT_DESKTOP),
     ))
     val state: StateFlow<BrowserUiState> = _state.asStateFlow()
 
@@ -506,6 +506,7 @@ class BrowserSession(
         if (renderer === view) return
         renderer?.let { old -> runCatching { old.destroy() } }
         renderer = view
+        view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
         configure(view)
         rendererReady?.complete(view)
         view.webViewClient = clientFor(view)
@@ -550,7 +551,9 @@ class BrowserSession(
         prefs.edit().putBoolean("desktop", enabled).apply()
         _state.update { it.copy(desktopMode = enabled) }
         renderer?.settings?.useWideViewPort = enabled
-        renderer?.settings?.loadWithOverviewMode = !enabled
+        renderer?.settings?.loadWithOverviewMode = enabled
+        renderer?.settings?.userAgentString =
+            if (enabled) BrowserDesktopMode.DESKTOP_USER_AGENT else null
         renderer?.reload()
     }
 
@@ -796,7 +799,8 @@ class BrowserSession(
         s.javaScriptEnabled = _state.value.allowJs
         s.domStorageEnabled = true
         s.useWideViewPort = _state.value.desktopMode
-        s.loadWithOverviewMode = !_state.value.desktopMode
+        s.loadWithOverviewMode = _state.value.desktopMode
+        s.userAgentString = if (_state.value.desktopMode) BrowserDesktopMode.DESKTOP_USER_AGENT else null
         s.mediaPlaybackRequiresUserGesture = true
         s.mixedContentMode = android.webkit.WebSettings.MIXED_CONTENT_NEVER_ALLOW
         s.allowFileAccess = false
