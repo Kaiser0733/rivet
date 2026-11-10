@@ -510,7 +510,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 HorizontalDivider(Modifier.fillMaxWidth()
                     .align(Alignment.CenterHorizontally).padding(top = 2.dp),
                     color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.23f))
-                if (browserState.rendererVisible && browserState.watchVisible && !browserState.visible) {
+                if (com.kaiser.rivet.browser.BrowserDrivingPolicy.cardVisible(
+                        browserState.agentRunActive, browserState.agentVisualActive,
+                        browserState.watchVisible, browserState.visible)) {
                     BrowserWatchCard(browserState, onWatch = { chatViewModel.browser.watch() })
                 }
                 if (state.projectError != null && projectBinding != ProjectBindingState.AccessLost &&

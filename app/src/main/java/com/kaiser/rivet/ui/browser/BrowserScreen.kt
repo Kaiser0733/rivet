@@ -193,7 +193,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifi
                     }
                 }
             }
-            if (state.driving == BrowserDriving.User) {
+            if (com.kaiser.rivet.browser.BrowserDrivingPolicy.bannerVisible(
+                    state.agentRunActive, state.agentVisualActive, state.driving)) {
                 BrowserNotice(MaterialTheme.colorScheme.primaryContainer) {
                     Row(Modifier.padding(horizontal = 10.dp, vertical = 4.dp),
                         verticalAlignment = Alignment.CenterVertically) {
@@ -224,6 +225,10 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit, modifier: Modifi
                 }) { Text(if (state.readerMode) "Page" else "Reader") }
                 TextButton(onClick = { domainsOpen = true }) {
                     Text("Sites (${state.domains.map { it.host }.distinct().size})")
+                }
+                if (state.agentRunActive && state.agentVisualActive &&
+                    state.driving == BrowserDriving.Agent) {
+                    TextButton(onClick = { session.takeControl() }) { Text("Take control") }
                 }
                 Spacer(Modifier.weight(1f))
                 Text(

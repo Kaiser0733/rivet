@@ -1698,6 +1698,7 @@ class ChatViewModel private constructor(
                 recordSkillScriptApproval = skillScriptApprovals::approve,
             )
             try {
+                browser.beginAgentRun()
                 val runLoop: suspend () -> AgentRunResult = {
                     loop.run(
                         initial = durable,
@@ -1894,6 +1895,7 @@ class ChatViewModel private constructor(
                     "Rivet couldn't finish this request. Completed project changes remain safe.",
                     ChatErrorAction.RetryTurn)
             } finally {
+                browser.endAgentRun()
                 approvals.cancel()
                 val id = checkpointId
                 if (id != null && workspaceId != null && !checkpointBroken) {

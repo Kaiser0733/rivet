@@ -42,7 +42,6 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 
 enum class BrowserMode { Reader, Renderer }
-enum class BrowserDriving { Agent, User }
 
 data class BrowserWindowSummary(
     val id: String,
@@ -86,6 +85,8 @@ data class BrowserUiState(
     val windows: List<BrowserWindowSummary> = emptyList(),
     val activeWindowId: String? = null,
     val driving: BrowserDriving = BrowserDriving.Agent,
+    val agentRunActive: Boolean = false,
+    val agentVisualActive: Boolean = false,
     val handoff: BrowserHandoffState? = null,
     val authNotice: String? = null,
     val downloadPrompt: BrowserDownloadPrompt? = null,
@@ -154,6 +155,8 @@ class BrowserSession(
     private var budget = BrowserGovernor.decide(BrowserMemorySignals(0))
     private var lastRendererStart = 0L
     private var lastActivityAt = 0L
+    private var userControlAt = 0L
+    private var releaseJob: kotlinx.coroutines.Job? = null
     private var periodic: kotlinx.coroutines.Job? = null
 
     private val _state = MutableStateFlow(BrowserUiState(
@@ -174,6 +177,17 @@ class BrowserSession(
         models?.modelFootprintBytes?.let { footprint ->
             scope.launch { footprint.collect { refreshBudget() } }
         }
+    }
+
+    fun beginAgentRun() {
+        _state.update { it.copy(agentRunActive = true, driving = BrowserDriving.Agent) }
+    }
+
+    fun endAgentRun() {
+        releaseJob?.cancel()
+        releaseJob = null
+        _state.update { it.copy(agentRunActive = false, agentVisualActive = false,
+            driving = BrowserDriving.Agent) }
     }
 
     /** Human open: always the full-screen visual browser, never the reader face. */
@@ -277,7 +291,8 @@ class BrowserSession(
                     url = url, mode = BrowserMode.Renderer,
                     readerMode = false, error = null, notice = null, handoff = null, authNotice = null)
             }
-            val view = ensureRenderer(showWatch = !userInitiated, allowUserDriving = userInitiated)
+            val view = ensureRenderer(showWatch = !userInitiated,
+                allowUserDriving = userInitiated, agentAction = false)
             loadForInteraction(view, url)
             activeUrl = view.url ?: url
             activeTitle = view.title.orEmpty()
@@ -531,12 +546,25 @@ class BrowserSession(
         if (budget.tier == BrowserTier.ReaderFirst) destroyRenderer()
     }
 
-    fun setDriving(userDriving: Boolean) {
+    fun takeControl() {
+        if (!_state.value.agentRunActive || !_state.value.agentVisualActive) return
         lastActivityAt = System.currentTimeMillis()
-        _state.update { it.copy(driving = if (userDriving) BrowserDriving.User else BrowserDriving.Agent) }
+        userControlAt = lastActivityAt
+        _state.update { it.copy(driving = BrowserDriving.User) }
+        releaseJob?.cancel()
+        releaseJob = scope.launch {
+            kotlinx.coroutines.delay(BrowserDrivingPolicy.RELEASE_CONTROL_AFTER_MS)
+            if (_state.value.driving == BrowserDriving.User) handBack()
+        }
+    }
+
+    fun setDriving(userDriving: Boolean) {
+        if (userDriving) takeControl() else handBack()
     }
 
     fun handBack() {
+        releaseJob?.cancel()
+        releaseJob = null
         _state.update { it.copy(driving = BrowserDriving.Agent, notice = "Rivet can act again.") }
     }
 
@@ -823,13 +851,20 @@ class BrowserSession(
     }
 
     private suspend fun ensureRenderer(showWatch: Boolean = true,
-                                       allowUserDriving: Boolean = false): WebView {
+                                       allowUserDriving: Boolean = false,
+                                       agentAction: Boolean = true): WebView {
         refreshBudget()
         if (!BrowserGovernor.canOpenRenderer(budget.tier, interaction = true)) {
             throw BrowserFailure("browser_renderer_blocked", BrowserGovernor.refusalReason(budget))
         }
         if (!allowUserDriving && _state.value.driving == BrowserDriving.User) {
-            throw BrowserFailure("browser_user_driving", "The user is driving the browser. Ask them to hand it back.")
+            withTimeoutOrNull(2_000) {
+                while (_state.value.driving == BrowserDriving.User) kotlinx.coroutines.delay(200)
+            }
+            if (_state.value.driving == BrowserDriving.User) {
+                throw BrowserFailure("browser_user_driving",
+                    "The user is driving the browser. Ask them to hand it back.")
+            }
         }
         if (_state.value.handoff != null) {
             throw BrowserFailure("browser_handoff",
@@ -837,7 +872,8 @@ class BrowserSession(
         }
         lastActivityAt = System.currentTimeMillis()
         _state.update { it.copy(rendererVisible = true,
-            watchVisible = it.watchVisible || showWatch) }
+            watchVisible = it.watchVisible || showWatch,
+            agentVisualActive = it.agentVisualActive || (agentAction && showWatch)) }
         val existing = renderer
         if (existing != null) return existing
         val ready = CompletableDeferred<WebView>()
