@@ -237,6 +237,7 @@ internal class Toolchain(context: Context) {
         val links = pythonLinkTargets(parsePythonManifest(manifest.readText()), native)
         if (!temporary.isDirectory && !temporary.mkdirs()) return
         syncLinks(home, links)
+        markToolchainExecutables(home)
         if (extract) {
             try { marker.writeText(PYTHON_STDLIB_VERSION) } catch (_: Exception) { }
         }
@@ -252,7 +253,10 @@ internal class Toolchain(context: Context) {
         val home = pythonHome ?: return
         val executable = pythonExecutable?.takeIf { it.isFile } ?: return
         val temporary = pythonTmp ?: return
-        if (File(home, "bin/pip").isFile) return
+        if (File(home, "bin/pip").isFile) {
+            markPipEntryPoints(home)
+            return
+        }
         try {
             val base = baseEnvironment(home, path(), temporary, home)
             val env = pythonEnvironment(base, home, temporary,
@@ -276,6 +280,7 @@ internal class Toolchain(context: Context) {
             } else if (process.exitValue() != 0) {
                 Log.w("Toolchain", "ensurepip failed (${process.exitValue()}): ${output.takeLast(400)}")
             }
+            markPipEntryPoints(home)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -356,6 +361,31 @@ internal fun baseEnvironment(
     "LANG=C.UTF-8",
     "TERM=xterm-256color",
 )
+
+/** ensurepip's launchers are data files in the zip; make every pip entry point executable. */
+internal fun markPipEntryPoints(home: File): Int {
+    val bin = File(home, "bin")
+    if (!bin.isDirectory) return 0
+    return bin.listFiles().orEmpty().count { file ->
+        file.isFile && (file.name == "pip" || file.name.startsWith("pip3")) &&
+            file.setExecutable(true, false)
+    }
+}
+
+/** CPython and git scripts may arrive with the archive's mode; audit the tree's bin. */
+internal fun markToolchainExecutables(home: File): Int {
+    var changed = markPipEntryPoints(home)
+    val bin = File(home, "bin")
+    if (!bin.isDirectory) return changed
+    for (file in bin.listFiles().orEmpty()) {
+        if (!file.isFile) continue
+        if (file.name.startsWith("python") || file.name == "git" ||
+            file.name.startsWith("git-")) {
+            if (file.setExecutable(true, false)) changed++
+        }
+    }
+    return changed
+}
 
 internal data class ToolchainAvailability(
     val busybox: Boolean = false,
