@@ -143,6 +143,7 @@ class BrowserSession(
     private var activeTitle: String = ""
     private var authLimitStated = false
     private var renderer: WebView? = null
+    private var rendererReady: CompletableDeferred<WebView>? = null
     private var pageFinished: CompletableDeferred<Unit>? = null
     private var budget = BrowserGovernor.decide(BrowserMemorySignals(0))
     private var lastRendererStart = 0L
@@ -162,6 +163,10 @@ class BrowserSession(
     init {
         app.registerComponentCallbacks(this)
         refreshBudget()
+        models?.loadedId?.let { loaded -> scope.launch { loaded.collect { refreshBudget() } } }
+        models?.modelFootprintBytes?.let { footprint ->
+            scope.launch { footprint.collect { refreshBudget() } }
+        }
     }
 
     fun show() { _state.update { it.copy(visible = true) } }
@@ -233,7 +238,10 @@ class BrowserSession(
         }
 
     suspend fun read(chunk: Int = 0): BrowserReadResult = actionLock.withLock {
-        val document = reader ?: throw BrowserFailure("browser_not_open", "Open a page first.")
+        val document = if (renderer != null && activeUrl.isNotBlank() &&
+            (reader?.url != activeUrl || reader?.chunks?.isEmpty() == true)) {
+            readRenderedDocument()
+        } else reader ?: throw BrowserFailure("browser_not_open", "Open a page first.")
         if (document.chunks.isEmpty()) throw BrowserFailure("browser_needs_renderer",
             "This page needs the renderer for readable text. Open it for interaction.")
         if (chunk !in document.chunks.indices) {
@@ -248,8 +256,26 @@ class BrowserSession(
     }
 
     suspend fun find(text: String): List<ReaderHit> = actionLock.withLock {
-        val document = reader ?: throw BrowserFailure("browser_not_open", "Open a page first.")
+        val document = if (renderer != null && activeUrl.isNotBlank() &&
+            (reader?.url != activeUrl || reader?.chunks?.isEmpty() == true)) {
+            readRenderedDocument()
+        } else reader ?: throw BrowserFailure("browser_not_open", "Open a page first.")
         ReaderExtractor.find(document.text, text)
+    }
+
+    private suspend fun readRenderedDocument(): ReaderDocument {
+        val view = renderer ?: throw BrowserFailure("browser_renderer_unavailable",
+            "Open the Browser card so the page renderer can start.")
+        val raw = evaluate(view, "(function(){var m=document.querySelector('main,article');" +
+            "return (m?m.innerText:document.body.innerText)})()")
+        val text = runCatching { org.json.JSONTokener(raw).nextValue() as? String }
+            .getOrNull()?.trim().orEmpty()
+        if (text.isBlank()) throw BrowserFailure("browser_empty", "This page has no readable text.")
+        val document = ReaderDocument(activeUrl, view.title.orEmpty().ifBlank { activeUrl },
+            text, ReaderExtractor.chunk(text), needsRenderer = false)
+        reader = document
+        recordVisit(view.url ?: activeUrl)
+        return document
     }
 
     suspend fun classifyClick(selector: String?, text: String?): BrowserClickTarget =
@@ -302,8 +328,10 @@ class BrowserSession(
     suspend fun back(): String = actionLock.withLock {
         val view = ensureRenderer()
         if (view.canGoBack()) {
-            view.goBack()
-            withContext(Dispatchers.Main) { pageFinished?.let { } }
+            val ready = CompletableDeferred<Unit>()
+            pageFinished = ready
+            withContext(Dispatchers.Main) { view.goBack() }
+            withTimeoutOrNull(10_000) { ready.await() }
             activeUrl = view.url ?: activeUrl
         } else {
             throw BrowserFailure("browser_no_back", "There is no previous page in this window.")
@@ -327,6 +355,7 @@ class BrowserSession(
         renderer?.let { old -> runCatching { old.destroy() } }
         renderer = view
         configure(view)
+        rendererReady?.complete(view)
         view.webViewClient = clientFor(view)
         view.setDownloadListener { url, _, contentDisposition, mime, contentLength ->
             onDownloadRequested(url, contentDisposition, mime, contentLength)
@@ -427,7 +456,7 @@ class BrowserSession(
         activeUrl = target.currentUrl.orEmpty()
         activeTitle = target.title
         _state.update { it.copy(activeWindowId = id, url = activeUrl, title = activeTitle,
-            fidelity = target.fidelity, windows = windowSummaries()) }
+            fidelity = BrowserFidelity.Reloaded, windows = windowSummaries()) }
         val view = renderer
         if (view != null && activeUrl.isNotBlank()) {
             view.loadUrl(activeUrl)
@@ -613,7 +642,7 @@ class BrowserSession(
                 mode = BrowserMode.Renderer, rendererVisible = true, fidelity = BrowserFidelity.Reloaded) }
             if (!BrowserAuthGuard.isLoopback(actual)) {
                 view.evaluateJavascript("document.querySelector('input[type=password]') !== null") { raw ->
-                    if (raw == "true") stateHandoff(actual, "sign-in-wall")
+                    if (raw.trim('"') == "true") stateHandoff(actual, "sign-in-wall")
                 }
             }
         }
@@ -657,8 +686,14 @@ class BrowserSession(
         _state.update { it.copy(visible = true, rendererVisible = true) }
         val existing = renderer
         if (existing != null) return existing
-        throw BrowserFailure("browser_renderer_unavailable",
-            "Open the Browser card so the page renderer can start.")
+        val ready = CompletableDeferred<WebView>()
+        rendererReady = ready
+        val attached = withTimeoutOrNull(8_000) { ready.await() }
+        if (attached == null) {
+            throw BrowserFailure("browser_renderer_unavailable",
+                "Open the Browser card so the page renderer can start.")
+        }
+        return attached
     }
 
     private suspend fun loadForInteraction(view: WebView, url: String) {
@@ -716,7 +751,10 @@ class BrowserSession(
           if(!el) return JSON.stringify({error:'not_found'});
           var type=(el.getAttribute('type')||el.type||'text').toLowerCase();
           var ac=(el.getAttribute('autocomplete')||'').toLowerCase();
-          if(type==='password'||/one-time-code|cc-|current-password|new-password/.test(ac))
+          var hint=(el.getAttribute('name')||'')+' '+(el.getAttribute('placeholder')||'')+' '+
+            (el.getAttribute('aria-label')||'')+' '+ac;
+          if(type==='password'||type==='hidden'||/one-time-code|cc-|current-password|new-password/.test(ac)||
+            /pass(word|cod)|otp|one.?time|card|cvv|cvc|security.?code/i.test(hint))
             return JSON.stringify({error:'sensitive'});
           el.focus(); el.value=${jsonString(value)};
           el.dispatchEvent(new Event('input',{bubbles:true}));
@@ -780,6 +818,8 @@ class BrowserSession(
         periodic?.cancel(); periodic = null
         val view = renderer ?: return
         renderer = null
+        rendererReady?.cancel()
+        rendererReady = null
         runCatching { view.stopLoading(); view.destroy() }
         _state.update { it.copy(rendererVisible = false, mode = BrowserMode.Reader) }
     }
