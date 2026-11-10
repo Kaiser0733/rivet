@@ -10,6 +10,8 @@ enum class BrowserFidelity {
     @SerialName("reloaded") Reloaded,
 }
 
+data class BrowserBackTarget(val url: String, val historyIndex: Int)
+
 @Serializable
 data class BrowserSnapshot(
     val id: String,
@@ -24,6 +26,13 @@ data class BrowserSnapshot(
     val thumbnailFile: String? = null,
 ) {
     val currentUrl: String? get() = historyUrls.getOrNull(historyIndex)
+
+    /** Back target from our own model, used when a restored WebView has no native back stack. */
+    fun backTarget(): BrowserBackTarget? {
+        if (historyIndex <= 0) return null
+        val url = historyUrls.getOrNull(historyIndex - 1)?.takeIf { it.isNotBlank() } ?: return null
+        return BrowserBackTarget(url, historyIndex - 1)
+    }
 }
 
 object BrowserSnapshotCodec {

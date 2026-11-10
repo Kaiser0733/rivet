@@ -344,7 +344,24 @@ class BrowserSession(
             withTimeoutOrNull(10_000) { ready.await() }
             activeUrl = view.url ?: activeUrl
         } else {
-            throw BrowserFailure("browser_no_back", "There is no previous page in this window.")
+            val windowId = activeWindowId
+            val current = windowId?.let { windows[it] }
+            val target = current?.backTarget()
+            if (windowId == null || current == null || target == null) {
+                throw BrowserFailure("browser_no_back", "There is no previous page in this window.")
+            }
+            windows[windowId] = current.copy(historyIndex = target.historyIndex,
+                lastUsedAt = System.currentTimeMillis(), fidelity = BrowserFidelity.Reloaded)
+            activeUrl = target.url
+            val ready = CompletableDeferred<Unit>()
+            pageFinished = ready
+            withContext(Dispatchers.Main) { view.loadUrl(target.url) }
+            withTimeoutOrNull(10_000) { ready.await() }
+            activeUrl = view.url ?: target.url
+            _state.update {
+                it.copy(url = activeUrl, mode = BrowserMode.Renderer,
+                    rendererVisible = true, fidelity = BrowserFidelity.Reloaded)
+            }
         }
         activeUrl
     }
