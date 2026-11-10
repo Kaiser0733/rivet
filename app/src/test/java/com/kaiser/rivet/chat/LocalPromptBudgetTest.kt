@@ -15,7 +15,7 @@ class LocalPromptBudgetTest {
     private val config = ProviderConfig(
         id = "local-test", type = ProviderType.Local, name = "Local test",
         baseUrl = "local://", model = "Qwen3-0.6B-Q4_K_M.gguf",
-        manualContextWindowTokens = 4096, manualMaxOutputTokens = 512,
+        manualContextWindowTokens = 4096, manualMaxOutputTokens = 1024,
     )
 
     private fun request(message: String): AgentRequest {
