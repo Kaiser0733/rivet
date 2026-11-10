@@ -28,7 +28,8 @@ data class ModelsUiState(
     val byoError: String? = null,
     val staleBytes: Long = 0,
 ) {
-    fun fitFor(entry: LocalModelEntry): ModelFit = fits[entry.id] ?: ModelFit(entry, FitBadge.TooBig, "")
+    fun fitFor(entry: LocalModelEntry): ModelFit = fits[entry.id] ?: ModelRecommender.fit(
+        entry, totalRamMb, availableRamMb.toLong() * 1024 * 1024)
     val hasDeviceFacts: Boolean get() = totalRamMb > 0
 }
 

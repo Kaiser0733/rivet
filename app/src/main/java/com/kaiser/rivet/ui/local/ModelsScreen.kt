@@ -202,8 +202,7 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
             item { Text("Downloads", style = MaterialTheme.typography.titleMedium) }
             items(activeJobs, key = { "job-${it.entry.id}" }) { job ->
                 DownloadCard(job = job,
-                    fit = ui.fits[job.entry.id] ?: com.kaiser.rivet.local.ModelRecommender.fit(
-                        job.entry, ui.totalRamMb, ui.availableRamMb.toLong() * 1024 * 1024),
+                    fit = ui.fitFor(job.entry),
                     warning = viewModel.storageWarning(job),
                     network = viewModel.networkProblem(job),
                     onPause = { viewModel.pause(job) },
@@ -217,8 +216,7 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
             item { Text("Your models", style = MaterialTheme.typography.titleMedium) }
             items(customInstalled, key = { "installed-${it.entry.id}" }) { model ->
                 InstalledRow(model = model,
-                    fit = ui.fits[model.entry.id] ?: com.kaiser.rivet.local.ModelRecommender.fit(
-                        model.entry, ui.totalRamMb, ui.availableRamMb.toLong() * 1024 * 1024),
+                    fit = ui.fitFor(model.entry),
                     onUse = { viewModel.activate(model.entry); onClose() },
                     onExport = { exportTarget = model.entry; exportLauncher.launch("${model.entry.name}.gguf") },
                     onDelete = { deleteTarget = model.entry })
