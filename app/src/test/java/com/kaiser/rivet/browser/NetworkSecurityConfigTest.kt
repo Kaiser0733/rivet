@@ -36,8 +36,6 @@ class NetworkSecurityConfigTest {
         val text = manifest.readText()
         assertTrue(text.contains("android:networkSecurityConfig=\"@xml/network_security_config\""))
         assertFalse(text.contains("android:usesCleartextTraffic=\"true\""))
-        assertFalse("debug must not widen cleartext",
-            File(main.parentFile, "debug/res/xml/network_security_config.xml").exists())
         val application = DocumentBuilderFactory.newInstance().newDocumentBuilder()
             .parse(manifest).documentElement.getElementsByTagName("application").item(0) as Element
         assertEquals("@xml/network_security_config",

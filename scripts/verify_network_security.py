@@ -77,23 +77,35 @@ def verify_debug_network_security(manifest_tree: str, config_tree: str,
     )
 
 
-def verify_release_network_exclusion(manifest_xml: str, merged_resource_paths: set[str]) -> None:
+def verify_release_network_exclusion(manifest_xml: str, merged_resource_paths: set[str],
+                                     config_xml: str | None) -> None:
     try:
         manifest = ElementTree.fromstring(manifest_xml)
     except ElementTree.ParseError as error:
         raise AssertionError("invalid release merged manifest") from error
     application = manifest.find("application")
     assert application is not None
-    assert not application.get(ANDROID + "networkSecurityConfig"), (
-        "release manifest references the debug network security config"
+    assert application.get(ANDROID + "networkSecurityConfig"), (
+        "release manifest must reference the loopback network security config"
     )
     global_cleartext = application.get(ANDROID + "usesCleartextTraffic")
     assert global_cleartext is None or global_cleartext.lower() == "false", (
         "release manifest enables global cleartext traffic"
     )
-    assert not any("network_security_config" in path.lower() for path in merged_resource_paths), (
-        "release resources include the debug network security config"
+    assert any(path == "res/xml/network_security_config.xml" for path in merged_resource_paths), (
+        "release resources must include the loopback network security config"
     )
+    assert config_xml is not None, "release network security config is missing"
+    root = ElementTree.fromstring(config_xml)
+    base = root.find("base-config")
+    assert base is not None and base.get("cleartextTrafficPermitted", "").lower() == "false", (
+        "release base-config must deny cleartext"
+    )
+    domains = root.findall("domain-config/domain")
+    assert {domain.text for domain in domains} == {"127.0.0.1", "localhost", "::1"}, (
+        "release cleartext must be limited to loopback"
+    )
+    assert len(root.findall("domain-config")) == 1, "release must have one loopback domain-config"
 
 
 def _aapt(sdk: Path) -> Path:
@@ -107,7 +119,7 @@ def _run(*args: str) -> str:
     return subprocess.check_output(args, text=True).strip()
 
 
-def _release_outputs(build: Path) -> tuple[Path, set[str]]:
+def _release_outputs(build: Path) -> tuple[Path, set[str], Path | None]:
     intermediates = build / "intermediates"
     manifest_roots = [intermediates / "merged_manifest" / "release",
                       intermediates / "merged_manifests" / "release"]
@@ -118,7 +130,7 @@ def _release_outputs(build: Path) -> tuple[Path, set[str]]:
     assert resources_root.is_dir(), "release merged resources were not built"
     resources = {path.relative_to(resources_root).as_posix()
                  for path in resources_root.rglob("*") if path.is_file()}
-    return manifests[0], resources
+    return manifests[0], resources, resources_root / "res/xml/network_security_config.xml"
 
 
 def main() -> None:
@@ -135,8 +147,10 @@ def main() -> None:
     config_tree = _run(str(aapt), "dump", "xmltree", str(apk), "res/xml/network_security_config.xml")
     resources_dump = _run(str(aapt), "dump", "resources", str(apk))
     verify_debug_network_security(manifest_tree, config_tree, resources, resources_dump)
-    release_manifest, release_resources = _release_outputs(build)
-    verify_release_network_exclusion(release_manifest.read_text(encoding="utf-8"), release_resources)
+    release_manifest, release_resources, release_config = _release_outputs(build)
+    config_text = release_config.read_text(encoding="utf-8") if release_config.is_file() else None
+    verify_release_network_exclusion(release_manifest.read_text(encoding="utf-8"),
+                                     release_resources, config_text)
     print("debug mock-provider network policy and release exclusion verified")
 
 
