@@ -29,6 +29,8 @@ data class BrowserMemorySignals(
     val rendererActive: Boolean = false,
     /** Measured growth of this app and, where available, its renderer. */
     val observedBrowserBytes: Long = 0L,
+    /** The live page is a loopback preview: the memory cap does not apply. */
+    val loopbackLive: Boolean = false,
 )
 
 private const val BYTES_PER_MIB = 1024L * 1024L
@@ -40,8 +42,9 @@ data class BrowserBudget(
     val headroomBytes: Long,
     val modelLoaded: Boolean,
     val observedBrowserBytes: Long = 0L,
+    val loopbackExempt: Boolean = false,
 ) {
-    val capMb: Int get() = (capBytes / BYTES_PER_MIB).toInt()
+    val capMb: Int get() = if (loopbackExempt) 0 else (capBytes / BYTES_PER_MIB).toInt()
     val observedMb: Int get() = (observedBrowserBytes / BYTES_PER_MIB).toInt()
 }
 
@@ -52,6 +55,10 @@ object BrowserGovernor {
     const val MIB = BYTES_PER_MIB
 
     fun decide(signals: BrowserMemorySignals): BrowserBudget {
+        if (signals.loopbackLive) {
+            return BrowserBudget(Long.MAX_VALUE, BrowserTier.Normal, 0L, 0L,
+                signals.modelFootprintBytes > 0L, 0L, loopbackExempt = true)
+        }
         val model = signals.modelFootprintBytes.coerceAtLeast(0L)
         val reserve = model + SAFETY_BYTES
         val headroom = (signals.availableRamBytes.coerceAtLeast(0L) - reserve).coerceAtLeast(0L)
@@ -105,6 +112,9 @@ object BrowserGovernor {
     )
 
     fun contextLine(budget: BrowserBudget): String {
+        if (budget.loopbackExempt) {
+            return "Browser: loopback preview, memory cap paused (${budget.observedMb}MB used)."
+        }
         val tier = when (budget.tier) {
             BrowserTier.Normal -> "normal"
             BrowserTier.StrictDiet -> "strict-diet"

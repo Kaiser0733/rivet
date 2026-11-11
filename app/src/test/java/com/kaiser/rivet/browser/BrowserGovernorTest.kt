@@ -45,6 +45,22 @@ class BrowserGovernorTest {
         assertFalse(BrowserGovernor.canTakeScreenshot(BrowserTier.ReaderFirst))
     }
 
+    @Test fun aLoopbackPreviewStandsDownEvenAtFourHundredMegabytes() {
+        val budget = BrowserGovernor.decide(BrowserMemorySignals(2_000 * mb,
+            observedBrowserBytes = 400 * mb, loopbackLive = true))
+        assertEquals(BrowserTier.Normal, budget.tier)
+        assertTrue(budget.loopbackExempt)
+        assertTrue("loopback must not shed", BrowserShedLadder.actions(
+            BrowserTier.NoRenderer, budget.tier, screenVisible = true).isEmpty())
+        assertTrue(BrowserGovernor.contextLine(budget).contains("cap paused"))
+    }
+
+    @Test fun leavingLoopbackRearmsTheSameBudgetDecision() {
+        val web = BrowserGovernor.decide(BrowserMemorySignals(2_000 * mb,
+            observedBrowserBytes = 400 * mb, loopbackLive = false))
+        assertEquals(BrowserTier.NoRenderer, web.tier)
+    }
+
     @Test fun sheddingHasAStableOrderAndStopsAtReader() {
         assertEquals(listOf(BrowserShedStep.Caches, BrowserShedStep.SnapshotInactive,
             BrowserShedStep.TightenDiet, BrowserShedStep.Reader), BrowserGovernor.shedPlan())

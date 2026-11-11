@@ -10,6 +10,8 @@ import android.os.Environment
 import android.app.Activity
 import android.os.Handler
 import android.os.Looper
+import android.os.SystemClock
+import android.view.Choreographer
 import android.webkit.CookieManager
 import android.view.PixelCopy
 import android.webkit.WebResourceRequest
@@ -96,6 +98,7 @@ data class BrowserUiState(
     val notice: String? = null,
     val budgetCloseAction: Boolean = false,
     val error: String? = null,
+    val loadValveNotice: String? = null,
     val fullPage: Boolean = false,
     val allowJs: Boolean = true,
     val blockThirdParty: Boolean = true,
@@ -141,6 +144,9 @@ data class BrowserClickTarget(
  * Session-scoped browser state and agent backend. The WebView is owned by the sheet
  * host and attached here; the session never creates a second renderer.
  */
+private const val LOAD_VALVE_NOTICE =
+    "The phone cannot handle this project's load; the browser renderer was stopped."
+
 class BrowserSession(
     private val app: Application,
     private val models: LocalModelManager?,
@@ -159,6 +165,9 @@ class BrowserSession(
     private var readerReloaded = false
     private var readerSampleJob: kotlinx.coroutines.Job? = null
     private val paintWatchdog = PaintWatchdog()
+    private val hangValve = BrowserHangValve()
+    private var hangArmed = false
+    private var hangCallback: Choreographer.FrameCallback? = null
     private var paintWatchdogJob: kotlinx.coroutines.Job? = null
     private var pendingRestart: PendingPaintRestart? = null
     private var activeUrl: String = ""
@@ -296,18 +305,22 @@ class BrowserSession(
                 visualScreenshot = null, pageReady = false, driving = BrowserDriving.Agent,
                 agentRendererUse = false, budgetCloseAction = false)
         }
+        disarmHangValve()
         requestRendererTeardown()
         armTeardownWatchdog()
     }
 
-    fun clearNotice() { _state.update { it.copy(notice = null, error = null) } }
+    fun clearNotice() {
+        _state.update { it.copy(notice = null, error = null, loadValveNotice = null) }
+    }
 
     fun contextLine(): String {
         refreshBudget()
         val line = BrowserGovernor.contextLine(budget)
         val modes = " Browser text reads stay invisible; visual page is for the user."
-        return if (_state.value.authNotice != null) "$line$modes Identity sign-in stays in your browser."
-        else "$line$modes"
+        val valve = _state.value.loadValveNotice?.let { " $it" }.orEmpty()
+        return if (_state.value.authNotice != null) "$line$modes Identity sign-in stays in your browser.$valve"
+        else "$line$modes$valve"
     }
 
     fun refreshBudget(publish: Boolean = true, observedBytes: Long? = null) {
@@ -317,6 +330,23 @@ class BrowserSession(
         manager?.getMemoryInfo(info)
         val loaded = models?.loadedId?.value != null
         val footprint = if (loaded) models?.modelFootprintBytes?.value ?: 0L else 0L
+        val liveUrl = activeUrl.ifBlank { _state.value.url }
+        val loopback = BrowserAuthGuard.isLoopback(liveUrl)
+        if (loopback) {
+            observedBrowserBytes = 0L
+            budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint,
+                observedBrowserBytes = 0L, loopbackLive = true))
+            if (publish) {
+                _state.update {
+                    it.copy(tier = BrowserTier.Normal, capMb = 0, modelLoaded = budget.modelLoaded,
+                        budgetLine = BrowserGovernor.contextLine(budget),
+                        budgetCloseAction = false)
+                }
+            }
+            armHangValve()
+            return
+        }
+        disarmHangValve()
         if (baselineAvailMem > 0L) {
             observedBrowserBytes = BrowserObservedCost.bytes(
                 observedBrowserBytes, baselineAvailMem, info.availMem)
@@ -394,6 +424,7 @@ class BrowserSession(
     suspend fun openText(rawUrl: String, newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
             val url = BrowserUrlPolicy.validate(rawUrl)
+            activeUrl = url
             refreshBudget(publish = false)
             if (BrowserAuthGuard.isAuthSurface(url)) {
                 stateHandoff(url, "identity")
@@ -423,6 +454,7 @@ class BrowserSession(
             idleJob?.cancel(); idleJob = null
             idleArming.onActivity()
             val url = BrowserUrlPolicy.validate(rawUrl)
+            activeUrl = url
             refreshBudget(publish = true)
             if (BrowserAuthGuard.isAuthSurface(url)) {
                 stateHandoff(url, "identity")
@@ -436,7 +468,8 @@ class BrowserSession(
                 it.copy(visible = it.visible || userInitiated, rendererVisible = true,
                     pageReady = false, watchVisible = true, visualScreenshot = null,
                     url = url, mode = BrowserMode.Renderer,
-                    readerMode = false, error = null, notice = null, handoff = null, authNotice = null)
+                    readerMode = false, error = null, notice = null, handoff = null,
+                    authNotice = null, loadValveNotice = null)
             }
             val view = ensureRenderer(showWatch = !userInitiated,
                 allowUserDriving = userInitiated, agentAction = agentAction)
@@ -1063,6 +1096,7 @@ class BrowserSession(
         activeUrl = target.currentUrl.orEmpty()
         activeTitle = target.title
         unparkRenderer()
+        refreshBudget()
         _state.update { it.copy(activeWindowId = id, url = activeUrl, title = activeTitle,
             fidelity = BrowserFidelity.Reloaded, windows = windowSummaries()) }
         val view = renderer
@@ -1278,6 +1312,7 @@ class BrowserSession(
             _state.update { it.copy(url = actual, title = activeTitle,
                 mode = BrowserMode.Renderer, rendererVisible = true, pageReady = true,
                 fidelity = BrowserFidelity.Reloaded) }
+            refreshBudget()
             armPaintWatchdog(actual)
             if (!BrowserAuthGuard.isLoopback(actual)) {
                 view.evaluateJavascript("document.querySelector('input[type=password]') !== null") { raw ->
@@ -1508,6 +1543,40 @@ class BrowserSession(
         }
         _state.update { it.copy(teardownRequested = true, pageReady = false) }
         android.util.Log.d("BrowserHost", "teardownRequested published state=${teardown.state}")
+    }
+
+    private fun armHangValve() {
+        if (hangArmed) return
+        hangArmed = true
+        hangValve.reset()
+        val callback = object : Choreographer.FrameCallback {
+            override fun doFrame(frameTimeNanos: Long) {
+                if (!hangArmed) return
+                if (hangValve.onFrame(SystemClock.uptimeMillis())) {
+                    hangArmed = false
+                    hangCallback = null
+                    android.util.Log.w("BrowserPaint",
+                        "loopback hang valve tripped; stopping the renderer")
+                    _state.update {
+                        it.copy(loadValveNotice = LOAD_VALVE_NOTICE,
+                            notice = LOAD_VALVE_NOTICE,
+                            error = LOAD_VALVE_NOTICE)
+                    }
+                    requestRendererTeardown()
+                    return
+                }
+                if (hangArmed) Choreographer.getInstance().postFrameCallback(this)
+            }
+        }
+        hangCallback = callback
+        Choreographer.getInstance().postFrameCallback(callback)
+    }
+
+    private fun disarmHangValve() {
+        hangArmed = false
+        hangCallback?.let { Choreographer.getInstance().removeFrameCallback(it) }
+        hangCallback = null
+        hangValve.reset()
     }
 
     private fun armTeardownWatchdog() {
