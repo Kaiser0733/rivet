@@ -10,7 +10,8 @@ import org.junit.Test
 import org.w3c.dom.Element
 
 class NetworkSecurityConfigTest {
-    private val main = File("app/src/main")
+    private val main = listOf(File("src/main"), File("app/src/main"))
+        .first { it.isDirectory }
     private val config = File(main, "res/xml/network_security_config.xml")
     private val manifest = File(main, "AndroidManifest.xml")
 

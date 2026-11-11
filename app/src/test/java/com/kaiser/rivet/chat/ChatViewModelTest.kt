@@ -505,6 +505,7 @@ class ChatViewModelTest {
         assertEquals("hello", accepted.messages.last().text)
         viewModel.cancel()
         await(viewModel) { !it.streaming }
+        Unit
     }
 
     @Test fun prepFailureKeepsTheAcceptedBubbleAndRetryDoesNotDuplicateIt() = runBlocking {
