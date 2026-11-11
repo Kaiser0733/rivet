@@ -90,6 +90,7 @@ internal class Toolchain(context: Context) {
     val pythonTmp: File? get() = dataRoot?.let { File(it, "tmp") }
     val git: File? get() = nativeDir?.let { File(it, "libgit.so") }
     val gitRemoteHttps: File? get() = nativeDir?.let { File(it, "libgit-remote-https.so") }
+    val pip: File? get() = nativeDir?.let { File(it, "libpip.so") }
     val gitExecDir: File? get() = dataRoot?.let { File(it, "libexec/git-core") }
     val gitTemplateDir: File? get() = dataRoot?.let { File(it, "share/git-core/templates") }
     val caBundle: File? get() = dataRoot?.let { File(it, "etc/ssl/cert.pem") }
@@ -100,10 +101,12 @@ internal class Toolchain(context: Context) {
         busybox = busybox?.isFile == true,
         python = pythonExecutable?.isFile == true,
         git = git?.isFile == true,
+        writableEntryPoints = entryAudit?.violations?.map { it.name } ?: emptyList(),
     )
 
     @Volatile private var prepared = false
     @Volatile private var pythonReady = false
+    @Volatile private var entryAudit: ToolchainEntryAuditReport? = null
 
     /** True once the git binary was present and its farm/templates were prepared. */
     @Volatile var gitReady: Boolean = false
@@ -172,9 +175,21 @@ internal class Toolchain(context: Context) {
                         gitReady = false
                     }
                 }
+                val pipBinary = pip?.takeIf { it.isFile }
                 syncLinks(farm, farmTargets(BUSYBOX_APPLETS, binary?.absolutePath,
-                    python?.absolutePath, gitBinary?.absolutePath))
+                    python?.absolutePath, gitBinary?.absolutePath, pipBinary?.absolutePath))
                 if (pythonReady) preparePip()
+                entryAudit = ToolchainEntryAudit.audit(
+                    farmLinks = publishedLinks(farm),
+                    pythonBinLinks = publishedLinks(pythonBinDir),
+                    pythonBinOnPath = path().split(':').contains(pythonBinDir?.absolutePath),
+                    gitExecLinks = publishedLinks(gitExecDir),
+                    nativeDir = nativeDir?.absolutePath.orEmpty(),
+                )
+                entryAudit?.violations?.takeIf { it.isNotEmpty() }?.let { violations ->
+                    Log.e("Toolchain", "Writable user-invocable toolchain entries: " +
+                        violations.joinToString { "${it.location}/${it.name}" })
+                }
                 prepared = true
             } catch (e: CancellationException) {
                 throw e
@@ -187,7 +202,7 @@ internal class Toolchain(context: Context) {
     /** The command PATH: the farm first when it exists, today's value otherwise. */
     fun path(systemPath: String = SYSTEM_PATH): String {
         val farm = binDir ?: return systemPath
-        return commandPath(busybox, farm, systemPath, pythonExecutable, git, pythonBinDir)
+        return commandPath(busybox, farm, systemPath, pythonExecutable, git)
     }
 
     /** Toolchain environment; the exact input when neither Python nor git is ready. */
@@ -246,17 +261,15 @@ internal class Toolchain(context: Context) {
 
     /**
      * `--without-ensurepip` means the stdlib carries the ensurepip module and its bundled
-     * wheel but no `python/bin/pip` scripts. Add the PATH entry is not enough on its own;
-     * bootstrap once so bare `pip` exists. Never touches the network: the wheel is bundled.
+     * wheel but no `python/bin/pip` scripts. Bootstrap once so `python3 -m pip` works; the
+     * generated scripts stay off PATH and are never exec'd directly. The network is never
+     * touched: the wheel is bundled.
      */
     private fun preparePip() {
         val home = pythonHome ?: return
         val executable = pythonExecutable?.takeIf { it.isFile } ?: return
         val temporary = pythonTmp ?: return
-        if (File(home, "bin/pip").isFile) {
-            markPipEntryPoints(home)
-            return
-        }
+        if (File(home, "bin/pip").isFile) return
         try {
             val base = baseEnvironment(home, path(), temporary, home)
             val env = pythonEnvironment(base, home, temporary,
@@ -280,7 +293,6 @@ internal class Toolchain(context: Context) {
             } else if (process.exitValue() != 0) {
                 Log.w("Toolchain", "ensurepip failed (${process.exitValue()}): ${output.takeLast(400)}")
             }
-            markPipEntryPoints(home)
         } catch (e: CancellationException) {
             throw e
         } catch (e: Exception) {
@@ -362,19 +374,9 @@ internal fun baseEnvironment(
     "TERM=xterm-256color",
 )
 
-/** ensurepip's launchers are data files in the zip; make every pip entry point executable. */
-internal fun markPipEntryPoints(home: File): Int {
-    val bin = File(home, "bin")
-    if (!bin.isDirectory) return 0
-    return bin.listFiles().orEmpty().count { file ->
-        file.isFile && (file.name == "pip" || file.name.startsWith("pip3")) &&
-            file.setExecutable(true, false)
-    }
-}
-
 /** CPython and git scripts may arrive with the archive's mode; audit the tree's bin. */
 internal fun markToolchainExecutables(home: File): Int {
-    var changed = markPipEntryPoints(home)
+    var changed = 0
     val bin = File(home, "bin")
     if (!bin.isDirectory) return changed
     for (file in bin.listFiles().orEmpty()) {
@@ -391,24 +393,17 @@ internal data class ToolchainAvailability(
     val busybox: Boolean = false,
     val python: Boolean = false,
     val git: Boolean = false,
+    val writableEntryPoints: List<String> = emptyList(),
 ) {
     val any: Boolean get() = busybox || python || git
 }
 
 /** PATH composition, kept pure so the no-binary case is provably byte-identical. */
 internal fun commandPath(busybox: File?, farm: File, systemPath: String = SYSTEM_PATH,
-                         python: File? = null, git: File? = null,
-                         pythonBin: File? = null): String =
+                         python: File? = null, git: File? = null): String =
     if ((busybox?.isFile == true || python?.isFile == true || git?.isFile == true) &&
         farm.isDirectory) {
-        // ensurepip writes its pip/pip3 scripts next to CPython, not into the farm.
-        // Keep that directory on PATH so bare `pip` works without a shell alias.
-        val extras = buildList {
-            add(farm.absolutePath)
-            if (pythonBin?.isDirectory == true) add(pythonBin.absolutePath)
-            add(systemPath)
-        }
-        extras.joinToString(":")
+        "$farm:$systemPath"
     } else systemPath
 
 /** What one farm pass has to do, relative to the links already on disk. */
@@ -430,6 +425,7 @@ internal fun farmTargets(
     busybox: String?,
     python: String? = null,
     git: String? = null,
+    pip: String? = null,
 ): Map<String, String> {
     val targets = LinkedHashMap<String, String>()
     if (busybox != null) applets.forEach { targets[it] = busybox }
@@ -438,6 +434,10 @@ internal fun farmTargets(
         targets["python"] = python
     }
     if (git != null) targets["git"] = git
+    if (pip != null) {
+        targets["pip"] = pip
+        targets["pip3"] = pip
+    }
     return targets
 }
 
@@ -475,7 +475,19 @@ internal fun planFarm(
     target: String,
     python: String? = null,
     git: String? = null,
-): FarmPlan = planLinks(farmTargets(wanted, target, python, git), existing)
+    pip: String? = null,
+): FarmPlan = planLinks(farmTargets(wanted, target, python, git, pip), existing)
+
+/** Every published name and its current target, including real files that are not links. */
+private fun publishedLinks(root: File?): Map<String, String> {
+    if (root == null || !root.isDirectory) return emptyMap()
+    val links = LinkedHashMap<String, String>()
+    for (child in root.listFiles().orEmpty()) {
+        links[child.name] = try { Os.readlink(child.absolutePath) }
+        catch (_: Exception) { child.absolutePath }
+    }
+    return links
+}
 
 /** Applies a link plan to [root]; only links are ours to remove, other entries stay. */
 private fun syncLinks(root: File, wanted: Map<String, String>) {

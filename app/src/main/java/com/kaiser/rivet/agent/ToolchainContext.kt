@@ -17,6 +17,10 @@ internal object ToolchainContext {
         append(if (availability.python) "available" else "unavailable")
         append("; Git 2.56 ")
         append(if (availability.git) "available" else "unavailable")
+        if (availability.writableEntryPoints.isNotEmpty()) {
+            append("; TOOLCHAIN AUDIT FAILED: writable user entry points ")
+            append(availability.writableEntryPoints.joinToString(", "))
+        }
         append(". HTTP downloads use busybox wget; curl is not part of this toolchain.")
     }
 
