@@ -737,7 +737,25 @@ class ChatViewModel private constructor(
             handleGoalCommand(command)
             return
         }
-        startTurn(trimmed, retryingInterrupted = false)
+        // Acceptance is the tap: the bubble appears and the composer clears before the
+        // transcript load, SAF stat, provider snapshot or persistence can block. Prep uses
+        // this same message object for its durable copy; retries do not pass through here.
+        val accepted = AgentMessage.user(trimmed)
+        _uiState.update { state ->
+            state.copy(
+                messages = (state.messages + accepted).takeLast(100),
+                acceptedMessageCount = state.acceptedMessageCount + 1,
+                streaming = true,
+                turnStartedAt = SystemClock.elapsedRealtime(),
+                streamingText = "", streamingReasoning = "",
+                activity = "Getting ready…",
+                toolLifecycle = emptyList(), commandRunning = false,
+                error = null, errorAction = null, notice = null,
+                interruptedTurn = false,
+                lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
+            )
+        }
+        startTurn(trimmed, retryingInterrupted = false, acceptedUser = accepted)
     }
 
     private fun handleGoalCommand(command: GoalCommand) {
@@ -1266,7 +1284,8 @@ class ChatViewModel private constructor(
         }
     }
 
-    private fun startTurn(trimmed: String, retryingInterrupted: Boolean) {
+    private fun startTurn(trimmed: String, retryingInterrupted: Boolean,
+                         acceptedUser: AgentMessage? = null) {
         val wasInterrupted = _uiState.value.interruptedTurn
         val ticket = ++generation
         _uiState.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
@@ -1277,6 +1296,7 @@ class ChatViewModel private constructor(
         val previous = sendJob
         sendJob = viewModelScope.launch {
             var turnToken: String? = null
+            var acceptedPersisted = false
             try {
             previous?.join()
             turnToken = runtimeController.startTurn(::cancel)
@@ -1473,7 +1493,8 @@ class ChatViewModel private constructor(
             // request left its user message in it, and a failure after partial output also
             // left the cut-off answer, so appending the prompt again sent it twice.
             val reuseExistingTail = retryingInterrupted
-            val pendingUser = if (reuseExistingTail) emptyList() else listOf(AgentMessage.user(prompt))
+            val pendingUser = if (reuseExistingTail) emptyList()
+                else listOf(acceptedUser ?: AgentMessage.user(prompt))
             if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
                 try {
                     val reduced = context.prepare(activeMessages, force = true, reason = "storage_pressure")
@@ -1493,6 +1514,7 @@ class ChatViewModel private constructor(
             val durable = (activeMessages + initialContext(activeMessages) + pendingUser).toMutableList()
             try {
                 persistTurn(durable, interrupted = true)
+                acceptedPersisted = true
             } catch (_: AgentSessionLimitException) {
                 if (ticket == generation) {
                     _uiState.update {
@@ -1511,12 +1533,13 @@ class ChatViewModel private constructor(
             }
             _uiState.update {
                 it.copy(
-                    messages = if (reuseExistingTail) it.messages else (it.messages + durable.last()).takeLast(100),
+                    // send() already appended the accepted bubble; retries reuse the tail.
+                    messages = it.messages,
                     streaming = true,
                     error = null, errorAction = null, notice = null, unsupportedReasoning = null,
                     activity = "Working on it…",
                     lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
-                    acceptedMessageCount = if (reuseExistingTail) it.acceptedMessageCount else it.acceptedMessageCount + 1,
+                    acceptedMessageCount = it.acceptedMessageCount,
                     interruptedTurn = false,
                 )
             }
@@ -1942,6 +1965,9 @@ class ChatViewModel private constructor(
                     activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
+                if (acceptedUser != null && !acceptedPersisted) {
+                    withContext(NonCancellable) { persistAcceptedTail(acceptedUser) }
+                }
                 val live = currentRun
                 if (live != null && live.phase !in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped)) {
                     try {
@@ -2186,6 +2212,20 @@ class ChatViewModel private constructor(
                     _uiState.update { it.copy(activity = null, recoveringProjectChanges = false) }
                 }
             }
+        }
+    }
+
+    /** A pre-persist failure still leaves the accepted bubble durable for the next launch. */
+    private suspend fun persistAcceptedTail(accepted: AgentMessage) {
+        val durable = if (activeMessages.lastOrNull() == accepted) activeMessages
+            else activeMessages + accepted
+        activeMessages = durable
+        try { persistTurn(durable, interrupted = true) }
+        catch (e: CancellationException) { throw e }
+        catch (_: Exception) { }
+        _uiState.update { state ->
+            if (state.messages.lastOrNull() == accepted) state
+            else state.copy(messages = (state.messages + accepted).takeLast(100))
         }
     }
 

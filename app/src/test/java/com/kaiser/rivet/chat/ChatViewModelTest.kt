@@ -461,19 +461,19 @@ class ChatViewModelTest {
         assertEquals(1L, failed.acceptedMessageCount)
     }
 
-    @Test fun missingProviderDoesNotAcceptMessageAndOffersSettings() = runBlocking {
+    @Test fun missingProviderStillAcceptsTheMessageAndOffersSettings() = runBlocking {
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Failure("No API key stored.") },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready }
         viewModel.send("Please fix this")
         val failed = await(viewModel) { it.error != null }
-        assertEquals(0L, failed.acceptedMessageCount)
-        assertTrue(failed.messages.isEmpty())
+        assertEquals(1L, failed.acceptedMessageCount)
+        assertEquals("Please fix this", failed.messages.last().text)
         assertEquals(ChatErrorAction.OpenSettings, failed.errorAction)
     }
 
-    @Test fun stopWhilePreparingDoesNotAcceptAMessageOrStartASecondTurn() = runBlocking {
+    @Test fun stopWhilePreparingKeepsTheAcceptedMessageAndStartsNoSecondTurn() = runBlocking {
         val provider = CompletableDeferred<ProviderRuntimeResult>()
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { provider.await() },
@@ -484,8 +484,41 @@ class ChatViewModelTest {
         viewModel.send("second")
         viewModel.cancel()
         val stopped = await(viewModel) { !it.streaming && it.notice?.startsWith("Stopped") == true }
-        assertEquals(0L, stopped.acceptedMessageCount)
-        assertTrue(stopped.messages.isEmpty())
+        assertEquals(1L, stopped.acceptedMessageCount)
+        assertEquals(listOf("first"), stopped.messages.map { it.text })
+    }
+
+    @Test fun acceptanceHappensBeforeAProviderLoadThatNeverReturns() = runBlocking {
+        val provider = CompletableDeferred<ProviderRuntimeResult>()
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { provider.await() },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready }
+
+        viewModel.send("hello")
+
+        val accepted = viewModel.uiState.value
+        assertEquals(1L, accepted.acceptedMessageCount)
+        assertEquals("hello", accepted.messages.last().text)
+        viewModel.cancel()
+        await(viewModel) { !it.streaming }
+    }
+
+    @Test fun prepFailureKeepsTheAcceptedBubbleAndRetryDoesNotDuplicateIt() = runBlocking {
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Failure("No API key stored.") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready }
+
+        viewModel.send("hello")
+        val failed = await(viewModel) { !it.streaming && it.error != null }
+        assertEquals(1L, failed.acceptedMessageCount)
+        assertEquals("hello", failed.messages.last().text)
+
+        viewModel.retryFailedTurn()
+        val retried = await(viewModel) { !it.streaming && it.error != null }
+        assertEquals(1L, retried.acceptedMessageCount)
+        assertEquals(1, retried.messages.count { it.text == "hello" && it.role == com.kaiser.rivet.agent.AgentRole.User })
     }
 
     @Test
