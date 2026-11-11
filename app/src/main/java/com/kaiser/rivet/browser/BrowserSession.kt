@@ -533,7 +533,7 @@ class BrowserSession(
     }
 
     private fun armPaintWatchdog(url: String) {
-        if (!_state.value.visible) return
+        if (!_state.value.visible || _state.value.readerMode) return
         if (paintWatchdog.onPageFinished(url) != PaintWatchdog.Directive.Arm) return
         paintWatchdogJob?.cancel()
         paintWatchdogJob = scope.launch {
@@ -761,7 +761,11 @@ class BrowserSession(
         if (renderer === view) return
         renderer?.let { old ->
             android.util.Log.w("BrowserHost", "Attaching a new renderer while an old one is still attached")
-            runCatching { old.stopLoading(); old.destroy() }
+            val failure = runCatching { old.stopLoading(); old.destroy() }.exceptionOrNull()
+            if (failure != null) {
+                android.util.Log.w("BrowserHost", "Old renderer cleanup failed", failure)
+                _state.update { it.copy(error = "The previous browser view could not be closed cleanly.") }
+            }
         }
         teardown = RendererTeardown()
         rendererFailure = null
@@ -1372,9 +1376,10 @@ class BrowserSession(
         val message = rendererFailure ?: failure?.let { "The browser view could not be closed cleanly." }
         rendererFailure = null
         _state.update {
+            val combined = listOfNotNull(it.error, message).distinct().joinToString(" ")
             it.copy(teardownRequested = false, rendererVisible = false, watchVisible = false,
                 pageReady = false, mode = BrowserMode.Reader,
-                error = listOfNotNull(it.error, message).distinct().joinToString(" ").ifBlank { null })
+                error = if (combined.isBlank()) null else combined)
         }
         if (failure != null) android.util.Log.w("BrowserHost", "Renderer cleanup failed", failure)
         val restart = pendingRestart
