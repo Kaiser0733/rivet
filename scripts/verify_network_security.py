@@ -127,7 +127,7 @@ def _release_outputs(build: Path) -> tuple[Path, set[str], str | None]:
     assert resources_root.is_dir(), "release merged resources were not built"
     resources = {path.relative_to(resources_root).as_posix()
                  for path in resources_root.rglob("*") if path.is_file()}
-    configs = sorted(path for path in intermediates.rglob("network_security_config.xml")
+    configs = sorted(path for path in build.rglob("network_security_config.xml*")
                      if path.is_file() and "release" in path.parts and "debug" not in path.parts)
     return manifests[0], resources, configs[0].read_text(encoding="utf-8") if configs else None
 
