@@ -8,6 +8,18 @@ class PaintVerdictTest {
         assertEquals(PaintVerdict.Painted, PaintVerdict.decide(1200, sampled = true, nearWhiteFraction = 0.10f))
     }
 
+    @Test fun aDomScrolledFrameWithUnchangedPixelsIsStale() {
+        assertEquals(PaintVerdict.Stale,
+            PaintVerdict.decide(1200, sampled = true, nearWhiteFraction = 0.10f,
+                domScrolled = true, frameChanged = false))
+    }
+
+    @Test fun aFreshFrameAfterAScrollNudgeIsPainted() {
+        assertEquals(PaintVerdict.Painted,
+            PaintVerdict.decide(1200, sampled = true, nearWhiteFraction = 0.10f,
+                domScrolled = true, frameChanged = true))
+    }
+
     @Test fun blankPixelsWithDomPresentAreThePaintWedge() {
         assertEquals(PaintVerdict.BlankWithDom, PaintVerdict.decide(1200, sampled = true, nearWhiteFraction = 0.995f))
     }

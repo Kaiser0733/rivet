@@ -22,4 +22,11 @@ class ReaderParkTest {
         ReaderPark.apply(surface, ReaderPark.Mode.ReaderOff)
         assertEquals(listOf("visible=true", "resume"), surface.calls)
     }
+
+    @Test fun aNavigationExitUnparksAReaderPausedSurface() {
+        val surface = FakeSurface()
+        ReaderPark.apply(surface, ReaderPark.Mode.ReaderOn)
+        ReaderPark.unpark(surface)
+        assertEquals(listOf("pause", "visible=false", "visible=true", "resume"), surface.calls)
+    }
 }

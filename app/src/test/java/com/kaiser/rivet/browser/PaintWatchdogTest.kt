@@ -21,6 +21,16 @@ class PaintWatchdogTest {
             watchdog.onSample("https://example.com/a", PaintVerdict.BlankWithDom))
     }
 
+    @Test fun aStaleFrameUsesTheSameOneRestartBudgetAsABlankFrame() {
+        val watchdog = PaintWatchdog()
+        watchdog.onPageFinished("https://example.com/a")
+        assertEquals(PaintWatchdog.Directive.Restart,
+            watchdog.onSample("https://example.com/a", PaintVerdict.Stale))
+        watchdog.onPageFinished("https://example.com/a")
+        assertEquals(PaintWatchdog.Directive.Stop,
+            watchdog.onSample("https://example.com/a", PaintVerdict.Stale))
+    }
+
     @Test fun aDifferentPageGetsItsOwnSingleRestart() {
         val watchdog = PaintWatchdog()
         watchdog.onPageFinished("https://example.com/a")

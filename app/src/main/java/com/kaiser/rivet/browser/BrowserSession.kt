@@ -24,10 +24,12 @@ import com.kaiser.rivet.local.LocalModelManager
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileOutputStream
+import java.security.MessageDigest
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -182,6 +184,8 @@ class BrowserSession(
     private var periodic: kotlinx.coroutines.Job? = null
     private var teardownWatchdog: kotlinx.coroutines.Job? = null
     private var forceDestroyed: WebView? = null
+    private var paintRecoveryJob: kotlinx.coroutines.Job? = null
+    var surfaceReattacher: (() -> Unit)? = null
 
     private val _state = MutableStateFlow(BrowserUiState(
         allowJs = prefs.getBoolean("allow_js", true),
@@ -220,6 +224,7 @@ class BrowserSession(
         idleJob?.cancel(); idleJob = null
         idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
+        unparkRenderer()
         _state.update { it.copy(visible = true, readerMode = false, error = null) }
         val target = activeUrl.ifBlank { _state.value.url }
         if (target.isNotBlank() && renderer == null) {
@@ -235,12 +240,14 @@ class BrowserSession(
         idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
         if (renderer != null || _state.value.rendererVisible) {
+            unparkRenderer()
             _state.update { it.copy(visible = true, readerMode = false) }
         } else userOpen()
     }
 
     /** Closing the screen keeps the visual session alive for the watch card, then idle-expires it. */
     fun close() {
+        unparkRenderer()
         _state.update { it.copy(visible = false, readerMode = false) }
         idleArming.onHidden()
         armIdle()
@@ -283,6 +290,7 @@ class BrowserSession(
                 lastUsedAt = System.currentTimeMillis()))
         }
         saveActiveSnapshot()
+        unparkRenderer()
         _state.update {
             it.copy(visible = false, readerMode = false,
                 visualScreenshot = null, pageReady = false, driving = BrowserDriving.Agent,
@@ -423,6 +431,7 @@ class BrowserSession(
             if (newWindow || activeWindowId == null) createWindow(url, publish = userInitiated)
             activeUrl = url
             reader = null
+            unparkRenderer()
             _state.update {
                 it.copy(visible = it.visible || userInitiated, rendererVisible = true,
                     pageReady = false, watchVisible = true, visualScreenshot = null,
@@ -489,7 +498,7 @@ class BrowserSession(
         val first = document.chunks.firstOrNull()
         readerSampleJob?.cancel()
         readerSampleJob = null
-        parkRenderer(ReaderPark.Mode.ReaderOn)
+        setReaderMode(true)
         readerReloaded = false
         _state.update {
             it.copy(readerMode = true, readerText = first?.text.orEmpty(),
@@ -500,20 +509,30 @@ class BrowserSession(
     }
 
     fun hideReader() {
-        _state.update { it.copy(readerMode = false) }
-        parkRenderer(ReaderPark.Mode.ReaderOff)
-        verifyReaderPaint()
+        setReaderMode(false)
     }
 
-    private fun parkRenderer(mode: ReaderPark.Mode) {
+    /** The only writer of readerMode and the renderer pause/visibility state. */
+    private fun setReaderMode(enabled: Boolean) {
+        _state.update { it.copy(readerMode = enabled) }
         val view = renderer ?: return
-        ReaderPark.apply(object : RendererSurface {
+        val surface = object : RendererSurface {
             override fun pause() { view.onPause() }
             override fun setVisible(visible: Boolean) {
                 view.visibility = if (visible) android.view.View.VISIBLE else android.view.View.INVISIBLE
             }
             override fun resume() { view.onResume() }
-        }, mode)
+        }
+        if (enabled) {
+            ReaderPark.apply(surface, ReaderPark.Mode.ReaderOn)
+        } else {
+            ReaderPark.unpark(surface)
+            verifyReaderPaint()
+        }
+    }
+
+    private fun unparkRenderer() {
+        setReaderMode(false)
     }
 
     private fun verifyReaderPaint() {
@@ -522,7 +541,9 @@ class BrowserSession(
             kotlinx.coroutines.delay(900)
             if (_state.value.readerMode || readerReloaded) return@launch
             val verdict = samplePaint() ?: return@launch
-            if (verdict == PaintVerdict.BlankWithDom) {
+            if (verdict == PaintVerdict.Stale) {
+                recoverStalePaint(_state.value.url)
+            } else if (verdict == PaintVerdict.BlankWithDom) {
                 readerReloaded = true
                 reloadForReaderPaint()
             }
@@ -534,10 +555,39 @@ class BrowserSession(
         if (view.width <= 0 || view.height <= 0) return null
         val dom = evaluate(view, "document.body?document.body.innerText.length:0")
             .trim().trim('"').toIntOrNull() ?: 0
-        val shot = runCatching { captureScreenshot(view) }.getOrNull() ?: return PaintVerdict.Unknown
-        val bitmap = android.graphics.BitmapFactory.decodeFile(shot.path)
+        val firstShot = runCatching { captureScreenshot(view) }.getOrNull()
             ?: return PaintVerdict.Unknown
+        val firstHash = runCatching { fileHash(firstShot.path) }.getOrNull()
+        if (firstHash == null) {
+            File(firstShot.path).delete()
+            return PaintVerdict.Unknown
+        }
+        val startY = scrollY(view)
+        var scrolledY = startY
+        var secondHash = firstHash
+        if (startY != null) {
+            runCatching { evaluate(view, "window.scrollBy(0,1)") }
+            delay(80)
+            scrolledY = scrollY(view) ?: startY
+            runCatching { evaluate(view, "window.scrollBy(0,-1)") }
+            delay(80)
+            val secondShot = runCatching { captureScreenshot(view) }.getOrNull()
+            if (secondShot == null) {
+                File(firstShot.path).delete()
+                return PaintVerdict.Unknown
+            }
+            secondHash = runCatching { fileHash(secondShot.path) }.getOrNull().orEmpty()
+            File(secondShot.path).delete()
+        }
+        val bitmap = android.graphics.BitmapFactory.decodeFile(firstShot.path)
+        if (bitmap == null) {
+            File(firstShot.path).delete()
+            return PaintVerdict.Unknown
+        }
         return try {
+            if (startY != null && scrolledY != startY && secondHash.isNotEmpty() &&
+                PaintStaleness.isStale(FrameProbe(startY, firstHash),
+                    FrameProbe(scrolledY, secondHash))) return PaintVerdict.Stale
             val left = bitmap.width / 8
             val right = bitmap.width - left
             val top = bitmap.height / 4
@@ -562,8 +612,24 @@ class BrowserSession(
             PaintVerdict.decide(dom, sampled = true, nearWhiteFraction = fraction)
         } finally {
             bitmap.recycle()
-            java.io.File(shot.path).delete()
+            File(firstShot.path).delete()
         }
+    }
+
+    private suspend fun scrollY(view: WebView): Int? =
+        runCatching { evaluate(view, "window.scrollY").trim().trim('"').toInt() }.getOrNull()
+
+    private fun fileHash(path: String): String {
+        val digest = MessageDigest.getInstance("SHA-256")
+        File(path).inputStream().use { input ->
+            val bytes = ByteArray(64 * 1024)
+            while (true) {
+                val count = input.read(bytes)
+                if (count < 0) break
+                digest.update(bytes, 0, count)
+            }
+        }
+        return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
     private suspend fun reloadForReaderPaint() {
@@ -577,6 +643,40 @@ class BrowserSession(
         if (snapshot != null) loadSnapshotState(view, snapshot)
     }
 
+    private fun recoverStalePaint(url: String) {
+        if (paintRecoveryJob?.isActive == true) return
+        paintRecoveryJob = scope.launch {
+            val view = renderer ?: return@launch
+            android.util.Log.w("BrowserPaint", "stale frame detected; starting recovery ladder url=$url")
+            unparkRenderer()
+            view.onResume()
+            view.visibility = android.view.View.VISIBLE
+            view.invalidate()
+            delay(250)
+            if (samplePaint() != PaintVerdict.Stale) {
+                android.util.Log.i("BrowserPaint", "recovered-with-ladder step=resume")
+                return@launch
+            }
+            val reattach = surfaceReattacher
+            if (reattach != null) {
+                reattach.invoke()
+                delay(400)
+                if (samplePaint() != PaintVerdict.Stale) {
+                    android.util.Log.i("BrowserPaint", "recovered-with-ladder step=reattach")
+                    return@launch
+                }
+            } else {
+                android.util.Log.w("BrowserPaint", "recovery step=reattach unavailable")
+            }
+            saveActiveSnapshot()
+            pendingRestart = PendingPaintRestart(url,
+                activeWindowId?.let { windows[it] })
+            _state.update { it.copy(notice = "The page stopped updating — Rivet recreated the browser view.") }
+            android.util.Log.w("BrowserPaint", "recovered-with-ladder step=recreate")
+            requestRendererTeardown()
+        }
+    }
+
     private fun armPaintWatchdog(url: String) {
         if (!_state.value.visible || _state.value.readerMode) return
         if (paintWatchdog.onPageFinished(url) != PaintWatchdog.Directive.Arm) return
@@ -586,6 +686,10 @@ class BrowserSession(
             if (!_state.value.visible || _state.value.readerMode ||
                 _state.value.url != url || !_state.value.pageReady) return@launch
             val verdict = samplePaint() ?: return@launch
+            if (verdict == PaintVerdict.Stale) {
+                recoverStalePaint(url)
+                return@launch
+            }
             when (paintWatchdog.onSample(url, verdict)) {
                 PaintWatchdog.Directive.Restart -> restartForPaintWedge(url)
                 PaintWatchdog.Directive.Stop -> _state.update {
@@ -760,6 +864,7 @@ class BrowserSession(
     }
 
     suspend fun back(): String = actionLock.withLock {
+        unparkRenderer()
         val view = ensureRenderer()
         if (view.canGoBack()) {
             val ready = CompletableDeferred<Unit>()
@@ -953,6 +1058,7 @@ class BrowserSession(
         activeWindowId = id
         activeUrl = target.currentUrl.orEmpty()
         activeTitle = target.title
+        unparkRenderer()
         _state.update { it.copy(activeWindowId = id, url = activeUrl, title = activeTitle,
             fidelity = BrowserFidelity.Reloaded, windows = windowSummaries()) }
         val view = renderer
@@ -963,12 +1069,14 @@ class BrowserSession(
     }
 
     fun newWindow() {
+        unparkRenderer()
         val id = createWindow("about:blank")
         activeWindowId = id
         _state.update { it.copy(activeWindowId = id, windows = windowSummaries(), url = "", title = "") }
     }
 
     fun closeWindow(id: String) {
+        if (id == activeWindowId) unparkRenderer()
         windows.remove(id)
         snapshots.delete(id)
         if (activeWindowId == id) {
@@ -1242,6 +1350,7 @@ class BrowserSession(
     }
 
     private suspend fun loadForInteraction(view: WebView, url: String) {
+        if (_state.value.readerMode) unparkRenderer()
         if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
         if (view.url == activeUrl) return
         val ready = CompletableDeferred<Unit>()
@@ -1461,6 +1570,8 @@ class BrowserSession(
         readerSampleJob = null
         paintWatchdogJob?.cancel()
         paintWatchdogJob = null
+        paintRecoveryJob?.cancel()
+        paintRecoveryJob = null
         baselineOwnPss = 0L
         baselineAvailMem = 0L
         observedBrowserBytes = 0L

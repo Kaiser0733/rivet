@@ -1,6 +1,8 @@
 package com.kaiser.rivet.ui.browser
 
+import android.view.ViewGroup
 import android.webkit.WebView
+import android.widget.FrameLayout
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -12,22 +14,46 @@ import com.kaiser.rivet.browser.BrowserSession
  * The only WebView in the app. Composition removes the view before release; only
  * then does the host stop and destroy it, and only then does the session clear the
  * renderer card/visibility state.
+ *
+ * The WebView sits in a host FrameLayout so the stale-paint ladder can remove and
+ * re-add the same view, forcing a fresh surface without losing the session.
  */
 @Composable
 fun BrowserHost(session: BrowserSession, modifier: Modifier = Modifier) {
     val state by session.state.collectAsState()
     if (!state.rendererVisible || state.teardownRequested) return
     AndroidView(
-        factory = { context -> WebView(context).also { session.attach(it) } },
+        factory = { context ->
+            val frame = FrameLayout(context)
+            val web = WebView(context)
+            frame.addView(web, FrameLayout.LayoutParams(
+                ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
+            session.surfaceReattacher = {
+                val params = web.layoutParams ?: FrameLayout.LayoutParams(
+                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
+                (web.parent as? ViewGroup)?.removeView(web)
+                frame.addView(web, params)
+                web.requestLayout()
+            }
+            session.attach(web)
+            frame
+        },
         modifier = modifier,
-        onRelease = { view ->
-            session.onRendererReleased(view) {
-                try {
-                    view.stopLoading()
-                    view.destroy()
-                    null
-                } catch (error: Throwable) {
-                    error
+        onRelease = { frame ->
+            session.surfaceReattacher = null
+            val web = (0 until frame.childCount)
+                .map { frame.getChildAt(it) }
+                .filterIsInstance<WebView>()
+                .firstOrNull()
+            if (web != null) {
+                session.onRendererReleased(web) {
+                    try {
+                        web.stopLoading()
+                        web.destroy()
+                        null
+                    } catch (error: Throwable) {
+                        error
+                    }
                 }
             }
         },
