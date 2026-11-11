@@ -444,6 +444,8 @@ class BrowserSession(
         val document = if (renderer?.url == activeUrl && activeUrl.isNotBlank()) readRenderedDocument()
         else reader?.takeIf { it.url == activeUrl } ?: readerService.fetch(activeUrl)
         val first = document.chunks.firstOrNull()
+        readerSampleJob?.cancel()
+        readerSampleJob = null
         parkRenderer(ReaderPark.Mode.ReaderOn)
         readerReloaded = false
         _state.update {
@@ -538,7 +540,8 @@ class BrowserSession(
         paintWatchdogJob?.cancel()
         paintWatchdogJob = scope.launch {
             kotlinx.coroutines.delay(1_500)
-            if (!_state.value.visible || _state.value.url != url || !_state.value.pageReady) return@launch
+            if (!_state.value.visible || _state.value.readerMode ||
+                _state.value.url != url || !_state.value.pageReady) return@launch
             val verdict = samplePaint() ?: return@launch
             when (paintWatchdog.onSample(url, verdict)) {
                 PaintWatchdog.Directive.Restart -> restartForPaintWedge(url)
