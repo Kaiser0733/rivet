@@ -1387,7 +1387,9 @@ class BrowserSession(
     private suspend fun restartRenderer(restart: PendingPaintRestart) {
         runCatching {
             openVisual(restart.url, userInitiated = false, agentAction = false)
-            restart.snapshot?.let { loadSnapshotState(renderer ?: return@runCatching, it) }
+            val view = renderer
+            val snapshot = restart.snapshot
+            if (view != null && snapshot != null) loadSnapshotState(view, snapshot)
         }.onFailure {
             _state.update { state ->
                 state.copy(error = "The browser view could not restart. Close the browser to recover.")
