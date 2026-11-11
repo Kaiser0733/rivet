@@ -532,6 +532,7 @@ class AgentToolExecutor(
             if (result.memoryLimit) put("memory_limit", true)
             put("cwd", result.cwd)
             put("sync", result.sync)
+            result.vcsNote?.let { put("worktree_vcs", it) }
             result.syncPath?.let { put("sync_path", it) }
             if (result.syncSkipped.isNotEmpty()) put("sync_skipped", buildJsonArray {
                 result.syncSkipped.take(20).forEach { add(JsonPrimitive(it)) }

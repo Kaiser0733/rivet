@@ -63,6 +63,12 @@ class WorkspaceMirrorTest {
         val entry = workspace.createFile(path(value))
         provider.nodes[entry.documentId]!!.bytes.writeBytes(bytes)
     }
+    private suspend fun overwriteSource(value: String, bytes: ByteArray) {
+        val entry = workspace.stat(path(value))
+        val current = workspace.copyFileTo(path(value), ByteArrayOutputStream())
+        workspace.writeFileFrom(path(value), java.io.ByteArrayInputStream(bytes),
+            current.sha256, entry.documentId)
+    }
     private suspend fun bytes(value: String): ByteArray {
         val output = ByteArrayOutputStream()
         workspace.copyFileTo(path(value), output)
@@ -739,6 +745,53 @@ class WorkspaceMirrorTest {
         assertFalse(ready.dirty)
         assertEquals("print('terminal')", String(bytes("script.py")))
         assertFalse(mirror.hasLocalChanges())
+    }
+
+    @Test fun gitMetadataSurvivesAMaterializeAndCheckpointRestore() = runBlocking {
+        source("tracked.txt", "base".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, ".git").mkdirs()
+        File(root, ".git/HEAD").writeText("ref: refs/heads/main\n")
+        val head = File(root, ".git/HEAD").readText()
+
+        // An external SAF edit forces prepare() to rebuild current from SAF.
+        overwriteSource("tracked.txt", "new".toByteArray())
+        mirror.prepare()
+
+        assertEquals(head, File(root, ".git/HEAD").readText())
+
+        val store = TurnCheckpoint(File(files, "checkpoints"), tree.toString())
+        val checkpoint = store.begin(root)
+        File(root, "tracked.txt").writeText("after")
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        assertTrue(store.finish(checkpoint, mirror.prepare().worktree))
+        val stage = store.stageUndo(store.latest()!!, mirror.prepare().worktree)
+        mirror.installCheckpoint(stage)
+
+        assertEquals(head, File(root, ".git/HEAD").readText())
+        assertEquals("new", File(root, "tracked.txt").readText())
+    }
+
+    @Test fun aCheckpointThatPredatesTheRepoCannotDeleteIt() = runBlocking {
+        source("tracked.txt", "base".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        val store = TurnCheckpoint(File(files, "checkpoints"), tree.toString())
+        val beforeRepo = store.begin(root)
+
+        File(root, ".git").mkdirs()
+        File(root, ".git/HEAD").writeText("ref: refs/heads/main\n")
+        val head = File(root, ".git/HEAD").readText()
+        File(root, "tracked.txt").writeText("after")
+        assertEquals(MirrorSync.Ok, mirror.sync().state)
+        assertTrue(store.finish(beforeRepo, mirror.prepare().worktree))
+
+        val stage = store.stageUndo(store.latest()!!, mirror.prepare().worktree)
+        mirror.installCheckpoint(stage)
+
+        assertEquals(head, File(root, ".git/HEAD").readText())
+        assertEquals("base", File(root, "tracked.txt").readText())
     }
 
     @Test fun gitMetadataStaysLocalAndNeverLooksLikePendingWork() = runBlocking {

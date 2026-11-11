@@ -115,7 +115,7 @@ internal object AgentContext {
             put("output_pruned", true)
             put("original_bytes", result.content.toByteArray(Charsets.UTF_8).size)
             put("summary", clipped(result.summary, 180))
-            for (key in listOf("path", "sha256", "size", "exit_code", "timed_out", "sync", "sync_path",
+            for (key in listOf("path", "sha256", "size", "exit_code", "timed_out", "sync", "worktree_vcs", "sync_path",
                     "stdout_truncated", "stderr_truncated", "limited", "files_scanned", "entries_visited",
                     "bytes_scanned", "eof", "next_offset", "truncated")) {
                 val value = old?.get(key) as? JsonPrimitive ?: continue

@@ -32,6 +32,7 @@ data class RuntimeCommandResult(
     val syncPath: String? = null,
     val syncSkipped: List<String> = emptyList(),
     val syncConflicts: List<String> = emptyList(),
+    val vcsNote: String? = null,
     val error: String? = null,
     val tooManyChildren: Boolean = false,
     val memoryLimit: Boolean = false,
@@ -146,12 +147,14 @@ class RuntimeController(
                 // interrupted sync so the correlated event can be persisted.
                 return@withLock RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
                     result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
-                    "interrupted", tooManyChildren = result.tooManyChildren,
+                    "interrupted", vcsNote = worktreeVcsNote(ready.worktree),
+                    tooManyChildren = result.tooManyChildren,
                     memoryLimit = result.memoryLimit)
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
         RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
             result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
             sync.state.code, sync.path, syncSkipped = sync.skipped, syncConflicts = sync.conflicts,
+            vcsNote = worktreeVcsNote(ready.worktree),
             tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit)
     }
 

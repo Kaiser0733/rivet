@@ -64,14 +64,6 @@ private data class PartialCreate(
 
 private val emptyFile = MirrorEntry(false, 0, MessageDigest.getInstance("SHA-256").digest().toHex())
 
-// A project that becomes a git repository must not mirror its object database
-// through SAF. It is large, changes constantly, and has no user-visible copy value.
-private val VCS_DIRECTORIES = setOf(".git", ".hg", ".svn", ".jj", "_darcs")
-
-/** True for a VCS metadata path at any depth; `.gitignore` is not VCS metadata. */
-internal fun isVcsPath(path: String): Boolean =
-    path.split('/').any { it in VCS_DIRECTORIES }
-
 /** One SAF tree has one private worktree. The baseline names bytes confirmed at the last sync. */
 class WorkspaceMirror(
     context: Context,
@@ -86,6 +78,7 @@ class WorkspaceMirror(
     private val checkpointStaging = File(base, "checkpoint-stage")
     private val previous = File(base, "previous")
     private val partialCreateFile = File(current, "partial-create.json")
+    private val vcsCarry = File(base, "vcs-carry")
     private val mutex = Mutex()
     val worktree: File get() = File(current, "worktree")
     val home: File get() = File(base, "home")
@@ -292,13 +285,16 @@ class WorkspaceMirror(
             selected()
             recover()
             if (!replacement.isDirectory || Files.isSymbolicLink(replacement.toPath())) throw MirrorFailure("unsafe_entry")
+            stripVcsDirs(replacement)
             val before = baseline()
             if (localSnapshot().withoutExcluded(before.excluded) !=
                 before.entries.withoutExcluded(before.excluded)) throw MirrorFailure("mirror_dirty")
             if (safSnapshot().withoutExcluded(before.excluded) !=
                 before.entries.withoutExcluded(before.excluded)) throw MirrorFailure("conflict")
             if (!checkpointStaging.mkdirs()) throw MirrorFailure("storage")
+            var carried = 0
             try {
+                carried = WorktreeVcsCarry(vcsCarry).take(worktree)
                 Files.move(replacement.toPath(), File(checkpointStaging, "worktree").toPath(),
                     StandardCopyOption.ATOMIC_MOVE)
                 writeBaseline(checkpointStaging, before)
@@ -309,10 +305,14 @@ class WorkspaceMirror(
                     Files.move(previous.toPath(), current.toPath(), StandardCopyOption.ATOMIC_MOVE)
                     throw error
                 }
+                if (carried > 0) WorktreeVcsCarry(vcsCarry).restore(worktree)
                 if (previous.exists()) removeTree(previous)
             } catch (error: CancellationException) { throw error
             } catch (error: MirrorFailure) { throw error
             } catch (_: Exception) { throw MirrorFailure("restore_failed") }
+            finally {
+                if (carried > 0) runCatching { WorktreeVcsCarry(vcsCarry).restore(worktree) }
+            }
         }
     }
 
@@ -392,17 +392,24 @@ class WorkspaceMirror(
                 }
             }
             selected()
-            if (current.exists()) {
+            var carried = 0
+            val hadCurrent = current.exists()
+            if (hadCurrent) {
                 val local = localSnapshot()
                 val before = baseline()
                 if (!discardPending && local.withoutExcluded(before.excluded) !=
                     before.entries.withoutExcluded(before.excluded)) throw MirrorFailure("mirror_dirty")
-                Files.move(current.toPath(), previous.toPath(), StandardCopyOption.ATOMIC_MOVE)
             }
             try {
+                if (hadCurrent) {
+                    carried = WorktreeVcsCarry(vcsCarry).take(worktree)
+                    Files.move(current.toPath(), previous.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                }
                 Files.move(staging.toPath(), current.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                if (carried > 0) WorktreeVcsCarry(vcsCarry).restore(worktree)
             } catch (e: Exception) {
                 if (previous.exists()) Files.move(previous.toPath(), current.toPath(), StandardCopyOption.ATOMIC_MOVE)
+                if (carried > 0) runCatching { WorktreeVcsCarry(vcsCarry).restore(worktree) }
                 throw e
             }
             if (previous.exists()) removeTree(previous)
@@ -568,7 +575,7 @@ class WorkspaceMirror(
         // Commands share the app UID; refuse a substituted runtime directory
         // before opening metadata or removing a private tree.
         listOf(base.parentFile!!.parentFile!!, base.parentFile!!, base, current,
-            previous, staging, checkpointStaging).forEach { directory ->
+            previous, staging, checkpointStaging, vcsCarry).forEach { directory ->
             if (Files.exists(directory.toPath(), LinkOption.NOFOLLOW_LINKS) &&
                 (!Files.isDirectory(directory.toPath(), LinkOption.NOFOLLOW_LINKS) ||
                     Files.isSymbolicLink(directory.toPath()))) throw MirrorFailure("unsafe_entry")
@@ -576,6 +583,9 @@ class WorkspaceMirror(
         if (!base.isDirectory && !base.mkdirs()) throw MirrorFailure("storage")
         if (!current.exists() && previous.exists()) {
             Files.move(previous.toPath(), current.toPath(), StandardCopyOption.ATOMIC_MOVE)
+        }
+        if (vcsCarry.isDirectory && current.isDirectory) {
+            WorktreeVcsCarry(vcsCarry).restore(worktree)
         }
         val discardMarker = File(current, "discard-previous")
         val discardInstalled = Files.exists(discardMarker.toPath(), LinkOption.NOFOLLOW_LINKS)
@@ -594,6 +604,13 @@ class WorkspaceMirror(
         }
         if (discardInstalled) Files.delete(discardMarker.toPath())
         removeStaging()
+    }
+
+    private fun stripVcsDirs(root: File) {
+        for (name in VCS_DIRECTORIES) {
+            val directory = File(root, name)
+            if (Files.isDirectory(directory.toPath(), LinkOption.NOFOLLOW_LINKS)) removeTree(directory)
+        }
     }
 
     private fun removeStaging() {
