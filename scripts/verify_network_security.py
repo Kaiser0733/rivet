@@ -119,7 +119,7 @@ def _run(*args: str) -> str:
     return subprocess.check_output(args, text=True).strip()
 
 
-def _release_outputs(build: Path) -> tuple[Path, set[str], Path | None]:
+def _release_outputs(build: Path) -> tuple[Path, set[str], str | None]:
     intermediates = build / "intermediates"
     manifest_roots = [intermediates / "merged_manifest" / "release",
                       intermediates / "merged_manifests" / "release"]
@@ -130,9 +130,9 @@ def _release_outputs(build: Path) -> tuple[Path, set[str], Path | None]:
     assert resources_root.is_dir(), "release merged resources were not built"
     resources = {path.relative_to(resources_root).as_posix()
                  for path in resources_root.rglob("*") if path.is_file()}
-    configs = sorted(resources_root / path for path in resources
-                     if path.endswith("network_security_config.xml"))
-    return manifests[0], resources, configs[0] if configs else None
+    configs = sorted(path for path in resources_root.rglob("*")
+                     if path.is_file() and path.name.endswith("network_security_config.xml"))
+    return manifests[0], resources, configs[0].read_text(encoding="utf-8") if configs else None
 
 
 def main() -> None:
@@ -149,8 +149,7 @@ def main() -> None:
     config_tree = _run(str(aapt), "dump", "xmltree", str(apk), "res/xml/network_security_config.xml")
     resources_dump = _run(str(aapt), "dump", "resources", str(apk))
     verify_debug_network_security(manifest_tree, config_tree, resources, resources_dump)
-    release_manifest, release_resources, release_config = _release_outputs(build)
-    config_text = release_config.read_text(encoding="utf-8") if release_config.is_file() else None
+    release_manifest, release_resources, config_text = _release_outputs(build)
     verify_release_network_exclusion(release_manifest.read_text(encoding="utf-8"),
                                      release_resources, config_text)
     print("debug mock-provider network policy and release exclusion verified")
