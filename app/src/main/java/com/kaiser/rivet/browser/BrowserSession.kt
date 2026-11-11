@@ -948,10 +948,14 @@ class BrowserSession(
                 val ownGrowth = if (baselineOwnPss > 0L) {
                     memoryProbe.browserGrowthBytes(baselineOwnPss, sample)
                 } else 0L
+                val appPssGrowth = if (baselineOwnPss > 0L) {
+                    (sample.ownPssBytes - baselineOwnPss).coerceAtLeast(0L)
+                } else 0L
                 val currentAvail = withContext(Dispatchers.Default) {
                     availableMemBytes() ?: baselineAvailMem
                 }
-                val observed = BrowserObservedCost.bytes(ownGrowth, baselineAvailMem, currentAvail)
+                val observed = BrowserObservedCost.bytes(
+                    ownGrowth, baselineAvailMem, currentAvail, appPssGrowth)
                 refreshBudget(observedBytes = observed)
                 if (_state.value.visible) lastActivityAt = System.currentTimeMillis()
             }
