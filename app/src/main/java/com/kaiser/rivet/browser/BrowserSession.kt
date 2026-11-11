@@ -802,13 +802,9 @@ class BrowserSession(
     /** Attaches the sheet-hosted WebView. Called on the main thread. */
     fun attach(view: WebView) {
         if (renderer === view) return
-        renderer?.let { old ->
-            android.util.Log.w("BrowserHost", "Attaching a new renderer while an old one is still attached")
-            val failure = runCatching { old.stopLoading(); old.destroy() }.exceptionOrNull()
-            if (failure != null) {
-                android.util.Log.w("BrowserHost", "Old renderer cleanup failed", failure)
-                _state.update { it.copy(error = "The previous browser view could not be closed cleanly.") }
-            }
+        if (BrowserAttachPolicy.onAttach(renderer != null) == BrowserAttachAction.ReleaseFieldOnly) {
+            android.util.Log.w("BrowserHost",
+                "Replacing a renderer field; the old view's onRelease owns cleanup")
         }
         teardown = RendererTeardown()
         rendererFailure = null
