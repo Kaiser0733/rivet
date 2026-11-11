@@ -87,7 +87,7 @@ data class BrowserUiState(
     val activeWindowId: String? = null,
     val driving: BrowserDriving = BrowserDriving.Agent,
     val agentRunActive: Boolean = false,
-    val agentVisualActive: Boolean = false,
+    val agentRendererUse: Boolean = false,
     val handoff: BrowserHandoffState? = null,
     val authNotice: String? = null,
     val downloadPrompt: BrowserDownloadPrompt? = null,
@@ -99,7 +99,12 @@ data class BrowserUiState(
     val blockThirdParty: Boolean = true,
     val desktopMode: Boolean = false,
     val fidelity: BrowserFidelity? = null,
-)
+) {
+    /** Derived, never written: both the button and the banner/card read this. */
+    val agentVisualActive: Boolean
+        get() = BrowserDrivingPolicy.visualActive(
+            agentRunActive, agentRendererUse, rendererVisible && !teardownRequested)
+}
 
 data class BrowserOpenResult(
     val url: String,
@@ -197,13 +202,14 @@ class BrowserSession(
     }
 
     fun beginAgentRun() {
-        _state.update { it.copy(agentRunActive = true, driving = BrowserDriving.Agent) }
+        _state.update { it.copy(agentRunActive = true, agentRendererUse = false,
+            driving = BrowserDriving.Agent) }
     }
 
     fun endAgentRun() {
         releaseJob?.cancel()
         releaseJob = null
-        _state.update { it.copy(agentRunActive = false, agentVisualActive = false,
+        _state.update { it.copy(agentRunActive = false, agentRendererUse = false,
             driving = BrowserDriving.Agent) }
     }
 
@@ -276,9 +282,9 @@ class BrowserSession(
         }
         saveActiveSnapshot()
         _state.update {
-            it.copy(visible = false, readerMode = false, agentVisualActive = false,
+            it.copy(visible = false, readerMode = false,
                 visualScreenshot = null, pageReady = false, driving = BrowserDriving.Agent,
-                budgetCloseAction = false)
+                agentRendererUse = false, budgetCloseAction = false)
         }
         requestRendererTeardown()
     }
@@ -1214,7 +1220,7 @@ class BrowserSession(
         lastActivityAt = System.currentTimeMillis()
         _state.update { it.copy(rendererVisible = true,
             watchVisible = it.watchVisible || showWatch,
-            agentVisualActive = it.agentVisualActive || (agentAction && showWatch)) }
+            agentRendererUse = it.agentRendererUse || agentAction) }
         val existing = renderer
         if (existing != null) return existing
         val ready = CompletableDeferred<WebView>()
@@ -1422,7 +1428,7 @@ class BrowserSession(
             val combined = listOfNotNull(it.error, message).distinct().joinToString(" ")
             it.copy(teardownRequested = false, rendererVisible = false, watchVisible = false,
                 pageReady = false, mode = BrowserMode.Reader, budgetCloseAction = false,
-                error = if (combined.isBlank()) null else combined)
+                agentRendererUse = false, error = if (combined.isBlank()) null else combined)
         }
         if (failure != null) android.util.Log.w("BrowserHost", "Renderer cleanup failed", failure)
         val restart = pendingRestart

@@ -8,6 +8,11 @@ enum class BrowserDriving { Agent, User }
  * browser can hand control back and forth.
  */
 object BrowserDrivingPolicy {
+    /** The single derivation of visual activity, shared by both UI gates. */
+    fun visualActive(agentRunActive: Boolean, agentRendererUse: Boolean,
+                     rendererAlive: Boolean): Boolean =
+        agentRunActive && agentRendererUse && rendererAlive
+
     fun bannerVisible(agentRunActive: Boolean, agentVisualActive: Boolean,
                       driving: BrowserDriving): Boolean =
         agentRunActive && agentVisualActive && driving == BrowserDriving.User
