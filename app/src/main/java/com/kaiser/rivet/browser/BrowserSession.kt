@@ -73,6 +73,7 @@ data class BrowserUiState(
     val chunkAnchor: String = "",
     val needsRenderer: Boolean = false,
     val rendererVisible: Boolean = false,
+    val teardownRequested: Boolean = false,
     val pageReady: Boolean = false,
     val readerMode: Boolean = false,
     val watchVisible: Boolean = false,
@@ -151,6 +152,8 @@ class BrowserSession(
     private var activeTitle: String = ""
     private var authLimitStated = false
     private var renderer: WebView? = null
+    private var teardown = RendererTeardown()
+    private var rendererFailure: String? = null
     private var rendererReady: CompletableDeferred<WebView>? = null
     private var pageFinished: CompletableDeferred<Unit>? = null
     private var budget = BrowserGovernor.decide(BrowserMemorySignals(0))
@@ -241,12 +244,11 @@ class BrowserSession(
                 lastUsedAt = System.currentTimeMillis()))
         }
         saveActiveSnapshot()
-        destroyRenderer()
         _state.update {
-            it.copy(visible = false, readerMode = false, watchVisible = false,
-                agentVisualActive = false, visualScreenshot = null,
-                pageReady = false, driving = BrowserDriving.Agent)
+            it.copy(visible = false, readerMode = false, agentVisualActive = false,
+                visualScreenshot = null, pageReady = false, driving = BrowserDriving.Agent)
         }
+        requestRendererTeardown()
     }
 
     fun clearNotice() { _state.update { it.copy(notice = null, error = null) } }
@@ -289,9 +291,9 @@ class BrowserSession(
         }
         if (publish && !BrowserGovernor.canOpenRenderer(budget.tier, interaction = true) &&
             _state.value.rendererVisible) {
-            destroyRenderer()
+            requestRendererTeardown()
             _state.update {
-                it.copy(mode = BrowserMode.Reader, rendererVisible = false, watchVisible = false,
+                it.copy(mode = BrowserMode.Reader,
                     notice = BrowserGovernor.refusalReason(budget))
             }
         }
@@ -624,7 +626,12 @@ class BrowserSession(
     /** Attaches the sheet-hosted WebView. Called on the main thread. */
     fun attach(view: WebView) {
         if (renderer === view) return
-        renderer?.let { old -> runCatching { old.destroy() } }
+        renderer?.let { old ->
+            android.util.Log.w("BrowserHost", "Attaching a new renderer while an old one is still attached")
+            runCatching { old.stopLoading(); old.destroy() }
+        }
+        teardown = RendererTeardown()
+        rendererFailure = null
         renderer = view
         scope.launch(Dispatchers.Default) {
             baselineOwnPss = runCatching { memoryProbe.sample().ownPssBytes }.getOrDefault(0L)
@@ -655,7 +662,7 @@ class BrowserSession(
 
     fun detach(view: WebView?) {
         if (view != null && renderer !== view) return
-        destroyRenderer()
+        requestRendererTeardown()
     }
 
     fun setAllowJs(enabled: Boolean) {
@@ -697,7 +704,7 @@ class BrowserSession(
 
     /** Reader-first gets one interaction step, then the renderer is destroyed. */
     fun afterInteraction() {
-        if (budget.tier == BrowserTier.ReaderFirst) destroyRenderer()
+        if (budget.tier == BrowserTier.ReaderFirst) requestRendererTeardown()
     }
 
     fun takeControl() {
@@ -794,7 +801,7 @@ class BrowserSession(
             val active = activeWindowId
             windows.keys.filter { it != active }.forEach { windows.remove(it) }
             _state.update { it.copy(windows = windowSummaries()) }
-            if (budget.tier == BrowserTier.ReaderFirst) destroyRenderer()
+            if (budget.tier == BrowserTier.ReaderFirst) requestRendererTeardown()
         }
     }
 
@@ -998,9 +1005,8 @@ class BrowserSession(
         }
 
         override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
-            destroyRenderer()
-            _state.update { it.copy(mode = BrowserMode.Reader, rendererVisible = false,
-                error = "The page renderer stopped. Reader mode and a reload are available.") }
+            rendererFailure = "The page renderer stopped. Reader mode and a reload are available."
+            requestRendererTeardown()
             return true
         }
     }
@@ -1172,17 +1178,67 @@ class BrowserSession(
         }
     }
 
-    private fun destroyRenderer() {
-        periodic?.cancel(); periodic = null
-        val view = renderer ?: return
+    /**
+     * Session side only marks the hand-off and clears what must not keep running.
+     * The view is not touched here. BrowserHost removes it from composition, then
+     * calls onRendererReleased with the actual cleanup lambda.
+     */
+    fun requestRendererTeardown() {
+        periodic?.cancel()
+        periodic = null
+        saveActiveSnapshot()
+        if (renderer == null) {
+            finishRendererTeardown(null)
+            return
+        }
+        if (teardown.requestDetach()) {
+            _state.update { it.copy(teardownRequested = true, pageReady = false) }
+        }
+    }
+
+    /**
+     * Host side: composition has removed the view. This is the only place that may
+     * destroy it. The sequencer is advanced Released -> Destroyed around cleanup.
+     */
+    fun onRendererReleased(view: WebView, cleanup: () -> Throwable?) {
+        if (view !== renderer) {
+            // A stale AndroidView must still not leak; clean it, but do not let it
+            // clear the live session's state.
+            val failure = cleanup()
+            if (failure != null) android.util.Log.w("BrowserHost", "Stale renderer cleanup failed", failure)
+            return
+        }
+        if (teardown.state == RendererTeardown.State.Live) teardown.requestDetach()
+        val released = teardown.release()
+        if (!released) {
+            val failure = cleanup()
+            finishRendererTeardown(failure ?: IllegalStateException("renderer released out of order"))
+            return
+        }
+        val failure = cleanup()
+        if (!teardown.destroy()) {
+            finishRendererTeardown(IllegalStateException("renderer could not reach Destroyed"))
+            return
+        }
+        finishRendererTeardown(failure)
+    }
+
+    private fun finishRendererTeardown(failure: Throwable?) {
         renderer = null
         baselineOwnPss = 0L
         observedBrowserBytes = 0L
         rendererReady?.cancel()
         rendererReady = null
-        runCatching { view.stopLoading(); view.destroy() }
-        _state.update { it.copy(rendererVisible = false, watchVisible = false, pageReady = false,
-            mode = BrowserMode.Reader) }
+        periodic?.cancel()
+        periodic = null
+        val message = rendererFailure ?: failure?.let { "The browser view could not be closed cleanly." }
+        rendererFailure = null
+        _state.update {
+            it.copy(teardownRequested = false, rendererVisible = false, watchVisible = false,
+                pageReady = false, mode = BrowserMode.Reader,
+                error = listOfNotNull(it.error, message).distinct().joinToString(" ").ifBlank { null })
+        }
+        if (failure != null) android.util.Log.w("BrowserHost", "Renderer cleanup failed", failure)
     }
 
     private fun onDownloadRequested(url: String, disposition: String?, mime: String?, length: Long) {
