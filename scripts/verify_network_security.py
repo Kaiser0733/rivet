@@ -130,9 +130,9 @@ def _release_outputs(build: Path) -> tuple[Path, set[str], Path | None]:
     assert resources_root.is_dir(), "release merged resources were not built"
     resources = {path.relative_to(resources_root).as_posix()
                  for path in resources_root.rglob("*") if path.is_file()}
-    configs = [resources_root / path for path in resources
-               if path.endswith("network_security_config.xml")]
-    return manifests[0], resources, configs[0] if len(configs) == 1 else None
+    configs = sorted(resources_root / path for path in resources
+                     if path.endswith("network_security_config.xml"))
+    return manifests[0], resources, configs[0] if configs else None
 
 
 def main() -> None:
