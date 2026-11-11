@@ -29,4 +29,18 @@ class RendererTeardown {
         state = State.Destroyed
         return true
     }
+
+    /** A second Close/idle must still request composition removal. */
+    fun forceRequestDetach(): Boolean {
+        if (state == State.Destroyed) return false
+        state = State.DetachRequested
+        return true
+    }
+
+    /** A new view attached while a detach is pending supersedes the old hand-off. */
+    fun prepareAttach(): State {
+        val previous = state
+        state = State.Live
+        return previous
+    }
 }

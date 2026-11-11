@@ -180,6 +180,8 @@ class BrowserSession(
     private val idleArming = BrowserIdleArming()
     private var releaseJob: kotlinx.coroutines.Job? = null
     private var periodic: kotlinx.coroutines.Job? = null
+    private var teardownWatchdog: kotlinx.coroutines.Job? = null
+    private var forceDestroyed: WebView? = null
 
     private val _state = MutableStateFlow(BrowserUiState(
         allowJs = prefs.getBoolean("allow_js", true),
@@ -287,6 +289,7 @@ class BrowserSession(
                 agentRendererUse = false, budgetCloseAction = false)
         }
         requestRendererTeardown()
+        armTeardownWatchdog()
     }
 
     fun clearNotice() { _state.update { it.copy(notice = null, error = null) } }
@@ -806,7 +809,16 @@ class BrowserSession(
             android.util.Log.w("BrowserHost",
                 "Replacing a renderer field; the old view's onRelease owns cleanup")
         }
-        teardown = RendererTeardown()
+        val previousTeardown = teardown.prepareAttach()
+        teardownWatchdog?.cancel()
+        teardownWatchdog = null
+        forceDestroyed = null
+        if (previousTeardown != RendererTeardown.State.Live &&
+            previousTeardown != RendererTeardown.State.Destroyed) {
+            android.util.Log.w("BrowserHost",
+                "New renderer attach superseded pending teardown state=$previousTeardown")
+            _state.update { it.copy(teardownRequested = false) }
+        }
         rendererFailure = null
         renderer = view
         baselineAvailMem = availableMemBytes() ?: 0L
@@ -1370,11 +1382,34 @@ class BrowserSession(
         periodic = null
         saveActiveSnapshot()
         if (renderer == null) {
+            android.util.Log.d("BrowserHost", "teardown request with no renderer; finishing directly")
             finishRendererTeardown(null)
             return
         }
-        if (teardown.requestDetach()) {
-            _state.update { it.copy(teardownRequested = true, pageReady = false) }
+        val requested = teardown.requestDetach()
+        android.util.Log.d("BrowserHost", "requestDetach state=${teardown.state} accepted=$requested")
+        if (!requested) {
+            android.util.Log.w("BrowserHost",
+                "requestDetach refused in state=${teardown.state}; forcing teardownRequested")
+            teardown.forceRequestDetach()
+        }
+        _state.update { it.copy(teardownRequested = true, pageReady = false) }
+        android.util.Log.d("BrowserHost", "teardownRequested published state=${teardown.state}")
+    }
+
+    private fun armTeardownWatchdog() {
+        teardownWatchdog?.cancel()
+        val held = renderer ?: return
+        teardownWatchdog = scope.launch {
+            kotlinx.coroutines.delay(2_000)
+            if (renderer !== held || !_state.value.teardownRequested) return@launch
+            android.util.Log.w("BrowserHost",
+                "Renderer did not leave composition within 2s; destroying held view directly")
+            (held.parent as? android.view.ViewGroup)?.removeView(held)
+            forceDestroyed = held
+            runCatching { held.stopLoading(); held.destroy() }
+                .onFailure { android.util.Log.w("BrowserHost", "Direct held-view destroy failed", it) }
+            finishRendererTeardown(null)
         }
     }
 
@@ -1383,29 +1418,44 @@ class BrowserSession(
      * destroy it. The sequencer is advanced Released -> Destroyed around cleanup.
      */
     fun onRendererReleased(view: WebView, cleanup: () -> Throwable?) {
+        android.util.Log.d("BrowserHost", "onRelease entry state=${teardown.state} stale=${view !== renderer}")
+        if (view === forceDestroyed) {
+            forceDestroyed = null
+            android.util.Log.d("BrowserHost", "onRelease after direct destroy; cleanup already performed")
+            return
+        }
         if (view !== renderer) {
             // A stale AndroidView must still not leak; clean it, but do not let it
             // clear the live session's state.
             val failure = cleanup()
+            android.util.Log.d("BrowserHost",
+                "onRelease stale branch cleanup=${failure == null}")
             if (failure != null) android.util.Log.w("BrowserHost", "Stale renderer cleanup failed", failure)
             return
         }
         if (teardown.state == RendererTeardown.State.Live) teardown.requestDetach()
         val released = teardown.release()
+        android.util.Log.d("BrowserHost", "onRelease release accepted=$released state=${teardown.state}")
         if (!released) {
             val failure = cleanup()
+            android.util.Log.d("BrowserHost", "onRelease out-of-order cleanup=${failure == null}")
             finishRendererTeardown(failure ?: IllegalStateException("renderer released out of order"))
             return
         }
         val failure = cleanup()
+        android.util.Log.d("BrowserHost", "onRelease cleanup=${failure == null}")
         if (!teardown.destroy()) {
             finishRendererTeardown(IllegalStateException("renderer could not reach Destroyed"))
             return
         }
+        android.util.Log.d("BrowserHost", "onRelease destroy reached")
         finishRendererTeardown(failure)
     }
 
     private fun finishRendererTeardown(failure: Throwable?) {
+        teardownWatchdog?.cancel()
+        teardownWatchdog = null
+        android.util.Log.d("BrowserHost", "finishRendererTeardown failure=${failure != null}")
         renderer = null
         readerSampleJob?.cancel()
         readerSampleJob = null

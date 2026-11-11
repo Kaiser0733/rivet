@@ -23,6 +23,32 @@ class RendererTeardownTest {
         assertEquals(RendererTeardown.State.Destroyed, teardown.state)
     }
 
+    @Test fun aSecondTeardownRequestStillForcesAPendingDetach() {
+        val requested = RendererTeardown()
+        requested.requestDetach()
+        assertEquals(RendererTeardown.State.DetachRequested, requested.state)
+        // The session must publish teardownRequested even when requestDetach is false.
+        assertTrue(requested.forceRequestDetach())
+        assertEquals(RendererTeardown.State.DetachRequested, requested.state)
+
+        val released = RendererTeardown()
+        released.requestDetach()
+        released.release()
+        assertEquals(RendererTeardown.State.Released, released.state)
+        assertTrue(released.forceRequestDetach())
+        assertEquals(RendererTeardown.State.DetachRequested, released.state)
+    }
+
+    @Test fun attachingANewViewExplicitlySupersedesAPendingDetach() {
+        val pending = RendererTeardown()
+        pending.requestDetach()
+        assertEquals(RendererTeardown.State.DetachRequested, pending.prepareAttach())
+        assertEquals(RendererTeardown.State.Live, pending.state)
+        assertTrue("a superseded detach must not look pending", pending.requestDetach())
+        assertEquals(RendererTeardown.State.DetachRequested, pending.prepareAttach())
+        assertEquals(RendererTeardown.State.Live, pending.state)
+    }
+
     @Test fun detachAndReleaseAreIdempotentAndOutOfOrderCallsAreRefused() {
         val teardown = RendererTeardown()
         assertFalse(teardown.release())
