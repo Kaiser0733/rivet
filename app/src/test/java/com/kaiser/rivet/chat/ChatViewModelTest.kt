@@ -1648,8 +1648,8 @@ class ChatViewModelTest {
             AgentResponse(text = "Done"),
         ))
         val first = fixture.viewModel.uiState.value.currentSessionId!!
-        val other = fixture.sessions.create(fixture.tree.toString()).id!!
         val row = createFileTurn(fixture.viewModel)
+        val other = fixture.sessions.create(fixture.tree.toString()).id!!
 
         fixture.viewModel.resumeSession(other)
         val otherState = await(fixture.viewModel) { it.currentSessionId == other }
@@ -1666,8 +1666,8 @@ class ChatViewModelTest {
             AgentResponse(text = "Done"),
         ))
         val first = fixture.viewModel.uiState.value.currentSessionId!!
-        val other = fixture.sessions.create(fixture.tree.toString()).id!!
         val row = createFileTurn(fixture.viewModel)
+        val other = fixture.sessions.create(fixture.tree.toString()).id!!
         assertEquals(listOf("A.kt"), row.lastTurnFiles)
 
         fixture.viewModel.dismissUndoBar()
