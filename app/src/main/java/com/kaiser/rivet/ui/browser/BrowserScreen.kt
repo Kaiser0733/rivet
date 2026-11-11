@@ -58,6 +58,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.browser.BrowserDriving
+import com.kaiser.rivet.browser.BrowserFailure
 import com.kaiser.rivet.browser.BrowserSession
 import com.kaiser.rivet.browser.BrowserTier
 import com.kaiser.rivet.browser.ReaderBlock
@@ -134,7 +135,11 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                     )
                     TextButton(onClick = {
                         if (address.isNotBlank()) scope.launch {
-                            runCatching { session.openVisual(address, userInitiated = true) }
+                            try {
+                                session.openVisual(address, userInitiated = true)
+                            } catch (error: BrowserFailure) {
+                                session.showError(error.message)
+                            }
                         }
                     }) { Text("Go") }
                     Box {
@@ -209,8 +214,14 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                     }
                 }
             }
-            state.error?.let { Text(it, Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                color = MaterialTheme.colorScheme.error) }
+            state.error?.let { error ->
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Text(error, Modifier.weight(1f), color = MaterialTheme.colorScheme.error,
+                        style = MaterialTheme.typography.bodySmall)
+                    TextButton(onClick = onCloseSession) { Text("Close browser") }
+                }
+            }
             state.notice?.let { Text(it, Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }

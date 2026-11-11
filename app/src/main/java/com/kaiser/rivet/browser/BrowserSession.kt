@@ -150,6 +150,9 @@ class BrowserSession(
     private var reader: ReaderDocument? = null
     private var readerReloaded = false
     private var readerSampleJob: kotlinx.coroutines.Job? = null
+    private val paintWatchdog = PaintWatchdog()
+    private var paintWatchdogJob: kotlinx.coroutines.Job? = null
+    private var pendingRestart: PendingPaintRestart? = null
     private var activeUrl: String = ""
     private var activeTitle: String = ""
     private var authLimitStated = false
@@ -528,6 +531,40 @@ class BrowserSession(
         withTimeoutOrNull(10_000) { ready.await() }
         if (snapshot != null) loadSnapshotState(view, snapshot)
     }
+
+    private fun armPaintWatchdog(url: String) {
+        if (!_state.value.visible) return
+        if (paintWatchdog.onPageFinished(url) != PaintWatchdog.Directive.Arm) return
+        paintWatchdogJob?.cancel()
+        paintWatchdogJob = scope.launch {
+            kotlinx.coroutines.delay(1_500)
+            if (!_state.value.visible || _state.value.url != url || !_state.value.pageReady) return@launch
+            val verdict = samplePaint() ?: return@launch
+            when (paintWatchdog.onSample(url, verdict)) {
+                PaintWatchdog.Directive.Restart -> restartForPaintWedge(url)
+                PaintWatchdog.Directive.Stop -> _state.update {
+                    it.copy(error = "The page stopped rendering. Close the browser to recover.")
+                }
+                else -> Unit
+            }
+        }
+    }
+
+    private fun restartForPaintWedge(url: String) {
+        if (pendingRestart != null) return
+        saveActiveSnapshot()
+        pendingRestart = PendingPaintRestart(url,
+            activeWindowId?.let { windows[it] })
+        _state.update { it.copy(notice = "The page stopped rendering — Rivet restarted the browser view.",
+            error = null) }
+        requestRendererTeardown()
+    }
+
+    fun showError(message: String) {
+        _state.update { it.copy(error = message) }
+    }
+
+    private data class PendingPaintRestart(val url: String, val snapshot: BrowserSnapshot?)
 
     private suspend fun readRenderedDocument(): ReaderDocument {
         val view = renderer ?: throw BrowserFailure("browser_renderer_unavailable",
@@ -1069,6 +1106,7 @@ class BrowserSession(
             _state.update { it.copy(url = actual, title = activeTitle,
                 mode = BrowserMode.Renderer, rendererVisible = true, pageReady = true,
                 fidelity = BrowserFidelity.Reloaded) }
+            armPaintWatchdog(actual)
             if (!BrowserAuthGuard.isLoopback(actual)) {
                 view.evaluateJavascript("document.querySelector('input[type=password]') !== null") { raw ->
                     if (raw.trim('"') == "true") stateHandoff(actual, "sign-in-wall")
@@ -1323,6 +1361,8 @@ class BrowserSession(
         renderer = null
         readerSampleJob?.cancel()
         readerSampleJob = null
+        paintWatchdogJob?.cancel()
+        paintWatchdogJob = null
         baselineOwnPss = 0L
         observedBrowserBytes = 0L
         rendererReady?.cancel()
@@ -1337,6 +1377,22 @@ class BrowserSession(
                 error = listOfNotNull(it.error, message).distinct().joinToString(" ").ifBlank { null })
         }
         if (failure != null) android.util.Log.w("BrowserHost", "Renderer cleanup failed", failure)
+        val restart = pendingRestart
+        pendingRestart = null
+        if (restart != null && failure == null) {
+            scope.launch { restartRenderer(restart) }
+        }
+    }
+
+    private suspend fun restartRenderer(restart: PendingPaintRestart) {
+        runCatching {
+            openVisual(restart.url, userInitiated = false, agentAction = false)
+            restart.snapshot?.let { loadSnapshotState(renderer ?: return@runCatching, it) }
+        }.onFailure {
+            _state.update { state ->
+                state.copy(error = "The browser view could not restart. Close the browser to recover.")
+            }
+        }
     }
 
     private fun onDownloadRequested(url: String, disposition: String?, mime: String?, length: Long) {
