@@ -112,7 +112,7 @@ object BrowserGovernor {
             BrowserTier.NoRenderer -> "reader-only"
         }
         val suffix = if (budget.modelLoaded) " (local model loaded)" else ""
-        return "Browser: $tier, ${budget.capMb}MB cap$suffix."
+        return "Browser: $tier, ${budget.observedMb}MB used, ${budget.capMb}MB cap$suffix."
     }
 
     fun refusalReason(budget: BrowserBudget): String = when (budget.tier) {

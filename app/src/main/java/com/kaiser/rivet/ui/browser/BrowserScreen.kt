@@ -224,6 +224,13 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             }
             state.notice?.let { Text(it, Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            if (state.budgetCloseAction) {
+                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Spacer(Modifier.weight(1f))
+                    TextButton(onClick = onCloseSession) { Text("Close browser") }
+                }
+            }
         }
 
         Surface(Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding(),

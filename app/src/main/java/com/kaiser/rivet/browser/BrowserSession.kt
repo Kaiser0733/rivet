@@ -92,6 +92,7 @@ data class BrowserUiState(
     val authNotice: String? = null,
     val downloadPrompt: BrowserDownloadPrompt? = null,
     val notice: String? = null,
+    val budgetCloseAction: Boolean = false,
     val error: String? = null,
     val fullPage: Boolean = false,
     val allowJs: Boolean = true,
@@ -167,6 +168,7 @@ class BrowserSession(
     private var userControlAt = 0L
     private val memoryProbe = BrowserMemoryProbe()
     private var baselineOwnPss = 0L
+    private var baselineAvailMem = 0L
     private var observedBrowserBytes = 0L
     private var elementRefs: List<BrowserElementRef> = emptyList()
     private var idleJob: kotlinx.coroutines.Job? = null
@@ -275,7 +277,8 @@ class BrowserSession(
         saveActiveSnapshot()
         _state.update {
             it.copy(visible = false, readerMode = false, agentVisualActive = false,
-                visualScreenshot = null, pageReady = false, driving = BrowserDriving.Agent)
+                visualScreenshot = null, pageReady = false, driving = BrowserDriving.Agent,
+                budgetCloseAction = false)
         }
         requestRendererTeardown()
     }
@@ -297,35 +300,66 @@ class BrowserSession(
         manager?.getMemoryInfo(info)
         val loaded = models?.loadedId?.value != null
         val footprint = if (loaded) models?.modelFootprintBytes?.value ?: 0L else 0L
+        if (baselineAvailMem > 0L) {
+            observedBrowserBytes = BrowserObservedCost.bytes(
+                observedBrowserBytes, baselineAvailMem, info.availMem)
+        }
         val previousTier = budget.tier
         budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint,
             observedBrowserBytes = observedBrowserBytes))
         if (publish) {
-            if (budget.tier.ordinal > previousTier.ordinal) {
-                if (budget.tier.ordinal >= BrowserTier.StrictDiet.ordinal) {
-                    val wasFullPage = _state.value.fullPage
-                    _state.update { it.copy(fullPage = false) }
-                    if (wasFullPage) renderer?.reload()
-                }
-                if (budget.tier.ordinal >= BrowserTier.ReaderFirst.ordinal) unloadInactiveWindows()
-                _state.update {
-                    it.copy(notice = "Browser memory: ${budget.observedMb}MB used; " +
-                        "${budget.tier.name.lowercase()} mode.")
+            val visible = _state.value.visible
+            val actions = if (_state.value.rendererVisible) {
+                BrowserShedLadder.actions(previousTier, budget.tier, visible)
+            } else emptyList()
+            val announcements = mutableListOf<String>()
+            actions.forEach { action ->
+                when (action) {
+                    BrowserShedAction.TightenDiet -> {
+                        _state.update { it.copy(fullPage = false) }
+                        // Reload so the already-loaded page actually gets placeholders.
+                        renderer?.reload()
+                        announcements += "diet tightened"
+                    }
+                    BrowserShedAction.UnloadFarthestWindow -> {
+                        unloadInactiveWindows()
+                        announcements += "an inactive window was unloaded"
+                    }
+                    BrowserShedAction.ReaderFirstMessage ->
+                        announcements += "Browser is over its memory budget — switched to reader-first."
+                    BrowserShedAction.ShowBudgetCloseAction ->
+                        announcements += "Browser is over its memory budget — close the browser to free memory."
+                    BrowserShedAction.DestroyHiddenRenderer -> requestRendererTeardown()
                 }
             }
+            var budgetAction = false
+            if (budget.tier == BrowserTier.NoRenderer && _state.value.rendererVisible && visible) {
+                budgetAction = true
+                if (announcements.none { it.contains("close the browser") }) {
+                    announcements += "Browser is over its memory budget — close the browser to free memory."
+                }
+            }
+            if (budget.tier != BrowserTier.NoRenderer) budgetAction = false
+            val prefix = "Browser memory: ${budget.observedMb}MB used."
             _state.update {
                 it.copy(tier = budget.tier, capMb = budget.capMb, modelLoaded = budget.modelLoaded,
-                    budgetLine = BrowserGovernor.contextLine(budget))
+                    budgetLine = BrowserGovernor.contextLine(budget),
+                    budgetCloseAction = budgetAction,
+                    notice = if (announcements.isEmpty()) it.notice
+                    else (listOf(prefix) + announcements).joinToString(" "))
             }
         }
         if (publish && !BrowserGovernor.canOpenRenderer(budget.tier, interaction = true) &&
-            _state.value.rendererVisible) {
+            _state.value.rendererVisible && !_state.value.visible) {
             requestRendererTeardown()
-            _state.update {
-                it.copy(mode = BrowserMode.Reader,
-                    notice = BrowserGovernor.refusalReason(budget))
-            }
         }
+    }
+
+    private fun availableMemBytes(): Long? {
+        val manager = app.getSystemService(android.app.ActivityManager::class.java) ?: return null
+        val info = android.app.ActivityManager.MemoryInfo()
+        manager.getMemoryInfo(info)
+        return info.availMem
     }
 
     private fun unloadInactiveWindows() {
@@ -773,6 +807,7 @@ class BrowserSession(
         teardown = RendererTeardown()
         rendererFailure = null
         renderer = view
+        baselineAvailMem = availableMemBytes() ?: 0L
         scope.launch(Dispatchers.Default) {
             baselineOwnPss = runCatching { memoryProbe.sample().ownPssBytes }.getOrDefault(0L)
         }
@@ -791,9 +826,13 @@ class BrowserSession(
             while (true) {
                 kotlinx.coroutines.delay(5_000)
                 val sample = withContext(Dispatchers.Default) { memoryProbe.sample() }
-                val observed = if (baselineOwnPss > 0L) {
+                val ownGrowth = if (baselineOwnPss > 0L) {
                     memoryProbe.browserGrowthBytes(baselineOwnPss, sample)
                 } else 0L
+                val currentAvail = withContext(Dispatchers.Default) {
+                    availableMemBytes() ?: baselineAvailMem
+                }
+                val observed = BrowserObservedCost.bytes(ownGrowth, baselineAvailMem, currentAvail)
                 refreshBudget(observedBytes = observed)
                 if (_state.value.visible) lastActivityAt = System.currentTimeMillis()
             }
@@ -1371,6 +1410,7 @@ class BrowserSession(
         paintWatchdogJob?.cancel()
         paintWatchdogJob = null
         baselineOwnPss = 0L
+        baselineAvailMem = 0L
         observedBrowserBytes = 0L
         rendererReady?.cancel()
         rendererReady = null
@@ -1381,7 +1421,7 @@ class BrowserSession(
         _state.update {
             val combined = listOfNotNull(it.error, message).distinct().joinToString(" ")
             it.copy(teardownRequested = false, rendererVisible = false, watchVisible = false,
-                pageReady = false, mode = BrowserMode.Reader,
+                pageReady = false, mode = BrowserMode.Reader, budgetCloseAction = false,
                 error = if (combined.isBlank()) null else combined)
         }
         if (failure != null) android.util.Log.w("BrowserHost", "Renderer cleanup failed", failure)

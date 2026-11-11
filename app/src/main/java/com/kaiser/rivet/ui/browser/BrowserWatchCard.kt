@@ -56,6 +56,10 @@ fun BrowserWatchCard(state: BrowserUiState, onWatch: () -> Unit, modifier: Modif
                     Text(host, style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
+                state.notice?.let {
+                    Text(it, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2)
+                }
             }
             Button(onClick = onWatch) { Text("Watch") }
         }
