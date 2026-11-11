@@ -148,6 +148,8 @@ class BrowserSession(
     }
     private var activeWindowId: String? = null
     private var reader: ReaderDocument? = null
+    private var readerReloaded = false
+    private var readerSampleJob: kotlinx.coroutines.Job? = null
     private var activeUrl: String = ""
     private var activeTitle: String = ""
     private var authLimitStated = false
@@ -258,6 +260,8 @@ class BrowserSession(
         releaseJob = null
         idleJob?.cancel()
         idleJob = null
+        readerSampleJob?.cancel()
+        readerSampleJob = null
         idleArming.onActivity()
         val id = activeWindowId
         val current = id?.let { windows[it] }
@@ -437,6 +441,8 @@ class BrowserSession(
         val document = if (renderer?.url == activeUrl && activeUrl.isNotBlank()) readRenderedDocument()
         else reader?.takeIf { it.url == activeUrl } ?: readerService.fetch(activeUrl)
         val first = document.chunks.firstOrNull()
+        parkRenderer(ReaderPark.Mode.ReaderOn)
+        readerReloaded = false
         _state.update {
             it.copy(readerMode = true, readerText = first?.text.orEmpty(),
                 chunkIndex = 0, chunkCount = document.chunks.size,
@@ -447,13 +453,80 @@ class BrowserSession(
 
     fun hideReader() {
         _state.update { it.copy(readerMode = false) }
-        // Removing the opaque Compose reader must repaint the existing WebView surface.
-        renderer?.let {
-            it.visibility = android.view.View.VISIBLE
-            it.requestLayout()
-            it.invalidate()
-            it.onResume()
+        parkRenderer(ReaderPark.Mode.ReaderOff)
+        verifyReaderPaint()
+    }
+
+    private fun parkRenderer(mode: ReaderPark.Mode) {
+        val view = renderer ?: return
+        ReaderPark.apply(object : RendererSurface {
+            override fun pause() { view.onPause() }
+            override fun setVisible(visible: Boolean) {
+                view.visibility = if (visible) android.view.View.VISIBLE else android.view.View.INVISIBLE
+            }
+            override fun resume() { view.onResume() }
+        }, mode)
+    }
+
+    private fun verifyReaderPaint() {
+        readerSampleJob?.cancel()
+        readerSampleJob = scope.launch {
+            kotlinx.coroutines.delay(900)
+            if (_state.value.readerMode || readerReloaded) return@launch
+            val verdict = samplePaint() ?: return@launch
+            if (verdict == PaintVerdict.BlankWithDom) {
+                readerReloaded = true
+                reloadForReaderPaint()
+            }
         }
+    }
+
+    private suspend fun samplePaint(): PaintVerdict? {
+        val view = renderer ?: return null
+        if (view.width <= 0 || view.height <= 0) return null
+        val dom = evaluate(view, "document.body?document.body.innerText.length:0")
+            .trim().trim('"').toIntOrNull() ?: 0
+        val shot = runCatching { captureScreenshot(view) }.getOrNull() ?: return PaintVerdict.Unknown
+        val bitmap = android.graphics.BitmapFactory.decodeFile(shot.path)
+            ?: return PaintVerdict.Unknown
+        return try {
+            val left = bitmap.width / 8
+            val right = bitmap.width - left
+            val top = bitmap.height / 4
+            val bottom = bitmap.height - bitmap.height / 8
+            var total = 0
+            var nearWhite = 0
+            var y = top.coerceAtLeast(0)
+            while (y < bottom) {
+                var x = left.coerceAtLeast(0)
+                while (x < right) {
+                    val color = bitmap.getPixel(x, y)
+                    val r = android.graphics.Color.red(color)
+                    val g = android.graphics.Color.green(color)
+                    val b = android.graphics.Color.blue(color)
+                    if (r >= 245 && g >= 245 && b >= 245) nearWhite++
+                    total++
+                    x += 8
+                }
+                y += 8
+            }
+            val fraction = if (total == 0) 0f else nearWhite.toFloat() / total
+            PaintVerdict.decide(dom, sampled = true, nearWhiteFraction = fraction)
+        } finally {
+            bitmap.recycle()
+            java.io.File(shot.path).delete()
+        }
+    }
+
+    private suspend fun reloadForReaderPaint() {
+        val view = renderer ?: return
+        val snapshot = activeWindowId?.let { windows[it] }
+        _state.update { it.copy(pageReady = false, notice = "Page reloaded to restore the view.") }
+        val ready = CompletableDeferred<Unit>()
+        pageFinished = ready
+        withContext(Dispatchers.Main) { view.loadUrl(activeUrl) }
+        withTimeoutOrNull(10_000) { ready.await() }
+        if (snapshot != null) loadSnapshotState(view, snapshot)
     }
 
     private suspend fun readRenderedDocument(): ReaderDocument {
@@ -1248,6 +1321,8 @@ class BrowserSession(
 
     private fun finishRendererTeardown(failure: Throwable?) {
         renderer = null
+        readerSampleJob?.cancel()
+        readerSampleJob = null
         baselineOwnPss = 0L
         observedBrowserBytes = 0L
         rendererReady?.cancel()
