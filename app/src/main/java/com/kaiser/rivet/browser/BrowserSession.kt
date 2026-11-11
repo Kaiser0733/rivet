@@ -165,6 +165,7 @@ class BrowserSession(
     private var observedBrowserBytes = 0L
     private var elementRefs: List<BrowserElementRef> = emptyList()
     private var idleJob: kotlinx.coroutines.Job? = null
+    private val idleArming = BrowserIdleArming()
     private var releaseJob: kotlinx.coroutines.Job? = null
     private var periodic: kotlinx.coroutines.Job? = null
 
@@ -202,6 +203,7 @@ class BrowserSession(
     /** Human open: always the full-screen visual browser, never the reader face. */
     fun userOpen() {
         idleJob?.cancel(); idleJob = null
+        idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
         _state.update { it.copy(visible = true, readerMode = false, error = null) }
         val target = activeUrl.ifBlank { _state.value.url }
@@ -215,6 +217,7 @@ class BrowserSession(
     /** Watch an existing AI visual session without reloading it. */
     fun watch() {
         idleJob?.cancel(); idleJob = null
+        idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
         if (renderer != null || _state.value.rendererVisible) {
             _state.update { it.copy(visible = true, readerMode = false) }
@@ -224,6 +227,24 @@ class BrowserSession(
     /** Closing the screen keeps the visual session alive for the watch card, then idle-expires it. */
     fun close() {
         _state.update { it.copy(visible = false, readerMode = false) }
+        idleArming.onHidden()
+        armIdle()
+    }
+
+    /** MainActivity.onStop: the same three-minute clock, not a second timer. */
+    fun onAppBackground() {
+        if (idleArming.onBackground(renderer != null || _state.value.rendererVisible)) armIdle()
+    }
+
+    /** MainActivity.onStart: returning to the app disarms the background clock. */
+    fun onAppForeground() {
+        if (idleArming.onForeground()) {
+            idleJob?.cancel()
+            idleJob = null
+        }
+    }
+
+    private fun armIdle() {
         idleJob?.cancel()
         idleJob = scope.launch {
             kotlinx.coroutines.delay(BrowserIdleTimer.IDLE_MS)
@@ -237,6 +258,7 @@ class BrowserSession(
         releaseJob = null
         idleJob?.cancel()
         idleJob = null
+        idleArming.onActivity()
         val id = activeWindowId
         val current = id?.let { windows[it] }
         if (id != null && current != null) {
@@ -341,6 +363,7 @@ class BrowserSession(
                            agentAction: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
             idleJob?.cancel(); idleJob = null
+            idleArming.onActivity()
             val url = BrowserUrlPolicy.validate(rawUrl)
             refreshBudget(publish = true)
             if (BrowserAuthGuard.isAuthSurface(url)) {

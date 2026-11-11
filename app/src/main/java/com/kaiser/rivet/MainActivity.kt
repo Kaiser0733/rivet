@@ -15,6 +15,7 @@ import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 
 class MainActivity : ComponentActivity() {
+    private lateinit var chatViewModel: ChatViewModel
     private val processNavigationRequest = MutableStateFlow(0)
     private val sharedZipRequest = MutableStateFlow<android.net.Uri?>(null)
 
@@ -39,7 +40,7 @@ class MainActivity : ComponentActivity() {
         // AGP 8.x has no BuildConfig version field by default; the package
         // manager is the source of truth for the installed version.
         val versionName = packageManager.getPackageInfo(packageName, 0).versionName ?: ""
-        val chatViewModel = ViewModelProvider(this)[ChatViewModel::class.java]
+        chatViewModel = ViewModelProvider(this)[ChatViewModel::class.java]
         val providersViewModel = ViewModelProvider(this)[ProvidersViewModel::class.java]
         val modelsViewModel = ViewModelProvider(this)[ModelsViewModel::class.java]
         setContent {
@@ -49,6 +50,16 @@ class MainActivity : ComponentActivity() {
                 sharedZip = sharedZip,
                 onSharedZipConsumed = { sharedZipRequest.value = null })
         }
+    }
+
+    override fun onStop() {
+        super.onStop()
+        if (::chatViewModel.isInitialized) chatViewModel.browser.onAppBackground()
+    }
+
+    override fun onStart() {
+        super.onStart()
+        if (::chatViewModel.isInitialized) chatViewModel.browser.onAppForeground()
     }
 
     override fun onNewIntent(intent: android.content.Intent) {
