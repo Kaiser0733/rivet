@@ -73,34 +73,49 @@ class NetworkSecurityTest(unittest.TestCase):
                 DEBUG_RESOURCES,
             )
 
-    def test_release_outputs_exclude_debug_network_configuration(self):
+    def test_release_requires_the_loopback_network_config(self):
         release_manifest = """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-            <application />
+            <application android:networkSecurityConfig="@xml/network_security_config" />
         </manifest>"""
-        verify_release_network_exclusion(release_manifest, set())
+        config = """<network-security-config>
+            <base-config cleartextTrafficPermitted="false" />
+            <domain-config cleartextTrafficPermitted="true">
+                <domain>127.0.0.1</domain><domain>localhost</domain><domain>::1</domain>
+            </domain-config>
+        </network-security-config>"""
+        verify_release_network_exclusion(
+            release_manifest, {"res/xml/network_security_config.xml"}, config
+        )
 
-    def test_release_manifest_or_resources_cannot_reference_debug_config(self):
+    def test_release_rejects_missing_or_widened_network_config(self):
         release_manifest = """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
             <application android:networkSecurityConfig="@xml/network_security_config" />
         </manifest>"""
         with self.assertRaisesRegex(AssertionError, "release manifest"):
             verify_release_network_exclusion(
-                release_manifest, {"res/xml/network_security_config.xml"}
+                """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
+                    <application />
+                </manifest>""",
+                {"res/xml/network_security_config.xml"}, None
             )
 
-        clean_manifest = """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-            <application />
-        </manifest>"""
         with self.assertRaisesRegex(AssertionError, "release resources"):
-            verify_release_network_exclusion(
-                clean_manifest, {"res/xml/network_security_config.xml"}
-            )
+            verify_release_network_exclusion(release_manifest, set(), None)
 
         cleartext_manifest = """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
-            <application android:usesCleartextTraffic="true" />
+            <application android:networkSecurityConfig="@xml/network_security_config"
+                android:usesCleartextTraffic="true" />
         </manifest>"""
         with self.assertRaisesRegex(AssertionError, "global cleartext"):
-            verify_release_network_exclusion(cleartext_manifest, set())
+            verify_release_network_exclusion(cleartext_manifest, set(), None)
+
+        bad_config = """<network-security-config>
+            <base-config cleartextTrafficPermitted="true" />
+        </network-security-config>"""
+        with self.assertRaisesRegex(AssertionError, "base-config"):
+            verify_release_network_exclusion(
+                release_manifest, {"res/xml/network_security_config.xml"}, bad_config
+            )
 
 
 if __name__ == "__main__":
