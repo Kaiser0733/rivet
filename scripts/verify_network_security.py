@@ -147,6 +147,13 @@ def main() -> None:
     resources_dump = _run(str(aapt), "dump", "resources", str(apk))
     verify_debug_network_security(manifest_tree, config_tree, resources, resources_dump)
     release_manifest, release_resources, config_text = _release_outputs(build)
+    if config_text is None:
+        # mergeReleaseResources does not expose this XML file on every AGP version;
+        # the source resource is the same file the release manifest names.
+        source_config = (Path(__file__).resolve().parents[1] /
+                         "app/src/main/res/xml/network_security_config.xml")
+        if source_config.is_file():
+            config_text = source_config.read_text(encoding="utf-8")
     verify_release_network_exclusion(release_manifest.read_text(encoding="utf-8"),
                                      release_resources, config_text)
     print("debug mock-provider network policy and release exclusion verified")
