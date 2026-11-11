@@ -43,6 +43,11 @@ data class CheckpointRecord(
     // Paths Undo cannot cover because they are not regular project content
     // (symlinks, sockets). Recorded so the gap is visible instead of implied.
     val skipped: List<String> = emptyList(),
+    // The conversation that produced this turn. Null on records written before 1.4.3;
+    // those bars stay hidden, while their checkpoints remain restorable from Tools.
+    val sessionId: String? = null,
+    // The user closed the banner. The checkpoint itself is untouched.
+    val barDismissed: Boolean = false,
 )
 
 data class CheckpointChange(val path: String, val kind: String, val beforeSize: Long?, val afterSize: Long?)
@@ -51,7 +56,8 @@ data class CheckpointChange(val path: String, val kind: String, val beforeSize: 
 class TurnCheckpoint(private val storage: File, private val workspace: String) {
     private val directory = File(storage, sha256(workspace.toByteArray()))
 
-    suspend fun begin(worktree: File, runId: String? = null): String = withContext(Dispatchers.IO) {
+    suspend fun begin(worktree: File, runId: String? = null,
+                      sessionId: String? = null): String = withContext(Dispatchers.IO) {
         val id = UUID.randomUUID().toString()
         val staging = File(directory, ".$id.tmp")
         if (!staging.mkdirs()) throw CheckpointFailure("storage")
@@ -69,7 +75,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
                 }
             }
             writeRecord(staging, CheckpointRecord(id, workspace, System.currentTimeMillis(), before,
-                skipped = skipped, runId = runId))
+                skipped = skipped, runId = runId, sessionId = sessionId))
             Files.move(staging.toPath(), File(directory, id).toPath(), StandardCopyOption.ATOMIC_MOVE)
             id
         } catch (error: Exception) {
@@ -169,6 +175,12 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         val folder = folder(id)
         val record = readRecord(folder)
         writeRecord(folder, record.copy(undone = true))
+    }
+
+    suspend fun markBarDismissed(id: String) = withContext(Dispatchers.IO) {
+        val folder = folder(id)
+        val record = readRecord(folder)
+        writeRecord(folder, record.copy(barDismissed = true))
     }
 
     suspend fun discardStagedUndo(id: String) = withContext(Dispatchers.IO) {

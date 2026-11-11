@@ -664,6 +664,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 }
                 if (state.undoCheckpointId != null || state.undoing) {
                     ChangeSummary(state, onUndo = { confirmUndo = true },
+                        onDismissUndo = chatViewModel::dismissUndoBar,
                         modifier = Modifier.fillMaxWidth())
                 }
                 // Typed explicitly: an untyped lambda would not be inferred as the
@@ -1391,7 +1392,8 @@ private fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> U
 }
 
 @Composable
-private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modifier = Modifier) {
+private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit,
+                          onDismissUndo: () -> Unit, modifier: Modifier = Modifier) {
     var details by remember { mutableStateOf(false) }
     Column(modifier.padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1401,6 +1403,8 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit, modifier: Modi
             }
             TextButton(onClick = onUndo, enabled = !state.streaming && !state.undoing &&
                 state.undoCheckpointId != null) { Text(if (state.undoing) "Undoing…" else "Undo") }
+            TextButton(onClick = onDismissUndo,
+                enabled = state.undoCheckpointId != null) { Text("×") }
         }
         commandBusyReason(state.commandRunning)?.let { reason ->
             Text(reason, style = MaterialTheme.typography.bodySmall,

@@ -39,6 +39,7 @@ import com.kaiser.rivet.storage.AgentSession
 import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.AgentSessionPersistence
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
@@ -63,6 +64,8 @@ import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
 import org.robolectric.shadows.ShadowSystemClock
 import java.time.Duration
+import java.io.File
+import kotlinx.serialization.json.Json
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -1497,10 +1500,8 @@ class ChatViewModelTest {
             restarted > started)
     }
 
-    // Undo reaches one project's files. Switching conversations inside that project must
-    // keep the Undo the turn just registered; switching to a conversation in another
-    // project must not offer it.
-    @Test fun undoSurvivesAConversationSwitchOnlyInsideTheSameProject() = runBlocking {
+    // The bar belongs to the session that made the change, not to the workspace alone.
+    @Test fun undoSurvivesAConversationSwitchOnlyInsideTheSameSession() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val provider = object : ProviderClient {
@@ -1517,12 +1518,12 @@ class ChatViewModelTest {
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
-        assertTrue(viewModel.undoSurvivesSwitch("project-a", "project-a"))
-        assertTrue("two unbound conversations share the same state",
+        assertTrue(viewModel.undoSurvivesSwitch("session-a", "session-a"))
+        assertTrue("the same unbound session keeps its own bar",
             viewModel.undoSurvivesSwitch(null, null))
-        assertFalse(viewModel.undoSurvivesSwitch("project-a", "project-b"))
-        assertFalse("going from a project to no project must drop it",
-            viewModel.undoSurvivesSwitch("project-a", null))
+        assertFalse(viewModel.undoSurvivesSwitch("session-a", "session-b"))
+        assertFalse("a session id never survives into no session",
+            viewModel.undoSurvivesSwitch("session-a", null))
     }
 
     // The Undo row is what `undoCheckpointId != null` renders, so a row test has to produce a
@@ -1612,17 +1613,16 @@ class ChatViewModelTest {
         assertEquals(fixture.tree.toString(), back.currentSessionWorkspaceId)
     }
 
-    // The order's S2 ask, end to end with a real checkpoint: a switch queued behind a running
-    // turn must not take the Undo row the turn just earned away, because both conversations are
-    // in the same project and Undo reaches that project's files.
-    @Test fun aConversationSwitchQueuedBehindATurnKeepsTheUndoRow() = runBlocking {
+    // A queued switch belongs to the other session and must not inherit the first
+    // session's bar, even though both chats are in the same project.
+    @Test fun aQueuedConversationSwitchDoesNotCarryTheUndoBarAcrossSessions() = runBlocking {
         val fixture = undoFixture("com.kaiser.rivet.undo-switch", listOf(
             AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
             AgentResponse(text = "Done"),
         ))
-        // A second conversation in the same project, created the way the history pane does.
+        val first = fixture.viewModel.uiState.value.currentSessionId!!
         val other = fixture.sessions.create(fixture.tree.toString()).id!!
-        fixture.sessions.select(fixture.viewModel.uiState.value.currentSessionId!!)
+        fixture.sessions.select(first)
 
         fixture.viewModel.send("Create A")
         await(fixture.viewModel) { it.streaming }
@@ -1633,9 +1633,61 @@ class ChatViewModelTest {
         fixture.viewModel.approve(approval.pendingApproval!!.approvalToken)
 
         val switched = await(fixture.viewModel) { !it.streaming && it.currentSessionId == other }
-        assertNotNull("the queued switch must not drop the Undo row", switched.undoCheckpointId)
-        assertEquals(listOf("A.kt"), switched.lastTurnFiles)
-        assertEquals(1, switched.lastTurnFileCount)
+        assertNull("the other session must not inherit the Undo bar", switched.undoCheckpointId)
+        assertTrue(switched.lastTurnFiles.isEmpty())
+
+        fixture.viewModel.resumeSession(first)
+        val back = await(fixture.viewModel) { it.currentSessionId == first && it.undoCheckpointId != null }
+        assertEquals(listOf("A.kt"), back.lastTurnFiles)
+    }
+
+    @Test fun theUndoBarBelongsToTheSessionThatMadeTheChange() = runBlocking {
+        val fixture = undoFixture("com.kaiser.rivet.undo-owner", listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
+            AgentResponse(text = "Done"),
+        ))
+        val first = fixture.viewModel.uiState.value.currentSessionId!!
+        val other = fixture.sessions.create(fixture.tree.toString()).id!!
+        val row = createFileTurn(fixture.viewModel)
+
+        fixture.viewModel.resumeSession(other)
+        val otherState = await(fixture.viewModel) { it.currentSessionId == other }
+        assertNull("a different chat in the same project has no bar", otherState.undoCheckpointId)
+
+        fixture.viewModel.resumeSession(first)
+        val back = await(fixture.viewModel) { it.currentSessionId == first && it.undoCheckpointId != null }
+        assertEquals(row.undoCheckpointId, back.undoCheckpointId)
+    }
+
+    @Test fun dismissingTheUndoBarHidesItAcrossSwitchAndRestartWithoutUndoing() = runBlocking {
+        val fixture = undoFixture("com.kaiser.rivet.undo-dismiss", listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
+            AgentResponse(text = "Done"),
+        ))
+        val first = fixture.viewModel.uiState.value.currentSessionId!!
+        val other = fixture.sessions.create(fixture.tree.toString()).id!!
+        val row = createFileTurn(fixture.viewModel)
+        assertEquals(listOf("A.kt"), row.lastTurnFiles)
+
+        fixture.viewModel.dismissUndoBar()
+        val hidden = await(fixture.viewModel) { it.undoCheckpointId == null }
+        assertTrue(hidden.lastTurnFiles.isEmpty())
+        delay(100)
+
+        fixture.viewModel.resumeSession(other)
+        await(fixture.viewModel) { it.currentSessionId == other }
+        fixture.viewModel.resumeSession(first)
+        await(fixture.viewModel) { it.currentSessionId == first && !it.projectLoading }
+        delay(100)
+        assertNull("rehydration must not resurrect a dismissed bar",
+            fixture.viewModel.uiState.value.undoCheckpointId)
+
+        val json = File(app.filesDir, "checkpoints").walkTopDown()
+            .filter { it.name == "checkpoint.json" }
+            .mapNotNull { file -> runCatching { Json.decodeFromString<com.kaiser.rivet.runtime.CheckpointRecord>(file.readText()) }.getOrNull() }
+            .first { it.id == row.undoCheckpointId }
+        assertTrue(json.barDismissed)
+        assertFalse(json.undone)
     }
 
     // A turn writes into the conversation it started in. Before this was bound, a switch
@@ -1671,8 +1723,10 @@ class ChatViewModelTest {
         // Wait until the turn's first write is durable before moving the pointer. S1 is about the
         // reply not following the pointer into another conversation; moving it first makes even a
         // correct turn refuse its own first write, and the conversation is then empty by design.
-        // streaming is set synchronously in startTurn, so it says nothing about the write.
-        await(viewModel) { it.acceptedMessageCount == 1L }
+        // Acceptance is synchronous now, so the UI counters say nothing about the write.
+        withTimeout(5_000) {
+            while (sessions.recent(first).none { it.text == "Keep working" }) delay(10)
+        }
 
         // The storage pointer moves under the running turn, as a switch in flight does.
         sessions.select(other)

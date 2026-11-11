@@ -478,6 +478,7 @@ class ChatViewModel private constructor(
     }
 
     private var activeMessages: List<AgentMessage> = emptyList()
+    private val dismissedUndoBars = mutableSetOf<String>()
     private var activeSummary: String = ""
     private val sessionGoals = SessionGoalStore(app)
     private val spendStore = SpendStore(app)
@@ -1679,7 +1680,8 @@ class ChatViewModel private constructor(
                     else {
                         try {
                             val id = checkpointId
-                            if (id == null) checkpointId = runtime.beginCheckpoint(workspaceId, currentRun?.id)
+                            if (id == null) checkpointId = runtime.beginCheckpoint(
+                                workspaceId, currentRun?.id, turnSessionId)
                             else if (needsPostCheck) {
                                 if (!runtime.checkpointMatchesPost(workspaceId, id)) checkpointBroken = true
                                 else needsPostCheck = false
@@ -1926,10 +1928,14 @@ class ChatViewModel private constructor(
                         try {
                             if (runtime.finishCheckpoint(workspaceId, id) && ticket == generation) {
                                 val record = runtime.latestCheckpoint()
-                                if (record?.id == id) {
+                                if (record?.id == id && undoBarOwned(record)) {
                                     val row = undoRowFor(record)
-                                    _uiState.update { it.copy(lastTurnFiles = row.files,
-                                        lastTurnFileCount = row.fileCount, undoCheckpointId = row.checkpointId) }
+                                    _uiState.update { state ->
+                                        if (state.currentSessionId != record.sessionId) state
+                                        else state.copy(lastTurnFiles = row.files,
+                                            lastTurnFileCount = row.fileCount,
+                                            undoCheckpointId = row.checkpointId)
+                                    }
                                 }
                             }
                         }
@@ -1965,8 +1971,9 @@ class ChatViewModel private constructor(
                     activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
-                if (acceptedUser != null && !acceptedPersisted) {
-                    withContext(NonCancellable) { persistAcceptedTail(acceptedUser) }
+                val accepted = acceptedUser
+                if (accepted != null && !acceptedPersisted) {
+                    withContext(NonCancellable) { persistAcceptedTail(accepted) }
                 }
                 val live = currentRun
                 if (live != null && live.phase !in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped)) {
@@ -2328,25 +2335,42 @@ class ChatViewModel private constructor(
         return UndoRow(record.id, paths.take(5), paths.size)
     }
 
-    // Undo outlives the process. The checkpoint is on disk and belongs to the project, not to
-    // the conversation, so opening the app again in the same project has to offer the same
-    // Undo instead of coming back with no row and no way to take the change back. A checkpoint
-    // from another workspace is not this conversation's Undo, so the row is left alone.
+    // Undo outlives the process for the session that made it: the checkpoint is on disk,
+    // but its bar is shown only when it belongs to this conversation and was not dismissed.
     private suspend fun rehydrateUndo(workspaceId: String?) {
         if (workspaceId == null) return
         val record = try { runtimeController.latestCheckpoint() }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { null }
-        if (record == null || record.workspace != workspaceId) return
+        if (record == null || record.workspace != workspaceId || !undoBarOwned(record)) return
         val row = try { undoRowFor(record) }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { return }
         _uiState.update { state ->
             // The conversation can move while the checkpoint is read; a row from another
-            // project's checkpoint must never appear over this one.
-            if (state.currentSessionWorkspaceId != workspaceId) state
+            // project's or session's checkpoint must never appear over this one.
+            if (state.currentSessionWorkspaceId != workspaceId ||
+                state.currentSessionId != record.sessionId) state
             else state.copy(lastTurnFiles = row.files, lastTurnFileCount = row.fileCount,
                 undoCheckpointId = row.checkpointId)
+        }
+    }
+
+    private fun undoBarOwned(record: CheckpointRecord?): Boolean {
+        val id = record?.id ?: return false
+        return undoBarVisible(record, _uiState.value.currentSessionId) &&
+            id !in dismissedUndoBars
+    }
+
+    fun dismissUndoBar() {
+        val id = _uiState.value.undoCheckpointId ?: return
+        dismissedUndoBars += id
+        _uiState.update { it.copy(lastTurnFiles = emptyList(), lastTurnFileCount = 0,
+            undoCheckpointId = null) }
+        viewModelScope.launch {
+            try { runtimeController.markUndoBarDismissed(id) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { }
         }
     }
 
@@ -2462,8 +2486,7 @@ class ChatViewModel private constructor(
         }
     }
 
-    // Undo reaches the files of one project, so it survives a conversation switch only while
-    // the project stays the same. Two unbound conversations share the "no project" state.
+    // The bar belongs to the session that made the change, not the workspace around it.
     internal fun undoSurvivesSwitch(previous: String?, next: String?): Boolean = previous == next
 
     private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
@@ -2484,10 +2507,9 @@ class ChatViewModel private constructor(
                 val interruptedTurn = selected.interrupted &&
                     (visible.isNotEmpty() || selected.messages.isNotEmpty())
                 val project = _uiState.value
-                // Undo is workspace-scoped, so a checkpoint made in this project is still the
-                // right Undo after switching conversations inside it. A switch that changes
-                // project must drop it: the checkpoint belongs to the old project's files.
-                val keepUndo = undoSurvivesSwitch(project.currentSessionWorkspaceId, selected.workspaceId)
+                // The bar belongs to the session that made the change; rehydration below
+                // restores it only for that session (and only while it is not dismissed).
+                val keepUndo = undoSurvivesSwitch(project.currentSessionId, selected.id)
                 if (ticket == generation) _uiState.value = ChatUiState(
                     messages = visible, ready = true, sessions = history,
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
@@ -2507,6 +2529,7 @@ class ChatViewModel private constructor(
                     spendLabel = project.spendLabel, runSpendUsd = project.runSpendUsd)
                 refreshGoalMemory(
                     try { workspaceSelection.restore()?.first } catch (_: Exception) { null }, selected.id)
+                rehydrateUndo(selected.workspaceId)
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
                 if (ticket == generation) _uiState.update { it.copy(error = "Could not open the session.") }
