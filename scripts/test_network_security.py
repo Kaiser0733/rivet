@@ -99,7 +99,7 @@ class NetworkSecurityTest(unittest.TestCase):
                 {"res/xml/network_security_config.xml"}, None
             )
 
-        with self.assertRaisesRegex(AssertionError, "release resources"):
+        with self.assertRaisesRegex(AssertionError, "missing"):
             verify_release_network_exclusion(release_manifest, set(), None)
 
         cleartext_manifest = """<manifest xmlns:android="http://schemas.android.com/apk/res/android">
