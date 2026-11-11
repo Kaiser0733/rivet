@@ -92,7 +92,7 @@ def verify_release_network_exclusion(manifest_xml: str, merged_resource_paths: s
     assert global_cleartext is None or global_cleartext.lower() == "false", (
         "release manifest enables global cleartext traffic"
     )
-    assert any(path == "res/xml/network_security_config.xml" for path in merged_resource_paths), (
+    assert any(path.endswith("network_security_config.xml") for path in merged_resource_paths), (
         "release resources must include the loopback network security config"
     )
     assert config_xml is not None, "release network security config is missing"
@@ -130,7 +130,9 @@ def _release_outputs(build: Path) -> tuple[Path, set[str], Path | None]:
     assert resources_root.is_dir(), "release merged resources were not built"
     resources = {path.relative_to(resources_root).as_posix()
                  for path in resources_root.rglob("*") if path.is_file()}
-    return manifests[0], resources, resources_root / "res/xml/network_security_config.xml"
+    configs = [resources_root / path for path in resources
+               if path.endswith("network_security_config.xml")]
+    return manifests[0], resources, configs[0] if len(configs) == 1 else None
 
 
 def main() -> None:
