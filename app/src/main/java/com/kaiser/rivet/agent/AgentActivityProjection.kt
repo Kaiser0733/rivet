@@ -96,7 +96,8 @@ object AgentActivityProjection {
             result == null && live == null -> "Outcome unknown"
             else -> null
         }
-        return AgentActivityOperation(call.id, title, detail, outcome, outcomeDetail)
+        // Correlation keys are hashes — the projection never carries raw call ids.
+        return AgentActivityOperation(AgentToolLifecycle.keyFor(call.id), title, detail, outcome, outcomeDetail)
     }
 
     private fun resultOutcome(result: AgentToolResult, value: Map<String, kotlinx.serialization.json.JsonElement>): ActivityOutcome {
