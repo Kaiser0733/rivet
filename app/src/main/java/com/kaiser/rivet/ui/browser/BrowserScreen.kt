@@ -54,7 +54,10 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kaiser.rivet.R
@@ -79,7 +82,9 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
     val state by session.state.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    var address by remember(state.url) { mutableStateOf(state.url) }
+    var address by remember(state.url) {
+        mutableStateOf(TextFieldValue(state.url, selection = TextRange(state.url.length)))
+    }
     var menuOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
     var domainsOpen by remember { mutableStateOf(false) }
@@ -131,15 +136,21 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                     OutlinedTextField(
                         value = address,
                         onValueChange = { address = it },
-                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp),
+                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
+                            .onFocusChanged { focus ->
+                                if (focus.isFocused) {
+                                    address = address.copy(
+                                        selection = TextRange(UrlFieldSelection.selectAll(address.text).last))
+                                }
+                            },
                         singleLine = true,
                         textStyle = MaterialTheme.typography.bodyMedium,
                         label = { Text("URL") },
                     )
                     TextButton(onClick = {
-                        if (address.isNotBlank()) scope.launch {
+                        if (address.text.isNotBlank()) scope.launch {
                             try {
-                                session.openVisual(address, userInitiated = true)
+                                session.openVisual(address.text, userInitiated = true)
                             } catch (error: BrowserFailure) {
                                 session.showError(error.message)
                             }
