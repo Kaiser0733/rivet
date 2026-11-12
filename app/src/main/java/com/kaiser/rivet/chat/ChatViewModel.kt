@@ -1347,6 +1347,7 @@ class ChatViewModel private constructor(
                     workspaceAccessFailed = true
                 }
             }
+            browser.projectKey = workspaceId ?: _uiState.value.currentSessionWorkspaceId ?: "unbound"
             if (workspaceId != null && snapshot.config.type == ProviderType.Local) {
                 val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
                 val block = local?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)

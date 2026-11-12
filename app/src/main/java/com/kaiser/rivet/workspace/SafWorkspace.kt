@@ -286,11 +286,31 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
     // A text MIME can append .txt; extension lookup can also misclassify source
     // files (for example .ts as video). Let the requested name stand on its own.
     suspend fun createFile(path: WorkspacePath): WorkspaceEntry = create(path, "application/octet-stream")
+    suspend fun createFileWithParents(path: WorkspacePath): WorkspaceEntry = create(path, "application/octet-stream", createParents = true)
     suspend fun createDirectory(path: WorkspacePath): WorkspaceEntry = create(path, Document.MIME_TYPE_DIR)
 
-    private suspend fun create(path: WorkspacePath, mime: String): WorkspaceEntry = io {
+    private suspend fun create(path: WorkspacePath, mime: String,
+                               createParents: Boolean = false): WorkspaceEntry = io {
         mutations.withLock {
             requireNonRoot(path)
+            if (createParents) {
+                val missing = CreateParents.missing(path) { candidate ->
+                    try {
+                        val existing = resolve(candidate)
+                        if (!existing.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
+                        true
+                    } catch (e: WorkspaceFailure) {
+                        if (e.reason != WorkspaceFailure.Reason.MISSING) throw e
+                        false
+                    }
+                }
+                missing.forEach { createLocked(it, Document.MIME_TYPE_DIR) }
+            }
+            createLocked(path, mime)
+        }
+    }
+
+    private suspend fun createLocked(path: WorkspacePath, mime: String): WorkspaceEntry {
             val parent = resolve(path.parent())
             if (!parent.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
             if (!parent.capabilities.create) fail(WorkspaceFailure.Reason.UNSUPPORTED)
@@ -314,7 +334,6 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
                     returnedChild(parent, renamed ?: uri(confirmed.documentId))
                 } else confirmed
             }
-        }
     }
 
     suspend fun delete(path: WorkspacePath, approved: WorkspaceStructuralStamp? = null) =

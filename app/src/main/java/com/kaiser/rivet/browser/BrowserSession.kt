@@ -158,6 +158,12 @@ class BrowserSession(
     private val readerCache = ReaderCache()
     private val trail = BrowserDomainTrail()
     private val snapshots = BrowserSnapshotStore(File(app.filesDir, "browser-snapshots"))
+    private var shotStore = BrowserShotStore(app.filesDir, "unbound")
+    var projectKey: String = "unbound"
+        set(value) {
+            field = value.ifBlank { "unbound" }
+            shotStore = BrowserShotStore(app.filesDir, field)
+        }
     private val windows = linkedMapOf<String, BrowserSnapshot>().apply {
         snapshots.loadAll().forEach { put(it.id, it) }
     }
@@ -307,6 +313,7 @@ class BrowserSession(
                 agentRendererUse = false, budgetCloseAction = false)
         }
         disarmHangValve()
+        shotStore.cleanSession()
         requestRendererTeardown()
         armTeardownWatchdog()
     }
@@ -1517,8 +1524,7 @@ class BrowserSession(
                 withTimeoutOrNull(5_000) { done.await() } == true
             } else false
             if (!ok) Canvas(bitmap).also { canvas -> view.draw(canvas) }
-            val dir = File(app.filesDir, "browser-shots").apply { mkdirs() }
-            val file = File(dir, "shot-${System.currentTimeMillis()}.webp")
+            val file = shotStore.newShot(System.currentTimeMillis())
             FileOutputStream(file).use { bitmap.compress(Bitmap.CompressFormat.WEBP, 80, it) }
             BrowserShot(file.absolutePath, width, height)
         } finally { bitmap.recycle() }

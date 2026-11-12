@@ -223,7 +223,7 @@ class AgentToolExecutor(
                     val args = json.decodeFromString<CreateArgs>(call.arguments); val path = path(args.path)
                     mutation(call, "Create file", path, path.length * 2 + 255,
                         modelRequestsApproval = args.askUser) {
-                        val created = workspace.createFile(path)
+                        val created = workspace.createFileWithParents(path)
                         val content = args.content
                         val written = if (content != null) {
                             // create_file can be called with content by a model that does not
