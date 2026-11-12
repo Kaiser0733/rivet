@@ -212,11 +212,15 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     }
                 }
             }
+            var chromeHeightPx by remember { mutableIntStateOf(0) }
+            val density = androidx.compose.ui.platform.LocalDensity.current
             BrowserHost(
                 chatViewModel.browser,
                 Modifier.fillMaxSize().zIndex(if (browserState.visible) 1f else -1f).then(
                     if (browserState.visible) Modifier.padding(
-                        top = BrowserChrome.topPadding(statusBarTop),
+                        top = with(density) {
+                            BrowserChrome.hostTopPaddingPx(chromeHeightPx).toDp()
+                        },
                         bottom = BrowserChrome.bottomPadding(navigationBarBottom),
                     ) else Modifier),
             )
@@ -224,6 +228,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 BrowserScreen(chatViewModel.browser,
                     onClose = { chatViewModel.browser.close() },
                     onCloseSession = { chatViewModel.browser.endSession() },
+                    onChromeHeight = { chromeHeightPx = it },
                     modifier = Modifier.fillMaxSize().zIndex(2f))
             }
         }

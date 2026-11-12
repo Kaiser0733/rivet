@@ -54,6 +54,7 @@ import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kaiser.rivet.R
@@ -73,6 +74,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                   onCloseSession: () -> Unit = { session.endSession() },
+                  onChromeHeight: (Int) -> Unit = {},
                   modifier: Modifier = Modifier) {
     val state by session.state.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -115,7 +117,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             }
         }
 
-        Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding()) {
+        Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding()
+            .onSizeChanged { onChromeHeight(it.height) }) {
             Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically) {
