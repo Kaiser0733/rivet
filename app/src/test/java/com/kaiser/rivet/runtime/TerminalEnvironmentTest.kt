@@ -25,10 +25,11 @@ class TerminalEnvironmentTest {
 
         assertEquals("ENV=/dev/null", env[env.size - 3])
         assertEquals("TERM=xterm-256color", env[env.size - 2])
-        assertEquals("PS1=\\W \\$ ", env.last())
+        assertEquals("PS1=${TerminalPrompt.PS1}", env.last())
         assertFalse(env.last().contains("@"))
         assertFalse(env.last().contains("\\u"))
         assertFalse(env.last().contains("\\h"))
+        assertTrue("prompt starts on a new line", env.last().startsWith("PS1=${TerminalPrompt.PS1}"))
         assertEquals(base.dropLast(1), env.dropLast(3))
     }
 

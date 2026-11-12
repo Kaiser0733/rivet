@@ -591,5 +591,5 @@ internal fun terminalEnvironment(base: List<String>): List<String> {
     val kept = base.filterNot {
         it.startsWith("TERM=") || it.startsWith("PS1=") || it.startsWith("ENV=")
     }
-    return kept + "ENV=/dev/null" + "TERM=xterm-256color" + "PS1=\\W \\$ "
+    return kept + "ENV=/dev/null" + "TERM=xterm-256color" + "PS1=${TerminalPrompt.PS1}"
 }
