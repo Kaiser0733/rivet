@@ -43,6 +43,7 @@ import com.kaiser.rivet.storage.AutonomyStore
 import com.kaiser.rivet.ui.browser.BrowserChrome
 import com.kaiser.rivet.ui.browser.BrowserHost
 import com.kaiser.rivet.ui.browser.BrowserScreen
+import com.kaiser.rivet.ui.terminal.TerminalPane
 import com.kaiser.rivet.ui.chat.ChatScreen
 import com.kaiser.rivet.ui.history.HistoryPane
 import com.kaiser.rivet.ui.local.ModelsScreen
@@ -100,6 +101,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         var modelsOpen by rememberSaveable { mutableStateOf(false) }
         var installOpen by rememberSaveable { mutableStateOf(false) }
         var installZip by remember { mutableStateOf<android.net.Uri?>(null) }
+        var terminalOpen by rememberSaveable { mutableStateOf(false) }
+        val terminalStateLine by chatViewModel.terminalStatusLine.collectAsState()
         val drawerState = rememberDrawerState(DrawerValue.Closed)
         val settingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val modelsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -153,8 +156,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         }
 
         val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open || processesOpen
-        BackHandler(editing || settingsOpen || modelsOpen || browserState.visible || panelOpen) {
+        BackHandler(terminalOpen || editing || settingsOpen || modelsOpen || browserState.visible || panelOpen) {
             when {
+                terminalOpen -> terminalOpen = false
                 browserState.visible -> chatViewModel.browser.close()
                 modelsOpen -> modelsOpen = false
                 editing -> {
@@ -196,12 +200,15 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = { processesOpen = false }) {
-                                val stateLine by chatViewModel.terminalStatusLine.collectAsState()
                                 val conversation by chatViewModel.uiState.collectAsState()
                                 ToolsPane(
                                     processes = chatViewModel.managedProcesses,
                                     terminal = chatViewModel.terminalSession,
-                                    stateLine = stateLine,
+                                    stateLine = terminalStateLine,
+                                    onOpenTerminal = {
+                                        processesOpen = false
+                                        terminalOpen = true
+                                    },
                                     checkpoints = conversation.runCheckpoints,
                                     onRestoreCheckpoint = chatViewModel::restoreRunCheckpoint,
                                     checkpointNotice = conversation.runCheckpointNotice,
@@ -230,6 +237,11 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     onCloseSession = { chatViewModel.browser.endSession() },
                     onChromeHeight = { chromeHeightPx = it },
                     modifier = Modifier.fillMaxSize().zIndex(2f))
+            }
+            if (terminalOpen) {
+                TerminalPane(chatViewModel.terminalSession, terminalStateLine,
+                    onClose = { terminalOpen = false },
+                    modifier = Modifier.fillMaxSize().zIndex(3f))
             }
         }
 

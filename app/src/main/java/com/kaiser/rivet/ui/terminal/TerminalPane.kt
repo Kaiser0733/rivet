@@ -14,7 +14,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
@@ -98,17 +100,18 @@ private val TerminalLineHeight = 17.sp
 internal fun TerminalPane(
     session: InteractiveTerminalSession,
     stateLine: String,
-    onBack: () -> Unit,
+    onClose: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
     val state by session.state.collectAsState()
-    Column(modifier.fillMaxSize().background(Pane)) {
+    Column(modifier.fillMaxSize().background(Pane).navigationBarsPadding()) {
         Row(
-            Modifier.fillMaxWidth().height(44.dp).padding(start = 4.dp, end = 4.dp),
+            Modifier.fillMaxWidth().statusBarsPadding()
+                .padding(horizontal = 4.dp, vertical = 4.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
-            IconButton(onClick = onBack, modifier = Modifier.size(40.dp)) {
-                Icon(painterResource(R.drawable.ic_back), "Back to tools", tint = Muted)
+            IconButton(onClick = onClose, modifier = Modifier.size(40.dp)) {
+                Icon(painterResource(R.drawable.ic_back), "Back to chat", tint = Muted)
             }
             Surface(
                 modifier = Modifier.weight(1f).height(30.dp),
@@ -134,10 +137,10 @@ internal fun TerminalPane(
                 }
             }
             IconButton(
-                onClick = { session.close() },
+                onClick = onClose,
                 modifier = Modifier.size(40.dp),
             ) {
-                Icon(painterResource(R.drawable.ic_close), "Close terminal", tint = Muted)
+                Icon(painterResource(R.drawable.ic_close), "Hide terminal", tint = Muted)
             }
         }
         HorizontalDivider(color = PaneLine)

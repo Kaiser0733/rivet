@@ -36,7 +36,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableLongStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
@@ -55,7 +54,6 @@ import com.kaiser.rivet.runtime.RunCheckpointInfo
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
-import com.kaiser.rivet.ui.terminal.TerminalPane
 import kotlinx.coroutines.delay
 
 @Composable
@@ -73,24 +71,18 @@ internal fun ToolsPane(
     processes: ManagedProcesses,
     terminal: InteractiveTerminalSession,
     stateLine: String,
+    onOpenTerminal: () -> Unit = {},
     checkpoints: List<RunCheckpointInfo> = emptyList(),
     onRestoreCheckpoint: (String) -> Unit = {},
     checkpointNotice: String? = null,
     modifier: Modifier = Modifier,
 ) {
-    var terminalOpen by rememberSaveable { mutableStateOf(false) }
-    if (terminalOpen) {
-        BackHandler { terminalOpen = false }
-        TerminalPane(terminal, stateLine,
-            onBack = { terminalOpen = false }, modifier = modifier)
-    } else {
-        ProcessesContent(processes, modifier, null, stateLine = stateLine,
-            onOpenTerminal = {
-                terminal.open()
-                terminalOpen = true
-            }, checkpoints = checkpoints, onRestoreCheckpoint = onRestoreCheckpoint,
-            checkpointNotice = checkpointNotice)
-    }
+    ProcessesContent(processes, modifier, null, stateLine = stateLine,
+        onOpenTerminal = {
+            terminal.open()
+            onOpenTerminal()
+        }, checkpoints = checkpoints, onRestoreCheckpoint = onRestoreCheckpoint,
+        checkpointNotice = checkpointNotice)
 }
 
 private data class RestoreTarget(val checkpoint: RunCheckpointInfo, val undoRun: Boolean)
