@@ -182,7 +182,7 @@ class BrowserSession(
     private var lastRendererStart = 0L
     private var lastActivityAt = 0L
     private var userControlAt = 0L
-    private val memoryProbe = BrowserMemoryProbe()
+    private val memoryProbe = BrowserMemoryProbe(rendererPss = { sampleRendererPss() })
     private var baselineOwnPss = 0L
     private var baselineAvailMem = 0L
     private var observedBrowserBytes = 0L
@@ -401,6 +401,21 @@ class BrowserSession(
             requestRendererTeardown()
         }
     }
+
+    private fun sampleRendererPss(): Long? = runCatching {
+        val manager = app.getSystemService(android.app.ActivityManager::class.java) ?: return null
+        val ownPid = android.os.Process.myPid()
+        val ownUid = android.os.Process.myUid()
+        val candidates = manager.runningAppProcesses.orEmpty()
+            .filter { it.uid == ownUid && it.pid != ownPid }
+        if (candidates.isEmpty()) return null
+        val memory = manager.getProcessMemoryInfo(candidates.map { it.pid }.toIntArray())
+        val processes = candidates.mapIndexed { index, process ->
+            RendererProcess(process.pid, process.uid,
+                (memory.getOrNull(index)?.totalPss?.toLong() ?: 0L) * 1024L)
+        }
+        selectRendererPss(processes, ownPid, ownUid)
+    }.getOrNull()
 
     private fun availableMemBytes(): Long? {
         val manager = app.getSystemService(android.app.ActivityManager::class.java) ?: return null
@@ -981,14 +996,10 @@ class BrowserSession(
                 val ownGrowth = if (baselineOwnPss > 0L) {
                     memoryProbe.browserGrowthBytes(baselineOwnPss, sample)
                 } else 0L
-                val appPssGrowth = if (baselineOwnPss > 0L) {
-                    (sample.ownPssBytes - baselineOwnPss).coerceAtLeast(0L)
-                } else 0L
                 val currentAvail = withContext(Dispatchers.Default) {
                     availableMemBytes() ?: baselineAvailMem
                 }
-                val observed = BrowserObservedCost.bytes(
-                    ownGrowth, baselineAvailMem, currentAvail, appPssGrowth)
+                val observed = BrowserObservedCost.bytes(ownGrowth, baselineAvailMem, currentAvail)
                 refreshBudget(observedBytes = observed)
                 if (_state.value.visible) lastActivityAt = System.currentTimeMillis()
             }

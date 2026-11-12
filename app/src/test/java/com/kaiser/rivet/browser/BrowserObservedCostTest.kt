@@ -1,7 +1,6 @@
 package com.kaiser.rivet.browser
 
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotEquals
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -32,16 +31,4 @@ class BrowserObservedCostTest {
         assertEquals(75 * mb, BrowserObservedCost.bytes(75 * mb, 500 * mb, 700 * mb))
     }
 
-    @Test fun appPssGrowthIsTheThirdTermAndCanRaiseTheTierAlone() {
-        val appPssGrowth = 260 * mb
-        val observed = BrowserObservedCost.bytes(0, 2_000 * mb, 2_000 * mb, appPssGrowth)
-        assertEquals(appPssGrowth, observed)
-        val budget = BrowserGovernor.decide(BrowserMemorySignals(2_000 * mb,
-            observedBrowserBytes = observed))
-        assertNotEquals("a +260MB app-PSS growth must leave Normal",
-            BrowserTier.Normal, budget.tier)
-        assertEquals((260 * mb / (1024 * 1024)).toInt(), budget.observedMb)
-        assertTrue("the banner must use the same observed number as the decision",
-            BrowserGovernor.contextLine(budget).contains("260MB used"))
-    }
 }

@@ -2,16 +2,15 @@ package com.kaiser.rivet.browser
 
 /**
  * The renderer does not expose PSS to the app, but its memory comes out of device
- * headroom. Take the largest of own-process growth, total app-PSS growth, and the
- * drop in available RAM. The app-PSS term is the one that cannot under-read when the
- * renderer's own PID is invisible.
+ * headroom. Take the larger of own-process growth and the drop in available RAM.
+ * The renderer term is supplied by BrowserMemoryProbe when the same-uid renderer
+ * process can be enumerated.
  */
 object BrowserObservedCost {
     fun bytes(ownPssGrowthBytes: Long, baselineAvailMemBytes: Long,
-              currentAvailMemBytes: Long, appPssGrowthBytes: Long = 0L): Long {
+              currentAvailMemBytes: Long): Long {
         val own = ownPssGrowthBytes.coerceAtLeast(0L)
         val headroomDrop = (baselineAvailMemBytes - currentAvailMemBytes).coerceAtLeast(0L)
-        val app = appPssGrowthBytes.coerceAtLeast(0L)
-        return maxOf(own, headroomDrop, app)
+        return maxOf(own, headroomDrop)
     }
 }
