@@ -28,4 +28,18 @@ class BrowserTabsTest {
     @Test fun blankUrlFallsBackToANeutralTitle() {
         assertEquals("New tab", BrowserTabs.title("", ""))
     }
+    @Test fun closingTheActiveWindowSelectsTheLastRemainingWindowAndItsUrl() {
+        val target = BrowserTabs.closeTarget(windows, activeId = "b", closingId = "b")
+        assertEquals("a", target.activeId)
+        assertEquals("https://example.com/", target.url)
+        assertEquals("Home", target.title)
+    }
+
+    @Test fun closingAnInactiveWindowKeepsTheActivePage() {
+        val target = BrowserTabs.closeTarget(windows, activeId = "b", closingId = "a")
+        assertEquals("b", target.activeId)
+        assertEquals("https://docs.example.com/api", target.url)
+        assertEquals("", target.title)
+    }
+
 }

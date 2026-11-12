@@ -17,6 +17,7 @@ import android.view.PixelCopy
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import com.kaiser.rivet.ui.browser.BrowserTabs
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -1188,15 +1189,36 @@ class BrowserSession(
     }
 
     fun closeWindow(id: String) {
-        if (id == activeWindowId) unparkRenderer()
+        val wasActive = id == activeWindowId
+        val target = BrowserTabs.closeTarget(windowSummaries(), activeWindowId, id)
+        if (wasActive) unparkRenderer()
         windows.remove(id)
         snapshots.delete(id)
-        if (activeWindowId == id) {
-            activeWindowId = windows.keys.lastOrNull()
-            _state.update { it.copy(activeWindowId = activeWindowId,
-                url = windows[activeWindowId]?.currentUrl.orEmpty(),
-                title = windows[activeWindowId]?.title.orEmpty(), windows = windowSummaries()) }
-        } else _state.update { it.copy(windows = windowSummaries()) }
+        if (wasActive) {
+            activeWindowId = target.activeId
+            activeUrl = target.url
+            activeTitle = target.title
+            _state.update {
+                it.copy(
+                    activeWindowId = activeWindowId,
+                    url = activeUrl,
+                    title = activeTitle,
+                    windows = windowSummaries(),
+                )
+            }
+            val next = activeWindowId?.let { windows[it] }
+            val view = renderer
+            if (view != null) {
+                if (activeUrl.isNotBlank()) {
+                    view.loadUrl(activeUrl)
+                    next?.let { loadSnapshotState(view, it) }
+                } else {
+                    view.loadUrl("about:blank")
+                }
+            }
+        } else {
+            _state.update { it.copy(windows = windowSummaries()) }
+        }
     }
 
     suspend fun bookmark(): String {
