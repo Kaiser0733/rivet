@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.chat
 
+
 enum class ProcessActivityKind(val key: String) {
     Thinking("thinking"),
     Read("read"),
@@ -297,13 +298,21 @@ data class TurnItem<T>(
     val isProcess: Boolean
 )
 
+sealed interface TurnPart<out T> {
+    data class Process<T>(val items: List<T>) : TurnPart<T>
+    data class Answer<T>(val item: T) : TurnPart<T>
+}
+
 data class SegmentedTurn<T>(
     val turnIndex: Int,
     val userItem: T?,
-    val processItems: List<T>,
-    val answerItems: List<T>,
+    val parts: List<TurnPart<T>>,
     val spec: ChatTurnProcessSpec
 ) {
+    val processItems: List<T> get() = parts.filterIsInstance<TurnPart.Process<T>>()
+        .flatMap { it.items }
+    val answerItems: List<T> get() = parts.filterIsInstance<TurnPart.Answer<T>>()
+        .map { it.item }
     val answerItem: T? get() = answerItems.lastOrNull()
 }
 
@@ -317,11 +326,19 @@ fun <T> segmentTurnItems(
     val result = mutableListOf<SegmentedTurn<T>>()
     var currentTurnIndex = 0
     var currentUser: T? = null
-    val currentProcesses = mutableListOf<T>()
-    val currentAnswers = mutableListOf<T>()
+    val currentParts = mutableListOf<TurnPart<T>>()
+    val pendingProcess = mutableListOf<T>()
+
+    fun flushProcess() {
+        if (pendingProcess.isNotEmpty()) {
+            currentParts += TurnPart.Process(pendingProcess.toList())
+            pendingProcess.clear()
+        }
+    }
 
     fun flushTurn(isLast: Boolean) {
-        if (currentUser == null && currentProcesses.isEmpty() && currentAnswers.isEmpty()) return
+        flushProcess()
+        if (currentUser == null && currentParts.isEmpty()) return
         val isLive = isLast && isStreaming
         val isStopped = isLast && isInterruptedTurn
         val isError = isLast && hasError
@@ -338,27 +355,27 @@ fun <T> segmentTurnItems(
             SegmentedTurn(
                 turnIndex = currentTurnIndex,
                 userItem = currentUser,
-                processItems = currentProcesses.toList(),
-                answerItems = currentAnswers.toList(),
+                parts = currentParts.toList(),
                 spec = spec
             )
         )
         currentTurnIndex++
         currentUser = null
-        currentProcesses.clear()
-        currentAnswers.clear()
+        currentParts.clear()
     }
 
     items.forEach { item ->
         if (item.isUser) {
-            if (currentUser != null || currentProcesses.isNotEmpty() || currentAnswers.isNotEmpty()) {
+            flushProcess()
+            if (currentUser != null || currentParts.isNotEmpty()) {
                 flushTurn(isLast = false)
             }
             currentUser = item.data
         } else if (item.isAnswer) {
-            currentAnswers.add(item.data)
+            flushProcess()
+            currentParts += TurnPart.Answer(item.data)
         } else if (item.isProcess) {
-            currentProcesses.add(item.data)
+            pendingProcess += item.data
         }
     }
     flushTurn(isLast = true)

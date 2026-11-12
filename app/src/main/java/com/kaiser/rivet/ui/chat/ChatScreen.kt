@@ -1173,49 +1173,48 @@ private fun TurnBlockView(
                     onToggle = { if (turn.spec.canFold) turnOpen = !turnOpen }
                 )
             }
-            AnimatedVisibility(
-                visible = isOpen,
-                enter = expandVertically() + fadeIn(),
-                exit = shrinkVertically() + fadeOut()
-            ) {
-                Column(
-                    modifier = Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp)
-                ) {
-                    turn.processItems.forEach { entry ->
-                        when (val item = entry.item) {
-                            is AgentConversationItem.Activity -> {
-                                if (!entry.standaloneThinking.isNullOrBlank()) {
-                                    ReasoningRow(
-                                        entry.standaloneThinking,
-                                        streaming = false,
-                                        id = "thinking-${entry.messageIndex ?: item.group.id}",
+            val lastProcess = turn.parts.lastOrNull { it is TurnPart.Process }
+            turn.parts.forEach { part ->
+                when (part) {
+                    is TurnPart.Process -> {
+                        if (isOpen) {
+                            AnimatedVisibility(
+                                visible = true,
+                                enter = expandVertically() + fadeIn(),
+                                exit = shrinkVertically() + fadeOut()
+                            ) {
+                                val groups = part.items.mapNotNull { entry ->
+                                    (entry.item as? AgentConversationItem.Activity)?.group
+                                }
+                                if (groups.isNotEmpty()) {
+                                    ActivityRow(
+                                        groups = groups,
+                                        isLive = state.streaming && isLastTurn && part == lastProcess,
                                     )
                                 }
-                                val isLiveGroup = state.streaming && isLastTurn &&
-                                    entry == turn.processItems.lastOrNull { it.item is AgentConversationItem.Activity }
-                                ActivityRow(item.group, isLive = isLiveGroup)
                             }
-                            is AgentConversationItem.Message -> {
-                                MessageRow(
-                                    message = item.message,
-                                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
-                                    messageKey = entry.messageIndex ?: 0,
-                                )
-                            }
+                        }
+                    }
+                    is TurnPart.Answer -> {
+                        if (part.item.item is AgentConversationItem.Message) {
+                            MessageRow(
+                                message = part.item.item.message,
+                                reasoning = part.item.messageIndex?.let { state.messageReasoning[it] },
+                                messageKey = part.item.messageIndex ?: part.item.item.message.hashCode(),
+                            )
                         }
                     }
                 }
             }
-        }
-
-        turn.answerItems.forEach { entry ->
-            if (entry.item is AgentConversationItem.Message) {
-                MessageRow(
-                    message = entry.item.message,
-                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
-                    messageKey = entry.messageIndex ?: entry.item.message.hashCode(),
-                )
+        } else {
+            turn.parts.forEach { part ->
+                if (part is TurnPart.Answer && part.item.item is AgentConversationItem.Message) {
+                    MessageRow(
+                        message = part.item.item.message,
+                        reasoning = part.item.messageIndex?.let { state.messageReasoning[it] },
+                        messageKey = part.item.messageIndex ?: part.item.item.message.hashCode(),
+                    )
+                }
             }
         }
     }
@@ -1304,13 +1303,15 @@ private fun ProcessGroupHeader(
 
 @Composable
 private fun ActivityRow(
-    group: AgentActivityGroup,
+    groups: List<AgentActivityGroup>,
     isLive: Boolean = false,
 ) {
-    var expanded by rememberSaveable(group.id) { mutableStateOf(isLive) }
+    val groupKey = remember(groups) { groups.joinToString("|") { it.id } }
+    var expanded by rememberSaveable(groupKey) { mutableStateOf(isLive) }
 
-    val items = remember(group.operations) {
-        group.operations.map { op ->
+    val operations = remember(groups) { groups.flatMap { it.operations } }
+    val items = remember(operations) {
+        operations.map { op ->
             ProcessCallItem(
                 callId = op.id,
                 name = op.title,
@@ -1345,7 +1346,7 @@ private fun ActivityRow(
                     .padding(top = 4.dp, bottom = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
-                group.operations.forEach { operation -> ActivityOperationRow(operation) }
+                operations.forEach { operation -> ActivityOperationRow(operation) }
             }
         }
     }

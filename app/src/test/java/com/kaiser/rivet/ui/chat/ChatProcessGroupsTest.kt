@@ -265,4 +265,39 @@ class ChatProcessGroupsTest {
         assertFalse(turnsError[0].spec.canFold)
         assertEquals("Failed", turnsError[0].spec.foldLabel())
     }
+    @Test
+    fun keepsProcessAndAnswerOrderInsteadOfGroupingAllProcessFirst() {
+        val items = listOf(
+            TurnItem("user-0", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem("proc-0", isUser = false, isAnswer = false, isProcess = true),
+            TurnItem("answer-0", isUser = false, isAnswer = true, isProcess = false),
+            TurnItem("proc-1", isUser = false, isAnswer = false, isProcess = true),
+            TurnItem("answer-1", isUser = false, isAnswer = true, isProcess = false),
+        )
+        val turn = segmentTurnItems(items, false, mapOf(0 to 1000L), false, false).single()
+        assertEquals(4, turn.parts.size)
+        assertTrue(turn.parts[0] is TurnPart.Process)
+        assertEquals(listOf("proc-0"), (turn.parts[0] as TurnPart.Process).items)
+        assertTrue(turn.parts[1] is TurnPart.Answer)
+        assertEquals("answer-0", (turn.parts[1] as TurnPart.Answer).item)
+        assertTrue(turn.parts[2] is TurnPart.Process)
+        assertEquals(listOf("proc-1"), (turn.parts[2] as TurnPart.Process).items)
+        assertTrue(turn.parts[3] is TurnPart.Answer)
+        assertEquals("answer-1", (turn.parts[3] as TurnPart.Answer).item)
+    }
+
+    @Test
+    fun mergesAdjacentProcessItemsIntoOnePreAnswerRun() {
+        val items = listOf(
+            TurnItem("user-0", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem("proc-0", isUser = false, isAnswer = false, isProcess = true),
+            TurnItem("proc-1", isUser = false, isAnswer = false, isProcess = true),
+            TurnItem("answer-0", isUser = false, isAnswer = true, isProcess = false),
+        )
+        val turn = segmentTurnItems(items, false, mapOf(0 to 1000L), false, false).single()
+        assertEquals(2, turn.parts.size)
+        assertEquals(listOf("proc-0", "proc-1"), (turn.parts[0] as TurnPart.Process).items)
+        assertTrue(turn.parts[1] is TurnPart.Answer)
+    }
+
 }
