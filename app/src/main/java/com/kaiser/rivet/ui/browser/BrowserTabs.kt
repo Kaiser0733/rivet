@@ -18,6 +18,9 @@ data class WindowCloseTarget(
     val activeId: String?,
     val url: String,
     val title: String,
+    val readerMode: Boolean = false,
+    val readerText: String = "",
+    val pageReady: Boolean = false,
 )
 
 /** Pure tab-strip mapping and close targeting. */

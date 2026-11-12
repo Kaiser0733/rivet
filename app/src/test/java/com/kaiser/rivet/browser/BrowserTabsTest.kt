@@ -3,6 +3,7 @@ package com.kaiser.rivet.browser
 import com.kaiser.rivet.ui.browser.BrowserTabs
 import com.kaiser.rivet.ui.browser.BrowserWindowInfo
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
 import org.junit.Test
 
@@ -33,6 +34,9 @@ class BrowserTabsTest {
         assertEquals("a", target.activeId)
         assertEquals("https://example.com/", target.url)
         assertEquals("Home", target.title)
+        assertFalse(target.readerMode)
+        assertEquals("", target.readerText)
+        assertFalse(target.pageReady)
     }
 
     @Test fun closingAnInactiveWindowKeepsTheActivePage() {

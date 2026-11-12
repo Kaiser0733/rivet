@@ -1219,6 +1219,9 @@ class BrowserSession(
                     activeWindowId = activeWindowId,
                     url = activeUrl,
                     title = activeTitle,
+                    readerMode = target.readerMode,
+                    readerText = target.readerText,
+                    pageReady = target.pageReady,
                     windows = windowSummaries(),
                 )
             }
