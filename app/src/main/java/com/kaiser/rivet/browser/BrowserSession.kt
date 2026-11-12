@@ -155,6 +155,7 @@ class BrowserSession(
     private val actionLock = Mutex()
     private val prefs = app.getSharedPreferences("browser", Context.MODE_PRIVATE)
     private val readerService = ReaderService()
+    private val readerCache = ReaderCache()
     private val trail = BrowserDomainTrail()
     private val snapshots = BrowserSnapshotStore(File(app.filesDir, "browser-snapshots"))
     private val windows = linkedMapOf<String, BrowserSnapshot>().apply {
@@ -440,6 +441,7 @@ class BrowserSession(
         actionLock.withLock {
             val url = BrowserUrlPolicy.validate(rawUrl)
             activeUrl = url
+            readerCache.navigate()
             refreshBudget(publish = false)
             if (BrowserAuthGuard.isAuthSurface(url)) {
                 stateHandoff(url, "identity")
@@ -449,6 +451,7 @@ class BrowserSession(
             activeUrl = url
             try {
                 val document = readerService.fetch(url)
+                readerCache.record(readerCache.navigationToken, document)
                 reader = document
                 activeTitle = document.title
                 recordVisit(url, projectPreview || BrowserAuthGuard.isLoopback(url), publish = false)
@@ -470,6 +473,7 @@ class BrowserSession(
             idleArming.onActivity()
             val url = BrowserUrlPolicy.validate(rawUrl)
             activeUrl = url
+            readerCache.navigate()
             refreshBudget(publish = true)
             if (BrowserAuthGuard.isAuthSurface(url)) {
                 stateHandoff(url, "identity")
@@ -503,11 +507,12 @@ class BrowserSession(
         }
 
     suspend fun read(chunk: Int = 0): BrowserReadResult = actionLock.withLock {
-        val document = if (renderer?.url == activeUrl && activeUrl.isNotBlank() &&
-            (reader?.url != activeUrl || reader?.chunks?.isEmpty() == true ||
-                reader?.needsRenderer == true)) {
+        val cached = readerCache.cached()
+        val document = if (renderer != null && activeUrl.isNotBlank()) {
             readRenderedDocument()
-        } else reader ?: throw BrowserFailure("browser_not_open", "Open a page first.")
+        } else {
+            cached ?: throw BrowserFailure("browser_not_open", "Open a page first.")
+        }
         if (document.needsRenderer) throw BrowserFailure("browser_needs_renderer",
             "This page needs the renderer for readable text. Rivet will start a quiet visual session.")
         if (document.chunks.isEmpty()) throw BrowserFailure("browser_empty",
@@ -522,11 +527,12 @@ class BrowserSession(
     }
 
     suspend fun find(text: String): List<ReaderHit> = actionLock.withLock {
-        val document = if (renderer?.url == activeUrl && activeUrl.isNotBlank() &&
-            (reader?.url != activeUrl || reader?.chunks?.isEmpty() == true ||
-                reader?.needsRenderer == true)) {
+        val cached = readerCache.cached()
+        val document = if (renderer != null && activeUrl.isNotBlank()) {
             readRenderedDocument()
-        } else reader ?: throw BrowserFailure("browser_not_open", "Open a page first.")
+        } else {
+            cached ?: throw BrowserFailure("browser_not_open", "Open a page first.")
+        }
         if (document.needsRenderer) throw BrowserFailure("browser_needs_renderer",
             "This page needs the renderer for searchable text. Rivet will start a quiet visual session.")
         ReaderExtractor.find(document.text, text)
@@ -541,8 +547,12 @@ class BrowserSession(
     /** The explicit in-browser Reader toggle; this is allowed to change screen state. */
     suspend fun showReader() = actionLock.withLock {
         if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
-        val document = if (renderer?.url == activeUrl && activeUrl.isNotBlank()) readRenderedDocument()
-        else reader?.takeIf { it.url == activeUrl } ?: readerService.fetch(activeUrl)
+        val cached = readerCache.cached()
+        val document = if (cached != null && cached.url == activeUrl) cached
+        else if (renderer != null && activeUrl.isNotBlank()) readRenderedDocument()
+        else readerService.fetch(activeUrl).also {
+            readerCache.record(readerCache.navigationToken, it)
+        }
         val first = document.chunks.firstOrNull()
         readerSampleJob?.cancel()
         readerSampleJob = null
@@ -765,6 +775,7 @@ class BrowserSession(
     private data class PendingPaintRestart(val url: String, val snapshot: BrowserSnapshot?)
 
     private suspend fun readRenderedDocument(): ReaderDocument {
+        val token = readerCache.navigationToken
         val view = renderer ?: throw BrowserFailure("browser_renderer_unavailable",
             "Open the visual browser so the page renderer can start.")
         val pageUrl = view.url ?: activeUrl
@@ -791,7 +802,12 @@ class BrowserSession(
             """.trimIndent())
             BrowserElementRefs.fromJson(raw.trim().trim('"').replace("\\\"", "\""))
         }.getOrDefault(emptyList())
-        if (result.text.isBlank()) throw BrowserFailure("browser_empty", "This page has no readable text.")
+        if (result.text.isBlank()) throw BrowserFailure("browser_empty",
+            "This page has no readable text. If the page is still loading, retry browser_read after it finishes.")
+        if (!readerCache.record(token, result)) {
+            throw BrowserFailure("browser_page_loading",
+                "The page changed while Rivet was reading it. Retry browser_read after the page finishes loading.")
+        }
         reader = result
         recordVisit(pageUrl, publish = false)
         return result
@@ -1315,6 +1331,7 @@ class BrowserSession(
         override fun onPageFinished(view: WebView, url: String?) {
             val actual = url ?: view.url ?: activeUrl
             activeUrl = actual
+            readerCache.navigate()
             activeTitle = view.title.orEmpty()
             recordVisit(actual)
             updateActiveWindow(actual, activeTitle)
