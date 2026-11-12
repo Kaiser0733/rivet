@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,13 +18,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -42,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -55,6 +63,8 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kaiser.rivet.R
@@ -84,6 +94,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
     var settingsOpen by remember { mutableStateOf(false) }
     var domainsOpen by remember { mutableStateOf(false) }
     var windowsOpen by remember { mutableStateOf(false) }
+    var chromeHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
 
     LaunchedEffect(Unit) {
         session.customTabOpener = { url ->
@@ -101,7 +113,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
         else Modifier)) {
         if (state.readerMode) {
             ReaderPane(state.readerText, Modifier.fillMaxSize().padding(
-                top = BrowserChrome.topPadding(0.dp), bottom = BrowserChrome.bottomPadding(0.dp))) { url ->
+                top = with(density) { chromeHeightPx.toDp() },
+                bottom = BrowserChrome.bottomPadding(0.dp))) { url ->
                 scope.launch { runCatching { session.openVisual(url, userInitiated = true) } }
             }
         } else if (state.url.isBlank() && !state.rendererVisible) {
@@ -118,7 +131,13 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
         }
 
         Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding()
-            .onSizeChanged { onChromeHeight(it.height) }) {
+            .onSizeChanged { chromeHeightPx = it.height; onChromeHeight(it.height) }) {
+            BrowserTabStrip(
+                windows = state.windows,
+                onSelect = session::selectWindow,
+                onClose = session::closeWindow,
+                onOpenWindows = { windowsOpen = true },
+            )
             Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically) {
@@ -320,6 +339,72 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             },
             confirmButton = { TextButton(onClick = { windowsOpen = false }) { Text("Close") } },
         )
+    }
+}
+
+@Composable
+private fun BrowserTabStrip(
+    windows: List<com.kaiser.rivet.browser.BrowserWindowSummary>,
+    onSelect: (String) -> Unit,
+    onClose: (String) -> Unit,
+    onOpenWindows: () -> Unit,
+) {
+    val chips = remember(windows) {
+        BrowserTabs.chips(windows.map {
+            BrowserWindowInfo(it.id, it.title, it.url, it.active)
+        })
+    }
+    if (chips.isEmpty()) return
+    LazyRow(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        items(chips, key = { it.id }) { chip ->
+            Surface(
+                color = if (chip.active) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                shape = RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp),
+                border = if (chip.active) BorderStroke(1.dp,
+                    MaterialTheme.colorScheme.outlineVariant) else null,
+                modifier = Modifier.height(36.dp).widthIn(min = 96.dp, max = 200.dp)
+                    .clickable { onSelect(chip.id) },
+            ) {
+                Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 1.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painterResource(R.drawable.ic_browser), null,
+                        Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(6.dp))
+                    Text(chip.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (chip.active) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.widthIn(max = 132.dp))
+                    if (chip.active) {
+                        IconButton(onClick = { onClose(chip.id) },
+                            modifier = Modifier.size(26.dp)) {
+                            Icon(painterResource(R.drawable.ic_close), "Close tab",
+                                Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Surface(
+                color = Color.Transparent,
+                modifier = Modifier.height(36.dp).clickable { onOpenWindows() },
+            ) {
+                Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painterResource(R.drawable.ic_processes), "Windows",
+                        Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(4.dp))
+                    Text("${chips.size}", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
     }
 }
 
