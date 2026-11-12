@@ -1310,9 +1310,10 @@ private fun ActivityRow(
     var expanded by rememberSaveable(groupKey) { mutableStateOf(isLive) }
 
     val operations = remember(groups) { groups.flatMap { it.operations } }
-    val items = remember(operations) { processCallItems(operations) }
-    val counts = remember(items) { calculateActivityCounts(items) }
-    val summary = remember(counts, isLive) { ProcessGroupSummary(counts = counts, closed = !isLive) }
+    val summary = remember(operations, isLive) {
+        processGroupSummary(operations, closed = !isLive)
+    }
+    val counts = summary.counts
     val title = if (isLive) summary.liveLabel() else summary.title()
     val primaryKind = counts.firstOrNull()?.kind ?: ProcessActivityKind.Thinking
 

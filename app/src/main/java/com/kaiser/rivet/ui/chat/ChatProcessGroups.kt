@@ -241,6 +241,27 @@ fun processCallItems(operations: List<AgentActivityOperation>): List<ProcessCall
         )
     }
 
+
+/**
+ * Builds the live header from the same projected operations the rows display.
+ * The running/preparing item is the latest lifecycle state, not a caller-supplied summary.
+ */
+fun processGroupSummary(
+    operations: List<AgentActivityOperation>,
+    closed: Boolean,
+): ProcessGroupSummary {
+    val items = processCallItems(operations)
+    val running = items.lastOrNull { it.isRunning }
+    val preparing = items.lastOrNull { it.isPreparing }
+    val active = running ?: preparing
+    return ProcessGroupSummary(
+        counts = calculateActivityCounts(items),
+        running = active?.kind,
+        runningDetail = normalizeLiveDetail(active?.argsJson.orEmpty()),
+        preparing = running == null && preparing != null,
+        closed = closed,
+    )
+}
 data class ProcessCallItem(
     val callId: String,
     val name: String,

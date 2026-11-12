@@ -316,4 +316,35 @@ class ChatProcessGroupsTest {
         assertEquals(ProcessActivityKind.Commands, item.kind)
     }
 
+    @Test
+    fun derivesLiveRunningKindAndDetailFromProjectedOperations() {
+        val running = AgentActivityOperation(
+            id = "hashed-running",
+            title = "Run",
+            detail = "gradlew test",
+            outcome = ActivityOutcome.Running,
+            toolName = "run_command",
+        )
+        val summary = processGroupSummary(listOf(running), closed = false)
+        assertEquals(ProcessActivityKind.Commands, summary.running)
+        assertEquals("gradlew test", summary.runningDetail)
+        assertEquals("Running commands · gradlew test", summary.liveLabel())
+        assertFalse(summary.preparing)
+    }
+
+    @Test
+    fun derivesPreparingLiveStateFromAQueuedOperation() {
+        val queued = AgentActivityOperation(
+            id = "hashed-queued",
+            title = "Read",
+            detail = "src/App.kt",
+            outcome = ActivityOutcome.Queued,
+            toolName = "read_file",
+        )
+        val summary = processGroupSummary(listOf(queued), closed = false)
+        assertEquals(ProcessActivityKind.Read, summary.running)
+        assertTrue(summary.preparing)
+        assertEquals("Preparing to read files · src/App.kt", summary.liveLabel())
+    }
+
 }
