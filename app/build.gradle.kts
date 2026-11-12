@@ -29,8 +29,8 @@ android {
         applicationId = "com.kaiser.rivet"
         minSdk = 26
         targetSdk = 35
-        versionCode = 33
-        versionName = "1.4.4"
+        versionCode = 34
+        versionName = "1.4.5"
     }
 
     buildFeatures {
