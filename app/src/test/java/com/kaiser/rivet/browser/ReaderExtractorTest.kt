@@ -36,6 +36,20 @@ class ReaderExtractorTest {
         assertTrue(doc.needsRenderer)
     }
 
+    @Test fun hiddenPanelsAreNotReaderTextByDefault() {
+        val html = """<html><body><article>
+            <p>Visible game instructions with enough words to be a real article body.</p>
+            <div style="display:none"><p>Paused hidden panel</p></div>
+            <div style="visibility:hidden"><p>Game over hidden panel</p></div>
+        </article></body></html>"""
+        val visible = ReaderExtractor.extract(html, "https://game.example")
+        assertTrue(visible.text.contains("Visible game instructions"))
+        assertFalse(visible.text.contains("Paused hidden panel"))
+        assertFalse(visible.text.contains("Game over hidden panel"))
+        val all = ReaderExtractor.extract(html, "https://game.example", visibleOnly = false)
+        assertTrue(all.text.contains("Paused hidden panel"))
+    }
+
     @Test fun findReturnsBoundedSnippets() {
         val hits = ReaderExtractor.find("one two three one two three", "TWO", limit = 2)
         assertEquals(2, hits.size)

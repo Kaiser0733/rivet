@@ -29,10 +29,11 @@ object ReaderExtractor {
     private val BLOCK_TAGS = setOf("p", "div", "section", "article", "main", "ul", "ol", "table",
         "blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "br", "li")
 
-    fun extract(html: String, url: String): ReaderDocument {
+    fun extract(html: String, url: String, visibleOnly: Boolean = true): ReaderDocument {
         val doc = Jsoup.parse(html, url)
         doc.select("script,style,noscript,template,svg,nav,header,footer,aside,form,iframe").remove()
         doc.select("[aria-hidden=true]").remove()
+        if (visibleOnly) removeHidden(doc)
         val title = doc.title().trim().ifEmpty {
             doc.selectFirst("h1")?.text()?.trim().orEmpty()
         }
@@ -73,6 +74,18 @@ object ReaderExtractor {
             val anchor = Regex("(?m)^(#{1,6})\\s+(.+)$").findAll(before).lastOrNull()
                 ?.groupValues?.get(2)?.trim().orEmpty().ifBlank { title }
             ReaderChunk(index, total, anchor, text.substring(start, end))
+        }
+    }
+
+    private fun removeHidden(doc: org.jsoup.nodes.Document) {
+        doc.select("[hidden],input[type=hidden]").remove()
+        doc.select("[style]").forEach { element ->
+            val style = element.attr("style").lowercase().replace(Regex("\\s+"), "")
+            if (style.contains("display:none") || style.contains("visibility:hidden") ||
+                style.contains("opacity:0") || style.contains("left:-") ||
+                style.contains("top:-9") || style.contains("transform:translate(-")) {
+                element.remove()
+            }
         }
     }
 

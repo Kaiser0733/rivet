@@ -506,7 +506,7 @@ class BrowserSession(
             BrowserOpenResult(activeUrl, activeTitle, 0, false, budget.tier, budget.capMb)
         }
 
-    suspend fun read(chunk: Int = 0): BrowserReadResult = actionLock.withLock {
+    suspend fun read(chunk: Int = 0, visibleOnly: Boolean = true): BrowserReadResult = actionLock.withLock {
         val cached = readerCache.cached()
         val document = if (renderer != null && activeUrl.isNotBlank()) {
             readRenderedDocument()
@@ -774,7 +774,7 @@ class BrowserSession(
 
     private data class PendingPaintRestart(val url: String, val snapshot: BrowserSnapshot?)
 
-    private suspend fun readRenderedDocument(): ReaderDocument {
+    private suspend fun readRenderedDocument(visibleOnly: Boolean = true): ReaderDocument {
         val token = readerCache.navigationToken
         val view = renderer ?: throw BrowserFailure("browser_renderer_unavailable",
             "Open the visual browser so the page renderer can start.")
@@ -783,7 +783,7 @@ class BrowserSession(
         val html = runCatching { org.json.JSONTokener(rawHtml).nextValue() as? String }
             .getOrNull().orEmpty()
         val document = if (html.length in 80..2_000_000) {
-            runCatching { ReaderExtractor.extract(html, pageUrl) }
+            runCatching { ReaderExtractor.extract(html, pageUrl, visibleOnly) }
                 .getOrNull()?.takeIf { it.text.isNotBlank() }?.copy(needsRenderer = false)
         } else null
         val fallbackText = if (document == null) {

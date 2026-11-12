@@ -54,7 +54,7 @@ class BrowserTools(private val session: BrowserSession) {
             val root = args.string("preview_root")
             session.previewStarter?.invoke(root, previewEntry)
                 ?: throw BrowserFailure("browser_preview_unavailable",
-                    "Project preview needs an open project and the local preview server.")
+                    "Project preview needs preview_root and preview_entry from an open project plus the local preview server.")
         } else args.string("url")
         if (url.isBlank()) throw BrowserFailure("browser_invalid_url", "browser_open needs a URL or a preview entry.")
         return readOnly(call) {
@@ -171,12 +171,13 @@ class BrowserTools(private val session: BrowserSession) {
 
     private suspend fun read(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val chunk = args.int("chunk") ?: 0
+        val visibleOnly = args["visible_only"]?.jsonPrimitive?.booleanOrNull ?: true
         val result = try {
-            session.read(chunk)
+            session.read(chunk, visibleOnly)
         } catch (e: BrowserFailure) {
             if (e.code != "browser_needs_renderer") throw e
             session.escalateForRead()
-            session.read(chunk)
+            session.read(chunk, visibleOnly)
         }
         return value(call, buildJsonObject {
             put("url", result.url)
@@ -302,6 +303,7 @@ class BrowserTools(private val session: BrowserSession) {
 
     private fun JsonObject.string(key: String): String = this[key]?.jsonPrimitive?.content.orEmpty()
     private fun JsonObject.bool(key: String): Boolean = this[key]?.jsonPrimitive?.content?.toBoolean() == true
+    private val JsonPrimitive.booleanOrNull: Boolean? get() = content.toBooleanStrictOrNull()
     private fun JsonObject.int(key: String): Int? = this[key]?.jsonPrimitive?.intOrNull
 
     companion object {
@@ -329,8 +331,8 @@ class BrowserTools(private val session: BrowserSession) {
                 schema(emptyList(), "url" to string, "new_window" to boolean,
                     "preview_root" to string, "preview_entry" to string)),
             AgentToolDefinition("browser_read",
-                "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
-                schema(emptyList(), "chunk" to integer)),
+                "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. Hidden DOM text is excluded by default; pass visible_only=false only when the user explicitly needs it. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
+                schema(emptyList(), "chunk" to integer, "visible_only" to boolean)),
             AgentToolDefinition("browser_find",
                 "Find text in the current page's reader text and return bounded snippets with offsets.",
                 schema(listOf("text"), "text" to string)),
