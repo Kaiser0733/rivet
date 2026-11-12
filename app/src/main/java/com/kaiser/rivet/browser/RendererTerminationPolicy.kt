@@ -8,7 +8,25 @@ enum class RendererTerminationOutcome {
     Refused,
 }
 
+enum class RendererTeardownStep {
+    RemoveFromParent,
+    StopLoading,
+    ClearHistory,
+    TerminateRenderer,
+    Destroy,
+}
+
 object RendererTerminationPolicy {
+    /** The one strict order used when a renderer is released. */
+    fun teardownSteps(featureSupported: Boolean, handleAvailable: Boolean): List<RendererTeardownStep> =
+        buildList {
+            add(RendererTeardownStep.RemoveFromParent)
+            add(RendererTeardownStep.StopLoading)
+            add(RendererTeardownStep.ClearHistory)
+            if (featureSupported && handleAvailable) add(RendererTeardownStep.TerminateRenderer)
+            add(RendererTeardownStep.Destroy)
+        }
+
     fun request(featureSupported: Boolean, handleAvailable: Boolean,
                 terminate: () -> Boolean): RendererTerminationOutcome {
         if (!featureSupported) return RendererTerminationOutcome.Unsupported

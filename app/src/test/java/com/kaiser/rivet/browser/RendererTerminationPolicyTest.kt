@@ -1,6 +1,7 @@
 package com.kaiser.rivet.browser
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class RendererTerminationPolicyTest {
@@ -29,4 +30,24 @@ class RendererTerminationPolicyTest {
         assertEquals(RendererTerminationOutcome.Refused,
             RendererTerminationPolicy.request(true, true) { false })
     }
+    @Test fun theTerminatingPathUsesTheStrictOrderRemoveStopClearTerminateDestroy() {
+        assertEquals(
+            listOf(
+                RendererTeardownStep.RemoveFromParent,
+                RendererTeardownStep.StopLoading,
+                RendererTeardownStep.ClearHistory,
+                RendererTeardownStep.TerminateRenderer,
+                RendererTeardownStep.Destroy,
+            ),
+            RendererTerminationPolicy.teardownSteps(featureSupported = true, handleAvailable = true),
+        )
+    }
+
+    @Test fun theUnsupportedPathStillUsesTheStrictOrderWithoutTerminate() {
+        val steps = RendererTerminationPolicy.teardownSteps(
+            featureSupported = false, handleAvailable = true)
+        assertEquals(RendererTeardownStep.Destroy, steps.last())
+        assertFalse(steps.contains(RendererTeardownStep.TerminateRenderer))
+    }
+
 }
