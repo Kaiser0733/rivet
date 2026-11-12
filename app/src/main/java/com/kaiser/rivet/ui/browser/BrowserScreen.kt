@@ -164,39 +164,6 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                             }
                         }
                     }) { Text("Go") }
-                    Box {
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(painterResource(R.drawable.ic_settings), "Browser menu")
-                        }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(text = {
-                                Text(if (state.readerMode) "Page view" else "Reader view")
-                            }, onClick = {
-                                menuOpen = false
-                                scope.launch {
-                                    if (state.readerMode) session.hideReader()
-                                    else runCatching { session.showReader() }
-                                }
-                            })
-                            DropdownMenuItem(text = { Text("Sites") }, onClick = {
-                                menuOpen = false; domainsOpen = true
-                            })
-                            DropdownMenuItem(text = { Text("Windows (${state.windows.size})") }, onClick = {
-                                menuOpen = false; windowsOpen = true
-                            })
-                            DropdownMenuItem(text = { Text("Open in my browser") }, onClick = {
-                                menuOpen = false
-                                if (state.url.isNotBlank()) session.openExternal(state.url)
-                            })
-                            DropdownMenuItem(text = { Text("Save link") }, onClick = {
-                                menuOpen = false
-                                scope.launch { runCatching { session.bookmark() } }
-                            })
-                            DropdownMenuItem(text = { Text("Settings") }, onClick = {
-                                menuOpen = false; settingsOpen = true
-                            })
-                        }
-                    }
                 }
             }
             state.handoff?.let { handoff ->
@@ -257,19 +224,26 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
 
         Surface(Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding(),
             tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+            Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { scope.launch { runCatching { session.back() } } }) {
                     Icon(painterResource(R.drawable.ic_back), "Page back")
                 }
-                TextButton(onClick = {
+                IconButton(onClick = { scope.launch { runCatching { session.forward() } } }) {
+                    Icon(painterResource(R.drawable.ic_forward), "Page forward")
+                }
+                IconButton(onClick = { scope.launch { runCatching { session.reload() } } }) {
+                    Icon(painterResource(R.drawable.ic_reload), "Reload page")
+                }
+                IconButton(onClick = {
                     scope.launch {
                         if (state.readerMode) session.hideReader()
                         else runCatching { session.showReader() }
                     }
-                }) { Text(if (state.readerMode) "Page" else "Reader") }
-                TextButton(onClick = { domainsOpen = true }) {
-                    Text("Sites (${state.domains.map { it.host }.distinct().size})")
+                }) {
+                    Icon(painterResource(if (state.readerMode) R.drawable.ic_visibility_off
+                        else R.drawable.ic_visibility),
+                        if (state.readerMode) "Page view" else "Reader view")
                 }
                 if (state.agentRunActive && state.agentVisualActive &&
                     state.driving == BrowserDriving.Agent) {
@@ -286,6 +260,51 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(painterResource(R.drawable.ic_more), "Browser menu")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (state.readerMode) "Page view" else "Reader view") },
+                            leadingIcon = { Icon(painterResource(
+                                if (state.readerMode) R.drawable.ic_visibility_off
+                                else R.drawable.ic_visibility), null) },
+                            onClick = {
+                                menuOpen = false
+                                scope.launch {
+                                    if (state.readerMode) session.hideReader()
+                                    else runCatching { session.showReader() }
+                                }
+                            })
+                        DropdownMenuItem(
+                            text = { Text("Sites") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_browser), null) },
+                            onClick = { menuOpen = false; domainsOpen = true })
+                        DropdownMenuItem(
+                            text = { Text("Windows (${state.windows.size})") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_processes), null) },
+                            onClick = { menuOpen = false; windowsOpen = true })
+                        DropdownMenuItem(
+                            text = { Text("Open in my browser") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_forward), null) },
+                            onClick = {
+                                menuOpen = false
+                                if (state.url.isNotBlank()) session.openExternal(state.url)
+                            })
+                        DropdownMenuItem(
+                            text = { Text("Save link") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_pin), null) },
+                            onClick = {
+                                menuOpen = false
+                                scope.launch { runCatching { session.bookmark() } }
+                            })
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_settings), null) },
+                            onClick = { menuOpen = false; settingsOpen = true })
+                    }
+                }
             }
         }
     }
