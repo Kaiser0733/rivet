@@ -13,6 +13,12 @@ class BrowserIdleTimerTest {
         assertEquals(0L, BrowserIdleTimer.remainingMs(hidden, hidden + BrowserIdleTimer.IDLE_MS + 1))
     }
 
+    @Test fun aBackgroundedBrowserEndsEvenWhenTheScreenStateIsStillVisible() {
+        assertTrue(BrowserIdleTimer.shouldEndOnTimer(visible = true, appBackgrounded = true))
+        assertTrue(BrowserIdleTimer.shouldEndOnTimer(visible = false, appBackgrounded = false))
+        assertFalse(BrowserIdleTimer.shouldEndOnTimer(visible = true, appBackgrounded = false))
+    }
+
     @Test fun neverHiddenDoesNotExpire() {
         assertFalse(BrowserIdleTimer.shouldDestroy(0L, Long.MAX_VALUE))
     }

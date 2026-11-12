@@ -7,6 +7,9 @@ object BrowserIdleTimer {
     fun shouldDestroy(hiddenAtMillis: Long, nowMillis: Long): Boolean =
         hiddenAtMillis > 0L && nowMillis - hiddenAtMillis >= IDLE_MS
 
+    fun shouldEndOnTimer(visible: Boolean, appBackgrounded: Boolean): Boolean =
+        !visible || appBackgrounded
+
     fun remainingMs(hiddenAtMillis: Long, nowMillis: Long): Long =
         if (hiddenAtMillis <= 0L) IDLE_MS else (IDLE_MS - (nowMillis - hiddenAtMillis)).coerceAtLeast(0L)
 }

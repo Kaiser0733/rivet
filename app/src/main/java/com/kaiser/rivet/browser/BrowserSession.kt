@@ -196,6 +196,7 @@ class BrowserSession(
     private var elementRefs: List<BrowserElementRef> = emptyList()
     private var idleJob: kotlinx.coroutines.Job? = null
     private val idleArming = BrowserIdleArming()
+    private var appBackgrounded = false
     private var releaseJob: kotlinx.coroutines.Job? = null
     private var periodic: kotlinx.coroutines.Job? = null
     private var teardownWatchdog: kotlinx.coroutines.Job? = null
@@ -273,12 +274,19 @@ class BrowserSession(
 
     /** MainActivity.onStop: the same three-minute clock, not a second timer. */
     fun onAppBackground() {
-        if (idleArming.onBackground(renderer != null || _state.value.rendererVisible)) armIdle()
+        appBackgrounded = true
+        if (idleArming.onBackground(renderer != null || _state.value.rendererVisible,
+                System.currentTimeMillis())) armIdle()
     }
 
-    /** MainActivity.onStart: returning to the app disarms the background clock. */
+    /** MainActivity.onStart: enforce an expired background deadline immediately. */
     fun onAppForeground() {
-        if (idleArming.onForeground()) {
+        appBackgrounded = false
+        if (idleArming.onForeground(System.currentTimeMillis())) {
+            idleJob?.cancel()
+            idleJob = null
+            endSession()
+        } else {
             idleJob?.cancel()
             idleJob = null
         }
@@ -286,9 +294,10 @@ class BrowserSession(
 
     private fun armIdle() {
         idleJob?.cancel()
+        idleArming.onHidden(System.currentTimeMillis())
         idleJob = scope.launch {
             kotlinx.coroutines.delay(BrowserIdleTimer.IDLE_MS)
-            if (!_state.value.visible) endSession()
+            if (BrowserIdleTimer.shouldEndOnTimer(_state.value.visible, appBackgrounded)) endSession()
         }
     }
 

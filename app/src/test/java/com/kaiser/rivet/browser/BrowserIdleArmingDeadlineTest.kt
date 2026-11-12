@@ -1,0 +1,24 @@
+package com.kaiser.rivet.browser
+
+import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
+import org.junit.Test
+
+class BrowserIdleArmingDeadlineTest {
+    @Test fun backgroundingStoresTheDeadlineAndForegroundingEnforcesIt() {
+        val arming = BrowserIdleArming()
+        val now = 10_000L
+        assertTrue(arming.onBackground(rendererAlive = true, now = now))
+        assertEquals(now + BrowserIdleTimer.IDLE_MS, arming.deadline)
+        assertTrue(arming.onForeground(now + BrowserIdleTimer.IDLE_MS))
+        assertFalse(arming.armed)
+    }
+
+    @Test fun returningBeforeTheDeadlineCancelsWithoutTeardown() {
+        val arming = BrowserIdleArming()
+        arming.onBackground(rendererAlive = true, now = 10_000L)
+        assertFalse(arming.onForeground(10_000L + BrowserIdleTimer.IDLE_MS - 1))
+        assertFalse(arming.armed)
+    }
+}
