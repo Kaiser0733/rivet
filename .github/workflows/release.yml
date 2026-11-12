@@ -114,6 +114,11 @@ jobs:
           release.keystore "$RIVET_KEYSTORE_PASSWORD" "$RIVET_KEY_ALIAS"
           release/production-signer.sha256 "$RELEASE_TAG"
 
+      - name: Verify packaged loopback network config
+        run: >
+          python3 scripts/verify_network_security_artifact.py
+          app/build/outputs/apk/release/app-release.apk
+
       - name: Remove decoded keystore
         if: always()
         run: rm -f release.keystore
