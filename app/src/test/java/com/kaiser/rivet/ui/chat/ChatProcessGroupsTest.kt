@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.agent.AgentActivityOperation
+import com.kaiser.rivet.agent.ActivityOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -298,6 +300,20 @@ class ChatProcessGroupsTest {
         assertEquals(2, turn.parts.size)
         assertEquals(listOf("proc-0", "proc-1"), (turn.parts[0] as TurnPart.Process).items)
         assertTrue(turn.parts[1] is TurnPart.Answer)
+    }
+
+    @Test
+    fun classifiesOperationsFromTheCarriedToolNameNotTheHumanTitle() {
+        val operation = AgentActivityOperation(
+            id = "hashed-call",
+            title = "Run",
+            detail = "gradlew test",
+            outcome = ActivityOutcome.Completed,
+            toolName = "run_command",
+        )
+        val item = processCallItems(listOf(operation)).single()
+        assertEquals("run_command", item.name)
+        assertEquals(ProcessActivityKind.Commands, item.kind)
     }
 
 }

@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.agent.AgentActivityOperation
+import com.kaiser.rivet.agent.ActivityOutcome
+
 
 enum class ProcessActivityKind(val key: String) {
     Thinking("thinking"),
@@ -225,6 +228,18 @@ fun formatProcessTitle(counts: List<ActivityCount>): String {
 
 private fun String.decapitalize(): String =
     if (isNotEmpty()) this[0].lowercaseChar() + substring(1) else this
+
+fun processCallItems(operations: List<AgentActivityOperation>): List<ProcessCallItem> =
+    operations.map { op ->
+        ProcessCallItem(
+            callId = op.id,
+            name = op.toolName,
+            argsJson = op.detail,
+            isRunning = op.outcome == ActivityOutcome.Running,
+            isPreparing = op.outcome == ActivityOutcome.Queued ||
+                op.outcome == ActivityOutcome.WaitingApproval,
+        )
+    }
 
 data class ProcessCallItem(
     val callId: String,

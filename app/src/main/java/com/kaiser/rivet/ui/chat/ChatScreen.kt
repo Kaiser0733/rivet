@@ -1310,17 +1310,7 @@ private fun ActivityRow(
     var expanded by rememberSaveable(groupKey) { mutableStateOf(isLive) }
 
     val operations = remember(groups) { groups.flatMap { it.operations } }
-    val items = remember(operations) {
-        operations.map { op ->
-            ProcessCallItem(
-                callId = op.id,
-                name = op.title,
-                argsJson = op.detail,
-                isRunning = op.outcome == ActivityOutcome.Running || op.outcome == ActivityOutcome.WaitingApproval,
-                isPreparing = false
-            )
-        }
-    }
+    val items = remember(operations) { processCallItems(operations) }
     val counts = remember(items) { calculateActivityCounts(items) }
     val summary = remember(counts, isLive) { ProcessGroupSummary(counts = counts, closed = !isLive) }
     val title = if (isLive) summary.liveLabel() else summary.title()

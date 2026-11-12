@@ -16,6 +16,7 @@ data class AgentActivityOperation(
     val detail: String,
     val outcome: ActivityOutcome,
     val outcomeDetail: String? = null,
+    val toolName: String = "",
 )
 
 data class AgentActivityGroup(
@@ -97,7 +98,14 @@ object AgentActivityProjection {
             else -> null
         }
         // Correlation keys are hashes — the projection never carries raw call ids.
-        return AgentActivityOperation(AgentToolLifecycle.keyFor(call.id), title, detail, outcome, outcomeDetail)
+        return AgentActivityOperation(
+            id = AgentToolLifecycle.keyFor(call.id),
+            title = title,
+            detail = detail,
+            outcome = outcome,
+            outcomeDetail = outcomeDetail,
+            toolName = call.name,
+        )
     }
 
     private fun resultOutcome(result: AgentToolResult, value: Map<String, kotlinx.serialization.json.JsonElement>): ActivityOutcome {

@@ -5,6 +5,8 @@ import com.kaiser.rivet.agent.AgentActivityProjection
 import com.kaiser.rivet.agent.AgentConversationItem
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolLifecycle
+import com.kaiser.rivet.agent.AgentToolLifecycleStage
 import com.kaiser.rivet.agent.AgentToolResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -69,4 +71,24 @@ class ChatPresentationTest {
         assertEquals("model", displayModelName("model"))
         assertEquals("", displayModelName(""))
     }
+    @Test fun projectedOperationsCarryTheToolNameAndDriveProcessClassification() {
+        val call = AgentToolCall("projected-id", "run_command", "{\"command\":\"gradlew test\"}")
+        val timeline = AgentActivityProjection.conversation(
+            listOf(AgentMessage.assistant("", listOf(call))),
+            liveEvents = listOf(
+                AgentToolLifecycle(
+                    correlationKey = AgentToolLifecycle.keyFor(call.id),
+                    stage = AgentToolLifecycleStage.Started,
+                )
+            ),
+        )
+        val group = timeline.filterIsInstance<AgentConversationItem.Activity>().single().group
+        val operation = group.operations.single()
+        assertEquals("run_command", operation.toolName)
+        val item = processCallItems(listOf(operation)).single()
+        assertEquals("run_command", item.name)
+        assertEquals(ProcessActivityKind.Commands, item.kind)
+
+    }
+
 }
