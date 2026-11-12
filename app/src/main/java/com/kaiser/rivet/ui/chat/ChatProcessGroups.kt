@@ -289,3 +289,79 @@ data class ChatTurnProcessSpec(
         else -> "Completed"
     }
 }
+
+data class TurnItem<T>(
+    val data: T,
+    val isUser: Boolean,
+    val isAnswer: Boolean,
+    val isProcess: Boolean
+)
+
+data class SegmentedTurn<T>(
+    val turnIndex: Int,
+    val userItem: T?,
+    val processItems: List<T>,
+    val answerItems: List<T>,
+    val spec: ChatTurnProcessSpec
+) {
+    val answerItem: T? get() = answerItems.lastOrNull()
+}
+
+fun <T> segmentTurnItems(
+    items: List<TurnItem<T>>,
+    isStreaming: Boolean,
+    turnDurationsMs: Map<Int, Long>,
+    isInterruptedTurn: Boolean,
+    hasError: Boolean
+): List<SegmentedTurn<T>> {
+    val result = mutableListOf<SegmentedTurn<T>>()
+    var currentTurnIndex = 0
+    var currentUser: T? = null
+    val currentProcesses = mutableListOf<T>()
+    val currentAnswers = mutableListOf<T>()
+
+    fun flushTurn(isLast: Boolean) {
+        if (currentUser == null && currentProcesses.isEmpty() && currentAnswers.isEmpty()) return
+        val isLive = isLast && isStreaming
+        val isStopped = isLast && isInterruptedTurn
+        val isError = isLast && hasError
+        val duration = turnDurationsMs[currentTurnIndex]
+        val spec = ChatTurnProcessSpec(
+            turnIndex = currentTurnIndex,
+            isLive = isLive,
+            isStopped = isStopped,
+            isError = isError,
+            durationMs = duration,
+            hasInterleavedUserInput = false
+        )
+        result.add(
+            SegmentedTurn(
+                turnIndex = currentTurnIndex,
+                userItem = currentUser,
+                processItems = currentProcesses.toList(),
+                answerItems = currentAnswers.toList(),
+                spec = spec
+            )
+        )
+        currentTurnIndex++
+        currentUser = null
+        currentProcesses.clear()
+        currentAnswers.clear()
+    }
+
+    items.forEach { item ->
+        if (item.isUser) {
+            if (currentUser != null || currentProcesses.isNotEmpty() || currentAnswers.isNotEmpty()) {
+                flushTurn(isLast = false)
+            }
+            currentUser = item.data
+        } else if (item.isAnswer) {
+            currentAnswers.add(item.data)
+        } else if (item.isProcess) {
+            currentProcesses.add(item.data)
+        }
+    }
+    flushTurn(isLast = true)
+    return result
+}
+

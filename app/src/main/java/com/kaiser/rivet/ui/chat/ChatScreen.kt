@@ -31,6 +31,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -848,7 +856,31 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     )
     val showActivity = !streaming && state.activity != null
     val showInterruptedTurn = state.interruptedTurn && !state.streaming
-    val totalItems = timeline.size +
+    val turnItems = remember(timeline) {
+        timeline.map { entry ->
+            val isUser = entry.item is AgentConversationItem.Message &&
+                entry.item.message.role == AgentRole.User
+            val isAnswer = entry.item is AgentConversationItem.Message &&
+                entry.item.message.role == AgentRole.Assistant
+            val isProcess = entry.item is AgentConversationItem.Activity
+            TurnItem(
+                data = entry,
+                isUser = isUser,
+                isAnswer = isAnswer,
+                isProcess = isProcess,
+            )
+        }
+    }
+    val segmentedTurns = remember(turnItems, state.streaming, state.turnDurationsMs, state.interruptedTurn, state.error != null) {
+        segmentTurnItems(
+            items = turnItems,
+            isStreaming = state.streaming,
+            turnDurationsMs = state.turnDurationsMs,
+            isInterruptedTurn = state.interruptedTurn,
+            hasError = state.error != null,
+        )
+    }
+    val totalItems = segmentedTurns.size +
         (if (state.goalLine != null) 1 else 0) +
         (if (streamingReasoning.isNotBlank()) 1 else 0) +
         (if (streamingText.isNotBlank()) 1 else 0) +
@@ -886,7 +918,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // the list's edge until the next bucket, or for good if the stream stalled there (device
     // finding, kaiser, 2026-11-02). Growth is followed by the settle effect below; this one only
     // has to handle rows appearing or disappearing, which move everything at once.
-    LaunchedEffect(timeline.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
+    LaunchedEffect(segmentedTurns.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
         state.notice) {
         if (followBottom && totalItems > 0) {
@@ -940,28 +972,12 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 onDismiss = onDismissInterruptedTurn,
             )
         }
-        items(timeline) { entry ->
-            when (val item = entry.item) {
-                is AgentConversationItem.Message -> MessageRow(
-                    message = item.message,
-                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
-                    messageKey = entry.messageIndex ?: 0,
-                )
-                is AgentConversationItem.Activity -> Column(
-                    Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (!entry.standaloneThinking.isNullOrBlank()) {
-                        ThinkingBlock(
-                            entry.standaloneThinking,
-                            streaming = false,
-                            id = "thinking-${entry.messageIndex ?: item.group.id}",
-                        )
-                    }
-                    val isLiveGroup = state.streaming && entry == timeline.lastOrNull { it.item is AgentConversationItem.Activity }
-                    ActivityRow(item.group, isLive = isLiveGroup)
-                }
-            }
+        items(segmentedTurns, key = { it.turnIndex }) { turn ->
+            TurnBlockView(
+                turn = turn,
+                state = state,
+                isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
+            )
         }
         if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
             ThinkingBlock(streamingReasoning, streaming = true, id = "streaming")
@@ -1046,6 +1062,162 @@ private fun LiveStatusRow(label: String, startedAt: Long) {
         verticalAlignment = Alignment.CenterVertically) {
         Text(liveStatusLine(label, elapsed), style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
+    }
+}
+
+@Composable
+private fun TurnProcessRow(
+    spec: ChatTurnProcessSpec,
+    open: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val rotation by animateFloatAsState(targetValue = if (open) 180f else 0f, label = "turnChevronRotation")
+    val hairlineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(33.dp)
+            .drawBehind {
+                val strokeWidth = 0.5.dp.toPx()
+                val y = size.height - strokeWidth / 2
+                drawLine(
+                    color = hairlineColor,
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = strokeWidth
+                )
+            }
+            .then(
+                if (spec.canFold) Modifier.clickable(role = Role.Button, onClick = onToggle)
+                else Modifier
+            )
+            .padding(bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
+        Row(
+            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f, fill = false)
+        ) {
+            val label = spec.foldLabel()
+            if (spec.durationMs != null && label.startsWith("Completed in ")) {
+                Text(
+                    text = "Completed in ",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = formatRunDuration(spec.durationMs),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace
+                    ),
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                )
+            } else {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+        if (spec.canFold) {
+            Icon(
+                painter = painterResource(R.drawable.ic_chevron_down),
+                contentDescription = if (open) "Collapse turn process" else "Expand turn process",
+                modifier = Modifier
+                    .size(14.dp)
+                    .graphicsLayer { rotationZ = rotation },
+                tint = MaterialTheme.colorScheme.tertiary
+            )
+        }
+    }
+}
+
+@Composable
+private fun TurnBlockView(
+    turn: SegmentedTurn<TimelineDisplayEntry>,
+    state: ChatUiState,
+    isLastTurn: Boolean,
+) {
+    var turnOpen by rememberSaveable(turn.turnIndex) { mutableStateOf(!turn.spec.canFold) }
+    val isOpen = !turn.spec.canFold || turnOpen
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        turn.userItem?.let { entry ->
+            if (entry.item is AgentConversationItem.Message) {
+                MessageRow(
+                    message = entry.item.message,
+                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
+                    messageKey = entry.messageIndex ?: entry.item.message.hashCode(),
+                )
+            }
+        }
+
+        if (turn.processItems.isNotEmpty()) {
+            if (!turn.spec.isLive) {
+                TurnProcessRow(
+                    spec = turn.spec,
+                    open = isOpen,
+                    onToggle = { if (turn.spec.canFold) turnOpen = !turnOpen }
+                )
+            }
+            AnimatedVisibility(
+                visible = isOpen,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    turn.processItems.forEach { entry ->
+                        when (val item = entry.item) {
+                            is AgentConversationItem.Activity -> {
+                                if (!entry.standaloneThinking.isNullOrBlank()) {
+                                    ThinkingBlock(
+                                        entry.standaloneThinking,
+                                        streaming = false,
+                                        id = "thinking-${entry.messageIndex ?: item.group.id}",
+                                    )
+                                }
+                                val isLiveGroup = state.streaming && isLastTurn &&
+                                    entry == turn.processItems.lastOrNull { it.item is AgentConversationItem.Activity }
+                                ActivityRow(item.group, isLive = isLiveGroup)
+                            }
+                            is AgentConversationItem.Message -> {
+                                MessageRow(
+                                    message = item.message,
+                                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
+                                    messageKey = entry.messageIndex ?: 0,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        turn.answerItems.forEach { entry ->
+            if (entry.item is AgentConversationItem.Message) {
+                MessageRow(
+                    message = entry.item.message,
+                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
+                    messageKey = entry.messageIndex ?: entry.item.message.hashCode(),
+                )
+            }
+        }
     }
 }
 

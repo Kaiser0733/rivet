@@ -195,4 +195,74 @@ class ChatProcessGroupsTest {
         val interleaved = ChatTurnProcessSpec(turnIndex = 4, hasInterleavedUserInput = true, durationMs = 8000L)
         assertFalse(interleaved.canFold)
     }
+
+    @Test
+    fun segmentsTurnItemsIntoTurnsAndTracksFoldState() {
+        val items = listOf(
+            // Turn 0: User -> Process -> Answer
+            TurnItem("user-0", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem("proc-0a", isUser = false, isAnswer = false, isProcess = true),
+            TurnItem("proc-0b", isUser = false, isAnswer = false, isProcess = true),
+            TurnItem("answer-0", isUser = false, isAnswer = true, isProcess = false),
+            // Turn 1: User -> Process (Live)
+            TurnItem("user-1", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem("proc-1", isUser = false, isAnswer = false, isProcess = true),
+        )
+        val durations = mapOf(0 to 14000L)
+        val turns = segmentTurnItems(
+            items = items,
+            isStreaming = true,
+            turnDurationsMs = durations,
+            isInterruptedTurn = false,
+            hasError = false
+        )
+
+        assertEquals(2, turns.size)
+
+        // Turn 0 is completed
+        val turn0 = turns[0]
+        assertEquals(0, turn0.turnIndex)
+        assertEquals("user-0", turn0.userItem)
+        assertEquals(listOf("proc-0a", "proc-0b"), turn0.processItems)
+        assertEquals("answer-0", turn0.answerItem)
+        assertTrue(turn0.spec.canFold)
+        assertEquals("Completed in 14s", turn0.spec.foldLabel())
+
+        // Turn 1 is live
+        val turn1 = turns[1]
+        assertEquals(1, turn1.turnIndex)
+        assertEquals("user-1", turn1.userItem)
+        assertEquals(listOf("proc-1"), turn1.processItems)
+        assertEquals(null, turn1.answerItem)
+        assertFalse(turn1.spec.canFold)
+    }
+
+    @Test
+    fun segmentsTurnItemsHandlesStoppedAndErrorTurns() {
+        val items = listOf(
+            TurnItem("user-0", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem("proc-0", isUser = false, isAnswer = false, isProcess = true),
+        )
+        val turnsStopped = segmentTurnItems(
+            items = items,
+            isStreaming = false,
+            turnDurationsMs = emptyMap(),
+            isInterruptedTurn = true,
+            hasError = false
+        )
+        assertEquals(1, turnsStopped.size)
+        assertFalse(turnsStopped[0].spec.canFold)
+        assertEquals("Stopped", turnsStopped[0].spec.foldLabel())
+
+        val turnsError = segmentTurnItems(
+            items = items,
+            isStreaming = false,
+            turnDurationsMs = emptyMap(),
+            isInterruptedTurn = false,
+            hasError = true
+        )
+        assertEquals(1, turnsError.size)
+        assertFalse(turnsError[0].spec.canFold)
+        assertEquals("Failed", turnsError[0].spec.foldLabel())
+    }
 }
