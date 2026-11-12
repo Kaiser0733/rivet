@@ -31,6 +31,14 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.height
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.ui.draw.drawBehind
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.selection.SelectionContainer
@@ -98,6 +106,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -839,7 +856,31 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     )
     val showActivity = !streaming && state.activity != null
     val showInterruptedTurn = state.interruptedTurn && !state.streaming
-    val totalItems = timeline.size +
+    val turnItems = remember(timeline) {
+        timeline.map { entry ->
+            val isUser = entry.item is AgentConversationItem.Message &&
+                entry.item.message.role == AgentRole.User
+            val isAnswer = entry.item is AgentConversationItem.Message &&
+                entry.item.message.role == AgentRole.Assistant
+            val isProcess = entry.item is AgentConversationItem.Activity
+            TurnItem(
+                data = entry,
+                isUser = isUser,
+                isAnswer = isAnswer,
+                isProcess = isProcess,
+            )
+        }
+    }
+    val segmentedTurns = remember(turnItems, state.streaming, state.turnDurationsMs, state.interruptedTurn, state.error != null) {
+        segmentTurnItems(
+            items = turnItems,
+            isStreaming = state.streaming,
+            turnDurationsMs = state.turnDurationsMs,
+            isInterruptedTurn = state.interruptedTurn,
+            hasError = state.error != null,
+        )
+    }
+    val totalItems = segmentedTurns.size +
         (if (state.goalLine != null) 1 else 0) +
         (if (streamingReasoning.isNotBlank()) 1 else 0) +
         (if (streamingText.isNotBlank()) 1 else 0) +
@@ -877,7 +918,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // the list's edge until the next bucket, or for good if the stream stalled there (device
     // finding, kaiser, 2026-11-02). Growth is followed by the settle effect below; this one only
     // has to handle rows appearing or disappearing, which move everything at once.
-    LaunchedEffect(timeline.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
+    LaunchedEffect(segmentedTurns.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
         state.notice) {
         if (followBottom && totalItems > 0) {
@@ -910,10 +951,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
         }
     }
-    LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
+    LazyColumn(state = listState, modifier = modifier.widthIn(max = 748.dp).fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        verticalArrangement = Arrangement.spacedBy(6.dp)) {
         state.goalLine?.let { line ->
             item(key = "goal-line") {
                 GoalLine(line, state.goalAttachOffer, onAttachGoal)
@@ -931,30 +972,15 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 onDismiss = onDismissInterruptedTurn,
             )
         }
-        items(timeline) { entry ->
-            when (val item = entry.item) {
-                is AgentConversationItem.Message -> MessageRow(
-                    message = item.message,
-                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
-                    messageKey = entry.messageIndex ?: 0,
-                )
-                is AgentConversationItem.Activity -> Column(
-                    Modifier.fillMaxWidth(),
-                    verticalArrangement = Arrangement.spacedBy(6.dp),
-                ) {
-                    if (!entry.standaloneThinking.isNullOrBlank()) {
-                        ThinkingBlock(
-                            entry.standaloneThinking,
-                            streaming = false,
-                            id = "thinking-${entry.messageIndex ?: item.group.id}",
-                        )
-                    }
-                    ActivityRow(item.group)
-                }
-            }
+        items(segmentedTurns, key = { it.turnIndex }) { turn ->
+            TurnBlockView(
+                turn = turn,
+                state = state,
+                isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
+            )
         }
         if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
-            ThinkingBlock(streamingReasoning, streaming = true, id = "streaming")
+            ReasoningRow(streamingReasoning, streaming = true, id = "streaming")
         }
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
@@ -1040,32 +1066,288 @@ private fun LiveStatusRow(label: String, startedAt: Long) {
 }
 
 @Composable
-private fun ActivityRow(group: AgentActivityGroup) {
-    var expanded by rememberSaveable(group.id) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth()) {
+private fun TurnProcessRow(
+    spec: ChatTurnProcessSpec,
+    open: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val rotation by animateFloatAsState(targetValue = if (open) 180f else 0f, label = "turnChevronRotation")
+    val hairlineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .height(33.dp)
+            .drawBehind {
+                val strokeWidth = 0.5.dp.toPx()
+                val y = size.height - strokeWidth / 2
+                drawLine(
+                    color = hairlineColor,
+                    start = Offset(0f, y),
+                    end = Offset(size.width, y),
+                    strokeWidth = strokeWidth
+                )
+            }
+            .then(
+                if (spec.canFold) Modifier.clickable(role = Role.Button, onClick = onToggle)
+                else Modifier
+            )
+            .padding(bottom = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.SpaceBetween
+    ) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { expanded = !expanded }
-                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
-                .padding(horizontal = 8.dp, vertical = 5.dp),
             verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier.weight(1f, fill = false)
         ) {
-            Text("Activity", style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary)
-            Text(group.summary, Modifier.weight(1f).padding(start = 8.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (expanded) 2 else 1, overflow = TextOverflow.Ellipsis)
-            Text(if (expanded) "Hide" else "Details", Modifier.padding(start = 8.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            val label = spec.foldLabel()
+            if (spec.durationMs != null && label.startsWith("Completed in ")) {
+                Text(
+                    text = "Completed in ",
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+                Text(
+                    text = formatRunDuration(spec.durationMs),
+                    style = MaterialTheme.typography.bodyMedium.copy(
+                        fontSize = 14.sp,
+                        fontFamily = FontFamily.Monospace
+                    ),
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                )
+            } else {
+                Text(
+                    text = label,
+                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                    color = MaterialTheme.colorScheme.tertiary,
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis
+                )
+            }
         }
+        if (spec.canFold) {
+            Icon(
+                painter = painterResource(R.drawable.ic_chevron_down),
+                contentDescription = if (open) "Collapse turn process" else "Expand turn process",
+                modifier = Modifier
+                    .size(14.dp)
+                    .graphicsLayer { rotationZ = rotation },
+                tint = MaterialTheme.colorScheme.tertiary
+            )
+        }
+    }
+}
+
+@Composable
+private fun TurnBlockView(
+    turn: SegmentedTurn<TimelineDisplayEntry>,
+    state: ChatUiState,
+    isLastTurn: Boolean,
+) {
+    var turnOpen by rememberSaveable(turn.turnIndex) { mutableStateOf(!turn.spec.canFold) }
+    val isOpen = !turn.spec.canFold || turnOpen
+
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        turn.userItem?.let { entry ->
+            if (entry.item is AgentConversationItem.Message) {
+                MessageRow(
+                    message = entry.item.message,
+                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
+                    messageKey = entry.messageIndex ?: entry.item.message.hashCode(),
+                )
+            }
+        }
+
+        if (turn.processItems.isNotEmpty()) {
+            if (!turn.spec.isLive) {
+                TurnProcessRow(
+                    spec = turn.spec,
+                    open = isOpen,
+                    onToggle = { if (turn.spec.canFold) turnOpen = !turnOpen }
+                )
+            }
+            AnimatedVisibility(
+                visible = isOpen,
+                enter = expandVertically() + fadeIn(),
+                exit = shrinkVertically() + fadeOut()
+            ) {
+                Column(
+                    modifier = Modifier.fillMaxWidth(),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)
+                ) {
+                    turn.processItems.forEach { entry ->
+                        when (val item = entry.item) {
+                            is AgentConversationItem.Activity -> {
+                                if (!entry.standaloneThinking.isNullOrBlank()) {
+                                    ReasoningRow(
+                                        entry.standaloneThinking,
+                                        streaming = false,
+                                        id = "thinking-${entry.messageIndex ?: item.group.id}",
+                                    )
+                                }
+                                val isLiveGroup = state.streaming && isLastTurn &&
+                                    entry == turn.processItems.lastOrNull { it.item is AgentConversationItem.Activity }
+                                ActivityRow(item.group, isLive = isLiveGroup)
+                            }
+                            is AgentConversationItem.Message -> {
+                                MessageRow(
+                                    message = item.message,
+                                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
+                                    messageKey = entry.messageIndex ?: 0,
+                                )
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        turn.answerItems.forEach { entry ->
+            if (entry.item is AgentConversationItem.Message) {
+                MessageRow(
+                    message = entry.item.message,
+                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
+                    messageKey = entry.messageIndex ?: entry.item.message.hashCode(),
+                )
+            }
+        }
+    }
+}
+
+@Composable
+private fun ProcessGroupHeader(
+    title: String,
+    activityKind: ProcessActivityKind,
+    open: Boolean,
+    isLive: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val rotation by animateFloatAsState(targetValue = if (open) 180f else 0f, label = "chevronRotation")
+    val alphaAnim = if (isLive) {
+        val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
+        val alpha by infiniteTransition.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "shimmerAlpha"
+        )
+        alpha
+    } else 1f
+
+    val iconRes = when (activityKind) {
+        ProcessActivityKind.Read -> R.drawable.ic_files
+        ProcessActivityKind.ReadImage -> R.drawable.ic_visibility
+        ProcessActivityKind.Search -> R.drawable.ic_files
+        ProcessActivityKind.Write -> R.drawable.ic_edit
+        ProcessActivityKind.Edit -> R.drawable.ic_edit
+        ProcessActivityKind.Commands, ProcessActivityKind.Code -> R.drawable.ic_processes
+        ProcessActivityKind.WebSearch, ProcessActivityKind.WebFetch -> R.drawable.ic_browser
+        ProcessActivityKind.Subagents -> R.drawable.ic_processes
+        ProcessActivityKind.Plan -> R.drawable.ic_history
+        ProcessActivityKind.Questions -> R.drawable.ic_more
+        ProcessActivityKind.Thinking -> R.drawable.ic_history
+        ProcessActivityKind.Tools -> R.drawable.ic_processes
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(
+                role = Role.Button,
+                onClick = onToggle
+            )
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier.size(16.dp),
+            contentAlignment = Alignment.Center
+        ) {
+            if (open) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_chevron_down),
+                    contentDescription = if (open) "Collapse" else "Expand",
+                    modifier = Modifier.size(14.dp).graphicsLayer { rotationZ = rotation },
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+            } else {
+                Icon(
+                    painter = painterResource(iconRes),
+                    contentDescription = activityKind.key,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+            }
+        }
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+            color = MaterialTheme.colorScheme.tertiary.copy(alpha = alphaAnim),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun ActivityRow(
+    group: AgentActivityGroup,
+    isLive: Boolean = false,
+) {
+    var expanded by rememberSaveable(group.id) { mutableStateOf(isLive) }
+
+    val items = remember(group.operations) {
+        group.operations.map { op ->
+            ProcessCallItem(
+                callId = op.id,
+                name = op.title,
+                argsJson = op.detail,
+                isRunning = op.outcome == ActivityOutcome.Running || op.outcome == ActivityOutcome.WaitingApproval,
+                isPreparing = false
+            )
+        }
+    }
+    val counts = remember(items) { calculateActivityCounts(items) }
+    val summary = remember(counts, isLive) { ProcessGroupSummary(counts = counts, closed = !isLive) }
+    val title = if (isLive) summary.liveLabel() else summary.title()
+    val primaryKind = counts.firstOrNull()?.kind ?: ProcessActivityKind.Thinking
+
+    val config = LocalConfiguration.current
+    val maxBodyHeight = minOf(400.dp, (config.screenHeightDp * 0.5f).dp)
+
+    Column(Modifier.fillMaxWidth()) {
+        ProcessGroupHeader(
+            title = title,
+            activityKind = primaryKind,
+            open = expanded,
+            isLive = isLive,
+            onToggle = { expanded = !expanded }
+        )
         if (expanded) {
-            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, bottom = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maxBodyHeight)
+                    .verticalScroll(rememberScrollState())
+                    .padding(top = 4.dp, bottom = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 group.operations.forEach { operation -> ActivityOperationRow(operation) }
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
     }
 }
 
@@ -1125,22 +1407,21 @@ private fun MessageRow(message: AgentMessage, reasoning: String? = null, message
     var selectingText by remember(messageKey) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (message.role == AgentRole.Assistant && !reasoning.isNullOrBlank()) {
-            ThinkingBlock(reasoning, streaming = false, id = "thinking-$messageKey")
+            ReasoningRow(reasoning, streaming = false, id = "thinking-$messageKey")
         }
         val bubble: @Composable () -> Unit = {
             if (message.role == AgentRole.User) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Column(Modifier.fillMaxWidth(0.86f), horizontalAlignment = Alignment.End,
-                        verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("You", style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Surface(color = MaterialTheme.colorScheme.surfaceContainer,
-                            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp,
-                                bottomStart = 16.dp, bottomEnd = 4.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f))) {
-                            Text(message.text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                style = MaterialTheme.typography.bodyMedium)
-                        }
+                    Surface(
+                        modifier = Modifier.widthIn(max = 525.dp).fillMaxWidth(0.82f),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        shape = RoundedCornerShape(20.dp),
+                    ) {
+                        Text(
+                            message.text,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
             } else {
@@ -1173,61 +1454,110 @@ private fun MessageRow(message: AgentMessage, reasoning: String? = null, message
     }
 }
 
-// One thinking row for the whole turn, modelled on dsh: the header always toggles,
-// collapsed by default, and while the chain streams the header previews one cheap line
-// instead of laying out the whole text. The full chain renders only when expanded.
+// Assistant reasoning row copied from dsh ReasoningRow: collapsed is exactly one 24dp line
+// ("Think" + 2dp dot + 13sp preview without asterisks, fade shimmer when streaming).
+// Expanded body is indented 22dp with secondary typography, no Surface and no Show/Hide buttons.
 @Composable
-private fun ThinkingBlock(text: String, streaming: Boolean, id: String) {
+private fun ReasoningRow(
+    text: String,
+    streaming: Boolean,
+    id: String,
+    modifier: Modifier = Modifier,
+) {
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
-    // The chain is republished on every delta, and building the preview from scratch meant
-    // reading the whole chain again per token. While it streams the row is keyed and its text
-    // only grows, so one scan carries across the deltas and reads only what arrived.
+    val rotation by animateFloatAsState(targetValue = if (expanded) 180f else 0f, label = "reasoningChevronRotation")
+    val alphaAnim = if (streaming) {
+        val infiniteTransition = rememberInfiniteTransition(label = "reasoningShimmer")
+        val alpha by infiniteTransition.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "reasoningAlpha"
+        )
+        alpha
+    } else 1f
+
     val scan = remember { PreviewScan() }
-    val interactions = remember { MutableInteractionSource() }
-    val preview = remember(text, streaming) {
-        displaySafeText(thinkingPreview(text, streaming, scan))
+    val summaryText = remember(text, streaming) {
+        val raw = displaySafeText(thinkingPreview(text, streaming, scan))
+        raw.replace("**", "").trim()
     }
-    Column(Modifier.fillMaxWidth(0.94f)) {
+
+    Column(modifier = modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 36.dp).clickable(role = Role.Button) { expanded = !expanded }
-                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .clickable(
+                    role = Role.Button,
+                    onClick = { expanded = !expanded }
+                )
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Thinking", style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (preview.isEmpty()) Spacer(Modifier.weight(1f))
-            else Text(preview, Modifier.weight(1f).padding(start = 8.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (expanded) "Hide" else "Show", Modifier.padding(start = 8.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(
+                modifier = Modifier.size(16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (expanded) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_chevron_down),
+                        contentDescription = "Collapse",
+                        modifier = Modifier.size(14.dp).graphicsLayer { rotationZ = rotation },
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
+                } else {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_history),
+                        contentDescription = "Think",
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+            }
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Think",
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                color = MaterialTheme.colorScheme.tertiary
+            )
+            if (summaryText.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .size(2.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                )
+                Text(
+                    text = summaryText,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alphaAnim),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
         }
         if (expanded) {
-            // A long chain pushes the header off the top of the screen, so the box is a tap
-            // target of its own: tapping the chain collapses it where the user stopped reading.
-            // This is a clickable, not a hand-rolled tap detector, and that is the whole
-            // tap-versus-drag split: clickable only fires when the press is released without
-            // the pointer changes being consumed, and the chat list's scroll consumes them the
-            // moment a drag starts, which cancels the press. The chain itself carries no nested
-            // scroll (plain Text in the Surface below), so nothing competes with the list.
-            Surface(
-                modifier = Modifier.fillMaxWidth()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 22.dp, top = 4.dp, bottom = 4.dp)
                     .clickable(
-                        interactionSource = interactions,
+                        interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                         role = Role.Button,
-                        onClickLabel = "Collapse thinking",
-                    ) { expanded = false },
-                color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f),
-                shape = RoundedCornerShape(6.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
+                        onClickLabel = "Collapse thinking"
+                    ) { expanded = false }
             ) {
-                Text(displaySafeText(text), modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                Text(
+                    text = displaySafeText(text),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
@@ -1257,20 +1587,13 @@ private fun BrowserImage(image: ChatMarkdownBlock.Image) {
 
 @Composable
 private fun AssistantMessage(text: String, streaming: Boolean) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(0.94f),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.15f)),
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text("Rivet", style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary)
-            if (streaming) {
-                Text(text, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
-            } else AssistantMarkdown(text)
-        }
+        if (streaming) {
+            Text(text, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
+        } else AssistantMarkdown(text)
     }
 }
 
@@ -1281,7 +1604,7 @@ private fun AssistantMarkdown(text: String) {
     // re-parses only that block, with the same result (see MarkdownBlocks).
     val parser = remember { MarkdownBlocks() }
     val blocks = parser.forText(text)
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         blocks.forEach { block ->
             when (block) {
                 is ChatMarkdownBlock.Paragraph -> InlineMarkdown(block.text)

@@ -171,6 +171,7 @@ data class ChatUiState(
     // that prints it: a start held inside the live-status list item was lost whenever the list
     // relaid it out (a long thinking block folding does exactly that) and came back as 0s.
     val turnStartedAt: Long? = null,
+    val turnDurationsMs: Map<Int, Long> = emptyMap(),
     val interruptedTurn: Boolean = false,
     // A shell command holds the project lock for as long as it runs, so Undo and
     // retry cannot complete until it ends. The UI says so instead of ignoring taps.
@@ -2145,8 +2146,16 @@ class ChatViewModel private constructor(
                 state.messageReasoning - (state.messages.size - 1)
             } else state.messageReasoning
             val unchanged = renameRevision == titleRenameRevision
+            val turnIndex = visible.count { it.role == AgentRole.User } - 1
+            val elapsed = state.turnStartedAt?.let { start ->
+                (SystemClock.elapsedRealtime() - start).coerceAtLeast(0)
+            }
+            val nextDurations = if (turnIndex >= 0 && elapsed != null && result.stopReason == AgentStopReason.Completed) {
+                state.turnDurationsMs + (turnIndex to elapsed)
+            } else state.turnDurationsMs
             state.copy(messages = visible, streaming = false, streamingText = "", streamingReasoning = "",
                 messageReasoning = nextReasoning, pendingApproval = null,
+                turnDurationsMs = nextDurations,
                 toolLifecycle = emptyList(), commandRunning = false,
                 sessions = if (unchanged && history != null) history else state.sessions,
                 currentSessionTitle = if (unchanged && history != null) history.firstOrNull {
