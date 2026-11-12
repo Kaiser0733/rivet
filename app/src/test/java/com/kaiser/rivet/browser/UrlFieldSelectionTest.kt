@@ -2,6 +2,7 @@ package com.kaiser.rivet.browser
 
 import com.kaiser.rivet.ui.browser.UrlFieldSelection
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Test
 
 class UrlFieldSelectionTest {
@@ -15,5 +16,14 @@ class UrlFieldSelectionTest {
 
     @Test fun anEmptyFieldStaysCollapsedAtZero() {
         assertEquals(0..0, UrlFieldSelection.selectAll(""))
+    }
+
+    @Test fun theFieldSelectionCoversTheWholeUrlAndIsNotCollapsed() {
+        val url = "https://example.com/page?q=1"
+        val selection = UrlFieldSelection.selection(url)
+        assertEquals(0, selection.start)
+        assertEquals(url.length, selection.end)
+        assertFalse(selection.collapsed)
+        assertEquals(url, url.substring(selection.start, selection.end))
     }
 }
