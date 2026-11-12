@@ -1,6 +1,8 @@
 package com.kaiser.rivet.ui.chat
 
 import com.kaiser.rivet.agent.AgentActivityOperation
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.ActivityOutcome
 
 enum class ProcessActivityKind(val key: String) {
@@ -227,6 +229,19 @@ fun formatProcessTitle(counts: List<ActivityCount>): String {
 
 private fun String.decapitalize(): String =
     if (isNotEmpty()) this[0].lowercaseChar() + substring(1) else this
+
+/** A tool step owns reasoning when it is also the source of a visible answer. */
+data class MessageReasoning(
+    val forActivity: String?,
+    val forAnswer: String?,
+)
+
+fun splitMessageReasoning(message: AgentMessage, reasoning: String?): MessageReasoning =
+    if (message.role == AgentRole.Assistant && message.toolCalls.isNotEmpty()) {
+        MessageReasoning(forActivity = reasoning, forAnswer = null)
+    } else {
+        MessageReasoning(forActivity = null, forAnswer = reasoning)
+    }
 
 fun processCallItems(operations: List<AgentActivityOperation>): List<ProcessCallItem> =
     operations.map { op ->

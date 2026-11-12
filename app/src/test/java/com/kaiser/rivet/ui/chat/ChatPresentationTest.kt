@@ -10,6 +10,7 @@ import com.kaiser.rivet.agent.AgentToolLifecycleStage
 import com.kaiser.rivet.agent.AgentToolResult
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -93,6 +94,18 @@ class ChatPresentationTest {
         assertEquals(ProcessActivityKind.Commands, summary.running)
         assertEquals("Running commands · gradlew test", summary.liveLabel())
 
+    }
+
+    @Test fun visibleAssistantTextWithToolsProjectsReasoningIntoTheActivityStep() {
+        val call = AgentToolCall("reasoning-call", "read_file", "{\"path\":\"src/App.kt\"}")
+        val message = AgentMessage.assistant("I checked the file.", listOf(call))
+        val timeline = AgentActivityProjection.conversation(listOf(message))
+        assertEquals(2, timeline.size)
+        assertTrue(timeline[0] is AgentConversationItem.Message)
+        assertTrue(timeline[1] is AgentConversationItem.Activity)
+        val owned = splitMessageReasoning(message, "Inspecting the call site")
+        assertEquals("Inspecting the call site", owned.forActivity)
+        assertNull(owned.forAnswer)
     }
 
 }

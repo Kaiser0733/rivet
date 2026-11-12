@@ -824,8 +824,12 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                             }
                         }
                     }
-                    val standalone = matched?.takeIf { state.messages[it].text.isBlank() }
-                        ?.let { state.messageReasoning[it] }
+                    val standalone = matched?.let { index ->
+                        splitMessageReasoning(
+                            state.messages[index],
+                            state.messageReasoning[index],
+                        ).forActivity
+                    }
                     TimelineDisplayEntry(item, matched, standalone)
                 }
             }
@@ -1199,11 +1203,16 @@ private fun TurnBlockView(
                         }
                     }
                     is TurnPart.Answer -> {
-                        if (part.item.item is AgentConversationItem.Message) {
+                        val item = part.item.item
+                        if (item is AgentConversationItem.Message) {
+                            val owned = splitMessageReasoning(
+                                item.message,
+                                part.item.messageIndex?.let { state.messageReasoning[it] },
+                            )
                             MessageRow(
-                                message = part.item.item.message,
-                                reasoning = part.item.messageIndex?.let { state.messageReasoning[it] },
-                                messageKey = part.item.messageIndex ?: part.item.item.message.hashCode(),
+                                message = item.message,
+                                reasoning = owned.forAnswer,
+                                messageKey = part.item.messageIndex ?: item.message.hashCode(),
                             )
                         }
                     }
@@ -1211,12 +1220,19 @@ private fun TurnBlockView(
             }
         } else {
             turn.parts.forEach { part ->
-                if (part is TurnPart.Answer && part.item.item is AgentConversationItem.Message) {
-                    MessageRow(
-                        message = part.item.item.message,
-                        reasoning = part.item.messageIndex?.let { state.messageReasoning[it] },
-                        messageKey = part.item.messageIndex ?: part.item.item.message.hashCode(),
-                    )
+                if (part is TurnPart.Answer) {
+                    val item = part.item.item
+                    if (item is AgentConversationItem.Message) {
+                        val owned = splitMessageReasoning(
+                            item.message,
+                            part.item.messageIndex?.let { state.messageReasoning[it] },
+                        )
+                        MessageRow(
+                            message = item.message,
+                            reasoning = owned.forAnswer,
+                            messageKey = part.item.messageIndex ?: item.message.hashCode(),
+                        )
+                    }
                 }
             }
         }

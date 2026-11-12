@@ -1,6 +1,8 @@
 package com.kaiser.rivet.ui.chat
 
 import com.kaiser.rivet.agent.AgentActivityOperation
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.ActivityOutcome
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -384,5 +386,20 @@ class ChatProcessGroupsTest {
         assertEquals("Inspecting the call site", summary.runningDetail)
         assertEquals("Analyzing the request · Inspecting the call site", summary.liveLabel())
     }
+
+    @Test
+    fun aVisibleAssistantStepWithToolsOwnsReasoningInActivityNotAnswer() {
+        val call = AgentToolCall("call-1", "run_command", "{\"command\":\"gradlew test\"}")
+        val message = AgentMessage.assistant("visible answer", listOf(call))
+        val owned = splitMessageReasoning(message, "thought")
+        assertEquals("thought", owned.forActivity)
+        assertEquals(null, owned.forAnswer)
+
+        val textOnly = AgentMessage.assistant("visible answer")
+        val textOwned = splitMessageReasoning(textOnly, "thought")
+        assertEquals(null, textOwned.forActivity)
+        assertEquals("thought", textOwned.forAnswer)
+    }
+
 
 }
