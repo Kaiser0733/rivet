@@ -158,9 +158,12 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                         modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
                             .onFocusChanged { focus ->
                                 if (focus.isFocused) {
-                                    val selection = UrlFieldSelection.selection(address.text)
+                                    val focused = UrlFieldSelection.focus(address.text)
                                     address = address.copy(
-                                        selection = TextRange(selection.start, selection.end))
+                                        selection = TextRange(
+                                            focused.selection.start,
+                                            focused.selection.end,
+                                        ))
                                 }
                             },
                         singleLine = true,

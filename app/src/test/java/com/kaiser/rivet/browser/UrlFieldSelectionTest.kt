@@ -26,4 +26,14 @@ class UrlFieldSelectionTest {
         assertFalse(selection.collapsed)
         assertEquals(url, url.substring(selection.start, selection.end))
     }
+    @Test fun theFocusedFieldInstallsTheWholeUrlAsItsSelection() {
+        val url = "https://example.com/a?b=c"
+        val field = UrlFieldSelection.focus(url)
+        assertEquals(url, field.text)
+        assertEquals(0, field.selection.start)
+        assertEquals(url.length, field.selection.end)
+        assertFalse(field.selection.collapsed)
+        assertEquals(url, field.text.substring(field.selection.start, field.selection.end))
+    }
+
 }
