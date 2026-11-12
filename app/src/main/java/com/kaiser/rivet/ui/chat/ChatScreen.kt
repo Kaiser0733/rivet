@@ -1186,9 +1186,12 @@ private fun TurnBlockView(
                                 val groups = part.items.mapNotNull { entry ->
                                     (entry.item as? AgentConversationItem.Activity)?.group
                                 }
-                                if (groups.isNotEmpty()) {
+                                val thinking = part.items.mapNotNull { it.standaloneThinking }
+                                    .filter { it.isNotBlank() }
+                                if (groups.isNotEmpty() || thinking.isNotEmpty()) {
                                     ActivityRow(
                                         groups = groups,
+                                        thinking = thinking,
                                         isLive = state.streaming && isLastTurn && part == lastProcess,
                                     )
                                 }
@@ -1304,14 +1307,17 @@ private fun ProcessGroupHeader(
 @Composable
 private fun ActivityRow(
     groups: List<AgentActivityGroup>,
+    thinking: List<String> = emptyList(),
     isLive: Boolean = false,
 ) {
-    val groupKey = remember(groups) { groups.joinToString("|") { it.id } }
+    val groupKey = remember(groups, thinking) {
+        groups.joinToString("|") { it.id } + "#thinking=" + thinking.joinToString("|")
+    }
     var expanded by rememberSaveable(groupKey) { mutableStateOf(isLive) }
 
     val operations = remember(groups) { groups.flatMap { it.operations } }
-    val summary = remember(operations, isLive) {
-        processGroupSummary(operations, closed = !isLive)
+    val summary = remember(operations, thinking, isLive) {
+        processGroupSummary(operations, thinking, closed = !isLive)
     }
     val counts = summary.counts
     val title = if (isLive) summary.liveLabel() else summary.title()
@@ -1337,6 +1343,13 @@ private fun ActivityRow(
                     .padding(top = 4.dp, bottom = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
+                thinking.forEachIndexed { index, text ->
+                    ReasoningRow(
+                        text,
+                        streaming = false,
+                        id = "thinking-$groupKey-$index",
+                    )
+                }
                 operations.forEach { operation -> ActivityOperationRow(operation) }
             }
         }

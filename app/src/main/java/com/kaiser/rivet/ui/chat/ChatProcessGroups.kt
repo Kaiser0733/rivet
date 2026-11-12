@@ -3,7 +3,6 @@ package com.kaiser.rivet.ui.chat
 import com.kaiser.rivet.agent.AgentActivityOperation
 import com.kaiser.rivet.agent.ActivityOutcome
 
-
 enum class ProcessActivityKind(val key: String) {
     Thinking("thinking"),
     Read("read"),
@@ -241,27 +240,43 @@ fun processCallItems(operations: List<AgentActivityOperation>): List<ProcessCall
         )
     }
 
-
 /**
  * Builds the live header from the same projected operations the rows display.
  * The running/preparing item is the latest lifecycle state, not a caller-supplied summary.
  */
 fun processGroupSummary(
     operations: List<AgentActivityOperation>,
+    thinking: List<String> = emptyList(),
     closed: Boolean,
 ): ProcessGroupSummary {
-    val items = processCallItems(operations)
-    val running = items.lastOrNull { it.isRunning }
-    val preparing = items.lastOrNull { it.isPreparing }
-    val active = running ?: preparing
+    val thinkingItems = thinking.filter { it.isNotBlank() }.mapIndexed { index, text ->
+        ProcessCallItem(
+            callId = "thinking-$index",
+            name = "thinking",
+            argsJson = text,
+            kind = ProcessActivityKind.Thinking,
+        )
+    }
+    val items = processCallItems(operations) + thinkingItems
+    val runningTool = items.lastOrNull { it.isRunning }
+    val preparingTool = items.lastOrNull { it.isPreparing }
+    val liveThinking = if (!closed && runningTool == null && preparingTool == null) {
+        thinking.lastOrNull { it.isNotBlank() }
+    } else null
+    val active = runningTool ?: preparingTool
     return ProcessGroupSummary(
         counts = calculateActivityCounts(items),
-        running = active?.kind,
-        runningDetail = normalizeLiveDetail(active?.argsJson.orEmpty()),
-        preparing = running == null && preparing != null,
+        running = active?.kind ?: if (liveThinking != null) ProcessActivityKind.Thinking else null,
+        runningDetail = if (liveThinking != null) {
+            extractLiveReasoningDetail(liveThinking)
+        } else {
+            normalizeLiveDetail(active?.argsJson.orEmpty())
+        },
+        preparing = runningTool == null && preparingTool != null,
         closed = closed,
     )
 }
+
 data class ProcessCallItem(
     val callId: String,
     val name: String,

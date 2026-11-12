@@ -362,4 +362,27 @@ class ChatProcessGroupsTest {
         assertFalse(turns[1].spec.hasInterleavedUserInput)
     }
 
+    @Test
+    fun thinkingParticipatesInTheProcessGroupCountsAndLiveState() {
+        val operation = AgentActivityOperation(
+            id = "hashed-read",
+            title = "Read",
+            detail = "src/App.kt",
+            outcome = ActivityOutcome.Completed,
+            toolName = "read_file",
+        )
+        val summary = processGroupSummary(
+            operations = listOf(operation),
+            thinking = listOf("Inspecting the call site"),
+            closed = false,
+        )
+        val thinkingCount = summary.counts.firstOrNull {
+            it.kind == ProcessActivityKind.Thinking
+        }
+        assertEquals(1, thinkingCount?.count)
+        assertEquals(ProcessActivityKind.Thinking, summary.running)
+        assertEquals("Inspecting the call site", summary.runningDetail)
+        assertEquals("Analyzing the request · Inspecting the call site", summary.liveLabel())
+    }
+
 }
