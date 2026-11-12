@@ -411,4 +411,20 @@ class ChatProcessGroupsTest {
         assertTrue(nextFoldOpenAfterState(open = true, canFold = false, isLive = false))
     }
 
+    @Test
+    fun aWaitingApprovalToolIsNotReportedAsPreparing() {
+        val waiting = AgentActivityOperation(
+            id = "hashed-waiting",
+            title = "Run",
+            detail = "gradlew test",
+            outcome = ActivityOutcome.WaitingApproval,
+            toolName = "run_command",
+        )
+        val summary = processGroupSummary(listOf(waiting), closed = false)
+        assertEquals(ProcessActivityKind.Commands, summary.running)
+        assertTrue(summary.waitingApproval)
+        assertFalse(summary.preparing)
+        assertEquals("Waiting for approval · gradlew test", summary.liveLabel())
+    }
+
 }

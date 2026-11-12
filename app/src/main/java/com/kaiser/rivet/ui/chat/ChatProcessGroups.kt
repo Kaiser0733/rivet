@@ -190,12 +190,14 @@ data class ProcessGroupSummary(
     val running: ProcessActivityKind? = null,
     val runningDetail: String = "",
     val preparing: Boolean = false,
+    val waitingApproval: Boolean = false,
     val closed: Boolean = false
 ) {
     fun title(): String = formatProcessTitle(counts)
 
     fun liveLabel(): String {
         val base = when {
+            waitingApproval -> "Waiting for approval"
             preparing -> running?.preparingTense() ?: "Preparing"
             running != null -> running.presentTense()
             else -> "Analyzing the request"
@@ -256,8 +258,8 @@ fun processCallItems(operations: List<AgentActivityOperation>): List<ProcessCall
             name = op.toolName,
             argsJson = op.detail,
             isRunning = op.outcome == ActivityOutcome.Running,
-            isPreparing = op.outcome == ActivityOutcome.Queued ||
-                op.outcome == ActivityOutcome.WaitingApproval,
+            isPreparing = op.outcome == ActivityOutcome.Queued,
+            isWaitingForApproval = op.outcome == ActivityOutcome.WaitingApproval,
         )
     }
 
@@ -280,11 +282,13 @@ fun processGroupSummary(
     }
     val items = processCallItems(operations) + thinkingItems
     val runningTool = items.lastOrNull { it.isRunning }
+    val waitingTool = items.lastOrNull { it.isWaitingForApproval }
     val preparingTool = items.lastOrNull { it.isPreparing }
-    val liveThinking = if (!closed && runningTool == null && preparingTool == null) {
+    val liveThinking = if (!closed && runningTool == null && waitingTool == null &&
+        preparingTool == null) {
         thinking.lastOrNull { it.isNotBlank() }
     } else null
-    val active = runningTool ?: preparingTool
+    val active = runningTool ?: waitingTool ?: preparingTool
     return ProcessGroupSummary(
         counts = calculateActivityCounts(items),
         running = active?.kind ?: if (liveThinking != null) ProcessActivityKind.Thinking else null,
@@ -293,7 +297,8 @@ fun processGroupSummary(
         } else {
             normalizeLiveDetail(active?.argsJson.orEmpty())
         },
-        preparing = runningTool == null && preparingTool != null,
+        preparing = runningTool == null && waitingTool == null && preparingTool != null,
+        waitingApproval = runningTool == null && waitingTool != null,
         closed = closed,
     )
 }
@@ -304,7 +309,8 @@ data class ProcessCallItem(
     val argsJson: String = "",
     val kind: ProcessActivityKind = ProcessActivityKind.fromToolName(name),
     val isRunning: Boolean = false,
-    val isPreparing: Boolean = false
+    val isPreparing: Boolean = false,
+    val isWaitingForApproval: Boolean = false
 )
 
 fun calculateActivityCounts(items: List<ProcessCallItem>): List<ActivityCount> {
