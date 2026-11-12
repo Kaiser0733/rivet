@@ -98,6 +98,15 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontStyle
+import androidx.compose.animation.core.animateFloat
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.rememberInfiniteTransition
+import androidx.compose.animation.core.infiniteRepeatable
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.core.LinearEasing
+import androidx.compose.animation.core.RepeatMode
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
 import androidx.compose.ui.text.TextStyle
@@ -949,7 +958,8 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                             id = "thinking-${entry.messageIndex ?: item.group.id}",
                         )
                     }
-                    ActivityRow(item.group)
+                    val isLiveGroup = state.streaming && entry == timeline.lastOrNull { it.item is AgentConversationItem.Activity }
+                    ActivityRow(item.group, isLive = isLiveGroup)
                 }
             }
         }
@@ -1040,32 +1050,132 @@ private fun LiveStatusRow(label: String, startedAt: Long) {
 }
 
 @Composable
-private fun ActivityRow(group: AgentActivityGroup) {
-    var expanded by rememberSaveable(group.id) { mutableStateOf(false) }
-    Column(Modifier.fillMaxWidth()) {
-        Row(
-            Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(role = Role.Button) { expanded = !expanded }
-                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
-                .padding(horizontal = 8.dp, vertical = 5.dp),
-            verticalAlignment = Alignment.CenterVertically,
+private fun ProcessGroupHeader(
+    title: String,
+    activityKind: ProcessActivityKind,
+    open: Boolean,
+    isLive: Boolean,
+    onToggle: () -> Unit,
+    modifier: Modifier = Modifier,
+) {
+    val rotation by animateFloatAsState(targetValue = if (open) 180f else 0f, label = "chevronRotation")
+    val alphaAnim = if (isLive) {
+        val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
+        val alpha by infiniteTransition.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "shimmerAlpha"
+        )
+        alpha
+    } else 1f
+
+    val iconRes = when (activityKind) {
+        ProcessActivityKind.Read -> R.drawable.ic_files
+        ProcessActivityKind.ReadImage -> R.drawable.ic_visibility
+        ProcessActivityKind.Search -> R.drawable.ic_files
+        ProcessActivityKind.Write -> R.drawable.ic_edit
+        ProcessActivityKind.Edit -> R.drawable.ic_edit
+        ProcessActivityKind.Commands, ProcessActivityKind.Code -> R.drawable.ic_processes
+        ProcessActivityKind.WebSearch, ProcessActivityKind.WebFetch -> R.drawable.ic_browser
+        ProcessActivityKind.Subagents -> R.drawable.ic_processes
+        ProcessActivityKind.Plan -> R.drawable.ic_history
+        ProcessActivityKind.Questions -> R.drawable.ic_more
+        ProcessActivityKind.Thinking -> R.drawable.ic_history
+        ProcessActivityKind.Tools -> R.drawable.ic_processes
+    }
+
+    Row(
+        modifier = modifier
+            .fillMaxWidth()
+            .clickable(
+                role = Role.Button,
+                onClick = onToggle
+            )
+            .padding(vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(6.dp)
+    ) {
+        Box(
+            modifier = Modifier.size(16.dp),
+            contentAlignment = Alignment.Center
         ) {
-            Text("Activity", style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.primary)
-            Text(group.summary, Modifier.weight(1f).padding(start = 8.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = if (expanded) 2 else 1, overflow = TextOverflow.Ellipsis)
-            Text(if (expanded) "Hide" else "Details", Modifier.padding(start = 8.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (open) {
+                Icon(
+                    painter = painterResource(R.drawable.ic_chevron_down),
+                    contentDescription = if (open) "Collapse" else "Expand",
+                    modifier = Modifier.size(14.dp).graphicsLayer { rotationZ = rotation },
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+            } else {
+                Icon(
+                    painter = painterResource(iconRes),
+                    contentDescription = activityKind.key,
+                    modifier = Modifier.size(14.dp),
+                    tint = MaterialTheme.colorScheme.tertiary
+                )
+            }
         }
+        Text(
+            text = title,
+            style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+            color = MaterialTheme.colorScheme.tertiary.copy(alpha = alphaAnim),
+            maxLines = 1,
+            overflow = TextOverflow.Ellipsis,
+            modifier = Modifier.weight(1f)
+        )
+    }
+}
+
+@Composable
+private fun ActivityRow(
+    group: AgentActivityGroup,
+    isLive: Boolean = false,
+) {
+    var expanded by rememberSaveable(group.id) { mutableStateOf(isLive) }
+
+    val items = remember(group.operations) {
+        group.operations.map { op ->
+            ProcessCallItem(
+                callId = op.id,
+                name = op.title,
+                argsJson = op.detail,
+                isRunning = op.outcome == ActivityOutcome.Running || op.outcome == ActivityOutcome.WaitingApproval,
+                isPreparing = false
+            )
+        }
+    }
+    val counts = remember(items) { calculateActivityCounts(items) }
+    val summary = remember(counts, isLive) { ProcessGroupSummary(counts = counts, closed = !isLive) }
+    val title = if (isLive) summary.liveLabel() else summary.title()
+    val primaryKind = counts.firstOrNull()?.kind ?: ProcessActivityKind.Thinking
+
+    val config = LocalConfiguration.current
+    val maxBodyHeight = minOf(400.dp, (config.screenHeightDp * 0.5f).dp)
+
+    Column(Modifier.fillMaxWidth()) {
+        ProcessGroupHeader(
+            title = title,
+            activityKind = primaryKind,
+            open = expanded,
+            isLive = isLive,
+            onToggle = { expanded = !expanded }
+        )
         if (expanded) {
-            Column(Modifier.fillMaxWidth().padding(start = 16.dp, end = 8.dp, bottom = 6.dp),
-                verticalArrangement = Arrangement.spacedBy(7.dp)) {
+            Column(
+                Modifier
+                    .fillMaxWidth()
+                    .heightIn(max = maxBodyHeight)
+                    .verticalScroll(rememberScrollState())
+                    .padding(top = 4.dp, bottom = 4.dp),
+                verticalArrangement = Arrangement.spacedBy(6.dp)
+            ) {
                 group.operations.forEach { operation -> ActivityOperationRow(operation) }
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
     }
 }
 
