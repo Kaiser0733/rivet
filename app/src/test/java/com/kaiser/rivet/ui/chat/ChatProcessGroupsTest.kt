@@ -402,4 +402,13 @@ class ChatProcessGroupsTest {
     }
 
 
+    @Test
+    fun aCompletedGroupReturnsToTheFoldedDefaultAfterLiveStreaming() {
+        assertFalse(initialFoldOpen(canFold = true))
+        assertTrue(initialFoldOpen(canFold = false))
+        assertFalse(nextFoldOpenAfterState(open = true, canFold = true, isLive = false))
+        assertTrue(nextFoldOpenAfterState(open = true, canFold = false, isLive = true))
+        assertTrue(nextFoldOpenAfterState(open = true, canFold = false, isLive = false))
+    }
+
 }

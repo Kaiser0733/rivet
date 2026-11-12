@@ -243,6 +243,12 @@ fun splitMessageReasoning(message: AgentMessage, reasoning: String?): MessageRea
         MessageReasoning(forActivity = null, forAnswer = reasoning)
     }
 
+fun initialFoldOpen(canFold: Boolean): Boolean = !canFold
+
+/** The live group is open; once it is no longer live, completed groups return to folded. */
+fun nextFoldOpenAfterState(open: Boolean, canFold: Boolean, isLive: Boolean): Boolean =
+    if (!isLive && canFold) false else open
+
 fun processCallItems(operations: List<AgentActivityOperation>): List<ProcessCallItem> =
     operations.map { op ->
         ProcessCallItem(

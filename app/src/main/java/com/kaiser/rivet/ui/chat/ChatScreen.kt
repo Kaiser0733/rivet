@@ -1152,7 +1152,12 @@ private fun TurnBlockView(
     state: ChatUiState,
     isLastTurn: Boolean,
 ) {
-    var turnOpen by rememberSaveable(turn.turnIndex) { mutableStateOf(!turn.spec.canFold) }
+    var turnOpen by rememberSaveable(turn.turnIndex) {
+        mutableStateOf(initialFoldOpen(turn.spec.canFold))
+    }
+    LaunchedEffect(turn.spec.canFold, turn.spec.isLive) {
+        turnOpen = nextFoldOpenAfterState(turnOpen, turn.spec.canFold, turn.spec.isLive)
+    }
     val isOpen = !turn.spec.canFold || turnOpen
 
     Column(
@@ -1329,7 +1334,12 @@ private fun ActivityRow(
     val groupKey = remember(groups, thinking) {
         groups.joinToString("|") { it.id } + "#thinking=" + thinking.joinToString("|")
     }
-    var expanded by rememberSaveable(groupKey) { mutableStateOf(isLive) }
+    var expanded by rememberSaveable(groupKey) {
+        mutableStateOf(initialFoldOpen(canFold = !isLive))
+    }
+    LaunchedEffect(isLive) {
+        expanded = nextFoldOpenAfterState(expanded, canFold = !isLive, isLive = isLive)
+    }
 
     val operations = remember(groups) { groups.flatMap { it.operations } }
     val summary = remember(operations, thinking, isLive) {
