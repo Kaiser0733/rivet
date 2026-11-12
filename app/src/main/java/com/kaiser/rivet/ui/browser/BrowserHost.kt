@@ -46,15 +46,7 @@ fun BrowserHost(session: BrowserSession, modifier: Modifier = Modifier) {
                 .filterIsInstance<WebView>()
                 .firstOrNull()
             if (web != null) {
-                session.onRendererReleased(web) {
-                    try {
-                        web.stopLoading()
-                        web.destroy()
-                        null
-                    } catch (error: Throwable) {
-                        error
-                    }
-                }
+                session.onRendererReleased(web) { session.releaseRenderer(web) }
             }
         },
     )

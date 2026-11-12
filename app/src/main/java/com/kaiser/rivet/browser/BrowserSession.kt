@@ -18,6 +18,8 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import android.app.DownloadManager
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -197,6 +199,9 @@ class BrowserSession(
     private var idleJob: kotlinx.coroutines.Job? = null
     private val idleArming = BrowserIdleArming()
     private var appBackgrounded = false
+    private var releasingView: WebView? = null
+    private var pendingGoneView: WebView? = null
+    private var pendingGoneJob: kotlinx.coroutines.Job? = null
     private var releaseJob: kotlinx.coroutines.Job? = null
     private var periodic: kotlinx.coroutines.Job? = null
     private var teardownWatchdog: kotlinx.coroutines.Job? = null
@@ -1403,6 +1408,21 @@ class BrowserSession(
         }
 
         override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+            android.util.Log.d("BrowserHost",
+                "onRenderProcessGone fired didCrash=${detail?.didCrash()} releasing=${view === releasingView}")
+            if (view === pendingGoneView) {
+                android.util.Log.d("BrowserHost", "gone-handler cleanup started")
+                pendingGoneJob?.cancel()
+                pendingGoneJob = null
+                pendingGoneView = null
+                destroyGoneView(view)
+                return true
+            }
+            if (view === releasingView) return true
+            if (view !== renderer) {
+                android.util.Log.d("BrowserHost", "onRenderProcessGone for a stale view ignored")
+                return true
+            }
             rendererFailure = "The page renderer stopped. Reader mode and a reload are available."
             requestRendererTeardown()
             return true
@@ -1614,6 +1634,83 @@ class BrowserSession(
     }
 
     /**
+     * The official WebView teardown order, plus the feature-gated renderer terminate.
+     * The handle must be captured while the WebView is alive: no WebView method may
+     * be called after destroy(), and terminate-after-destroy is undocumented.
+     */
+    fun releaseRenderer(view: WebView): Throwable? {
+        if (releasingView === view) return null
+        releasingView = view
+        return try {
+            (view.parent as? android.view.ViewGroup)?.removeView(view)
+            android.util.Log.d("BrowserHost", "releaseRenderer removed-from-parent")
+            runCatching { view.stopLoading() }
+            runCatching { view.clearHistory() }
+            pendingGoneView = view
+            val outcome = terminateRenderer(view)
+            if (outcome == RendererTerminationOutcome.Requested && pendingGoneView === view) {
+                android.util.Log.d("BrowserHost",
+                    "renderer destroy deferred to gone-handler")
+                armGoneFallback(view)
+            } else if (pendingGoneView === view) {
+                pendingGoneView = null
+                view.destroy()
+                android.util.Log.d("BrowserHost", "releaseRenderer destroy reached")
+            }
+            null
+        } catch (error: Throwable) {
+            android.util.Log.w("BrowserHost", "releaseRenderer failed", error)
+            error
+        } finally {
+            releasingView = null
+        }
+    }
+
+    private fun armGoneFallback(view: WebView) {
+        pendingGoneJob?.cancel()
+        pendingGoneJob = scope.launch {
+            kotlinx.coroutines.delay(2_000)
+            if (pendingGoneView === view) {
+                android.util.Log.w("BrowserHost",
+                    "gone-handler did not fire; destroying the terminated view")
+                pendingGoneView = null
+                destroyGoneView(view)
+            }
+        }
+    }
+
+    private fun destroyGoneView(view: WebView) {
+        runCatching { (view.parent as? android.view.ViewGroup)?.removeView(view) }
+        runCatching { view.stopLoading() }
+        runCatching { view.clearHistory() }
+        runCatching { view.destroy() }
+            .onFailure { android.util.Log.w("BrowserHost", "gone-handler destroy failed", it) }
+        android.util.Log.d("BrowserHost", "gone-handler destroy reached")
+    }
+
+    private fun terminateRenderer(view: WebView): RendererTerminationOutcome {
+        val supported = runCatching {
+            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_TERMINATE)
+        }.getOrDefault(false)
+        if (!supported) {
+            android.util.Log.d("BrowserHost", "renderer terminate unavailable")
+            return RendererTerminationOutcome.Unsupported
+        }
+        val handle = runCatching {
+            if (WebViewFeature.isFeatureSupported(WebViewFeature.GET_WEB_VIEW_RENDERER)) {
+                WebViewCompat.getWebViewRenderProcess(view)
+            } else null
+        }.getOrNull()
+        android.util.Log.d("BrowserHost", "renderer termination supported=true handle=${handle != null}")
+        val outcome = RendererTerminationPolicy.request(true, handle != null) {
+            handle?.terminate() == true
+        }
+        android.util.Log.d("BrowserHost",
+            "renderer terminate called outcome=$outcome")
+        return outcome
+    }
+
+    /**
      * Session side only marks the hand-off and clears what must not keep running.
      * The view is not touched here. BrowserHost removes it from composition, then
      * calls onRendererReleased with the actual cleanup lambda.
@@ -1680,10 +1777,10 @@ class BrowserSession(
             if (renderer !== held || !_state.value.teardownRequested) return@launch
             android.util.Log.w("BrowserHost",
                 "Renderer did not leave composition within 2s; destroying held view directly")
-            (held.parent as? android.view.ViewGroup)?.removeView(held)
             forceDestroyed = held
-            runCatching { held.stopLoading(); held.destroy() }
-                .onFailure { android.util.Log.w("BrowserHost", "Direct held-view destroy failed", it) }
+            releaseRenderer(held)?.let {
+                android.util.Log.w("BrowserHost", "Direct held-view destroy failed", it)
+            }
             finishRendererTeardown(null)
         }
     }

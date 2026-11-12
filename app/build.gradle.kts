@@ -106,6 +106,7 @@ dependencies {
     implementation("androidx.compose.ui:ui")
     implementation("androidx.datastore:datastore-preferences:1.1.7")
     implementation("androidx.lifecycle:lifecycle-viewmodel-compose:2.8.7")
+    implementation("androidx.webkit:webkit:1.12.1")
     implementation("com.squareup.okhttp3:okhttp:4.12.0")
     // DnsOverHttps for the update client's secure-DNS fallback; the core artifact does not carry it.
     implementation("com.squareup.okhttp3:okhttp-dnsoverhttps:4.12.0")
