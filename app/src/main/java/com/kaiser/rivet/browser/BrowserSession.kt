@@ -18,6 +18,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import com.kaiser.rivet.ui.browser.BrowserTabs
+import com.kaiser.rivet.ui.browser.BrowserWindowInfo
 import android.webkit.WebViewClient
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -1199,7 +1200,13 @@ class BrowserSession(
 
     fun closeWindow(id: String) {
         val wasActive = id == activeWindowId
-        val target = BrowserTabs.closeTarget(windowSummaries(), activeWindowId, id)
+        val target = BrowserTabs.closeTarget(
+            windowSummaries().map {
+                BrowserWindowInfo(it.id, it.title, it.url, it.active)
+            },
+            activeWindowId,
+            id,
+        )
         if (wasActive) unparkRenderer()
         windows.remove(id)
         snapshots.delete(id)
