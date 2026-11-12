@@ -910,10 +910,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
         }
     }
-    LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
+    LazyColumn(state = listState, modifier = modifier.widthIn(max = 748.dp).fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        verticalArrangement = Arrangement.spacedBy(6.dp)) {
         state.goalLine?.let { line ->
             item(key = "goal-line") {
                 GoalLine(line, state.goalAttachOffer, onAttachGoal)
@@ -1130,17 +1130,16 @@ private fun MessageRow(message: AgentMessage, reasoning: String? = null, message
         val bubble: @Composable () -> Unit = {
             if (message.role == AgentRole.User) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Column(Modifier.fillMaxWidth(0.86f), horizontalAlignment = Alignment.End,
-                        verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                        Text("You", style = MaterialTheme.typography.labelLarge,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Surface(color = MaterialTheme.colorScheme.surfaceContainer,
-                            shape = RoundedCornerShape(topStart = 16.dp, topEnd = 16.dp,
-                                bottomStart = 16.dp, bottomEnd = 4.dp),
-                            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.22f))) {
-                            Text(message.text, modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp),
-                                style = MaterialTheme.typography.bodyMedium)
-                        }
+                    Surface(
+                        modifier = Modifier.widthIn(max = 525.dp).fillMaxWidth(0.82f),
+                        color = MaterialTheme.colorScheme.surfaceContainer,
+                        shape = RoundedCornerShape(20.dp),
+                    ) {
+                        Text(
+                            message.text,
+                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            style = MaterialTheme.typography.bodyMedium,
+                        )
                     }
                 }
             } else {
@@ -1257,20 +1256,13 @@ private fun BrowserImage(image: ChatMarkdownBlock.Image) {
 
 @Composable
 private fun AssistantMessage(text: String, streaming: Boolean) {
-    Surface(
-        modifier = Modifier.fillMaxWidth(0.94f),
-        color = MaterialTheme.colorScheme.surface.copy(alpha = 0.9f),
-        shape = RoundedCornerShape(8.dp),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.15f)),
+    Column(
+        modifier = Modifier.fillMaxWidth(),
+        verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
-        Column(Modifier.padding(horizontal = 11.dp, vertical = 8.dp),
-            verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Text("Rivet", style = MaterialTheme.typography.labelLarge,
-                color = MaterialTheme.colorScheme.primary)
-            if (streaming) {
-                Text(text, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
-            } else AssistantMarkdown(text)
-        }
+        if (streaming) {
+            Text(text, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
+        } else AssistantMarkdown(text)
     }
 }
 
@@ -1281,7 +1273,7 @@ private fun AssistantMarkdown(text: String) {
     // re-parses only that block, with the same result (see MarkdownBlocks).
     val parser = remember { MarkdownBlocks() }
     val blocks = parser.forText(text)
-    Column(verticalArrangement = Arrangement.spacedBy(7.dp)) {
+    Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         blocks.forEach { block ->
             when (block) {
                 is ChatMarkdownBlock.Paragraph -> InlineMarkdown(block.text)
