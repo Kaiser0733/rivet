@@ -12,4 +12,16 @@ object BrowserIdleTimer {
 
     fun remainingMs(hiddenAtMillis: Long, nowMillis: Long): Long =
         if (hiddenAtMillis <= 0L) IDLE_MS else (IDLE_MS - (nowMillis - hiddenAtMillis)).coerceAtLeast(0L)
+    /**
+     * Foregrounding must not silently cancel the countdown for a browser that is
+     * still hidden. Visible browsers are cancelled normally; an unarmed browser has
+     * nothing to rearm.
+     */
+    fun shouldRearmHiddenBrowser(
+        visible: Boolean,
+        wasArmed: Boolean,
+        deadline: Long,
+        now: Long,
+    ): Boolean = !visible && wasArmed && deadline > now
+
 }

@@ -285,24 +285,33 @@ class BrowserSession(
                 System.currentTimeMillis())) armIdle()
     }
 
-    /** MainActivity.onStart: enforce an expired background deadline immediately. */
+    /** MainActivity.onStart: enforce an expired deadline, or rearm a still-hidden browser. */
     fun onAppForeground() {
         appBackgrounded = false
-        if (idleArming.onForeground(System.currentTimeMillis())) {
+        val now = System.currentTimeMillis()
+        val visible = _state.value.visible
+        val wasArmed = idleArming.armed
+        val deadline = idleArming.deadline
+        if (idleArming.onForeground(now)) {
             idleJob?.cancel()
             idleJob = null
             endSession()
+        } else if (BrowserIdleTimer.shouldRearmHiddenBrowser(visible, wasArmed, deadline, now)) {
+            armIdle(remainingMs = deadline - now, deadline = deadline)
         } else {
             idleJob?.cancel()
             idleJob = null
         }
     }
 
-    private fun armIdle() {
+    private fun armIdle(
+        remainingMs: Long = BrowserIdleTimer.IDLE_MS,
+        deadline: Long = System.currentTimeMillis() + remainingMs,
+    ) {
         idleJob?.cancel()
-        idleArming.onHidden(System.currentTimeMillis())
+        idleArming.armUntil(deadline)
         idleJob = scope.launch {
-            kotlinx.coroutines.delay(BrowserIdleTimer.IDLE_MS)
+            kotlinx.coroutines.delay(remainingMs)
             if (BrowserIdleTimer.shouldEndOnTimer(_state.value.visible, appBackgrounded)) endSession()
         }
     }

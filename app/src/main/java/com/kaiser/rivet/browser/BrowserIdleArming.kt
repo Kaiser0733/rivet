@@ -32,4 +32,10 @@ class BrowserIdleArming {
         deadline = 0L
         return false
     }
+
+    /** Put the same deadline back after foregrounding a browser that is still hidden. */
+    fun armUntil(deadline: Long) {
+        armed = true
+        this.deadline = deadline
+    }
 }

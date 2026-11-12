@@ -21,4 +21,27 @@ class BrowserIdleArmingDeadlineTest {
         assertFalse(arming.onForeground(10_000L + BrowserIdleTimer.IDLE_MS - 1))
         assertFalse(arming.armed)
     }
+    @Test fun aHiddenBrowserKeepsItsOriginalDeadlineAcrossAnEarlyForeground() {
+        val arming = BrowserIdleArming()
+        arming.onBackground(rendererAlive = true, now = 10_000L)
+        val deadline = arming.deadline
+        val now = 10_000L + BrowserIdleTimer.IDLE_MS / 2
+        assertTrue(BrowserIdleTimer.shouldRearmHiddenBrowser(
+            visible = false, wasArmed = arming.armed, deadline = deadline, now = now))
+        arming.onForeground(now)
+        arming.armUntil(deadline)
+        assertTrue(arming.armed)
+        assertEquals(deadline, arming.deadline)
+        assertEquals(BrowserIdleTimer.IDLE_MS / 2, BrowserIdleTimer.remainingMs(10_000L, now))
+    }
+
+    @Test fun aVisibleBrowserDoesNotNeedAHiddenRearmAndAnExpiredOneDoesNotRearm() {
+        assertFalse(BrowserIdleTimer.shouldRearmHiddenBrowser(
+            visible = true, wasArmed = true, deadline = 20_000L, now = 10_000L))
+        assertFalse(BrowserIdleTimer.shouldRearmHiddenBrowser(
+            visible = false, wasArmed = true, deadline = 10_000L, now = 10_000L))
+        assertFalse(BrowserIdleTimer.shouldRearmHiddenBrowser(
+            visible = false, wasArmed = false, deadline = 20_000L, now = 10_000L))
+    }
+
 }
