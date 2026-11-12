@@ -347,4 +347,19 @@ class ChatProcessGroupsTest {
         assertEquals("Preparing to read files · src/App.kt", summary.liveLabel())
     }
 
+    @Test
+    fun marksATurnWithInterleavedUserInputAsNeverFoldable() {
+        val items = listOf(
+            TurnItem("user-0", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem("proc-0", isUser = false, isAnswer = false, isProcess = true),
+            TurnItem("user-1", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem("answer-1", isUser = false, isAnswer = true, isProcess = false),
+        )
+        val turns = segmentTurnItems(items, false, emptyMap(), false, false)
+        assertEquals(2, turns.size)
+        assertTrue(turns[0].spec.hasInterleavedUserInput)
+        assertFalse(turns[0].spec.canFold)
+        assertFalse(turns[1].spec.hasInterleavedUserInput)
+    }
+
 }

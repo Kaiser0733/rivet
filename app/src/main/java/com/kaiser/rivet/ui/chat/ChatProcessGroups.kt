@@ -372,7 +372,7 @@ fun <T> segmentTurnItems(
         }
     }
 
-    fun flushTurn(isLast: Boolean) {
+    fun flushTurn(isLast: Boolean, interleaved: Boolean = false) {
         flushProcess()
         if (currentUser == null && currentParts.isEmpty()) return
         val isLive = isLast && isStreaming
@@ -385,7 +385,7 @@ fun <T> segmentTurnItems(
             isStopped = isStopped,
             isError = isError,
             durationMs = duration,
-            hasInterleavedUserInput = false
+            hasInterleavedUserInput = interleaved
         )
         result.add(
             SegmentedTurn(
@@ -402,9 +402,11 @@ fun <T> segmentTurnItems(
 
     items.forEach { item ->
         if (item.isUser) {
+            val interleaved = (currentParts.none { it is TurnPart.Answer }) &&
+                (currentParts.isNotEmpty() || pendingProcess.isNotEmpty())
             flushProcess()
             if (currentUser != null || currentParts.isNotEmpty()) {
-                flushTurn(isLast = false)
+                flushTurn(isLast = false, interleaved = interleaved)
             }
             currentUser = item.data
         } else if (item.isAnswer) {
