@@ -77,6 +77,9 @@ interface AgentWorkspace {
         throw AgentWorkspaceFailure("unsupported")
     suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>): AgentFileSnapshot
     suspend fun createFile(path: String): AgentCreatedFile
+    // Creates missing parent directories first. The default keeps the old
+    // single-file behaviour for implementations that do not model parents.
+    suspend fun createFileWithParents(path: String): AgentCreatedFile = createFile(path)
     suspend fun createDirectory(path: String): AgentWorkspaceEntry
     suspend fun rename(path: String, newName: String, approved: WorkspaceStructuralStamp): AgentWorkspaceEntry
     suspend fun move(path: String, destination: String, approvedSource: WorkspaceStructuralStamp,

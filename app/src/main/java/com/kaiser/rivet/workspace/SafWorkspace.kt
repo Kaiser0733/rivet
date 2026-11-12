@@ -294,46 +294,54 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         mutations.withLock {
             requireNonRoot(path)
             if (createParents) {
-                val missing = CreateParents.missing(path) { candidate ->
-                    try {
-                        val existing = resolve(candidate)
-                        if (!existing.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
-                        true
+                // resolve() is suspend, but CreateParents.missing takes a plain
+                // predicate — probe existence first, then hand it a set lookup.
+                val existing = mutableSetOf<WorkspacePath>()
+                var probe = WorkspacePath.ROOT
+                for (segment in path.segments.dropLast(1)) {
+                    probe = probe.child(segment)
+                    val entry = try {
+                        resolve(probe)
                     } catch (e: WorkspaceFailure) {
                         if (e.reason != WorkspaceFailure.Reason.MISSING) throw e
-                        false
+                        null
+                    }
+                    if (entry != null) {
+                        if (!entry.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
+                        existing += probe
                     }
                 }
-                missing.forEach { createLocked(it, Document.MIME_TYPE_DIR) }
+                val missing = CreateParents.missing(path) { it in existing }
+                for (parent in missing) createLocked(parent, Document.MIME_TYPE_DIR)
             }
             createLocked(path, mime)
         }
     }
 
     private suspend fun createLocked(path: WorkspacePath, mime: String): WorkspaceEntry {
-            val parent = resolve(path.parent())
-            if (!parent.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
-            if (!parent.capabilities.create) fail(WorkspaceFailure.Reason.UNSUPPORTED)
-            absent(parent, path.name)
-            currentCoroutineContext().ensureActive()
-            withContext(NonCancellable) {
-                val created = DocumentsContract.createDocument(resolver, uri(parent.documentId), mime, path.name)
-                    ?: fail(WorkspaceFailure.Reason.PROVIDER)
-                val confirmed = returnedChild(parent, created)
-                if (mime != Document.MIME_TYPE_DIR && confirmed.path.name != path.name &&
-                    confirmed.capabilities.rename && children(parent, 5000).none { it.path.name == path.name }) {
-                    // One correction, within the same approved create. A refusal must
-                    // not turn a successful create into a retry that duplicates it.
-                    val renamed = try {
-                        DocumentsContract.renameDocument(resolver, uri(confirmed.documentId), path.name)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        null
-                    }
-                    returnedChild(parent, renamed ?: uri(confirmed.documentId))
-                } else confirmed
-            }
+        val parent = resolve(path.parent())
+        if (!parent.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
+        if (!parent.capabilities.create) fail(WorkspaceFailure.Reason.UNSUPPORTED)
+        absent(parent, path.name)
+        currentCoroutineContext().ensureActive()
+        return withContext(NonCancellable) {
+            val created = DocumentsContract.createDocument(resolver, uri(parent.documentId), mime, path.name)
+                ?: fail(WorkspaceFailure.Reason.PROVIDER)
+            val confirmed = returnedChild(parent, created)
+            if (mime != Document.MIME_TYPE_DIR && confirmed.path.name != path.name &&
+                confirmed.capabilities.rename && children(parent, 5000).none { it.path.name == path.name }) {
+                // One correction, within the same approved create. A refusal must
+                // not turn a successful create into a retry that duplicates it.
+                val renamed = try {
+                    DocumentsContract.renameDocument(resolver, uri(confirmed.documentId), path.name)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+                returnedChild(parent, renamed ?: uri(confirmed.documentId))
+            } else confirmed
+        }
     }
 
     suspend fun delete(path: WorkspacePath, approved: WorkspaceStructuralStamp? = null) =

@@ -652,9 +652,10 @@ class BrowserSession(
             return PaintVerdict.Unknown
         }
         return try {
-            if (startY != null && scrolledY != startY && secondHash.isNotEmpty() &&
+            val scrolled = scrolledY
+            if (startY != null && scrolled != null && scrolled != startY && secondHash.isNotEmpty() &&
                 PaintStaleness.isStale(FrameProbe(startY, firstHash),
-                    FrameProbe(scrolledY, secondHash))) return PaintVerdict.Stale
+                    FrameProbe(scrolled, secondHash))) return PaintVerdict.Stale
             val left = bitmap.width / 8
             val right = bitmap.width - left
             val top = bitmap.height / 4
@@ -1572,8 +1573,8 @@ class BrowserSession(
             lateinit var listener: android.view.View.OnLayoutChangeListener
             listener = android.view.View.OnLayoutChangeListener {
                     changed, _, _, _, _, _, _, _, _ ->
-                if (changed.contentHeight >= rotationScroll.target) {
-                    val landed = rotationScroll.attempt(changed.contentHeight)
+                if (view.contentHeight >= rotationScroll.target) {
+                    val landed = rotationScroll.attempt(view.contentHeight)
                     if (landed != null) {
                         changed.scrollTo(0, landed)
                         rotationScroll.clear()

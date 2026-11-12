@@ -103,6 +103,19 @@ class SafAgentWorkspace(private val workspace: SafWorkspace) : AgentWorkspace {
         }
     }
 
+    override suspend fun createFileWithParents(path: String): AgentCreatedFile = call {
+        val created = workspace.createFileWithParents(WorkspacePath.parse(path))
+        try {
+            workspace.readCreatedFile(created.path).let {
+                AgentCreatedFile(it.path.value, it.sha256, it.size)
+            }
+        } catch (e: WorkspaceFailure) {
+            // Creation is already committed. Report its confirmed identity even
+            // when this provider refuses the follow-up inspection.
+            AgentCreatedFile(created.path.value, inspectionError = e.reason.name.lowercase())
+        }
+    }
+
     override suspend fun createDirectory(path: String): AgentWorkspaceEntry = call {
         workspace.createDirectory(WorkspacePath.parse(path)).let {
             AgentWorkspaceEntry(it.path.value, it.directory, it.size)
