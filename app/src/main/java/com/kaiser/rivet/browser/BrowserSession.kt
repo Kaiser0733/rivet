@@ -1755,7 +1755,9 @@ class BrowserSession(
                 WebViewCompat.getWebViewRenderProcess(view)
             } else null
         }.getOrNull()
-        android.util.Log.d("BrowserHost", "renderer termination supported=true handle=${handle != null}")
+        android.util.Log.d("BrowserHost",
+            "renderer termination supported=true handle=${handle != null} " +
+                "steps=${RendererTerminationPolicy.teardownSteps(true, handle != null)}")
         val outcome = RendererTerminationPolicy.request(true, handle != null) {
             handle?.terminate() == true
         }
