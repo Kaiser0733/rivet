@@ -347,12 +347,21 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             onDismissRequest = { windowsOpen = false },
             title = { Text("Windows") },
             text = {
-                Column {
-                    state.windows.forEach { window ->
-                        TextButton(onClick = {
-                            session.selectWindow(window.id)
-                            windowsOpen = false
-                        }) { Text("${if (window.active) "• " else ""}${window.title.take(48)}") }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxWidth().height(360.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    gridItems(state.windows, key = { it.id }) { window ->
+                        BrowserWindowCard(
+                            window = window,
+                            onSelect = {
+                                session.selectWindow(window.id)
+                                windowsOpen = false
+                            },
+                            onClose = { session.closeWindow(window.id) },
+                        )
                     }
                 }
             },
@@ -423,6 +432,43 @@ private fun BrowserTabStrip(
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun BrowserWindowCard(
+    window: com.kaiser.rivet.browser.BrowserWindowSummary,
+    onSelect: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Surface(
+        color = if (window.active) MaterialTheme.colorScheme.surfaceVariant
+        else MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onSelect),
+    ) {
+        Column(Modifier.padding(start = 10.dp, top = 8.dp, end = 2.dp, bottom = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(painterResource(R.drawable.ic_browser), null,
+                    Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(6.dp))
+                Text(BrowserTabs.title(window.title, window.url), maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f))
+                IconButton(onClick = onClose, modifier = Modifier.size(26.dp)) {
+                    Icon(painterResource(R.drawable.ic_close), "Close window",
+                        Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Text(window.url.substringAfter("://", window.url).substringBefore('/'),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, end = 8.dp))
         }
     }
 }
