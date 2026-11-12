@@ -980,7 +980,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             )
         }
         if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
-            ThinkingBlock(streamingReasoning, streaming = true, id = "streaming")
+            ReasoningRow(streamingReasoning, streaming = true, id = "streaming")
         }
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
@@ -1186,7 +1186,7 @@ private fun TurnBlockView(
                         when (val item = entry.item) {
                             is AgentConversationItem.Activity -> {
                                 if (!entry.standaloneThinking.isNullOrBlank()) {
-                                    ThinkingBlock(
+                                    ReasoningRow(
                                         entry.standaloneThinking,
                                         streaming = false,
                                         id = "thinking-${entry.messageIndex ?: item.group.id}",
@@ -1407,7 +1407,7 @@ private fun MessageRow(message: AgentMessage, reasoning: String? = null, message
     var selectingText by remember(messageKey) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (message.role == AgentRole.Assistant && !reasoning.isNullOrBlank()) {
-            ThinkingBlock(reasoning, streaming = false, id = "thinking-$messageKey")
+            ReasoningRow(reasoning, streaming = false, id = "thinking-$messageKey")
         }
         val bubble: @Composable () -> Unit = {
             if (message.role == AgentRole.User) {
@@ -1454,61 +1454,110 @@ private fun MessageRow(message: AgentMessage, reasoning: String? = null, message
     }
 }
 
-// One thinking row for the whole turn, modelled on dsh: the header always toggles,
-// collapsed by default, and while the chain streams the header previews one cheap line
-// instead of laying out the whole text. The full chain renders only when expanded.
+// Assistant reasoning row copied from dsh ReasoningRow: collapsed is exactly one 24dp line
+// ("Think" + 2dp dot + 13sp preview without asterisks, fade shimmer when streaming).
+// Expanded body is indented 22dp with secondary typography, no Surface and no Show/Hide buttons.
 @Composable
-private fun ThinkingBlock(text: String, streaming: Boolean, id: String) {
+private fun ReasoningRow(
+    text: String,
+    streaming: Boolean,
+    id: String,
+    modifier: Modifier = Modifier,
+) {
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
-    // The chain is republished on every delta, and building the preview from scratch meant
-    // reading the whole chain again per token. While it streams the row is keyed and its text
-    // only grows, so one scan carries across the deltas and reads only what arrived.
+    val rotation by animateFloatAsState(targetValue = if (expanded) 180f else 0f, label = "reasoningChevronRotation")
+    val alphaAnim = if (streaming) {
+        val infiniteTransition = rememberInfiniteTransition(label = "reasoningShimmer")
+        val alpha by infiniteTransition.animateFloat(
+            initialValue = 0.55f,
+            targetValue = 1f,
+            animationSpec = infiniteRepeatable(
+                animation = tween(800, easing = LinearEasing),
+                repeatMode = RepeatMode.Reverse
+            ),
+            label = "reasoningAlpha"
+        )
+        alpha
+    } else 1f
+
     val scan = remember { PreviewScan() }
-    val interactions = remember { MutableInteractionSource() }
-    val preview = remember(text, streaming) {
-        displaySafeText(thinkingPreview(text, streaming, scan))
+    val summaryText = remember(text, streaming) {
+        val raw = displaySafeText(thinkingPreview(text, streaming, scan))
+        raw.replace("**", "").trim()
     }
-    Column(Modifier.fillMaxWidth(0.94f)) {
+
+    Column(modifier = modifier.fillMaxWidth()) {
         Row(
-            Modifier.fillMaxWidth().heightIn(min = 36.dp).clickable(role = Role.Button) { expanded = !expanded }
-                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
-                .padding(horizontal = 8.dp, vertical = 4.dp),
-            verticalAlignment = Alignment.CenterVertically,
+            modifier = Modifier
+                .fillMaxWidth()
+                .height(24.dp)
+                .clickable(
+                    role = Role.Button,
+                    onClick = { expanded = !expanded }
+                )
+                .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
+            verticalAlignment = Alignment.CenterVertically
         ) {
-            Text("Thinking", style = MaterialTheme.typography.labelMedium,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (preview.isEmpty()) Spacer(Modifier.weight(1f))
-            else Text(preview, Modifier.weight(1f).padding(start = 8.dp),
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(if (expanded) "Hide" else "Show", Modifier.padding(start = 8.dp),
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Box(
+                modifier = Modifier.size(16.dp),
+                contentAlignment = Alignment.Center
+            ) {
+                if (expanded) {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_chevron_down),
+                        contentDescription = "Collapse",
+                        modifier = Modifier.size(14.dp).graphicsLayer { rotationZ = rotation },
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
+                } else {
+                    Icon(
+                        painter = painterResource(R.drawable.ic_history),
+                        contentDescription = "Think",
+                        modifier = Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.tertiary
+                    )
+                }
+            }
+            Spacer(Modifier.width(6.dp))
+            Text(
+                text = "Think",
+                style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
+                color = MaterialTheme.colorScheme.tertiary
+            )
+            if (summaryText.isNotEmpty()) {
+                Box(
+                    modifier = Modifier
+                        .padding(horizontal = 8.dp)
+                        .size(2.dp)
+                        .background(MaterialTheme.colorScheme.outlineVariant, CircleShape)
+                )
+                Text(
+                    text = summaryText,
+                    style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alphaAnim),
+                    maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    modifier = Modifier.weight(1f, fill = false)
+                )
+            }
         }
         if (expanded) {
-            // A long chain pushes the header off the top of the screen, so the box is a tap
-            // target of its own: tapping the chain collapses it where the user stopped reading.
-            // This is a clickable, not a hand-rolled tap detector, and that is the whole
-            // tap-versus-drag split: clickable only fires when the press is released without
-            // the pointer changes being consumed, and the chat list's scroll consumes them the
-            // moment a drag starts, which cancels the press. The chain itself carries no nested
-            // scroll (plain Text in the Surface below), so nothing competes with the list.
-            Surface(
-                modifier = Modifier.fillMaxWidth()
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(start = 22.dp, top = 4.dp, bottom = 4.dp)
                     .clickable(
-                        interactionSource = interactions,
+                        interactionSource = remember { MutableInteractionSource() },
                         indication = null,
                         role = Role.Button,
-                        onClickLabel = "Collapse thinking",
-                    ) { expanded = false },
-                color = MaterialTheme.colorScheme.surfaceContainer.copy(alpha = 0.7f),
-                shape = RoundedCornerShape(6.dp),
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
+                        onClickLabel = "Collapse thinking"
+                    ) { expanded = false }
             ) {
-                Text(displaySafeText(text), modifier = Modifier.padding(horizontal = 10.dp, vertical = 8.dp),
+                Text(
+                    text = displaySafeText(text),
                     style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    color = MaterialTheme.colorScheme.onSurfaceVariant
+                )
             }
         }
     }
