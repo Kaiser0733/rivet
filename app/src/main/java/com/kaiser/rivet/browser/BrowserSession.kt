@@ -201,6 +201,8 @@ class BrowserSession(
     private var teardownWatchdog: kotlinx.coroutines.Job? = null
     private var forceDestroyed: WebView? = null
     private var paintRecoveryJob: kotlinx.coroutines.Job? = null
+    private val rotationScroll = ScrollRestore()
+    private var scrollLayoutListener: android.view.View.OnLayoutChangeListener? = null
     var surfaceReattacher: (() -> Unit)? = null
 
     private val _state = MutableStateFlow(BrowserUiState(
@@ -1179,7 +1181,13 @@ class BrowserSession(
     }
 
     override fun onLowMemory() { onTrimMemory(ComponentCallbacks2.TRIM_MEMORY_COMPLETE) }
-    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) { }
+    override fun onConfigurationChanged(newConfig: android.content.res.Configuration) {
+        val view = renderer ?: return
+        view.evaluateJavascript("window.scrollY") { raw ->
+            val value = raw.trim().trim('"').toIntOrNull() ?: 0
+            if (value > 0) rotationScroll.capture(value)
+        }
+    }
 
     private fun stateHandoff(url: String, reason: String) {
         val first = !authLimitStated
@@ -1348,6 +1356,10 @@ class BrowserSession(
                 mode = BrowserMode.Renderer, rendererVisible = true, pageReady = true,
                 fidelity = BrowserFidelity.Reloaded) }
             refreshBudget()
+            val windowScroll = activeWindowId?.let { windows[it]?.scrollY } ?: 0
+            if (windowScroll > 0 || rotationScroll.target > 0) {
+                restoreScroll(view, maxOf(windowScroll, rotationScroll.target))
+            }
             armPaintWatchdog(actual)
             if (!BrowserAuthGuard.isLoopback(actual)) {
                 view.evaluateJavascript("document.querySelector('input[type=password]') !== null") { raw ->
@@ -1539,9 +1551,46 @@ class BrowserSession(
         return current as? Activity
     }
 
+    private fun restoreScroll(view: WebView, target: Int) {
+        if (target <= 0) return
+        if (rotationScroll.target != target) rotationScroll.capture(target)
+        applyScrollRestore(view)
+    }
+
+    private fun applyScrollRestore(view: WebView) {
+        val offset = rotationScroll.attempt(view.contentHeight)
+        if (offset != null) {
+            view.scrollTo(0, offset)
+            rotationScroll.clear()
+            scrollLayoutListener?.let {
+                view.removeOnLayoutChangeListener(it)
+                scrollLayoutListener = null
+            }
+            return
+        }
+        if (scrollLayoutListener == null) {
+            lateinit var listener: android.view.View.OnLayoutChangeListener
+            listener = android.view.View.OnLayoutChangeListener {
+                    changed, _, _, _, _, _, _, _, _ ->
+                if (changed.contentHeight >= rotationScroll.target) {
+                    val landed = rotationScroll.attempt(changed.contentHeight)
+                    if (landed != null) {
+                        changed.scrollTo(0, landed)
+                        rotationScroll.clear()
+                    }
+                    changed.removeOnLayoutChangeListener(listener)
+                    if (scrollLayoutListener === listener) scrollLayoutListener = null
+                }
+            }
+            scrollLayoutListener = listener
+            view.addOnLayoutChangeListener(listener)
+            view.post { applyScrollRestore(view) }
+        }
+    }
+
     private fun loadSnapshotState(view: WebView, snapshot: BrowserSnapshot) {
         view.post {
-            view.scrollTo(0, snapshot.scrollY)
+            restoreScroll(view, snapshot.scrollY)
             // Form restoration is deliberately name/value only; sensitive fields were
             // filtered out when the snapshot was made.
             val fields = snapshot.formFields
@@ -1672,6 +1721,8 @@ class BrowserSession(
         teardownWatchdog?.cancel()
         teardownWatchdog = null
         android.util.Log.d("BrowserHost", "finishRendererTeardown failure=${failure != null}")
+        scrollLayoutListener?.let { renderer?.removeOnLayoutChangeListener(it) }
+        scrollLayoutListener = null
         renderer = null
         readerSampleJob?.cancel()
         readerSampleJob = null
