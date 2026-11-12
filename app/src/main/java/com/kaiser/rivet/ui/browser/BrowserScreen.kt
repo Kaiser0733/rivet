@@ -6,6 +6,7 @@ import android.content.ContextWrapper
 import android.content.Intent
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -17,13 +18,19 @@ import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items as gridItems
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.Button
@@ -42,6 +49,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
@@ -56,8 +64,10 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.layout.onSizeChanged
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.kaiser.rivet.R
@@ -89,6 +99,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
     var settingsOpen by remember { mutableStateOf(false) }
     var domainsOpen by remember { mutableStateOf(false) }
     var windowsOpen by remember { mutableStateOf(false) }
+    var chromeHeightPx by remember { mutableIntStateOf(0) }
+    val density = LocalDensity.current
 
     LaunchedEffect(Unit) {
         session.customTabOpener = { url ->
@@ -106,7 +118,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
         else Modifier)) {
         if (state.readerMode) {
             ReaderPane(state.readerText, Modifier.fillMaxSize().padding(
-                top = BrowserChrome.topPadding(0.dp), bottom = BrowserChrome.bottomPadding(0.dp))) { url ->
+                top = with(density) { chromeHeightPx.toDp() },
+                bottom = BrowserChrome.bottomPadding(0.dp))) { url ->
                 scope.launch { runCatching { session.openVisual(url, userInitiated = true) } }
             }
         } else if (state.url.isBlank() && !state.rendererVisible) {
@@ -123,7 +136,13 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
         }
 
         Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding()
-            .onSizeChanged { onChromeHeight(it.height) }) {
+            .onSizeChanged { chromeHeightPx = it.height; onChromeHeight(it.height) }) {
+            BrowserTabStrip(
+                windows = state.windows,
+                onSelect = session::selectWindow,
+                onClose = session::closeWindow,
+                onOpenWindows = { windowsOpen = true },
+            )
             Surface(tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
                 Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically) {
@@ -156,39 +175,6 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                             }
                         }
                     }) { Text("Go") }
-                    Box {
-                        IconButton(onClick = { menuOpen = true }) {
-                            Icon(painterResource(R.drawable.ic_settings), "Browser menu")
-                        }
-                        DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                            DropdownMenuItem(text = {
-                                Text(if (state.readerMode) "Page view" else "Reader view")
-                            }, onClick = {
-                                menuOpen = false
-                                scope.launch {
-                                    if (state.readerMode) session.hideReader()
-                                    else runCatching { session.showReader() }
-                                }
-                            })
-                            DropdownMenuItem(text = { Text("Sites") }, onClick = {
-                                menuOpen = false; domainsOpen = true
-                            })
-                            DropdownMenuItem(text = { Text("Windows (${state.windows.size})") }, onClick = {
-                                menuOpen = false; windowsOpen = true
-                            })
-                            DropdownMenuItem(text = { Text("Open in my browser") }, onClick = {
-                                menuOpen = false
-                                if (state.url.isNotBlank()) session.openExternal(state.url)
-                            })
-                            DropdownMenuItem(text = { Text("Save link") }, onClick = {
-                                menuOpen = false
-                                scope.launch { runCatching { session.bookmark() } }
-                            })
-                            DropdownMenuItem(text = { Text("Settings") }, onClick = {
-                                menuOpen = false; settingsOpen = true
-                            })
-                        }
-                    }
                 }
             }
             state.handoff?.let { handoff ->
@@ -249,19 +235,26 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
 
         Surface(Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding(),
             tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 2.dp),
+            Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 IconButton(onClick = { scope.launch { runCatching { session.back() } } }) {
                     Icon(painterResource(R.drawable.ic_back), "Page back")
                 }
-                TextButton(onClick = {
+                IconButton(onClick = { scope.launch { runCatching { session.forward() } } }) {
+                    Icon(painterResource(R.drawable.ic_forward), "Page forward")
+                }
+                IconButton(onClick = { scope.launch { runCatching { session.reload() } } }) {
+                    Icon(painterResource(R.drawable.ic_reload), "Reload page")
+                }
+                IconButton(onClick = {
                     scope.launch {
                         if (state.readerMode) session.hideReader()
                         else runCatching { session.showReader() }
                     }
-                }) { Text(if (state.readerMode) "Page" else "Reader") }
-                TextButton(onClick = { domainsOpen = true }) {
-                    Text("Sites (${state.domains.map { it.host }.distinct().size})")
+                }) {
+                    Icon(painterResource(if (state.readerMode) R.drawable.ic_visibility_off
+                        else R.drawable.ic_visibility),
+                        if (state.readerMode) "Page view" else "Reader view")
                 }
                 if (state.agentRunActive && state.agentVisualActive &&
                     state.driving == BrowserDriving.Agent) {
@@ -278,6 +271,51 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                     style = MaterialTheme.typography.labelSmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                 )
+                Box {
+                    IconButton(onClick = { menuOpen = true }) {
+                        Icon(painterResource(R.drawable.ic_more), "Browser menu")
+                    }
+                    DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
+                        DropdownMenuItem(
+                            text = { Text(if (state.readerMode) "Page view" else "Reader view") },
+                            leadingIcon = { Icon(painterResource(
+                                if (state.readerMode) R.drawable.ic_visibility_off
+                                else R.drawable.ic_visibility), null) },
+                            onClick = {
+                                menuOpen = false
+                                scope.launch {
+                                    if (state.readerMode) session.hideReader()
+                                    else runCatching { session.showReader() }
+                                }
+                            })
+                        DropdownMenuItem(
+                            text = { Text("Sites") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_browser), null) },
+                            onClick = { menuOpen = false; domainsOpen = true })
+                        DropdownMenuItem(
+                            text = { Text("Windows (${state.windows.size})") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_processes), null) },
+                            onClick = { menuOpen = false; windowsOpen = true })
+                        DropdownMenuItem(
+                            text = { Text("Open in my browser") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_forward), null) },
+                            onClick = {
+                                menuOpen = false
+                                if (state.url.isNotBlank()) session.openExternal(state.url)
+                            })
+                        DropdownMenuItem(
+                            text = { Text("Save link") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_pin), null) },
+                            onClick = {
+                                menuOpen = false
+                                scope.launch { runCatching { session.bookmark() } }
+                            })
+                        DropdownMenuItem(
+                            text = { Text("Settings") },
+                            leadingIcon = { Icon(painterResource(R.drawable.ic_settings), null) },
+                            onClick = { menuOpen = false; settingsOpen = true })
+                    }
+                }
             }
         }
     }
@@ -320,17 +358,129 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             onDismissRequest = { windowsOpen = false },
             title = { Text("Windows") },
             text = {
-                Column {
-                    state.windows.forEach { window ->
-                        TextButton(onClick = {
-                            session.selectWindow(window.id)
-                            windowsOpen = false
-                        }) { Text("${if (window.active) "• " else ""}${window.title.take(48)}") }
+                LazyVerticalGrid(
+                    columns = GridCells.Fixed(2),
+                    modifier = Modifier.fillMaxWidth().height(360.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalArrangement = Arrangement.spacedBy(8.dp),
+                ) {
+                    gridItems(state.windows, key = { it.id }) { window ->
+                        BrowserWindowCard(
+                            window = window,
+                            onSelect = {
+                                session.selectWindow(window.id)
+                                windowsOpen = false
+                            },
+                            onClose = { session.closeWindow(window.id) },
+                        )
                     }
                 }
             },
             confirmButton = { TextButton(onClick = { windowsOpen = false }) { Text("Close") } },
         )
+    }
+}
+
+@Composable
+private fun BrowserTabStrip(
+    windows: List<com.kaiser.rivet.browser.BrowserWindowSummary>,
+    onSelect: (String) -> Unit,
+    onClose: (String) -> Unit,
+    onOpenWindows: () -> Unit,
+) {
+    val chips = remember(windows) {
+        BrowserTabs.chips(windows.map {
+            BrowserWindowInfo(it.id, it.title, it.url, it.active)
+        })
+    }
+    if (chips.isEmpty()) return
+    LazyRow(
+        Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surface)
+            .padding(horizontal = 4.dp),
+        horizontalArrangement = Arrangement.spacedBy(4.dp),
+        verticalAlignment = Alignment.Bottom,
+    ) {
+        items(chips, key = { it.id }) { chip ->
+            Surface(
+                color = if (chip.active) MaterialTheme.colorScheme.surfaceVariant else Color.Transparent,
+                shape = RoundedCornerShape(topStart = 10.dp, topEnd = 10.dp),
+                border = if (chip.active) BorderStroke(1.dp,
+                    MaterialTheme.colorScheme.outlineVariant) else null,
+                modifier = Modifier.height(36.dp).widthIn(min = 96.dp, max = 200.dp)
+                    .clickable { onSelect(chip.id) },
+            ) {
+                Row(Modifier.fillMaxWidth().padding(start = 8.dp, end = 1.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painterResource(R.drawable.ic_browser), null,
+                        Modifier.size(15.dp), tint = MaterialTheme.colorScheme.primary)
+                    Spacer(Modifier.width(6.dp))
+                    Text(chip.title, maxLines = 1, overflow = TextOverflow.Ellipsis,
+                        style = MaterialTheme.typography.labelMedium,
+                        color = if (chip.active) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.widthIn(max = 132.dp))
+                    if (chip.active) {
+                        IconButton(onClick = { onClose(chip.id) },
+                            modifier = Modifier.size(26.dp)) {
+                            Icon(painterResource(R.drawable.ic_close), "Close tab",
+                                Modifier.size(14.dp),
+                                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+        }
+        item {
+            Surface(
+                color = Color.Transparent,
+                modifier = Modifier.height(36.dp).clickable { onOpenWindows() },
+            ) {
+                Row(Modifier.padding(horizontal = 8.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painterResource(R.drawable.ic_processes), "Windows",
+                        Modifier.size(16.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Spacer(Modifier.width(4.dp))
+                    Text("${chips.size}", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+        }
+    }
+}
+
+@Composable
+private fun BrowserWindowCard(
+    window: com.kaiser.rivet.browser.BrowserWindowSummary,
+    onSelect: () -> Unit,
+    onClose: () -> Unit,
+) {
+    Surface(
+        color = if (window.active) MaterialTheme.colorScheme.surfaceVariant
+        else MaterialTheme.colorScheme.surface,
+        shape = RoundedCornerShape(10.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
+        modifier = Modifier.fillMaxWidth().clickable(onClick = onSelect),
+    ) {
+        Column(Modifier.padding(start = 10.dp, top = 8.dp, end = 2.dp, bottom = 10.dp)) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                Icon(painterResource(R.drawable.ic_browser), null,
+                    Modifier.size(18.dp), tint = MaterialTheme.colorScheme.primary)
+                Spacer(Modifier.width(6.dp))
+                Text(BrowserTabs.title(window.title, window.url), maxLines = 1,
+                    overflow = TextOverflow.Ellipsis,
+                    style = MaterialTheme.typography.labelMedium,
+                    modifier = Modifier.weight(1f))
+                IconButton(onClick = onClose, modifier = Modifier.size(26.dp)) {
+                    Icon(painterResource(R.drawable.ic_close), "Close window",
+                        Modifier.size(14.dp),
+                        tint = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+            }
+            Text(window.url.substringAfter("://", window.url).substringBefore('/'),
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(top = 2.dp, end = 8.dp))
+        }
     }
 }
 

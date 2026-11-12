@@ -983,6 +983,29 @@ class BrowserSession(
         activeUrl
     }
 
+    /** Thin chrome action: forward through the WebView's own history. */
+    suspend fun forward(): String = actionLock.withLock {
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        val moved = withContext(Dispatchers.Main) {
+            if (view.canGoForward()) {
+                view.goForward()
+                true
+            } else false
+        }
+        if (!moved) throw BrowserFailure("browser_no_forward", "There is no forward page in this window.")
+        activeUrl
+    }
+
+    /** Thin chrome action: reload the live page without changing its history. */
+    suspend fun reload(): String = actionLock.withLock {
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        _state.update { it.copy(pageReady = false) }
+        withContext(Dispatchers.Main) { view.reload() }
+        activeUrl
+    }
+
     suspend fun screenshot(): BrowserShot = actionLock.withLock {
         if (!BrowserGovernor.canTakeScreenshot(budget.tier)) {
             throw BrowserFailure("browser_screenshot_blocked",
