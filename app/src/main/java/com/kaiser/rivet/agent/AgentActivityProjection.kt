@@ -11,6 +11,7 @@ import kotlinx.serialization.json.jsonObject
 enum class ActivityOutcome { Queued, WaitingApproval, Running, Completed, Failed, Denied, Blocked, Cancelled, Unknown }
 
 data class AgentActivityOperation(
+    val id: String,
     val title: String,
     val detail: String,
     val outcome: ActivityOutcome,
@@ -95,7 +96,7 @@ object AgentActivityProjection {
             result == null && live == null -> "Outcome unknown"
             else -> null
         }
-        return AgentActivityOperation(title, detail, outcome, outcomeDetail)
+        return AgentActivityOperation(call.id, title, detail, outcome, outcomeDetail)
     }
 
     private fun resultOutcome(result: AgentToolResult, value: Map<String, kotlinx.serialization.json.JsonElement>): ActivityOutcome {
