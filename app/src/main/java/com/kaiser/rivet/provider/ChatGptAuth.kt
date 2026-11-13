@@ -3,7 +3,6 @@ package com.kaiser.rivet.provider
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.jsonPrimitive
 import okhttp3.FormBody
 import okhttp3.Request
 import java.net.URLEncoder
@@ -185,7 +184,7 @@ internal fun parseTokenResponse(body: String): TokenResult {
     if (access == null || refresh == null || id == null) {
         return TokenResult.Failed("invalid_response")
     }
-    val expiresIn = (obj["expires_in"]?.jsonPrimitive?.content?.toLongOrNull()) ?: 3600L
+    val expiresIn = (obj["expires_in"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 3600L
     return TokenResult.Ok(
         accessToken = access,
         refreshToken = refresh,
@@ -339,7 +338,7 @@ fun validateIdToken(
         else -> false
     }
     if (!audOk) return null
-    val expSec = claims["exp"]?.jsonPrimitive?.content?.toLongOrNull() ?: return null
+    val expSec = (claims["exp"] as? JsonPrimitive)?.content?.toLongOrNull() ?: return null
     if (expSec <= nowMs / 1000 - 60) return null // 60s clock tolerance
     if (claims["nonce"]?.str() != expectedNonce) return null
     return claims["sub"]?.str()

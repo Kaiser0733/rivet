@@ -140,4 +140,16 @@ class ChatGptIdTokenTest {
         assertEquals("a@b.c", idTokenEmail(token))
         assertNull(idTokenEmail("garbage"))
     }
+
+    @Test fun nonPrimitiveExpClaimReturnsNullWithoutThrowing() {
+        val (tokenObj, jwksObj) = mint(
+            """{"iss":"$CHATGPT_ISSUER","aud":"oaiapp_x","exp":{},"nonce":"n123","sub":"user_1"}"""
+        )
+        assertNull(validateIdToken(tokenObj, "oaiapp_x", "n123", jwksObj, nowMs))
+
+        val (tokenArr, jwksArr) = mint(
+            """{"iss":"$CHATGPT_ISSUER","aud":"oaiapp_x","exp":[9999999999],"nonce":"n123","sub":"user_1"}"""
+        )
+        assertNull(validateIdToken(tokenArr, "oaiapp_x", "n123", jwksArr, nowMs))
+    }
 }

@@ -110,7 +110,7 @@
 - **JiTTest**: Pure-Kotlin JVM JiTTest (`RunJournalTest`).
 
 #### H10 — Uncaught `jsonPrimitive` exception in `ChatGptAuth` on non-primitive `expires_in` / `exp`
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`ChatGptPkceTest` + `ChatGptIdTokenTest` JiTTests added; `ChatGptAuth.kt`, `ChatGptPkceTest.kt`, `ChatGptIdTokenTest.kt` pass `kt-checks.py balance`; requires Gradle OkHttp dependency to execute)
 - **Files**: `app/src/main/java/com/kaiser/rivet/provider/ChatGptAuth.kt:188, 342`
 - **Issue**: `obj["expires_in"]?.jsonPrimitive` and `claims["exp"]?.jsonPrimitive` throw `IllegalArgumentException` if JSON contains an object or array (`{"expires_in":{}}`, `{"exp":[]}`).
 - **Fix**: Cast via `(elem as? JsonPrimitive)` safely without throwing.

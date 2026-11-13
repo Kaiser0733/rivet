@@ -64,4 +64,18 @@ class ChatGptPkceTest {
         // Substring must not match: exact token only.
         assertFalse(hasPlanScope("chatgpt.tokens.use.directx"))
     }
+
+    @Test fun parseTokenResponseHandlesNonPrimitiveExpiresInWithoutThrowing() {
+        val objectExpires = parseTokenResponse(
+            """{"access_token":"a","refresh_token":"r","id_token":"i","expires_in":{}}"""
+        )
+        assertTrue(objectExpires is TokenResult.Ok)
+        assertEquals(3600L, (objectExpires as TokenResult.Ok).expiresInSec)
+
+        val arrayExpires = parseTokenResponse(
+            """{"access_token":"a","refresh_token":"r","id_token":"i","expires_in":[100]}"""
+        )
+        assertTrue(arrayExpires is TokenResult.Ok)
+        assertEquals(3600L, (arrayExpires as TokenResult.Ok).expiresInSec)
+    }
 }
