@@ -43,7 +43,7 @@
 - **JiTTest**: Pure-Kotlin JiTTest for `LocalModelManager` / `LlamaBridge.close()` idempotence/handle zeroing where testable; full JNI/NDK test marked `NEEDS-DEVICE-PROOF`.
 
 #### H2 — `ModelDownloadService.onStartCommand` triggers `ForegroundServiceDidNotStartInTimeException`
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (Robolectric `ModelDownloadServiceTest` added; `ModelDownloadService.kt` + `ModelDownloadServiceTest.kt` verified with `kt-checks.py balance`; requires Android/Gradle Robolectric run)
 - **Files**: `app/src/main/java/com/kaiser/rivet/local/ModelDownloadService.kt:47-82`
 - **Issue**: When started via `startForegroundService()` and `LocalRuntime.downloads == null` or `active == null`, `onStartCommand` calls `stopSelf()` and returns `START_NOT_STICKY` without calling `startForegroundCompat(...)`, crashing on Android 8+.
 - **Fix**: Always call `startForegroundCompat(...)` with a minimal status notification before `stopSelf()` when `onStartCommand` bails early.

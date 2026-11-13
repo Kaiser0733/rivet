@@ -33,6 +33,10 @@ class ModelDownloadService : Service() {
 
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private var observing: Job? = null
+    internal var foregroundStarted: Boolean = false
+        private set
+    internal var foregroundStartCount: Int = 0
+        private set
 
     override fun onCreate() {
         super.onCreate()
@@ -47,36 +51,40 @@ class ModelDownloadService : Service() {
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         val manager = LocalRuntime.downloads
         if (manager == null) {
-            stopSelf()
+            startForegroundThenStop(startId)
             return START_NOT_STICKY
         }
         when (intent?.action) {
             ACTION_PAUSE -> {
                 intent.getStringExtra(EXTRA_ID)?.let(manager::pause)
+                val remaining = activeJob(manager)
+                if (remaining == null) {
+                    startForegroundThenStop(startId)
+                } else if (!foregroundStarted) {
+                    startForegroundCompat(notification(remaining))
+                }
                 return START_NOT_STICKY
             }
             ACTION_CANCEL -> {
                 intent.getStringExtra(EXTRA_ID)?.let(manager::cancel)
+                val remaining = activeJob(manager)
+                if (remaining == null) {
+                    startForegroundThenStop(startId)
+                } else if (!foregroundStarted) {
+                    startForegroundCompat(notification(remaining))
+                }
                 return START_NOT_STICKY
             }
             ACTION_STOP -> {
-                if (manager.jobs.value.values.none {
-                        it.status == DownloadStatus.Downloading ||
-                            it.status == DownloadStatus.Verifying ||
-                            it.status == DownloadStatus.Queued
-                    }) {
-                    stopForeground(STOP_FOREGROUND_REMOVE)
-                    stopSelf()
+                if (activeJob(manager) == null) {
+                    startForegroundThenStop(startId)
                 }
                 return START_NOT_STICKY
             }
             else -> Unit
         }
-        val active = manager.jobs.value.values.firstOrNull {
-            it.status == DownloadStatus.Downloading || it.status == DownloadStatus.Verifying ||
-                it.status == DownloadStatus.Queued
-        } ?: run {
-            stopSelf()
+        val active = activeJob(manager) ?: run {
+            startForegroundThenStop(startId)
             return START_NOT_STICKY
         }
         startForegroundCompat(notification(active))
@@ -87,17 +95,45 @@ class ModelDownloadService : Service() {
                         it.status == DownloadStatus.Downloading || it.status == DownloadStatus.Verifying ||
                             it.status == DownloadStatus.Queued
                     } ?: run {
-                        stopForeground(STOP_FOREGROUND_REMOVE)
+                        stopForegroundCompat()
                         stopSelf()
                         return@collectLatest
                     }
-                    val manager = getSystemService(NotificationManager::class.java)
-                    manager.notify(NOTIFICATION_ID, notification(current))
+                    val notificationManager = getSystemService(NotificationManager::class.java)
+                    notificationManager.notify(NOTIFICATION_ID, notification(current))
                 }
             }
         }
         return START_NOT_STICKY
     }
+
+    private fun activeJob(manager: ModelDownloadManager): DownloadJob? =
+        manager.jobs.value.values.firstOrNull {
+            it.status == DownloadStatus.Downloading ||
+                it.status == DownloadStatus.Verifying ||
+                it.status == DownloadStatus.Queued
+        }
+
+    private fun startForegroundThenStop(startId: Int) {
+        if (!foregroundStarted) {
+            startForegroundCompat(idleNotification())
+        }
+        stopForegroundCompat()
+        stopSelf(startId)
+    }
+
+    private fun stopForegroundCompat() {
+        stopForeground(STOP_FOREGROUND_REMOVE)
+        foregroundStarted = false
+    }
+
+    private fun idleNotification(): Notification = NotificationCompat.Builder(this, CHANNEL)
+        .setSmallIcon(android.R.drawable.stat_sys_download_done)
+        .setContentTitle("Model downloads")
+        .setContentText("Finishing model download…")
+        .setOngoing(false)
+        .setOnlyAlertOnce(true)
+        .build()
 
     private fun startForegroundCompat(value: Notification) {
         if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.Q) {
@@ -105,6 +141,8 @@ class ModelDownloadService : Service() {
         } else {
             startForeground(NOTIFICATION_ID, value)
         }
+        foregroundStarted = true
+        foregroundStartCount += 1
     }
 
     private fun notification(job: DownloadJob): Notification {
