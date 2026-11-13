@@ -2018,7 +2018,7 @@ class ChatViewModelTest {
             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
         val startedFirstAttempt = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
-        var attempts = 0
+        val attempts = java.util.concurrent.atomic.AtomicInteger(0)
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
         val sessions = CodingSessions(app)
@@ -2033,8 +2033,11 @@ class ChatViewModelTest {
                         onReasoning: (String) -> Unit,
                         onDelta: (String) -> Unit,
                     ): AgentResponse {
-                        attempts++
-                        if (attempts == 1) {
+                        // Ignore auto-title requests so attempts counts only agent turn invocations.
+                        if (request.tools.isEmpty()) {
+                            return AgentResponse(text = "Network Turn")
+                        }
+                        if (attempts.incrementAndGet() == 1) {
                             startedFirstAttempt.complete(Unit)
                             gate.await()
                         }
@@ -2056,8 +2059,8 @@ class ChatViewModelTest {
         t2.start()
         t2.join()
 
-        val finished = await(viewModel) { !it.streaming && attempts >= 2 }
-        assertEquals(2, attempts)
+        val finished = await(viewModel) { !it.streaming && attempts.get() >= 2 }
+        assertEquals(2, attempts.get())
         assertTrue(finished.messages.any { it.text == "Recovered" })
     }
 }
