@@ -1883,7 +1883,11 @@ class ChatViewModel private constructor(
                             interruptedTurn = !userCancelled && durable.isNotEmpty(),
                             error = if (pendingProjectChanges) "Rivet stopped before it could save the command's project changes." else it.error,
                             errorAction = if (pendingProjectChanges) ChatErrorAction.RetryProjectChanges else it.errorAction,
-                            notice = if (pendingProjectChanges) null else "Stopped. Any saved project changes remain.") }
+                            notice = when {
+                                pendingProjectChanges -> null
+                                budgetPaused -> it.notice
+                                else -> "Stopped. Any saved project changes remain."
+                            }) }
                     }
                 }
                 throw e
@@ -1977,53 +1981,55 @@ class ChatViewModel private constructor(
                 if (accepted != null && !acceptedPersisted) {
                     withContext(NonCancellable) { persistAcceptedTail(accepted) }
                 }
-                val live = currentRun
-                if (live != null && live.phase !in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped)) {
-                    try {
-                        if (pauseRequestedTicket == ticket && live.phase == RunPhase.Running) {
-                            val paused = RunMachine.pause(live, pauseReason)
-                            currentRun = paused
-                            runResumeContext = true
-                            if (pauseReason == RunPauseReason.Budget) {
-                                PersistentProcessService.showBudgetPause(getApplication<Application>(), paused.title)
-                            } else if (pauseReason == RunPauseReason.NetworkLost) {
-                                PersistentProcessService.showNetworkPause(getApplication<Application>(), paused.title)
+                withContext(NonCancellable) {
+                    val live = currentRun
+                    if (live != null && live.phase !in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped)) {
+                        try {
+                            if (pauseRequestedTicket == ticket && live.phase == RunPhase.Running) {
+                                val paused = RunMachine.pause(live, pauseReason)
+                                currentRun = paused
+                                runResumeContext = true
+                                if (pauseReason == RunPauseReason.Budget) {
+                                    PersistentProcessService.showBudgetPause(getApplication<Application>(), paused.title)
+                                } else if (pauseReason == RunPauseReason.NetworkLost) {
+                                    PersistentProcessService.showNetworkPause(getApplication<Application>(), paused.title)
+                                }
+                                runCheckpointId?.let { id ->
+                                    try { runtimeController.finishRunCheckpoint(live.workspaceId ?: return@let, id) }
+                                    catch (_: Exception) { }
+                                    runCheckpointId = null
+                                    refreshRunCheckpoints()
+                                }
+                                try { runJournal?.save(paused) } catch (_: Exception) { }
+                                try { sessionStore.markInterrupted(true) } catch (_: Exception) { }
+                                managedProcesses.updateRunStatus(null, null, 0)
+                                _uiState.update {
+                                    it.copy(run = paused, interruptedTurn = true,
+                                        runRecovery = "Run ${paused.plainState()} after ${paused.lastCompletedStep} step(s). Resume to continue.")
+                                }
+                            } else {
+                                finishRun(if (userCancelledTicket == ticket) RunPhase.Stopped else RunPhase.Failed,
+                                    if (userCancelledTicket == ticket) null else "turn ended before the run finished")
                             }
-                            runCheckpointId?.let { id ->
-                                try { runtimeController.finishRunCheckpoint(live.workspaceId ?: return@let, id) }
-                                catch (_: Exception) { }
-                                runCheckpointId = null
-                                refreshRunCheckpoints()
-                            }
-                            try { runJournal?.save(paused) } catch (_: Exception) { }
-                            try { sessionStore.markInterrupted(true) } catch (_: Exception) { }
-                            managedProcesses.updateRunStatus(null, null, 0)
-                            _uiState.update {
-                                it.copy(run = paused, interruptedTurn = true,
-                                    runRecovery = "Run ${paused.plainState()} after ${paused.lastCompletedStep} step(s). Resume to continue.")
-                            }
-                        } else {
-                            finishRun(if (userCancelledTicket == ticket) RunPhase.Stopped else RunPhase.Failed,
-                                if (userCancelledTicket == ticket) null else "turn ended before the run finished")
+                        } catch (_: Exception) { }
+                    }
+                    turnSessionId = null
+                    runtimeController.finishTurn(turnToken)
+                    if (ticket == generation && _uiState.value.streaming) {
+                        _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
+                            activity = null, pendingApproval = null,
+                            toolLifecycle = emptyList(), commandRunning = false,
+                            notice = if (budgetPaused) it.notice
+                            else "Stopped. Any completed changes remain in the project.") }
+                    }
+                    // The conversation picked mid-reply opens now that the turn is over,
+                    // whether it finished, failed or was stopped.
+                    val queued = _uiState.value.queuedSessionId
+                    if (queued != null && ticket == generation && !_uiState.value.streaming) {
+                        _uiState.update { it.copy(queuedSessionId = null, notice = null) }
+                        if (queued != _uiState.value.currentSessionId) {
+                            changeSession { store -> store.select(queued) }
                         }
-                    } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                }
-                turnSessionId = null
-                runtimeController.finishTurn(turnToken)
-                if (ticket == generation && _uiState.value.streaming) {
-                    _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
-                        activity = null, pendingApproval = null,
-                        toolLifecycle = emptyList(), commandRunning = false,
-                        notice = if (budgetPaused) it.notice
-                        else "Stopped. Any completed changes remain in the project.") }
-                }
-                // The conversation picked mid-reply opens now that the turn is over,
-                // whether it finished, failed or was stopped.
-                val queued = _uiState.value.queuedSessionId
-                if (queued != null && ticket == generation && !_uiState.value.streaming) {
-                    _uiState.update { it.copy(queuedSessionId = null, notice = null) }
-                    if (queued != _uiState.value.currentSessionId) {
-                        changeSession { store -> store.select(queued) }
                     }
                 }
             }

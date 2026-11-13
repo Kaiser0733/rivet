@@ -13,6 +13,7 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.RunPauseReason
 import com.kaiser.rivet.storage.AgentSessionCodec
 import com.kaiser.rivet.storage.AgentSessionStore
 import com.kaiser.rivet.storage.CodingSessions
@@ -1905,5 +1906,39 @@ class ChatViewModelTest {
         } finally {
             SpendStore(app).save(SpendCaps(), null)
         }
+    }
+
+    @Test fun pauseCurrentRunPersistsPausedRecoveryAndReleasesTurnEvenWhenCancelled() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val started = CompletableDeferred<Unit>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                started.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "gpt-4o")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Long multi-step run")
+        withTimeout(5_000) { started.await() }
+        viewModel.pauseCurrentRun(RunPauseReason.User)
+
+        val done = await(viewModel) { !it.streaming }
+        assertTrue(done.interruptedTurn)
+        assertEquals(0, viewModel.managedProcesses.activeTurnCount())
+        assertFalse(viewModel.managedProcesses.hasForegroundWork())
     }
 }

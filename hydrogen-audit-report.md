@@ -75,7 +75,7 @@
 - **JiTTest**: Pure-Kotlin JVM JiTTest for non-git `stageRestore` (new dirs, file↔dir swap, empty dir); JGit test in `RunCheckpointStoreTest`.
 
 #### H6 — Cancelled/paused `ChatViewModel.startTurn` runs suspending cleanup in `finally` without `NonCancellable`
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`ChatViewModelTest.pauseCurrentRunPersistsPausedRecoveryAndReleasesTurnEvenWhenCancelled` added; `ChatViewModel.kt` & `ChatViewModelTest.kt` pass `kt-checks.py balance`; requires Gradle Robolectric test run)
 - **Files**: `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt:1045-1063, 1867-1889, 1975-2029`
 - **Issue**: On pause/cancel, `sendJob` is already cancelled when `finally` runs: suspending calls (`finishRunCheckpoint`, `runJournal.save`, `sessionStore.markInterrupted`, `finishRun`) throw `CancellationException`, losing paused run recovery state, skipping `runtimeController.finishTurn(turnToken)` (leaking `PersistentProcessService` foreground state) and `queuedSessionId` switch, and overwriting the `budgetPaused` notice at line `1886`.
 - **Fix**: Wrap `finally` (`1980-2029`) in `withContext(NonCancellable)` and preserve `budgetPaused` notice at line `1886`.
