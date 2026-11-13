@@ -77,4 +77,18 @@ class BrowserSourceSafetyTest {
         assertTrue(screen.contains("urlField.onValueChange"))
         assertTrue(screen.contains("urlField.onFocusChanged"))
     }
+
+    @Test fun bannerLivesInColumnAboveHostWithOpaqueSurface() {
+        val app = listOf(File("src/main/java/com/kaiser/rivet/ui/RivetApp.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/RivetApp.kt")).first { it.isFile }.readText()
+        assertFalse(app.contains("chromeHeightPx"))
+        assertFalse(app.contains("onChromeHeight"))
+
+        val screen = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt")).first { it.isFile }.readText()
+        assertTrue(screen.contains("Box(Modifier.weight(1f).fillMaxWidth().clipToBounds())"))
+        val noticeBlock = screen.substringAfter("state.error != null || state.notice != null || state.budgetCloseAction")
+        assertTrue(noticeBlock.trimStart().startsWith(")"))
+        assertTrue(screen.contains("BrowserNotice(\n                    if (state.error != null)"))
+    }
 }

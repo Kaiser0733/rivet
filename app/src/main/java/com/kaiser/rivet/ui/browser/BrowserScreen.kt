@@ -49,13 +49,13 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
@@ -63,8 +63,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.focus.onFocusChanged
-import androidx.compose.ui.layout.onSizeChanged
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
@@ -81,14 +79,16 @@ import com.kaiser.rivet.browser.ReaderBlocks
 import kotlinx.coroutines.launch
 
 /**
- * Full-screen visual browser chrome. The page itself is BrowserHost beneath this
- * overlay, so opening/closing the screen does not recreate the WebView.
+ * Full-screen visual browser shell. Top chrome, banners, page surface, and bottom controls live
+ * in a single Column so banners never overlap the WebView or bleed through to chat.
  */
 @Composable
 fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                   onCloseSession: () -> Unit = { session.endSession() },
-                  onChromeHeight: (Int) -> Unit = {},
-                  modifier: Modifier = Modifier) {
+                  modifier: Modifier = Modifier,
+                  hostContent: @Composable (Modifier) -> Unit = { hostModifier ->
+                      BrowserHost(session, hostModifier)
+                  }) {
     val state by session.state.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
@@ -113,8 +113,6 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
     var settingsOpen by remember { mutableStateOf(false) }
     var domainsOpen by remember { mutableStateOf(false) }
     var windowsOpen by remember { mutableStateOf(false) }
-    var chromeHeightPx by remember { mutableIntStateOf(0) }
-    val density = LocalDensity.current
 
     LaunchedEffect(Unit) {
         session.customTabOpener = { url ->
@@ -127,30 +125,10 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
         }
     }
 
-    Box(modifier.fillMaxSize().then(
-        if (!state.rendererVisible || state.readerMode) Modifier.background(MaterialTheme.colorScheme.surface)
-        else Modifier)) {
-        if (state.readerMode) {
-            ReaderPane(state.readerText, Modifier.fillMaxSize().padding(
-                top = with(density) { chromeHeightPx.toDp() },
-                bottom = BrowserChrome.bottomPadding(0.dp))) { url ->
-                scope.launch { runCatching { session.openVisual(url, userInitiated = true) } }
-            }
-        } else if (state.url.isBlank() && !state.rendererVisible) {
-            Box(Modifier.fillMaxSize().padding(top = 80.dp, bottom = 64.dp),
-                contentAlignment = Alignment.Center) {
-                Text("Enter a URL to open the visual browser.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        } else if (state.rendererVisible && !state.pageReady) {
-            Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
-                contentAlignment = Alignment.Center) {
-                CircularProgressIndicator()
-            }
-        }
-
-        Column(Modifier.fillMaxWidth().align(Alignment.TopCenter).statusBarsPadding()
-            .onSizeChanged { chromeHeightPx = it.height; onChromeHeight(it.height) }) {
+    Column(modifier.fillMaxSize().then(
+        if (state.visible) Modifier.background(MaterialTheme.colorScheme.surface) else Modifier)) {
+        if (state.visible) {
+            Column(Modifier.fillMaxWidth().statusBarsPadding()) {
             BrowserTabStrip(
                 windows = state.windows,
                 onSelect = session::selectWindow,
@@ -256,26 +234,63 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                     }
                 }
             }
-            state.error?.let { error ->
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text(error, Modifier.weight(1f), color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall)
-                    TextButton(onClick = onCloseSession) { Text("Close browser") }
+            if (state.error != null || state.notice != null || state.budgetCloseAction) {
+                BrowserNotice(
+                    if (state.error != null) MaterialTheme.colorScheme.errorContainer
+                    else MaterialTheme.colorScheme.surfaceContainerHigh,
+                ) {
+                    Column(Modifier.fillMaxWidth()) {
+                        state.error?.let { error ->
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Text(error, Modifier.weight(1f),
+                                    color = MaterialTheme.colorScheme.onErrorContainer,
+                                    style = MaterialTheme.typography.bodySmall)
+                                TextButton(onClick = onCloseSession) { Text("Close browser") }
+                            }
+                        }
+                        state.notice?.let {
+                            Text(it, Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 4.dp),
+                                color = MaterialTheme.colorScheme.onSurface,
+                                style = MaterialTheme.typography.bodySmall)
+                        }
+                        if (state.budgetCloseAction && state.error == null) {
+                            Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
+                                verticalAlignment = Alignment.CenterVertically) {
+                                Spacer(Modifier.weight(1f))
+                                TextButton(onClick = onCloseSession) { Text("Close browser") }
+                            }
+                        }
+                    }
                 }
             }
-            state.notice?.let { Text(it, Modifier.padding(horizontal = 12.dp, vertical = 4.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            if (state.budgetCloseAction) {
-                Row(Modifier.fillMaxWidth().padding(horizontal = 12.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Spacer(Modifier.weight(1f))
-                    TextButton(onClick = onCloseSession) { Text("Close browser") }
+        }
+        }
+
+        Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
+            hostContent(Modifier.fillMaxSize())
+            if (state.visible) {
+                if (state.readerMode) {
+                    ReaderPane(state.readerText, Modifier.fillMaxSize()) { url ->
+                        scope.launch { runCatching { session.openVisual(url, userInitiated = true) } }
+                    }
+                } else if (state.url.isBlank() && !state.rendererVisible) {
+                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+                        contentAlignment = Alignment.Center) {
+                        Text("Enter a URL to open the visual browser.",
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                } else if (state.rendererVisible && !state.pageReady) {
+                    Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+                        contentAlignment = Alignment.Center) {
+                        CircularProgressIndicator()
+                    }
                 }
             }
         }
 
-        Surface(Modifier.fillMaxWidth().align(Alignment.BottomCenter).navigationBarsPadding(),
+        if (state.visible) {
+        Surface(Modifier.fillMaxWidth().navigationBarsPadding(),
             tonalElevation = 3.dp, color = MaterialTheme.colorScheme.surface) {
             Row(Modifier.fillMaxWidth().padding(horizontal = 2.dp, vertical = 2.dp),
                 verticalAlignment = Alignment.CenterVertically) {
@@ -360,9 +375,10 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                 }
             }
         }
+        }
     }
 
-    if (settingsOpen) {
+    if (state.visible && settingsOpen) {
         AlertDialog(
             onDismissRequest = { settingsOpen = false },
             title = { Text("Browser settings") },
@@ -379,7 +395,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             confirmButton = { TextButton(onClick = { settingsOpen = false }) { Text("Close") } },
         )
     }
-    if (domainsOpen) {
+    if (state.visible && domainsOpen) {
         AlertDialog(
             onDismissRequest = { domainsOpen = false },
             title = { Text("Sites this session") },
@@ -395,7 +411,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             confirmButton = { TextButton(onClick = { domainsOpen = false }) { Text("Close") } },
         )
     }
-    if (windowsOpen) {
+    if (state.visible && windowsOpen) {
         AlertDialog(
             onDismissRequest = { windowsOpen = false },
             title = { Text("Windows") },

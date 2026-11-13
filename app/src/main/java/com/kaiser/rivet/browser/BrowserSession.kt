@@ -186,7 +186,7 @@ class BrowserSession(
     private var lastRendererStart = 0L
     private var lastActivityAt = 0L
     private var userControlAt = 0L
-    private val memoryProbe = BrowserMemoryProbe(rendererPss = { sampleRendererPss() })
+    internal var memoryProbe = BrowserMemoryProbe(rendererPss = { sampleRendererPss() })
     private var baselineOwnPss = 0L
     private var baselineAvailMem = 0L
     private var lastOwnGrowthBytes = 0L
@@ -201,6 +201,8 @@ class BrowserSession(
     private var pendingGoneJob: kotlinx.coroutines.Job? = null
     private var releaseJob: kotlinx.coroutines.Job? = null
     private var periodic: kotlinx.coroutines.Job? = null
+    private var baselineJob: kotlinx.coroutines.Job? = null
+    private var postLoadBudgetJob: kotlinx.coroutines.Job? = null
     private var teardownWatchdog: kotlinx.coroutines.Job? = null
     private var forceDestroyed: WebView? = null
     private var paintRecoveryJob: kotlinx.coroutines.Job? = null
@@ -538,6 +540,7 @@ class BrowserSession(
             val view = ensureRenderer(showWatch = !userInitiated,
                 allowUserDriving = userInitiated, agentAction = agentAction)
             loadForInteraction(view, url)
+            schedulePostLoadBudgetChecks()
             activeUrl = view.url ?: url
             activeTitle = view.title.orEmpty()
             recordVisit(activeUrl, projectPreview || BrowserAuthGuard.isLoopback(url), publish = userInitiated)
@@ -1062,7 +1065,8 @@ class BrowserSession(
         rendererFailure = null
         renderer = view
         baselineAvailMem = availableMemBytes() ?: 0L
-        scope.launch(Dispatchers.Default) {
+        baselineJob?.cancel()
+        baselineJob = scope.launch(Dispatchers.Default) {
             baselineOwnPss = runCatching { memoryProbe.sample().ownPssBytes }.getOrDefault(0L)
         }
         view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
@@ -1078,17 +1082,36 @@ class BrowserSession(
         periodic?.cancel()
         periodic = scope.launch {
             while (true) {
-                kotlinx.coroutines.delay(5_000)
-                val sample = withContext(Dispatchers.Default) { memoryProbe.sample() }
-                val ownGrowth = if (baselineOwnPss > 0L) {
-                    memoryProbe.browserGrowthBytes(baselineOwnPss, sample)
-                } else 0L
-                val currentAvail = withContext(Dispatchers.Default) {
-                    availableMemBytes() ?: baselineAvailMem
-                }
-                refreshBudget(ownGrowthBytes = ownGrowth)
+                kotlinx.coroutines.delay(if (_state.value.visible) 3_000L else 5_000L)
+                sampleAndRefreshBudget()
                 if (_state.value.visible) lastActivityAt = System.currentTimeMillis()
             }
+        }
+    }
+
+    internal suspend fun sampleAndRefreshBudget() {
+        baselineJob?.join()
+        val sample = withContext(Dispatchers.Default) { memoryProbe.sample() }
+        val ownGrowth = if (baselineOwnPss > 0L) {
+            memoryProbe.browserGrowthBytes(baselineOwnPss, sample)
+        } else {
+            sample.rendererPssBytes ?: 0L
+        }
+        withContext(Dispatchers.Main.immediate) {
+            refreshBudget(ownGrowthBytes = ownGrowth)
+        }
+    }
+
+    private fun schedulePostLoadBudgetChecks() {
+        postLoadBudgetJob?.cancel()
+        postLoadBudgetJob = scope.launch {
+            // Sample immediately on page finish, then at 1.5s and 3.0s so heavy decode/JS
+            // growth surfaces within the ~5s bar rather than waiting for a 5s poll tick.
+            sampleAndRefreshBudget()
+            delay(1_500L)
+            sampleAndRefreshBudget()
+            delay(1_500L)
+            sampleAndRefreshBudget()
         }
     }
 
@@ -1506,6 +1529,7 @@ class BrowserSession(
                 mode = BrowserMode.Renderer, rendererVisible = true, pageReady = true,
                 fidelity = BrowserFidelity.Reloaded) }
             refreshBudget()
+            schedulePostLoadBudgetChecks()
             val pending = pendingSnapshotRestore?.takeIf { (windowId, _) -> windowId == activeWindowId }?.second
             pendingSnapshotRestore = null
             if (pending != null) {
