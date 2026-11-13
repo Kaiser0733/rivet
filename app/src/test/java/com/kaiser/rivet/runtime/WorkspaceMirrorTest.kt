@@ -818,4 +818,19 @@ class WorkspaceMirrorTest {
         assertFalse(isVcsPath(".gitignore"))
         assertFalse(isVcsPath("src/.gitkeep"))
     }
+
+    @Test fun safInvalidPosixFilenamesAreSkippedWithoutCrashingSyncOrPrepare() = runBlocking {
+        source("ok.txt", "before".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, "foo.").writeText("ignored by SAF")
+        File(root, "ok.txt").writeText("after")
+
+        val result = mirror.sync()
+
+        assertEquals(MirrorSync.Ok, result.state)
+        assertTrue("foo." in result.skipped)
+        assertEquals("after", String(bytes("ok.txt")))
+        assertFalse(mirror.prepare().worktree.path.isEmpty())
+    }
 }

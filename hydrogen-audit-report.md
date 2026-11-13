@@ -59,7 +59,7 @@
 - **JiTTest**: Pure-Kotlin JVM JiTTest (`TurnCheckpointTest`) creating a `.gitignore`d dir (`node_modules/pkg.txt`) and a POSIX filename (`foo.`) before `begin()`/`finish()`/`stageUndo()`.
 
 #### H4 — `WorkspaceMirror.localSnapshot` crashes `prepare()`/`sync()` on SAF-invalid POSIX filenames
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`WorkspaceMirrorTest.safInvalidPosixFilenamesAreSkippedWithoutCrashingSyncOrPrepare` added; `WorkspaceMirror.kt` & `WorkspaceMirrorTest.kt` pass `kt-checks.py balance`; requires Android/Gradle test run for SAF `SafWorkspace`/`Context` dependencies)
 - **Files**: `app/src/main/java/com/kaiser/rivet/runtime/WorkspaceMirror.kt:539`
 - **Issue**: `relative.child(child.fileName.toString())` throws unhandled `WorkspaceFailure(INVALID_PATH)` on names ending in `.`, blank names, `\`, or depth > 64, bricking `runCommand`/`openTerminal`.
 - **Fix**: Catch `WorkspaceFailure` on child name construction in `localSnapshot` and record the relative path in `skipped` (matching symlinks/special files).

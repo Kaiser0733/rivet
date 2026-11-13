@@ -536,10 +536,17 @@ class WorkspaceMirror(
             Files.newDirectoryStream(parent).use { children ->
                 for (child in children) {
                     selected()
-                    val path = relative.child(child.fileName.toString())
-                    val name = path.value
+                    val childName = child.fileName.toString()
+                    val rawPath = if (relative.isRoot) childName else "${relative.value}/$childName"
                     // Terminal-run git commands create this at the worktree root.
-                    if (isVcsPath(name)) continue
+                    if (isVcsPath(rawPath)) continue
+                    val path = try {
+                        relative.child(childName)
+                    } catch (_: WorkspaceFailure) {
+                        skipped?.add(rawPath)
+                        continue
+                    }
+                    val name = path.value
                     when {
                         Files.isSymbolicLink(child) -> skipped?.add(name)
                         Files.isDirectory(child, LinkOption.NOFOLLOW_LINKS) -> {
