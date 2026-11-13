@@ -179,6 +179,19 @@ class BrowserSession(
     private var authLimitStated = false
     private var renderer: WebView? = null
     private var teardown = RendererTeardown()
+    private val processRegistry = RendererProcessRegistry()
+    internal var rendererTerminateSupported: () -> Boolean = {
+        runCatching {
+            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_TERMINATE)
+        }.getOrDefault(false)
+    }
+    internal var renderProcessHandleProvider: (WebView) -> Pair<Any, (Any) -> Boolean>? = { view ->
+        if (runCatching { WebViewFeature.isFeatureSupported(WebViewFeature.GET_WEB_VIEW_RENDERER) }.getOrDefault(false)) {
+            WebViewCompat.getWebViewRenderProcess(view)?.let { process ->
+                process to { target -> (target as androidx.webkit.WebViewRenderProcess).terminate() }
+            }
+        } else null
+    }
     private var rendererFailure: String? = null
     private var rendererReady: CompletableDeferred<WebView>? = null
     private var pageFinished: CompletableDeferred<Unit>? = null
@@ -323,6 +336,9 @@ class BrowserSession(
 
     /** The visible Close control and browser_close: save, destroy, free, clear the card. */
     fun endSession() {
+        pendingRestart = null
+        postLoadBudgetJob?.cancel()
+        postLoadBudgetJob = null
         releaseJob?.cancel()
         releaseJob = null
         idleJob?.cancel()
@@ -1064,6 +1080,7 @@ class BrowserSession(
         }
         rendererFailure = null
         renderer = view
+        recordRenderProcess(view)
         baselineAvailMem = availableMemBytes() ?: 0L
         baselineJob?.cancel()
         baselineJob = scope.launch(Dispatchers.Default) {
@@ -1503,6 +1520,7 @@ class BrowserSession(
         }
 
         override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+            recordRenderProcess(view)
             if (url != null && BrowserAuthGuard.isAuthSurface(url)) {
                 stateHandoff(url, "identity")
                 view.stopLoading()
@@ -1510,6 +1528,7 @@ class BrowserSession(
         }
 
         override fun onPageFinished(view: WebView, url: String?) {
+            recordRenderProcess(view)
             val actual = url ?: view.url ?: activeUrl
             activeUrl = actual
             readerCache.navigate()
@@ -1571,7 +1590,26 @@ class BrowserSession(
             return null
         }
 
+        override fun onReceivedError(
+            view: WebView,
+            request: WebResourceRequest,
+            error: android.webkit.WebResourceError,
+        ) {
+            recordRenderProcess(view)
+            super.onReceivedError(view, request, error)
+        }
+
+        override fun onReceivedHttpError(
+            view: WebView,
+            request: WebResourceRequest,
+            errorResponse: WebResourceResponse,
+        ) {
+            recordRenderProcess(view)
+            super.onReceivedHttpError(view, request, errorResponse)
+        }
+
         override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
+            processRegistry.onProcessGoneForView(view)
             android.util.Log.d("BrowserHost",
                 "onRenderProcessGone fired didCrash=${detail?.didCrash()} releasing=${view === releasingView}")
             if (view === pendingGoneView) {
@@ -1815,9 +1853,17 @@ class BrowserSession(
      * The handle must be captured while the WebView is alive: no WebView method may
      * be called after destroy(), and terminate-after-destroy is undocumented.
      */
+    private fun recordRenderProcess(view: WebView) {
+        runCatching { renderProcessHandleProvider(view) }.getOrNull()?.let { (process, terminate) ->
+            processRegistry.record(process, ownerView = view, terminate = terminate)
+        }
+    }
+
     fun releaseRenderer(view: WebView): Throwable? {
         if (releasingView === view) return null
         releasingView = view
+        // Capture the active handle while the WebView is still attached and live.
+        recordRenderProcess(view)
         return try {
             (view.parent as? android.view.ViewGroup)?.removeView(view)
             android.util.Log.d("BrowserHost", "releaseRenderer removed-from-parent")
@@ -1866,23 +1912,23 @@ class BrowserSession(
     }
 
     private fun terminateRenderer(view: WebView): RendererTerminationOutcome {
-        val supported = runCatching {
-            WebViewFeature.isFeatureSupported(WebViewFeature.WEB_VIEW_RENDERER_TERMINATE)
-        }.getOrDefault(false)
+        val supported = rendererTerminateSupported()
         if (!supported) {
             android.util.Log.d("BrowserHost", "renderer terminate unavailable")
             return RendererTerminationOutcome.Unsupported
         }
-        val handle = runCatching {
-            if (WebViewFeature.isFeatureSupported(WebViewFeature.GET_WEB_VIEW_RENDERER)) {
-                WebViewCompat.getWebViewRenderProcess(view)
-            } else null
-        }.getOrNull()
+        recordRenderProcess(view)
+        val handle = runCatching { renderProcessHandleProvider(view) }.getOrNull()
+        val hasAnyHandle = handle != null || processRegistry.liveCount() > 0
         android.util.Log.d("BrowserHost",
-            "renderer termination supported=true handle=${handle != null} " +
-                "steps=${RendererTerminationPolicy.teardownSteps(true, handle != null)}")
-        val outcome = RendererTerminationPolicy.request(true, handle != null) {
-            handle?.terminate() == true
+            "renderer termination supported=true handle=$hasAnyHandle " +
+                "steps=${RendererTerminationPolicy.teardownSteps(true, hasAnyHandle)}")
+        val outcome = RendererTerminationPolicy.request(true, hasAnyHandle) {
+            val terminatedCount = processRegistry.terminateAll(supported = true)
+            val directTerminated = if (terminatedCount == 0 && handle != null) {
+                handle.second(handle.first)
+            } else false
+            terminatedCount > 0 || directTerminated
         }
         android.util.Log.d("BrowserHost",
             "renderer terminate called outcome=$outcome")
@@ -1897,9 +1943,12 @@ class BrowserSession(
     fun requestRendererTeardown() {
         periodic?.cancel()
         periodic = null
+        postLoadBudgetJob?.cancel()
+        postLoadBudgetJob = null
         saveActiveSnapshot()
         if (renderer == null) {
             android.util.Log.d("BrowserHost", "teardown request with no renderer; finishing directly")
+            processRegistry.terminateAll(rendererTerminateSupported())
             finishRendererTeardown(null)
             return
         }
@@ -2025,6 +2074,9 @@ class BrowserSession(
         rendererReady = null
         periodic?.cancel()
         periodic = null
+        postLoadBudgetJob?.cancel()
+        postLoadBudgetJob = null
+        processRegistry.terminateAll(rendererTerminateSupported())
         val message = rendererFailure ?: failure?.let { "The browser view could not be closed cleanly." }
         rendererFailure = null
         _state.update {

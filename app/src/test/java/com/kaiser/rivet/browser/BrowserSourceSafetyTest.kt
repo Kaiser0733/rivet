@@ -91,4 +91,16 @@ class BrowserSourceSafetyTest {
         assertTrue(noticeBlock.trimStart().startsWith(")"))
         assertTrue(screen.contains("BrowserNotice(\n                    if (state.error != null)"))
     }
+
+    @Test fun teardownTerminatesTrackedProcessesAndClearsPendingRestart() {
+        val host = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt")).first { it.isFile }.readText()
+        assertTrue(host.contains("HeldWebView"))
+
+        val session = source("BrowserSession.kt")
+        val endSessionBody = session.substringAfter("fun endSession()").substringBefore("fun clearNotice()")
+        assertTrue(endSessionBody.contains("pendingRestart = null"))
+        val teardownBody = session.substringAfter("fun requestRendererTeardown()").substringBefore("private fun armHangValve()")
+        assertTrue(teardownBody.contains("processRegistry.terminateAll"))
+    }
 }
