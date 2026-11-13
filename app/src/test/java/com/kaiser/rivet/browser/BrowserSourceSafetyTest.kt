@@ -103,4 +103,17 @@ class BrowserSourceSafetyTest {
         val teardownBody = session.substringAfter("fun requestRendererTeardown()").substringBefore("private fun armHangValve()")
         assertTrue(teardownBody.contains("processRegistry.terminateAll"))
     }
+
+    @Test fun closeWindowDefersSnapshotRestoreAndReaderErrorsSurface() {
+        val session = source("BrowserSession.kt")
+        val closeWindowBody = session.substringAfter("fun closeWindow(id: String)").substringBefore("suspend fun bookmark()")
+        assertTrue(closeWindowBody.contains("unparkRenderer(verifyPaint = false)"))
+        assertTrue(closeWindowBody.contains("pendingSnapshotRestore ="))
+        assertFalse(closeWindowBody.contains("loadSnapshotState(view, it)"))
+
+        val screen = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt")).first { it.isFile }.readText()
+        assertFalse(screen.contains("runCatching { session.showReader() }"))
+        assertTrue(screen.contains("state.url.isBlank() && (!state.rendererVisible || state.activeWindowId == null)"))
+    }
 }

@@ -637,7 +637,7 @@ class BrowserSession(
     }
 
     /** The only writer of readerMode and the renderer pause/visibility state. */
-    private fun setReaderMode(enabled: Boolean) {
+    private fun setReaderMode(enabled: Boolean, verifyPaint: Boolean = true) {
         _state.update { it.copy(readerMode = enabled) }
         val view = renderer ?: return
         val surface = object : RendererSurface {
@@ -651,12 +651,12 @@ class BrowserSession(
             ReaderPark.apply(surface, ReaderPark.Mode.ReaderOn)
         } else {
             ReaderPark.unpark(surface)
-            verifyReaderPaint()
+            if (verifyPaint) verifyReaderPaint()
         }
     }
 
-    private fun unparkRenderer() {
-        setReaderMode(false)
+    private fun unparkRenderer(verifyPaint: Boolean = true) {
+        setReaderMode(false, verifyPaint = verifyPaint)
     }
 
     private fun verifyReaderPaint() {
@@ -1288,7 +1288,12 @@ class BrowserSession(
             activeWindowId,
             id,
         )
-        if (wasActive) unparkRenderer()
+        if (wasActive) {
+            readerSampleJob?.cancel()
+            readerSampleJob = null
+            readerReloaded = false
+            unparkRenderer(verifyPaint = false)
+        }
         windows.remove(id)
         snapshots.delete(id)
         if (wasActive) {
@@ -1310,9 +1315,14 @@ class BrowserSession(
             val view = renderer
             if (view != null) {
                 if (activeUrl.isNotBlank()) {
+                    // Defer snapshot restoration to onPageFinished so closeWindow does not
+                    // evaluate against the outgoing page or race the surviving tab's paint.
+                    pendingSnapshotRestore = activeWindowId?.let { nextId -> next?.let { nextId to it } }
                     view.loadUrl(activeUrl)
-                    next?.let { loadSnapshotState(view, it) }
+                    view.requestLayout()
+                    view.invalidate()
                 } else {
+                    pendingSnapshotRestore = null
                     view.loadUrl("about:blank")
                 }
             }

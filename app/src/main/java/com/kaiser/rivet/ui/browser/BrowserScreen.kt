@@ -274,7 +274,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                     ReaderPane(state.readerText, Modifier.fillMaxSize()) { url ->
                         scope.launch { runCatching { session.openVisual(url, userInitiated = true) } }
                     }
-                } else if (state.url.isBlank() && !state.rendererVisible) {
+                } else if (state.url.isBlank() && (!state.rendererVisible || state.activeWindowId == null)) {
                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
                         contentAlignment = Alignment.Center) {
                         Text("Enter a URL to open the visual browser.",
@@ -306,7 +306,11 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                 IconButton(onClick = {
                     scope.launch {
                         if (state.readerMode) session.hideReader()
-                        else runCatching { session.showReader() }
+                        else try {
+                            session.showReader()
+                        } catch (error: BrowserFailure) {
+                            session.showError(error.message)
+                        }
                     }
                 }) {
                     Icon(painterResource(if (state.readerMode) R.drawable.ic_visibility_off
@@ -342,7 +346,11 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                                 menuOpen = false
                                 scope.launch {
                                     if (state.readerMode) session.hideReader()
-                                    else runCatching { session.showReader() }
+                                    else try {
+                                        session.showReader()
+                                    } catch (error: BrowserFailure) {
+                                        session.showError(error.message)
+                                    }
                                 }
                             })
                         DropdownMenuItem(
