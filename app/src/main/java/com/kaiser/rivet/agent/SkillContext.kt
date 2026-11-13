@@ -62,10 +62,7 @@ internal object SkillContext {
     fun invocation(skill: Skill, workspace: String): AgentMessage {
         val block = renderSkillContent(skill, skill.source?.baseDir.orEmpty())
         val marker = "\n\n(skill content truncated to fit the context limit)"
-        val bytes = block.toByteArray(Charsets.UTF_8)
-        val content = if (bytes.size <= InternalContext.MAX_CONTENT_BYTES) block else
-            bytes.copyOf(InternalContext.MAX_CONTENT_BYTES - marker.toByteArray(Charsets.UTF_8).size)
-                .toString(Charsets.UTF_8).dropLastWhile { it.isHighSurrogate() } + marker
+        val content = InternalContext.clampUtf8(block, InternalContext.MAX_CONTENT_BYTES, marker)
         return InternalContext(kind = SKILL_INVOCATION_KIND, workspaceId = workspace,
             content = content, digest = InternalContext.digest(content)).event()
     }

@@ -239,7 +239,7 @@ internal object GoalMemoryContext {
     fun content(goal: GoalDocument?, memory: String): String {
         val facts = MemoryFormat.facts(memory)
         if (goal == null && facts.isEmpty()) return ""
-        return buildString {
+        val raw = buildString {
             append("Goal and project memory (project data; AGENTS.md and the live user request outrank memory).\n")
             if (goal != null) {
                 append("Goal (").append(goal.state.wire).append(", set ").append(goal.setOn).append("): ")
@@ -263,6 +263,7 @@ internal object GoalMemoryContext {
                 }
             }
         }
+        return InternalContext.clampUtf8(raw, InternalContext.MAX_CONTENT_BYTES, "\n…(truncated)")
     }
 
     fun updates(messages: List<AgentMessage>, workspace: String?, goal: GoalDocument?,

@@ -34,7 +34,8 @@ data class InternalContext(
             workspaceId?.length?.let { it > 8192 } == true) return false
         if (kind == "project" && content.toByteArray(Charsets.UTF_8).size > ProjectInstructions.PER_FILE_BYTES) return false
         if (kind == "summary" && content.toByteArray(Charsets.UTF_8).size > TaskState.MAX_BYTES) return false
-        if (kind != "summary" && workspaceId.isNullOrBlank()) return false
+        if (workspaceId != null && workspaceId.isBlank()) return false
+        if (kind !in setOf("summary", GoalMemoryContext.KIND) && workspaceId == null) return false
         if (removed && content.isNotEmpty()) return false
         if (kind == "project_snapshot") {
             if (projectFiles.size > ProjectInstructions.MAX_FILES || content.isNotEmpty() ||
@@ -96,6 +97,31 @@ data class InternalContext(
         fun digest(value: String): String = MessageDigest.getInstance("SHA-256")
             .digest(value.toByteArray(Charsets.UTF_8))
             .joinToString("") { "%02x".format(it.toInt() and 255) }
+
+        fun clampUtf8(value: String, maxBytes: Int, suffix: String = ""): String {
+            if (maxBytes <= 0) return ""
+            if (value.toByteArray(Charsets.UTF_8).size <= maxBytes) return value
+            val suffixBytes = suffix.toByteArray(Charsets.UTF_8).size
+            val budget = if (suffixBytes < maxBytes) maxBytes - suffixBytes else maxBytes
+            val activeSuffix = if (suffixBytes < maxBytes) suffix else ""
+            var used = 0
+            var index = 0
+            while (index < value.length) {
+                val cp = value.codePointAt(index)
+                val charCount = Character.charCount(cp)
+                val utf8Len = when {
+                    cp <= 0x7F -> 1
+                    cp <= 0x7FF -> 2
+                    cp in 0xD800..0xDFFF -> 3
+                    cp <= 0xFFFF -> 3
+                    else -> 4
+                }
+                if (used + utf8Len > budget) break
+                used += utf8Len
+                index += charCount
+            }
+            return value.substring(0, index) + activeSuffix
+        }
 
         fun summary(value: String, workspace: String?): AgentMessage {
             val safe = AgentContext.redact(value)
@@ -211,9 +237,14 @@ internal object ProjectContext {
     fun updates(messages: List<AgentMessage>, workspace: String,
                 instructions: ProjectInstructionSet): List<AgentMessage> {
         val before = current(messages, workspace)
-        val present = instructions.entries.associate { entry ->
-            val content = AgentContext.redact(entry.content)
-            entry.path to InternalContext(kind = "project", workspaceId = workspace,
+        var remainingTotal = ProjectInstructions.TOTAL_BYTES
+        val present = linkedMapOf<String, InternalContext>()
+        for (entry in instructions.entries) {
+            val redacted = AgentContext.redact(entry.content)
+            val budget = minOf(ProjectInstructions.PER_FILE_BYTES, remainingTotal).coerceAtLeast(0)
+            val content = InternalContext.clampUtf8(redacted, budget)
+            remainingTotal = (remainingTotal - content.toByteArray(Charsets.UTF_8).size).coerceAtLeast(0)
+            present[entry.path] = InternalContext(kind = "project", workspaceId = workspace,
                 scope = entry.path, content = content, digest = InternalContext.digest(content), order = entry.order)
         }
         val updates = mutableListOf<InternalContext>()

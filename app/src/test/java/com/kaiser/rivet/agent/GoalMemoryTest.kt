@@ -74,4 +74,17 @@ class GoalMemoryTest {
         assertEquals(1, changed.size)
         assertTrue(changed.single().internalContext!!.content.contains("paused"))
     }
+
+    @Test fun goalMemoryStaysValidAtMaxFactsAndWithoutWorkspace() {
+        val goal = GoalDocument.newGoal("ship safely", "s1")
+        val hugeMemory = (1..200).joinToString("\n") { i -> "- fact $i: ${"é".repeat(280)}" }
+        val bounded = GoalMemoryContext.content(goal, hugeMemory)
+        assertTrue(bounded.toByteArray(Charsets.UTF_8).size <= InternalContext.MAX_CONTENT_BYTES)
+
+        val boundMsg = GoalMemoryContext.updates(emptyList(), "tree://p", goal, hugeMemory).single()
+        assertNotNull(boundMsg.validatedContext())
+
+        val sessionOnly = GoalMemoryContext.updates(emptyList(), null, goal, "").single()
+        assertNotNull(sessionOnly.validatedContext())
+    }
 }

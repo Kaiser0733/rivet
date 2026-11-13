@@ -89,7 +89,7 @@
 - **JiTTest**: Robolectric `ChatViewModelTest` JiTTest (`NEEDS-DEVICE-PROOF` offline).
 
 #### H8 — `GoalMemoryContext`, `ProjectContext`, and `SkillContext` can exceed `InternalContext` caps or fail `valid()`, crashing `AgentLoop`
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (JiTTests added in `GoalMemoryTest`, `InternalContextTest`, `SkillContextTest`; all modified files pass `kt-checks.py balance`; requires Gradle `kotlinx-serialization` compiler plugin to run `@Serializable` models)
 - **Files**:
   - `app/src/main/java/com/kaiser/rivet/agent/GoalMemory.kt:256-281`
   - `app/src/main/java/com/kaiser/rivet/agent/InternalContext.kt:35-38, 214-218`

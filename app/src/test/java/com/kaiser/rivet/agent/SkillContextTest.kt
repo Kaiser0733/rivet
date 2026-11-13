@@ -83,4 +83,19 @@ class SkillContextTest {
         assertTrue(text.toByteArray(Charsets.UTF_8).size <= InternalContext.MAX_CONTENT_BYTES)
         assertTrue(text.contains("more installed skills are not listed"))
     }
+
+    @Test fun multibyteSkillInvocationTruncatesCleanlyWithoutExceedingContextLimit() {
+        val bloated = Skill(
+            name = "utf8-heavy",
+            description = "Heavy multi-byte instructions",
+            body = "é".repeat(InternalContext.MAX_CONTENT_BYTES),
+            disableModelInvocation = false,
+            source = SkillSource(".rivet/skills/utf8-heavy", SkillRootKind.ProjectRivet),
+        )
+        val event = SkillContext.invocation(bloated, "ws")
+        val validated = event.validatedContext()
+        assertNotNull(validated)
+        assertTrue(validated!!.content.toByteArray(Charsets.UTF_8).size <= InternalContext.MAX_CONTENT_BYTES)
+        assertFalse(validated.content.contains('\uFFFD'))
+    }
 }

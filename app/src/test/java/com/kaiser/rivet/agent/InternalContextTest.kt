@@ -154,4 +154,14 @@ class InternalContextTest {
         assertEquals(0, models)
         assertEquals(0, loads)
     }
+
+    @Test fun redactedProjectFileStillFitsPerFileAndTotalByteLimits() {
+        val nearLimit = "k=${"a".repeat(16)}\n".repeat(380)
+        assertTrue(nearLimit.toByteArray(Charsets.UTF_8).size <= ProjectInstructions.PER_FILE_BYTES)
+        val updates = ProjectContext.updates(emptyList(), workspace,
+            instructions("AGENTS.md" to nearLimit))
+        val msg = updates.single()
+        assertNotNull(msg.validatedContext())
+        assertTrue(msg.internalContext!!.content.toByteArray(Charsets.UTF_8).size <= ProjectInstructions.PER_FILE_BYTES)
+    }
 }
