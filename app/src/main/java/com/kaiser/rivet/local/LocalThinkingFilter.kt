@@ -9,11 +9,10 @@ package com.kaiser.rivet.local
  * back until we know whether it starts a tag.
  */
 internal class LocalThinkingFilter {
+    private enum class TagFamily { THINK, THINKING }
+
     private val pending = StringBuilder()
-    private var thinkingDepth = 0
-    // The short marker "</think" does not include the closing '>'. It can arrive
-    // one callback later, so remember to consume that delimiter.
-    private var consumeClosingBracket = false
+    private val openTags = mutableListOf<TagFamily>()
 
     fun feed(delta: String): String {
         pending.append(delta)
@@ -23,41 +22,35 @@ internal class LocalThinkingFilter {
     fun finish(): String {
         val visible = drain(final = true)
         pending.clear()
-        thinkingDepth = 0
-        consumeClosingBracket = false
+        openTags.clear()
         return visible
     }
 
     private fun drain(final: Boolean): String {
         val out = StringBuilder()
-        if (consumeClosingBracket) {
-            if (pending.startsWith(">")) {
-                pending.deleteCharAt(0)
-                consumeClosingBracket = false
-            } else if (pending.isNotEmpty()) {
-                consumeClosingBracket = false
-            }
-        }
         while (pending.isNotEmpty()) {
-            if (thinkingDepth > 0) {
+            if (openTags.isNotEmpty()) {
                 val start = earliestStart()
                 val end = earliestEnd()
-                val open = start != null && (end == null || start.first < end.first)
+                val open = start != null && (end == null || start.index < end.index)
                 if (open) {
-                    pending.delete(0, start.first + start.second)
-                    thinkingDepth++
+                    pending.delete(0, start.index + start.marker.length)
+                    openTags.add(familyFor(start.marker))
                     continue
                 }
                 if (end != null) {
-                    pending.delete(0, end.first + end.second)
-                    if (pending.startsWith(">")) pending.deleteCharAt(0)
-                    else consumeClosingBracket = true
-                    thinkingDepth--
+                    pending.delete(0, end.index + end.marker.length)
+                    val matchIndex = openTags.lastIndexOf(familyFor(end.marker))
+                    if (matchIndex >= 0) {
+                        while (openTags.size > matchIndex) {
+                            openTags.removeAt(openTags.lastIndex)
+                        }
+                    }
                     continue
                 }
                 if (final) {
                     pending.clear()
-                    thinkingDepth = 0
+                    openTags.clear()
                     break
                 }
                 holdSuffix(START_MARKERS + END_MARKERS)
@@ -65,9 +58,9 @@ internal class LocalThinkingFilter {
             }
             val start = earliestStart()
             if (start != null) {
-                out.append(pending.substring(0, start.first))
-                pending.delete(0, start.first + start.second)
-                thinkingDepth = 1
+                out.append(pending.substring(0, start.index))
+                pending.delete(0, start.index + start.marker.length)
+                openTags.add(familyFor(start.marker))
                 continue
             }
             if (final) {
@@ -84,17 +77,22 @@ internal class LocalThinkingFilter {
         return out.toString()
     }
 
-    /** Returns (index, length) of the earliest closing marker. */
-    private fun earliestEnd(): Pair<Int, Int>? = earliest(END_MARKERS)
+    private data class MarkerHit(val index: Int, val marker: String)
 
-    private fun earliestStart(): Pair<Int, Int>? = earliest(START_MARKERS)
+    private fun familyFor(marker: String): TagFamily =
+        if (marker.contains("thinking")) TagFamily.THINKING else TagFamily.THINK
 
-    private fun earliest(markers: List<String>): Pair<Int, Int>? {
+    /** Returns the earliest closing marker. */
+    private fun earliestEnd(): MarkerHit? = earliest(END_MARKERS)
+
+    private fun earliestStart(): MarkerHit? = earliest(START_MARKERS)
+
+    private fun earliest(markers: List<String>): MarkerHit? {
         val lower = pending.toString().lowercase()
-        var best: Pair<Int, Int>? = null
+        var best: MarkerHit? = null
         for (marker in markers) {
             val index = lower.indexOf(marker)
-            if (index >= 0 && (best == null || index < best.first)) best = index to marker.length
+            if (index >= 0 && (best == null || index < best.index)) best = MarkerHit(index, marker)
         }
         return best
     }
@@ -116,8 +114,8 @@ internal class LocalThinkingFilter {
     }
 
     companion object {
-        private val START_MARKERS = listOf("<thinking", "<think", "&lt;think&gt;")
-        private val END_MARKERS = listOf("</thinking", "</think", "&lt;/think&gt;")
+        private val START_MARKERS = listOf("<thinking>", "<think>", "&lt;thinking&gt;", "&lt;think&gt;")
+        private val END_MARKERS = listOf("</thinking>", "</think>", "&lt;/thinking&gt;", "&lt;/think&gt;")
 
         fun strip(text: String): String {
             val filter = LocalThinkingFilter()

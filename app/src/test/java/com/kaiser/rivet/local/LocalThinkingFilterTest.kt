@@ -69,4 +69,19 @@ class LocalThinkingFilterTest {
         }
     }
 
+    @Test fun splitThinkingCloseTagDoesNotLeakIngSuffixAndIgnoresUnmatchedInnerTag() {
+        val filter = LocalThinkingFilter()
+        val visible = buildString {
+            append(filter.feed("<thinking>secret</think"))
+            append(filter.feed("ing>answer"))
+            append(filter.finish())
+        }
+        assertEquals("answer", visible)
+
+        assertEquals(
+            "Start  End",
+            LocalThinkingFilter.strip("Start <think>outer <thinking>inner unclosed</think> End"),
+        )
+    }
+
 }

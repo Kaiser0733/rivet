@@ -168,11 +168,11 @@
 - **JiTTest**: Pure-Kotlin JVM JiTTest validating GBNF rules produced by `LocalToolProtocol.grammar`.
 
 #### H17 — `LocalThinkingFilter` leaks `"ing>"` across split `</thinking>` chunks and over-nests `<thinking>` inside `<think>`
-- **Status**: `PENDING`
+- **Status**: `FIXED` (`LocalThinkingFilterTest` `OK (10 tests)` on JVM via `K2JVMCompiler` + `JUnitCore`; `kt-checks.py balance` PASS)
 - **Files**: `app/src/main/java/com/kaiser/rivet/local/LocalThinkingFilter.kt:118-121`
 - **Issue**: `END_MARKERS` matches `"</think"` before `"</thinking"`, emitting stray `"ing>"` when `</thinking>` arrives across deltas; matching `<thinking` inside active `<think>` increments `thinkingDepth`.
-- **Fix**: Track matching tag family (`think` vs `thinking`) or match complete closing tags properly (`</thinking>` vs `</think>`) without splitting `</thinking` into `</think` + `ing>`.
-- **JiTTest**: Pure-Kotlin JVM JiTTest (`LocalThinkingFilterTest`) streaming `"<thinking>x</think"` + `"ing>answer"`.
+- **Fix**: Replaced integer `thinkingDepth` with an `openTags: MutableList<TagFamily>` stack matching full `</think>`/`</thinking>` (and `&gt;`) closing markers to matching opened tags, eliminating split `</thinking` leaks and unmatched inner closing tags.
+- **JiTTest**: `LocalThinkingFilterTest.splitThinkingCloseTagDoesNotLeakIngSuffixAndIgnoresUnmatchedInnerTag` (verified RED `AssertionError expected:<[]answer> but was:<[ing>]answer>` -> GREEN `OK (10 tests)`).
 
 #### H18 — `LocalProviderClient` parses tool calls before stripping `<think>` blocks and ignores coroutine cancellation
 - **Status**: `PENDING`
