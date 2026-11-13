@@ -32,17 +32,19 @@ internal data class LocatedSkill(val skill: Skill, val rank: Int, val path: Stri
  */
 class SkillDiscovery(private val globalRoot: File) {
     private val mutex = Mutex()
-    private var cached: CachedCatalog? = null
+    private val cache = SkillCatalogCache<SkillCatalog>()
 
     suspend fun catalog(workspace: AgentWorkspace?, workspaceId: String): SkillCatalog =
         mutex.withLock {
-            cached?.takeIf { it.workspaceId == workspaceId }?.catalog
-                ?: scan(workspace).also { cached = CachedCatalog(workspaceId, it) }
+            val hasWorkspace = workspace != null
+            cache.get(workspaceId, hasWorkspace)
+                ?: scan(workspace).also { cache.put(workspaceId, hasWorkspace, it) }
         }
 
     suspend fun refresh(workspace: AgentWorkspace?, workspaceId: String): SkillCatalog =
         mutex.withLock {
-            scan(workspace).also { cached = CachedCatalog(workspaceId, it) }
+            val hasWorkspace = workspace != null
+            scan(workspace).also { cache.put(workspaceId, hasWorkspace, it) }
         }
 
     private suspend fun scan(workspace: AgentWorkspace?): SkillCatalog = withContext(Dispatchers.IO) {
@@ -57,8 +59,6 @@ class SkillDiscovery(private val globalRoot: File) {
         located += scanDirectory(globalRoot, SkillRootKind.Global, errors)
         catalogOf(located, errors)
     }
-
-    private data class CachedCatalog(val workspaceId: String, val catalog: SkillCatalog)
 }
 
 /** Scan one SAF root. A missing root is normal and yields nothing. */

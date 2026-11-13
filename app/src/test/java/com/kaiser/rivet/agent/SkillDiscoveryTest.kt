@@ -219,4 +219,38 @@ class SkillDiscoveryTest {
         val otherWorkspace = runBlocking { discovery.catalog(null, "other-workspace") }
         assertEquals("Third.", otherWorkspace.skills.single().description)
     }
+
+    @Test fun catalogWithNullWorkspaceDoesNotPoisonSubsequentWorkspaceCatalog() {
+        val root = temp.newFolder("skills")
+        writeGlobal(root, "global-skill", "Global.")
+        directory(".rivet/skills/project-skill")
+        file(".rivet/skills/project-skill/SKILL.md", "project-skill", "Project.")
+        val discovery = SkillDiscovery(root)
+
+        val globalOnly = runBlocking { discovery.catalog(null, "ws-1") }
+        assertEquals(listOf("global-skill"), globalOnly.skills.map { it.name })
+
+        val workspace = object : AgentWorkspace {
+            override val identity: String = "ws-1"
+            override suspend fun list(path: String): List<AgentWorkspaceEntry> =
+                nodes.entries.filter { parentOf(it.key) == path }
+                    .map { AgentWorkspaceEntry(it.key, it.value == null, it.value?.length?.toLong()) }
+            override suspend fun read(path: String): AgentFileSnapshot {
+                val text = nodes[path] ?: throw AgentWorkspaceFailure("missing")
+                return AgentFileSnapshot(path, text, "", text.length.toLong())
+            }
+            override suspend fun exists(path: String): Boolean = path in nodes
+            override suspend fun isDirectory(path: String): Boolean = nodes[path] == null && path in nodes
+            override suspend fun write(path: String, content: String): AgentFileSnapshot = throw UnsupportedOperationException()
+            override suspend fun createDirectory(path: String) = throw UnsupportedOperationException()
+            override suspend fun delete(path: String) = throw UnsupportedOperationException()
+            override suspend fun rename(path: String, newName: String) = throw UnsupportedOperationException()
+            override suspend fun move(source: String, destDir: String) = throw UnsupportedOperationException()
+            override suspend fun copy(source: String, dest: String) = throw UnsupportedOperationException()
+            override suspend fun diff(path: String): String = ""
+        }
+
+        val withProject = runBlocking { discovery.catalog(workspace, "ws-1") }
+        assertEquals(listOf("project-skill", "global-skill"), withProject.skills.map { it.name })
+    }
 }

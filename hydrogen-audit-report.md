@@ -399,11 +399,13 @@
 - **JiTTest**: `AtomicJournalWriterTest.concurrentWritesNeverThrowOrLeaveCorruptOrTempFiles` (failed with `FileNotFoundException` on shared `.tmp` race before fix -> `OK (1 test)` after fix on JVM).
 
 #### H40 — `SkillDiscovery.catalog` caches `null` workspace under `workspaceId` key, poisoning subsequent workspace calls
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/agent/SkillDiscovery.kt:39-40`
+- **Status**: `FIXED` (`K2JVMCompiler` + `JUnitCore` `OK (1 test)` on `SkillCatalogCacheTest`, `kt-checks.py balance` PASS; `SkillDiscoveryTest` integration test added)
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/agent/SkillCatalogCache.kt` (extracted pure workspace-aware cache key)
+  - `app/src/main/java/com/kaiser/rivet/agent/SkillDiscovery.kt:33-47`
 - **Issue**: Cache key omits whether `workspace != null`, so `catalog(null, id)` caches global-only skills under `id` and blocks `catalog(workspace, id)` from discovering project skills.
-- **Fix**: Include `workspace != null` (or separate global vs project key) in cache key.
-- **JiTTest**: Pure-Kotlin JVM JiTTest (`SkillDiscoveryTest`).
+- **Fix**: Extracted `SkillCatalogCache` keyed on both `workspaceId` and `hasWorkspace = (workspace != null)` and wired `SkillDiscovery.catalog` and `refresh`.
+- **JiTTest**: `SkillCatalogCacheTest` (1 failure before fix -> `OK (1 test)` after fix on JVM) + `SkillDiscoveryTest.catalogWithNullWorkspaceDoesNotPoisonSubsequentWorkspaceCatalog`.
 
 #### H41 — `InteractiveTerminalSession` races between `ensureStarted`, `open`, `closeInternal`, and `job.invokeOnCompletion`
 - **Status**: `PENDING`
