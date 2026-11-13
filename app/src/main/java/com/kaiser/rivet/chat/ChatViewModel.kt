@@ -1299,6 +1299,7 @@ class ChatViewModel private constructor(
         sendJob = viewModelScope.launch {
             var turnToken: String? = null
             var acceptedPersisted = false
+            var persistAcceptedOnExit = true
             try {
             previous?.join()
             turnToken = runtimeController.startTurn(::cancel)
@@ -1353,6 +1354,8 @@ class ChatViewModel private constructor(
                 val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
                 val block = local?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)
                 if (block != null) {
+                    persistAcceptedOnExit = false
+                    rollbackAcceptedUser(acceptedUser)
                     failBeforeStart(block, wasInterrupted)
                     return@launch
                 }
@@ -1361,6 +1364,8 @@ class ChatViewModel private constructor(
             val binding = projectBindingState(current.currentSessionId,
                 current.currentSessionWorkspaceId, workspaceId, projectLoading = false)
             if (workspaceAccessFailed || binding == ProjectBindingState.AccessLost) {
+                persistAcceptedOnExit = false
+                rollbackAcceptedUser(acceptedUser)
                 _uiState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
                     projectError = if (current.currentSessionWorkspaceId != null) null
                     else "Rivet couldn't open this project. Choose the folder again.",
@@ -1370,6 +1375,8 @@ class ChatViewModel private constructor(
                 return@launch
             }
             if (sessions != null && binding == ProjectBindingState.Mismatch) {
+                persistAcceptedOnExit = false
+                rollbackAcceptedUser(acceptedUser)
                 _uiState.update { it.copy(streaming = false, activity = null,
                     interruptedTurn = wasInterrupted,
                     error = PROJECT_BINDING_MISMATCH_MESSAGE) }
@@ -1519,6 +1526,8 @@ class ChatViewModel private constructor(
                 persistTurn(durable, interrupted = true)
                 acceptedPersisted = true
             } catch (_: AgentSessionLimitException) {
+                persistAcceptedOnExit = false
+                rollbackAcceptedUser(acceptedUser)
                 if (ticket == generation) {
                     _uiState.update {
                         it.copy(streaming = false, pendingApproval = null, activity = null,
@@ -1978,7 +1987,7 @@ class ChatViewModel private constructor(
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
                 val accepted = acceptedUser
-                if (accepted != null && !acceptedPersisted) {
+                if (accepted != null && persistAcceptedOnExit && !acceptedPersisted) {
                     withContext(NonCancellable) { persistAcceptedTail(accepted) }
                 }
                 withContext(NonCancellable) {
@@ -2235,6 +2244,19 @@ class ChatViewModel private constructor(
                     _uiState.update { it.copy(activity = null, recoveringProjectChanges = false) }
                 }
             }
+        }
+    }
+
+    private fun rollbackAcceptedUser(accepted: AgentMessage?) {
+        if (accepted == null) return
+        _uiState.update { state ->
+            val index = state.messages.indexOfLast { it === accepted }
+            if (index < 0) return@update state
+            val updated = state.messages.toMutableList().apply { removeAt(index) }
+            state.copy(
+                messages = updated,
+                acceptedMessageCount = (state.acceptedMessageCount - 1L).coerceAtLeast(0L),
+            )
         }
     }
 

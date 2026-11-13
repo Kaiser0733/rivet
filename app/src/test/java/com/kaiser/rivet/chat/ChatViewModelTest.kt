@@ -1941,4 +1941,45 @@ class ChatViewModelTest {
         assertEquals(0, viewModel.managedProcesses.activeTurnCount())
         assertFalse(viewModel.managedProcesses.hasForegroundWork())
     }
+
+    @Test fun lostProjectAccessDoesNotPersistRefusedPromptIntoSqliteOrMessages() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.refused-access", "root")
+        val sessions = CodingSessions(app)
+        sessions.create(tree.toString())
+        sessions.save(listOf(AgentMessage.user("Existing prompt")), interrupted = false)
+        app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.send("Refused prompt")
+        val failed = await(viewModel) { !it.streaming && it.error == PROJECT_ACCESS_LOST_MESSAGE }
+
+        assertEquals(listOf("Existing prompt"), failed.messages.map { it.text })
+        val persisted = sessions.load()
+        assertEquals(listOf("Existing prompt"), persisted.messages.map { it.text })
+        assertFalse(persisted.interrupted)
+    }
+
+    @Test fun oversizedPromptLimitRollsBackAcceptedBubbleAndSkipsFinallySave() = runBlocking {
+        val persistence = RejectingPersistence()
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, persistence,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready }
+
+        viewModel.send("oversized")
+        val limited = await(viewModel) { !it.streaming && it.error == ChatViewModel.CONTEXT_LIMIT_ERROR }
+
+        assertTrue(limited.messages.isEmpty())
+        assertEquals(0L, limited.acceptedMessageCount)
+        assertEquals(1, persistence.saveAttempts)
+    }
 }

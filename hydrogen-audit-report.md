@@ -82,7 +82,7 @@
 - **JiTTest**: Robolectric `ChatViewModelTest` JiTTest (plus pure-Kotlin turn-finalization test if extracted).
 
 #### H7 — `persistAcceptedTail` persists preflight-refused prompts and retains over-limit prompts in memory
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`ChatViewModelTest` JiTTests added for AccessLost refusal and pre-persist `AgentSessionLimitException` rollback; `ChatViewModel.kt` & `ChatViewModelTest.kt` pass `kt-checks.py balance`; requires Gradle Robolectric test run)
 - **Files**: `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt:745-760, 1329-1377, 1511-1536, 1976-1979, 2236-2254`
 - **Issue**: When `startTurn` returns early on preflight refusal (`AccessLost`, `Mismatch`, missing provider, blocked local protocol) or `AgentSessionLimitException`, `finally` calls `persistAcceptedTail(accepted)`, writing refused prompts into SQLite with `interrupted = true` or leaving over-limit messages in `_uiState.messages`.
 - **Fix**: Only call `persistAcceptedTail` when cancellation occurred before initial persistence after preflight passed, and roll back the optimistic `accepted` message from `_uiState.messages` on preflight/limit refusal.
