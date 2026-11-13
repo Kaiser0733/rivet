@@ -69,4 +69,25 @@ class RunJournalTest {
         assertFalse(RunMachine.recover(finished).interrupted)
         assertEquals(null, RunContext.content(finished))
     }
+
+    @Test fun rejectsPathTraversalInRunIdAndWritesAtomicallyWithoutLeavingTempFiles() = runBlocking {
+        val root = temp.newFolder("atomic-runs")
+        val storage = DirectoryRunStorage(root)
+        val journal = RunJournal(storage)
+
+        val valid = RunMachine.start(RunMachine.begin("r-safe-1", "ws", "Safe run", now = 1))
+        journal.save(valid)
+        val loaded = journal.load("r-safe-1")
+        assertNotNull(loaded)
+        assertFalse(File(root, "${RunJournal.ROOT}/r-safe-1/.run.json.tmp").exists())
+
+        var threw = false
+        try {
+            journal.save(RunMachine.begin("../../escape", "ws", "Bad run", now = 2))
+        } catch (_: IllegalArgumentException) {
+            threw = true
+        }
+        assertTrue(threw)
+        assertFalse(File(root.parentFile, "escape/run.json").exists())
+    }
 }

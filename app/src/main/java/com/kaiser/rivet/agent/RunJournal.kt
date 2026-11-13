@@ -1,6 +1,12 @@
 package com.kaiser.rivet.agent
 
 import java.io.File
+import java.io.FileOutputStream
+import java.nio.file.AtomicMoveNotSupportedException
+import java.nio.file.Files
+import java.nio.file.StandardCopyOption
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 
@@ -126,19 +132,59 @@ interface RunStorage {
 
 /** Local-file storage for tests and for app-private journals. */
 class DirectoryRunStorage(private val root: File) : RunStorage {
-    override suspend fun read(relative: String): String? {
-        val file = File(root, relative)
-        return try { if (file.isFile) file.readText() else null } catch (_: Exception) { null }
+    private fun resolveSafe(relative: String): File {
+        require(relative.isNotEmpty() && !relative.startsWith('/') && !relative.contains('\\') && !relative.contains('\u0000')) {
+            "Invalid relative storage path"
+        }
+        val segments = relative.split('/')
+        require(segments.none { it.isEmpty() || it == "." || it == ".." }) {
+            "Invalid relative storage path"
+        }
+        val rootCanonical = root.canonicalFile
+        val target = File(rootCanonical, relative).canonicalFile
+        require(target.toPath().startsWith(rootCanonical.toPath())) {
+            "Storage path escapes root"
+        }
+        return target
     }
 
-    override suspend fun write(relative: String, text: String) {
-        val file = File(root, relative)
-        file.parentFile?.mkdirs()
-        file.writeText(text)
+    override suspend fun read(relative: String): String? = withContext(Dispatchers.IO) {
+        val file = try { resolveSafe(relative) } catch (_: IllegalArgumentException) { return@withContext null }
+        try { if (file.isFile) file.readText() else null } catch (_: Exception) { null }
     }
 
-    override suspend fun directories(relative: String): List<String> =
-        File(root, relative).listFiles()?.filter { it.isDirectory }?.map { it.name }.orEmpty()
+    override suspend fun write(relative: String, text: String) = withContext(Dispatchers.IO) {
+        val file = resolveSafe(relative)
+        val parent = file.parentFile
+        if (parent != null && !parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) {
+            throw java.io.IOException("Failed to create run storage directory")
+        }
+        val tmp = File(file.parentFile, ".${file.name}.tmp")
+        try {
+            FileOutputStream(tmp).use { output ->
+                output.write(text.toByteArray(Charsets.UTF_8))
+                output.fd.sync()
+            }
+            try {
+                Files.move(
+                    tmp.toPath(),
+                    file.toPath(),
+                    StandardCopyOption.ATOMIC_MOVE,
+                    StandardCopyOption.REPLACE_EXISTING,
+                )
+            } catch (_: AtomicMoveNotSupportedException) {
+                Files.move(tmp.toPath(), file.toPath(), StandardCopyOption.REPLACE_EXISTING)
+            }
+        } finally {
+            if (tmp.exists()) tmp.delete()
+        }
+        Unit
+    }
+
+    override suspend fun directories(relative: String): List<String> = withContext(Dispatchers.IO) {
+        val dir = try { resolveSafe(relative) } catch (_: IllegalArgumentException) { return@withContext emptyList() }
+        dir.listFiles()?.filter { it.isDirectory }?.map { it.name }.orEmpty()
+    }
 }
 
 /** SAF-backed storage for the real project. */
@@ -174,7 +220,16 @@ class RunJournal(private val storage: RunStorage) {
         return recovered
     }
 
-    private fun path(id: String) = "$ROOT/$id/run.json"
+    private fun path(id: String): String {
+        require(
+            id.isNotEmpty() &&
+                id != "." &&
+                id != ".." &&
+                !id.contains("..") &&
+                id.all { it.isLetterOrDigit() || it == '-' || it == '_' || it == '.' }
+        ) { "Invalid run id" }
+        return "$ROOT/$id/run.json"
+    }
 
     companion object { const val ROOT = ".rivet/runs" }
 }

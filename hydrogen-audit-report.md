@@ -103,7 +103,7 @@
 - **JiTTest**: Pure-Kotlin JVM JiTTest verifying `InternalContext.valid()` on all four edge cases.
 
 #### H9 — `DirectoryRunStorage` writes `run.json` non-atomically on caller thread and lacks `run.id` path guard
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`RunJournalTest.rejectsPathTraversalInRunIdAndWritesAtomicallyWithoutLeavingTempFiles` added; `RunJournal.kt` & `RunJournalTest.kt` pass `kt-checks.py balance`; requires Gradle `kotlinx-serialization` compiler plugin to run)
 - **Files**: `app/src/main/java/com/kaiser/rivet/agent/RunJournal.kt:128-142`
 - **Issue**: `DirectoryRunStorage.save` writes directly to `run.json` without temp+atomic rename, runs file I/O on caller dispatcher without `Dispatchers.IO`, and uses unvalidated `run.id` in `File(...)`.
 - **Fix**: Validate safe `run.id` (no `/`, `\`, `..`), run under `withContext(Dispatchers.IO)`, and write to a temp file followed by atomic replace/rename.
