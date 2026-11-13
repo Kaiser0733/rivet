@@ -148,4 +148,25 @@ class RunCheckpointStoreTest {
             assertTrue("staged.txt should remain in index added", "staged.txt" in status.added)
         }
     }
+
+    @Test fun stageRestoreRunUndoesAllStepsOfMultiStepRunUsingLatestAfterAndEarliestBefore() = runBlocking {
+        val project = temp.newFolder("multi-step-run")
+        project.resolve("shared.txt").writeText("v0")
+        project.resolve("second.txt").writeText("untouched-initially")
+        val store = RunCheckpointStore(temp.newFolder("multi-step-store"), "ws")
+
+        val step0 = store.begin(project, "run-multi", 0, "Edit shared")
+        project.resolve("shared.txt").writeText("v1")
+        assertTrue(store.finish(step0, project))
+
+        val step1 = store.begin(project, "run-multi", 1, "Edit shared again and second")
+        project.resolve("shared.txt").writeText("v2")
+        project.resolve("second.txt").writeText("changed-in-step1")
+        assertTrue(store.finish(step1, project))
+
+        val restore = store.stageRestoreRun(store.forRun("run-multi"), project)
+        assertTrue(restore.conflicts.isEmpty())
+        assertEquals("v0", File(restore.stage, "shared.txt").readText())
+        assertEquals("untouched-initially", File(restore.stage, "second.txt").readText())
+    }
 }

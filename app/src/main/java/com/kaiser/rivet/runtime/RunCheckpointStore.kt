@@ -117,6 +117,13 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
         history().firstOrNull { it.runId == runId }
     }
 
+    suspend fun forRun(runId: String): List<RunCheckpointInfo> = withContext(Dispatchers.IO) {
+        directory.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith('.') }
+            .mapNotNull { try { read(it) } catch (_: Exception) { null } }
+            .filter { it.after != null && it.runId == runId }
+            .sortedBy { it.sequence }
+    }
+
     /** Pre-change bytes for non-git delta copies; null when the file was absent or git-backed. */
     fun deltaBytes(record: RunCheckpointInfo, path: String): ByteArray? {
         if (record.gitRef != null) return null
@@ -132,35 +139,83 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
     suspend fun stageRestore(record: RunCheckpointInfo, worktree: File): RunCheckpointRestore =
         withContext(Dispatchers.IO) {
             val after = record.after ?: throw CheckpointFailure("undo_unavailable")
-            val current = scan(worktree)
-            val changed = changedPaths(record.before, after)
-            val conflicts = changed.filter { current[it] != after[it] }
-            if (conflicts.isNotEmpty()) return@withContext RunCheckpointRestore(File(""), emptyList(), conflicts)
-            val stage = File(folder(record.id), "restore-worktree")
-            if (stage.exists()) removeTree(stage)
-            copyTree(worktree, stage)
-            for (path in changed.sortedDescending()) {
-                val target = File(stage, path)
-                val before = record.before[path]
-                when {
-                    before == null -> removeTree(target)
-                    before.directory -> {
-                        if (target.exists() && !target.isDirectory) removeTree(target)
-                        target.mkdirs()
-                    }
-                    else -> if (target.isDirectory) removeTree(target)
+            stageSnapshotRestore(
+                stageId = record.id,
+                beforeMap = record.before,
+                afterMap = after,
+                worktree = worktree,
+            ) { path -> readBefore(record, path, worktree) }
+        }
+
+    /**
+     * Stages a net rollback across every completed step in a run: checks conflicts against
+     * the latest step's post-state and restores each changed path to the earliest step's
+     * pre-run state.
+     */
+    suspend fun stageRestoreRun(records: List<RunCheckpointInfo>, worktree: File): RunCheckpointRestore =
+        withContext(Dispatchers.IO) {
+            val ordered = records.filter { it.after != null }.sortedBy { it.sequence }
+            if (ordered.isEmpty()) throw CheckpointFailure("undo_unavailable")
+            if (ordered.size == 1) {
+                val single = ordered.single()
+                return@withContext stageSnapshotRestore(
+                    stageId = single.id,
+                    beforeMap = single.before,
+                    afterMap = single.after!!,
+                    worktree = worktree,
+                ) { path -> readBefore(single, path, worktree) }
+            }
+            val earliest = ordered.first()
+            val latest = ordered.last()
+            stageSnapshotRestore(
+                stageId = earliest.id,
+                beforeMap = earliest.before,
+                afterMap = latest.after!!,
+                worktree = worktree,
+            ) { path ->
+                ordered.firstNotNullOfOrNull { rec ->
+                    if (rec.before[path] == earliest.before[path]) readBefore(rec, path, worktree)
+                    else null
                 }
             }
-            for (path in changed) {
-                val before = record.before[path] ?: continue
-                if (before.directory) continue
-                val target = File(stage, path)
-                val bytes = readBefore(record, path, worktree) ?: throw CheckpointFailure("corrupt")
-                target.parentFile?.mkdirs()
-                FileOutputStream(target).use { it.write(bytes) }
-            }
-            RunCheckpointRestore(stage, changed, emptyList())
         }
+
+    private fun stageSnapshotRestore(
+        stageId: String,
+        beforeMap: Map<String, CheckpointEntry>,
+        afterMap: Map<String, CheckpointEntry>,
+        worktree: File,
+        readBytes: (String) -> ByteArray?,
+    ): RunCheckpointRestore {
+        val current = scan(worktree)
+        val changed = changedPaths(beforeMap, afterMap)
+        val conflicts = changed.filter { current[it] != afterMap[it] }
+        if (conflicts.isNotEmpty()) return RunCheckpointRestore(File(""), emptyList(), conflicts)
+        val stage = File(folder(stageId), "restore-worktree")
+        if (stage.exists()) removeTree(stage)
+        copyTree(worktree, stage)
+        for (path in changed.sortedDescending()) {
+            val target = File(stage, path)
+            val before = beforeMap[path]
+            when {
+                before == null -> removeTree(target)
+                before.directory -> {
+                    if (target.exists() && !target.isDirectory) removeTree(target)
+                    target.mkdirs()
+                }
+                else -> if (target.isDirectory) removeTree(target)
+            }
+        }
+        for (path in changed) {
+            val before = beforeMap[path] ?: continue
+            if (before.directory) continue
+            val target = File(stage, path)
+            val bytes = readBytes(path) ?: throw CheckpointFailure("corrupt")
+            target.parentFile?.mkdirs()
+            FileOutputStream(target).use { it.write(bytes) }
+        }
+        return RunCheckpointRestore(stage, changed, emptyList())
+    }
 
     fun discard(record: RunCheckpointInfo) {
         removeTree(File(folder(record.id), "restore-worktree"))

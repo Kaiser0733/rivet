@@ -73,7 +73,7 @@ internal fun ToolsPane(
     stateLine: String,
     onOpenTerminal: () -> Unit = {},
     checkpoints: List<RunCheckpointInfo> = emptyList(),
-    onRestoreCheckpoint: (String) -> Unit = {},
+    onRestoreCheckpoint: (String, Boolean) -> Unit = { _, _ -> },
     checkpointNotice: String? = null,
     modifier: Modifier = Modifier,
 ) {
@@ -96,7 +96,7 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                              stateLine: String? = null,
                              onOpenTerminal: (() -> Unit)? = null,
                              checkpoints: List<RunCheckpointInfo> = emptyList(),
-                             onRestoreCheckpoint: (String) -> Unit = {},
+                             onRestoreCheckpoint: (String, Boolean) -> Unit = { _, _ -> },
                              checkpointNotice: String? = null) {
     val context = LocalContext.current
     var restoreTarget by remember { mutableStateOf<RestoreTarget?>(null) }
@@ -227,7 +227,7 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                 "Rivet restores only the files it changed. If anything changed outside Rivet, it stops and lists those files instead of overwriting them.") },
             confirmButton = { TextButton(onClick = {
                 restoreTarget = null
-                onRestoreCheckpoint(checkpoint.id)
+                onRestoreCheckpoint(checkpoint.id, target.undoRun)
             }) { Text(restorePrimaryLabel(target.undoRun)) } },
             dismissButton = { TextButton(onClick = { restoreTarget = null }) { Text("Cancel") } },
         )

@@ -305,38 +305,49 @@ class RuntimeController(
         runCheckpoints(identity).history(limit)
     }
 
-    suspend fun restoreRunCheckpoint(record: RunCheckpointInfo): RunCheckpointRestoreResult =
+    suspend fun restoreRunCheckpoint(
+        record: RunCheckpointInfo,
+        undoRun: Boolean = false,
+    ): RunCheckpointRestoreResult =
         operations.withLock {
             if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
             val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
             var ready = active.prepare()
             val store = runCheckpoints(record.workspace)
+            val runRecords = if (undoRun) store.forRun(record.runId).ifEmpty { listOf(record) } else listOf(record)
+            val stageOwner = runRecords.first()
+            suspend fun stageTarget(worktree: File): RunCheckpointRestore =
+                if (undoRun) store.stageRestoreRun(runRecords, worktree) else store.stageRestore(stageOwner, worktree)
             if (ready.dirty) {
                 // Settle non-overlapping work first. If a same-path disagreement
                 // remains, still run the checkpoint comparison so the panel can list
                 // the files that stopped the restore instead of failing silently.
                 val synced = active.sync()
                 if (synced.state == MirrorSync.Conflict || synced.state == MirrorSync.Failed) {
-                    val staged = store.stageRestore(record, ready.worktree)
+                    val staged = stageTarget(ready.worktree)
                     if (staged.conflicts.isNotEmpty()) {
                         return@withLock RunCheckpointRestoreResult(emptyList(), staged.conflicts)
                     }
+                    store.discard(stageOwner)
                     throw MirrorFailure("sync_required", synced.path)
                 }
                 ready = active.prepare()
                 if (ready.dirty) throw MirrorFailure("sync_required")
             }
-            val staged = store.stageRestore(record, ready.worktree)
+            val staged = stageTarget(ready.worktree)
             if (staged.conflicts.isNotEmpty()) {
                 return@withLock RunCheckpointRestoreResult(emptyList(), staged.conflicts)
             }
             try {
                 active.installCheckpoint(staged.stage)
-                active.sync()
-                store.markRestored(record)
+                val synced = active.sync()
+                if (synced.state == MirrorSync.Conflict || synced.state == MirrorSync.Failed) {
+                    throw MirrorFailure("sync_failed", synced.path)
+                }
+                runRecords.forEach { store.markRestored(it) }
                 RunCheckpointRestoreResult(staged.restored, emptyList())
             } catch (error: Exception) {
-                store.discard(record)
+                store.discard(stageOwner)
                 throw error
             }
         }

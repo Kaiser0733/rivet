@@ -1154,7 +1154,7 @@ class ChatViewModel private constructor(
         }
     }
 
-    fun restoreRunCheckpoint(id: String) {
+    fun restoreRunCheckpoint(id: String, undoRun: Boolean = false) {
         val record = _uiState.value.runCheckpoints.firstOrNull { it.id == id }
         if (record == null) {
             _uiState.update {
@@ -1165,7 +1165,7 @@ class ChatViewModel private constructor(
         }
         viewModelScope.launch {
             try {
-                val result = runtimeController.restoreRunCheckpoint(record)
+                val result = runtimeController.restoreRunCheckpoint(record, undoRun = undoRun)
                 if (result.conflicts.isEmpty()) {
                     pendingRollback = "The user rolled back the project to checkpoint " +
                         "${record.summary}. Do not assume later file changes are present."

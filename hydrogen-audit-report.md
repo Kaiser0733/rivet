@@ -234,14 +234,15 @@
 - **JiTTest**: `RunCheckpointStoreTest.gitCheckpointPreservesUserStagedIndexEntries`.
 
 #### H24 — "Undo this run" & `restoreRunCheckpoint` fail on multi-step runs, ignore `sync()` failure, and leak `restore-worktree`
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; `RunCheckpointStoreTest` / Robolectric require Gradle)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/ui/processes/ProcessesScreen.kt:157-167, 228-231`
-  - `app/src/main/java/com/kaiser/rivet/runtime/RunCheckpointStore.kt:123-125`
-  - `app/src/main/java/com/kaiser/rivet/runtime/RuntimeController.kt:308-342`
+  - `app/src/main/java/com/kaiser/rivet/ui/processes/ProcessesScreen.kt:75-100, 230`
+  - `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt:1157-1168`
+  - `app/src/main/java/com/kaiser/rivet/runtime/RunCheckpointStore.kt:116-195`
+  - `app/src/main/java/com/kaiser/rivet/runtime/RuntimeController.kt:308-355`
 - **Issue**: Tapping "Undo this run" restores only `seq 0` and checks conflicts against `seq 0.after` rather than net changes `runStart.before..runEnd.after`; `restoreRunCheckpoint` ignores `active.sync()` return value at line `335` and leaks `restore-worktree` without `store.discard(record)` when throwing `MirrorFailure("sync_required")` at line `324`.
-- **Fix**: Add run-level net restore (`stageRestoreRun(checkpointsInRun, worktree)` comparing against latest `after` and restoring earliest `before`), check `active.sync()` state in `restoreRunCheckpoint`, and discard staged restore at line `324`.
-- **JiTTest**: Pure-Kotlin JVM JiTTest for multi-step `RunCheckpointStore` run restore.
+- **Fix**: Added `forRun` and `stageRestoreRun` (sharing `stageSnapshotRestore` with `stageRestore`) to check net conflicts against the latest step's `after` and restore earliest `before` bytes from whichever step retained them; propagated `undoRun` from `ProcessesScreen` -> `ChatViewModel` -> `RuntimeController.restoreRunCheckpoint`; checked post-install `active.sync()` state; called `store.discard(...)` before throwing `MirrorFailure("sync_required")`.
+- **JiTTest**: `RunCheckpointStoreTest.stageRestoreRunUndoesAllStepsOfMultiStepRunUsingLatestAfterAndEarliestBefore`.
 
 #### H25 — `Toolchain.preparePip` pipe-buffer deadlock & `ToolchainEntryAudit` misclassifying all paths when `nativeDir == ""`
 - **Status**: `PENDING`
