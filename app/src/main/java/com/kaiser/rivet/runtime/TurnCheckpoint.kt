@@ -1,6 +1,5 @@
 package com.kaiser.rivet.runtime
 
-import com.kaiser.rivet.workspace.WorkspacePath
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
@@ -147,22 +146,33 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         if (!stage.mkdirs()) throw CheckpointFailure("storage")
         try {
             ZipFile(File(folder, "before.zip")).use { archive ->
+                val stageCanonical = stage.canonicalFile
                 val entries = archive.entries()
                 while (entries.hasMoreElements()) {
                     currentCoroutineContext().ensureActive()
                     val entry = entries.nextElement()
-                    val relative = WorkspacePath.parse(entry.name.removeSuffix("/"))
-                    if (relative.isRoot || relative.segments.any { it == ".git" }) throw CheckpointFailure("corrupt")
-                    val target = File(stage, relative.value)
+                    val relative = validateEntryRelativePath(entry.name.removeSuffix("/"))
+                    val target = File(stageCanonical, relative)
+                    val targetCanonical = target.canonicalFile
+                    if (!targetCanonical.toPath().startsWith(stageCanonical.toPath()) ||
+                        targetCanonical == stageCanonical) {
+                        throw CheckpointFailure("corrupt")
+                    }
                     if (entry.isDirectory) {
-                        if (!target.mkdirs() && !target.isDirectory) throw CheckpointFailure("storage")
+                        if (!targetCanonical.mkdirs() && !targetCanonical.isDirectory) {
+                            throw CheckpointFailure("storage")
+                        }
                     } else {
-                        if (!target.parentFile!!.isDirectory && !target.parentFile!!.mkdirs()) throw CheckpointFailure("storage")
-                        archive.getInputStream(entry).use { input -> FileOutputStream(target).use { input.copyTo(it) } }
+                        val parent = targetCanonical.parentFile!!
+                        if (!parent.isDirectory && !parent.mkdirs()) throw CheckpointFailure("storage")
+                        archive.getInputStream(entry).use { input ->
+                            FileOutputStream(targetCanonical).use { input.copyTo(it) }
+                        }
                     }
                 }
             }
             preserveGitDirectories(current, stage)
+            preserveIgnoredDirectories(current, stage, record.before.keys)
             if (scan(stage) != record.before) throw CheckpointFailure("corrupt")
             stage
         } catch (error: Exception) {
@@ -296,6 +306,57 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
             }
         })
         return entries
+    }
+
+    private fun validateEntryRelativePath(raw: String): String {
+        if (raw.isEmpty() || raw.startsWith('/') || raw.contains('\\') || raw.contains('\u0000')) {
+            throw CheckpointFailure("corrupt")
+        }
+        val segments = raw.split('/')
+        if (segments.any { it.isEmpty() || it == "." || it == ".." || it == ".git" }) {
+            throw CheckpointFailure("corrupt")
+        }
+        return raw
+    }
+
+    private fun preserveIgnoredDirectories(current: File, stage: File, recordedPaths: Set<String>) {
+        val ignored = ignoredDirectories(stage)
+        if (ignored.isEmpty()) return
+        val currentRoot = current.toPath()
+        Files.walkFileTree(currentRoot, object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (Files.isSymbolicLink(dir)) return FileVisitResult.SKIP_SUBTREE
+                if (dir == currentRoot) return FileVisitResult.CONTINUE
+                if (dir.fileName?.toString() == ".git") return FileVisitResult.SKIP_SUBTREE
+                val rel = relative(current, dir)
+                if (rel == ".rivet/runs" || rel == ".rivet/checkpoints") return FileVisitResult.SKIP_SUBTREE
+                if (isIgnored(rel, ignored)) {
+                    if (!recordedPaths.contains(rel)) {
+                        copyTreePreservingRegularEntries(dir, File(stage, rel).toPath())
+                    }
+                    return FileVisitResult.SKIP_SUBTREE
+                }
+                return FileVisitResult.CONTINUE
+            }
+        })
+    }
+
+    private fun copyTreePreservingRegularEntries(source: Path, target: Path) {
+        Files.walkFileTree(source, object : SimpleFileVisitor<Path>() {
+            override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (Files.isSymbolicLink(dir)) return FileVisitResult.SKIP_SUBTREE
+                Files.createDirectories(target.resolve(source.relativize(dir)))
+                return FileVisitResult.CONTINUE
+            }
+            override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                if (attrs.isRegularFile && !Files.isSymbolicLink(file)) {
+                    val dest = target.resolve(source.relativize(file))
+                    dest.parent?.let { Files.createDirectories(it) }
+                    Files.copy(file, dest, StandardCopyOption.REPLACE_EXISTING)
+                }
+                return FileVisitResult.CONTINUE
+            }
+        })
     }
 
     private fun preserveGitDirectories(current: File, stage: File) {

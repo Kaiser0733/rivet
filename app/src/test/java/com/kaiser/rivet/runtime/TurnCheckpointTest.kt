@@ -175,4 +175,35 @@ class TurnCheckpointTest {
         assertTrue(before.contains("src/main.kt"))
         assertTrue(before.contains(".gitignore"))
     }
+
+    @Test fun stageUndoPreservesIgnoredDirectories() = runTest {
+        val root = temp.newFolder("worktree")
+        File(root, "src").mkdirs()
+        File(root, "src/main.kt").writeText("val a = 1\n")
+        File(root, "node_modules/pkg").mkdirs()
+        File(root, "node_modules/pkg/index.js").writeText("module.exports = 1\n")
+        File(root, ".gitignore").writeText("node_modules/\n")
+        val store = TurnCheckpoint(temp.newFolder("private-checkpoints"), "workspace-A")
+
+        val id = store.begin(root)
+        File(root, "src/main.kt").writeText("val a = 2\n")
+        assertTrue(store.finish(id, root))
+
+        val staged = store.stageUndo(store.latest()!!, root)
+        assertEquals("val a = 1\n", File(staged, "src/main.kt").readText())
+        assertEquals("module.exports = 1\n", File(staged, "node_modules/pkg/index.js").readText())
+    }
+
+    @Test fun stageUndoRestoresPosixFilenamesThatEndWithDot() = runTest {
+        val root = temp.newFolder("worktree")
+        File(root, "foo.").writeText("before\n")
+        val store = TurnCheckpoint(temp.newFolder("private-checkpoints"), "workspace-A")
+
+        val id = store.begin(root)
+        File(root, "foo.").writeText("after\n")
+        assertTrue(store.finish(id, root))
+
+        val staged = store.stageUndo(store.latest()!!, root)
+        assertEquals("before\n", File(staged, "foo.").readText())
+    }
 }

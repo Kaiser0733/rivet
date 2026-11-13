@@ -50,7 +50,7 @@
 - **JiTTest**: Robolectric `ModelDownloadService` JiTTest verifying `startForeground` is invoked before `stopSelf()` when no active job exists (`NEEDS-DEVICE-PROOF` in VM without Gradle/Robolectric).
 
 #### H3 — `TurnCheckpoint.stageUndo` deletes `.gitignore`/`.rivetignore` trees on SAF sync and crashes on valid POSIX filenames
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`TurnCheckpointTest` JiTTests added for ignored trees + trailing-dot POSIX filenames; `TurnCheckpoint.kt` & `TurnCheckpointTest.kt` pass `kt-checks.py balance`; requires Gradle `kotlinx-serialization` plugin + `kotlinx-coroutines-test` to execute)
 - **Files**: `app/src/main/java/com/kaiser/rivet/runtime/TurnCheckpoint.kt:141-172, 256-259`
 - **Issue**:
   1. `TurnCheckpoint.scan` skips `.gitignore`/`.rivetignore` directories, so `before.zip` omits them; `stageUndo` builds `stage` only from `before.zip`, then `WorkspaceMirror.installCheckpoint` + `sync()` permanently deletes all ignored trees (e.g. `node_modules/`, `dist/`) from worktree and SAF.
