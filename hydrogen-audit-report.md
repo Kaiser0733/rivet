@@ -449,13 +449,13 @@
 - **JiTTest**: Robolectric `ChatViewModelTest.offMainConnectivityLostAndAvailableAutoResumePausedTurnAfterJoin` (`NEEDS-DEVICE-PROOF` offline).
 
 #### H45 — `BrowserSession` teardown race, missing watchdog on `requestRendererTeardown`, `BrowserIdleArming` deadline reset, swallowed `userOpen` errors
-- **Status**: `PENDING`
+- **Status**: `FIXED`
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt:249-259, 283-287, 1496-1530, 1784-1852`
-  - `app/src/main/java/com/kaiser/rivet/browser/BrowserIdleArming.kt:16-20`
+  - `app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt`
+  - `app/src/main/java/com/kaiser/rivet/browser/BrowserIdleArming.kt`
 - **Issue**: `userOpen`/`ensureRenderer` reuse `renderer` while `teardownRequested == true`; `requestRendererTeardown` omits `armTeardownWatchdog()`; `BrowserIdleArming.onBackground` resets an already-armed hidden deadline; `ensureRenderer` leaves `idleJob`/`idleArming` active; `userOpen` swallows `openVisual` failures.
-- **Fix**: Reject/wait out pending `teardownRequested` before reusing `renderer`; call `armTeardownWatchdog()` in `requestRendererTeardown()`; only arm in `onBackground` when `!armed` and disarm `idleArming` / cancel `idleJob` in `ensureRenderer`; publish `BrowserFailure` in `userOpen().onFailure`.
-- **JiTTest**: Pure-Kotlin JVM JiTTest for `BrowserIdleArming`.
+- **Fix**: Awaited/rejected pending `teardownRequested` and disarmed `idleJob`/`idleArming` in `ensureRenderer`; armed `armTeardownWatchdog()` from `requestRendererTeardown()`; preserved existing deadline in `BrowserIdleArming.onBackground` when `!armed`; published `BrowserFailure` in `userOpen().onFailure`.
+- **JiTTest**: `BrowserIdleArmingDeadlineTest` (`1 failure` before fix -> `OK (8 tests)` across `BrowserIdleArmingTest` + `BrowserIdleArmingDeadlineTest` after fix on JVM).
 
 ---
 

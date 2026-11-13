@@ -15,7 +15,7 @@ class BrowserIdleArming {
 
     fun onBackground(rendererAlive: Boolean,
                      now: Long = System.currentTimeMillis()): Boolean {
-        if (rendererAlive) onHidden(now)
+        if (rendererAlive && !armed) onHidden(now)
         return armed
     }
 

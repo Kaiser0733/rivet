@@ -248,8 +248,15 @@ class BrowserSession(
         unparkRenderer()
         _state.update { it.copy(visible = true, readerMode = false, error = null) }
         val target = activeUrl.ifBlank { _state.value.url }
-        if (target.isNotBlank() && renderer == null) {
-            scope.launch { runCatching { openVisual(target, userInitiated = true) } }
+        if (target.isNotBlank() && (renderer == null || _state.value.teardownRequested)) {
+            scope.launch {
+                runCatching { openVisual(target, userInitiated = true) }.onFailure { err ->
+                    _state.update { state ->
+                        state.copy(error = (err as? BrowserFailure)?.message
+                            ?: "The visual browser could not open.")
+                    }
+                }
+            }
         }
     }
 
@@ -1573,7 +1580,19 @@ class BrowserSession(
             throw BrowserFailure("browser_handoff",
                 "Identity work moved to the phone's browser. Read-only pages still work; interactive agent actions are paused.")
         }
+        idleJob?.cancel()
+        idleJob = null
+        idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
+        if (_state.value.teardownRequested) {
+            withTimeoutOrNull(2_500) {
+                while (_state.value.teardownRequested) kotlinx.coroutines.delay(50)
+            }
+            if (_state.value.teardownRequested) {
+                throw BrowserFailure("browser_teardown_pending",
+                    "The visual browser is resetting. Try again in a moment.")
+            }
+        }
         _state.update { it.copy(rendererVisible = true,
             watchVisible = it.watchVisible || showWatch,
             agentRendererUse = it.agentRendererUse || agentAction) }
@@ -1856,6 +1875,7 @@ class BrowserSession(
             teardown.forceRequestDetach()
         }
         _state.update { it.copy(teardownRequested = true, pageReady = false) }
+        armTeardownWatchdog()
         android.util.Log.d("BrowserHost", "teardownRequested published state=${teardown.state}")
     }
 

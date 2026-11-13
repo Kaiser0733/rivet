@@ -44,4 +44,11 @@ class BrowserIdleArmingDeadlineTest {
             visible = false, wasArmed = false, deadline = 20_000L, now = 10_000L))
     }
 
+    @Test fun onBackgroundDoesNotExtendAnAlreadyArmedDeadline() {
+        val arming = BrowserIdleArming()
+        val firstDeadline = arming.onHidden(now = 10_000L)
+        assertTrue(arming.onBackground(rendererAlive = true, now = 120_000L))
+        assertEquals(firstDeadline, arming.deadline)
+    }
+
 }
