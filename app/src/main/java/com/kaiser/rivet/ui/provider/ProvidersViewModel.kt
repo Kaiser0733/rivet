@@ -76,6 +76,8 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     private val editorRequests = ProviderEditorRequests(viewModelScope)
     private var chatGptSession: ChatGptSignInSession? = null
     private var signInJob: Job? = null
+    private var saveJob: Job? = null
+    private var signOutJob: Job? = null
     internal var clientFactory: (ProviderConfig, String) -> com.kaiser.rivet.provider.ProviderClient =
         ::providerClient
     internal var signInRunner: suspend (
@@ -305,7 +307,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         )
         // Resolve an initial model before persisting so failed fetches never leave an empty-model entry.
         val resolved = resolveChatGptPlanModel(baseConfig, bundle.accessToken, onError) ?: return
-        if (!secrets.saveOAuthBundle(providerId, encoded)) {
+        if (!com.kaiser.rivet.provider.saveChatGptBundle(secrets, providerId, encoded)) {
             onError("Rivet couldn't save your key securely. Try again.")
             return
         }
@@ -316,7 +318,7 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
-            secrets.clearOAuthBundle(providerId)
+            com.kaiser.rivet.provider.clearChatGptBundle(secrets, providerId)
             onError("Rivet couldn't save this provider. Try again.")
             return
         }
@@ -369,14 +371,24 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                     session,
                     hostIds,
                 )
-                if (_editorState.value.config.id != editorId) return@launch
+                if (!com.kaiser.rivet.provider.ChatGptSessionGuards.canApplySignInOutcome(
+                        isCurrentSession = chatGptSession === session,
+                        currentEditorId = _editorState.value.config.id,
+                        expectedEditorId = editorId,
+                    )) {
+                    return@launch
+                }
                 when (result) {
                     is ChatGptSignInResult.Success -> {
                         if (isNew) {
                             saveChatGptPlanProviderInternal(
                                 bundle = result.bundle,
                                 onSaved = {
-                                    if (_editorState.value.config.id == editorId) {
+                                    if (com.kaiser.rivet.provider.ChatGptSessionGuards.canApplySignInOutcome(
+                                            isCurrentSession = chatGptSession === session,
+                                            currentEditorId = _editorState.value.config.id,
+                                            expectedEditorId = editorId,
+                                        )) {
                                         if (shouldShowChatGptPlanIntro()) {
                                             markChatGptPlanIntroSeen()
                                             _editorState.update { it.copy(showChatGptIntro = true) }
@@ -386,7 +398,11 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                                     }
                                 },
                                 onError = { msg ->
-                                    if (_editorState.value.config.id == editorId) {
+                                    if (com.kaiser.rivet.provider.ChatGptSessionGuards.canApplySignInOutcome(
+                                            isCurrentSession = chatGptSession === session,
+                                            currentEditorId = _editorState.value.config.id,
+                                            expectedEditorId = editorId,
+                                        )) {
                                         _editorState.update { it.copy(signInError = msg) }
                                     }
                                 },
@@ -398,16 +414,21 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                     }
                     else -> {
                         val message = chatGptSignInErrorMessage(result)
-                        if (message != null) {
+                        if (message != null && com.kaiser.rivet.provider.ChatGptSessionGuards.canApplySignInOutcome(
+                                isCurrentSession = chatGptSession === session,
+                                currentEditorId = _editorState.value.config.id,
+                                expectedEditorId = editorId,
+                            )) {
                             _editorState.update { it.copy(signInError = message) }
                         }
                     }
                 }
             } finally {
-                if (chatGptSession === session) {
+                val ownsSession = chatGptSession === session
+                if (ownsSession) {
                     chatGptSession = null
                 }
-                if (_editorState.value.config.id == editorId) {
+                if (ownsSession && _editorState.value.config.id == editorId) {
                     _editorState.update { it.copy(signingIn = false) }
                 }
             }
@@ -528,28 +549,38 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    private fun updateChatGptPlanBundleInternal(id: String, bundle: ChatGptBundle) {
+    private suspend fun updateChatGptPlanBundleInternal(id: String, bundle: ChatGptBundle) {
         val encoded = try {
             Json.encodeToString(ChatGptBundle.serializer(), bundle)
         } catch (_: Exception) {
             null
         }
-        if (encoded != null && secrets.saveOAuthBundle(id, encoded) && _editorState.value.config.id == id) {
+        if (encoded != null &&
+            com.kaiser.rivet.provider.saveChatGptBundle(secrets, id, encoded) &&
+            _editorState.value.config.id == id) {
             _editorState.update { it.copy(chatGptEmail = bundle.email) }
         }
     }
 
     fun signOutChatGptPlan(onDone: () -> Unit = {}) {
-        viewModelScope.launch {
+        if (signOutJob?.isActive == true) return
+        val launched = viewModelScope.launch {
             val id = _editorState.value.config.id
             val bundle = decodeChatGptBundle(id)
             if (bundle != null) {
                 revokeChatGptRefreshToken(bundle.clientId, bundle.refreshToken)
             }
-            secrets.clearOAuthBundle(id)
-            _editorState.update { it.copy(chatGptEmail = null) }
+            com.kaiser.rivet.provider.clearChatGptBundle(secrets, id)
+            if (com.kaiser.rivet.provider.ChatGptSessionGuards.canApplySignOutState(
+                    currentEditorId = _editorState.value.config.id,
+                    signedOutProviderId = id,
+                )) {
+                _editorState.update { it.copy(chatGptEmail = null) }
+            }
             onDone()
         }
+        signOutJob = launched
+        launched.invokeOnCompletion { if (signOutJob === launched) signOutJob = null }
     }
 
     fun shouldShowChatGptPlanIntro(): Boolean {
@@ -604,8 +635,9 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     }
 
     fun save(onSaved: () -> Unit) {
+        if (!com.kaiser.rivet.provider.ChatGptSessionGuards.canStartSave(saveJob?.isActive == true)) return
         cancelEditorRequests()
-        viewModelScope.launch {
+        val launched = viewModelScope.launch {
             val state = _editorState.value
             val config = state.config.withModelId(state.config.model, state.models)
             if (config.model.isBlank()) return@launch
@@ -634,12 +666,16 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                 if (list.activeId == null) list.copy(activeId = config.id) else list
             }
             val needsAutoDetect = config.detectedContextWindowForModel() == null && state.models.isEmpty()
-            _editorState.value = ProviderEditorState()
+            if (_editorState.value.config.id == config.id) {
+                _editorState.value = ProviderEditorState()
+            }
             onSaved()
             if (needsAutoDetect) {
                 autoDetectSavedModelMetadata(config.id, config.model)
             }
         }
+        saveJob = launched
+        launched.invokeOnCompletion { if (saveJob === launched) saveJob = null }
     }
 
     fun delete(id: String) {

@@ -50,10 +50,20 @@ suspend fun resolveChatGptToken(
         } catch (_: Exception) {
             return@withLock ChatGptTokenResult.ReauthRequired
         }
+        val stillPresent = secrets.oauthBundle(config.id) != null
+        if (!ChatGptSessionGuards.shouldPersistRefreshedBundle(stillPresent)) {
+            return@withLock ChatGptTokenResult.ReauthRequired
+        }
         if (!secrets.saveOAuthBundle(config.id, encoded)) return@withLock ChatGptTokenResult.ReauthRequired
         ChatGptTokenResult.Ready(renewed.accessToken)
     }
 }
+
+suspend fun saveChatGptBundle(secrets: SecretStore, providerId: String, encodedJson: String): Boolean =
+    chatGptRefreshMutex.withLock { secrets.saveOAuthBundle(providerId, encodedJson) }
+
+suspend fun clearChatGptBundle(secrets: SecretStore, providerId: String) =
+    chatGptRefreshMutex.withLock { secrets.clearOAuthBundle(providerId) }
 
 suspend fun resolveChatGptAccessToken(
     secrets: SecretStore,

@@ -430,14 +430,16 @@
 - **JiTTest**: `ForegroundStartPolicyTest` (2 failures before fix -> `OK (2 tests)` after fix on JVM) + `ManagedProcessesTest.failedPersistentPreviewStopStillReleasesPersistentSlot`.
 
 #### H43 — `ChatGptToken` refresh/sign-out race, uninterruptible `CountDownLatch` in `ChatGptLoopback`, and `ProvidersViewModel` callback/save races
-- **Status**: `PENDING`
+- **Status**: `FIXED`
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptToken.kt:20, 37-49`
-  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptSession.kt:65-85`
-  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt:330-412, 545-556, 609-646`
-- **Issue**: `resolveChatGptAccessToken` `?: bundle` fallback resurrects a cleared bundle if sign-out ran while waiting; `ChatGptLoopback.awaitCallback` blocks `Dispatchers.IO` via `CountDownLatch.await` ignoring job cancellation; `ProvidersViewModel` sign-in/sign-out/save lack session/editor-id/re-entrancy guards.
-- **Fix**: Never fall back to stale `bundle` when `secrets.oauthBundle` is null and synchronize save/clear with `chatGptRefreshMutex`; replace `CountDownLatch` with cancellable `CompletableDeferred` + `withTimeoutOrNull`; guard VM state updates with `session === chatGptSession` / `id` / `saving` check.
-- **JiTTest**: Pure-Kotlin JVM JiTTest for `ChatGptLoopback` cancellation + `ChatGptToken` clear-vs-refresh race.
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptSessionGuards.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptLoopback.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptSession.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptToken.kt`
+  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt`
+- **Issue**: `resolveChatGptToken` lacks sign-out/save serialization across `refreshBundleResult` and does not verify the stored bundle wasn't cleared mid-refresh; `ChatGptLoopback.awaitCallback` blocks `Dispatchers.IO` via `CountDownLatch.await` ignoring job cancellation; `ProvidersViewModel` sign-in/sign-out/save lack session/editor-id/re-entrancy guards.
+- **Fix**: Extracted `ChatGptSessionGuards` and `ChatGptLoopback` (replacing `CountDownLatch` with cancellable `CompletableDeferred` + `withTimeoutOrNull`); added mutex-serialized `saveChatGptBundle`/`clearChatGptBundle` and pre-persist presence check in `ChatGptToken`; added session-identity, editor-id, and re-entrant `saveJob`/`signOutJob` guards in `ProvidersViewModel`.
+- **JiTTest**: `ChatGptSessionGuardsTest` (3 failures before fix -> `OK (3 tests)` after fix on JVM) + live `ChatGptLoopbackTest` on JVM with `kotlinx-coroutines-core-jvm`.
 
 #### H44 — `ChatViewModel.networkCallback` mutates/reads VM state on `ConnectivityThread` and drops auto-resume
 - **Status**: `PENDING`
