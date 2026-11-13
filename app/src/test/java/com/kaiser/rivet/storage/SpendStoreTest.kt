@@ -28,7 +28,10 @@ class SpendStoreTest {
         assertEquals(0.42, month.first, 0.0001)
         assertEquals(500L, month.second)
         assertTrue(SpendStore.isLocal("http://127.0.0.1:11434"))
+        assertTrue(SpendStore.isLocal("http://[::1]:11434"))
         assertTrue(SpendStore.isLocal("local://"))
         assertFalse(SpendStore.isLocal("https://api.openai.com/v1"))
+        assertFalse(SpendStore.isLocal("https://localhost.evil.com/v1"))
+        assertFalse(SpendStore.isLocal("http://172.200.0.1/v1"))
     }
 }

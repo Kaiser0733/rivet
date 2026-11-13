@@ -376,11 +376,13 @@
 - **JiTTest**: `BrowserJsParsersTest` (2 failures before fix -> `OK (2 tests)` after fix on JVM).
 
 #### H38 — `SpendStore.isLocal` substring matching misclassifies remote hosts (`localhost.evil.com`, `172.200.0.1`)
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/storage/SpendStore.kt:80-89`
+- **Status**: `FIXED` (`K2JVMCompiler` + `JUnitCore` `OK (2 tests)` on `LocalEndpointPolicyTest`, `kt-checks.py balance` PASS)
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/storage/LocalEndpointPolicy.kt` (extracted pure URI host & IPv4 CIDR checker)
+  - `app/src/main/java/com/kaiser/rivet/storage/SpendStore.kt:80`
 - **Issue**: Substring `.contains("localhost")` and `.contains("://172.2")` treat `https://localhost.evil.com` or public `http://172.200.0.1` as zero-spend local URLs.
-- **Fix**: Parse `URI(baseUrl)` host and validate exact loopback / RFC-1918 IPv4 ranges (`10.*`, `192.168.*`, `172.16..31.*`, `10.0.2.2`, `localhost`, `127.0.0.1`, `::1`).
-- **JiTTest**: Pure-Kotlin JVM JiTTest (`SpendStoreTest`).
+- **Fix**: Extracted `LocalEndpointPolicy.isLocal` to parse `URI(baseUrl)` host strictly (trimming brackets/trailing dot and checking exact `localhost`, `::1`, `127.*`, RFC-1918 `10.*`, `192.168.*`, and `172.16..31.*`) and delegated `SpendStore.isLocal`.
+- **JiTTest**: `LocalEndpointPolicyTest` (1 failure before fix -> `OK (2 tests)` after fix on JVM) + `SpendStoreTest.capsAndMonthlyLedgerPersist`.
 
 ---
 
