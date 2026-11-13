@@ -29,7 +29,7 @@
 ### Severity (a) — Crashes / Data Loss / Corruption
 
 #### H1 — Native JNI UAF/Double-Free, Modified-UTF-8 `NewStringUTF` crash, null grammar sampler, and KV-exhausting prompt truncation
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (Kotlin `LlamaModel` close/handle-zeroing JiTTest `LlamaBridgeTest` RED->GREEN on JVM; `LocalModelManager.kt` lock guards verified via `kt-checks.py balance`; C++ NDK `rivet_llama.cpp` requires NDK/device run)
 - **Files**:
   - `app/src/main/cpp/rivet_llama.cpp:111-125, 174-205, 222-275`
   - `app/src/main/java/com/kaiser/rivet/local/LlamaBridge.kt:1-65`

@@ -116,18 +116,22 @@ class LocalModelManager(val app: Application) {
     }
 
     suspend fun remove(entry: LocalModelEntry) {
-        synchronized(nativeLock) {
-            if (active?.entry?.id == entry.id) closeLocked()
-        }
-        fileFor(entry).delete()
-        partFor(entry).delete()
-        synchronized(stateLock) {
-            val next = _installed.value.filterNot { it.entry.id == entry.id }
-            _installed.value = next
-            persist(next)
+        val remainingLoaded = withContext(Dispatchers.IO) {
+            val loaded = synchronized(nativeLock) {
+                if (active?.entry?.id == entry.id) closeLocked()
+                active?.entry?.id
+            }
+            fileFor(entry).delete()
+            partFor(entry).delete()
+            synchronized(stateLock) {
+                val next = _installed.value.filterNot { it.entry.id == entry.id }
+                _installed.value = next
+                persist(next)
+            }
+            loaded
         }
         // Removing model A must not erase the loaded id of a different model B.
-        _loadedId.value = active?.entry?.id
+        _loadedId.value = remainingLoaded
         syncProviders()
     }
 
@@ -191,9 +195,9 @@ class LocalModelManager(val app: Application) {
         synchronized(nativeLock) { closeLocked() }
     }
 
-    fun tokenCount(entry: LocalModelEntry, text: String): Int {
-        val model = synchronized(nativeLock) { ensureLoadedLocked(entry) }
-        return LlamaBridge.tokenize(model, text, true).size
+    fun tokenCount(entry: LocalModelEntry, text: String): Int = synchronized(nativeLock) {
+        val model = ensureLoadedLocked(entry)
+        LlamaBridge.tokenize(model, text, true).size
     }
 
     private fun ownPssBytes(): Long = runCatching {
