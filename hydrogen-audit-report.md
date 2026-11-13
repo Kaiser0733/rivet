@@ -201,17 +201,17 @@
 - **JiTTest**: `ByoModelResolverTest` (`parsesUppercaseSchemeAndHostPreservingPlusAndBranch`, `doesNotConfuseOwnerOrRepoNamedBlobOrResolveWithPathDelimiter`, `rejectsTraversalEvenWhenPercentEncoded`; verified RED 2 failures -> GREEN `OK (3 tests)`).
 
 #### H21 — `AgentToolExecutor.reservedGoalMutation` lacks `ReadOnly`, `AgentLoop` truncates duplicate call IDs & mislabels move/rename folder prompts, `ReadArgs.offset` is `Int`
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; `AgentLoopTest`/`AgentToolExecutorTest` require `@Serializable` + `coroutines-test` under Gradle)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/agent/AgentToolExecutor.kt:109-111, 686`
-  - `app/src/main/java/com/kaiser/rivet/agent/AgentLoop.kt:157-164, 356-361`
+  - `app/src/main/java/com/kaiser/rivet/agent/AgentToolExecutor.kt:109, 159-174, 684`
+  - `app/src/main/java/com/kaiser/rivet/agent/AgentLoop.kt:157-169, 362-367`
 - **Issue**:
   1. `reservedGoalMutation` returns default `AgentToolEffect.Write` instead of `ReadOnly`, causing `AgentLoop` to abort the whole turn as `CapabilityBlocked` in `Ask`/plan contexts instead of returning tool error `"reserved_goal"`.
   2. `AgentLoop.kt:158` `truncatedCalls` does not deduplicate duplicate/blank call IDs like normal tool calls do.
   3. `AgentLoop.kt:357-361` overwrites `rename_path`/`move_path` prompt titles with `"Delete folder?"` when `target in createdDirectories`.
   4. `ReadArgs.offset` is `Int` (overflowing on >2GB offset vs `Long`).
-- **Fix**: Set `effect = AgentToolEffect.ReadOnly` in `reservedGoalMutation` `PreparedAgentTool`; deduplicate `truncatedCalls` IDs; scope `"Delete folder?"` strictly to `call.name == "delete_path"`; widen `ReadArgs.offset` to `Long`.
-- **JiTTest**: Pure-Kotlin JVM JiTTests for `AgentLoop` (`Delete folder?` vs `rename_path`, duplicate truncated IDs) and `AgentToolExecutor` (`reservedGoalMutation` effect, `ReadArgs`).
+- **Fix**: Reused `invalid(call, "reserved_goal")` (`AgentToolEffect.ReadOnly`); deduplicated `truncatedCalls` IDs with a `seenIds` set; scoped `"Delete folder?"` strictly to `call.name == "delete_path"`; widened `ReadArgs.offset` to `Long`.
+- **JiTTest**: `AgentToolExecutorTest.reservedGoalMutationUsesReadOnlyEffectAndLargeReadOffsetsUseLong` and `AgentLoopTest.duplicateTruncatedToolCallIdsAreDeduplicatedAndRenameCreatedFolderIsNotDeleteFolder`.
 
 #### H22 — `GoalDocument.parse` masks `DATE` fallback, `ProjectContext.projection` drops `SKILL_CATALOG_KIND`, `SkillTool` leaks hidden skill names
 - **Status**: `PENDING`

@@ -154,8 +154,14 @@ class AgentLoop(
                     throw incomplete
                 }
                 modelIterations++
+                val seenIds = mutableSetOf<String>()
                 val truncatedCalls = incomplete.truncatedToolCalls.mapIndexed { index, call ->
-                    val safeId = call.id.takeIf { it.isNotBlank() } ?: "_rivet_truncated_${index + 1}"
+                    val baseId = call.id.takeIf { it.isNotBlank() } ?: "_rivet_truncated_${index + 1}"
+                    var safeId = baseId
+                    var suffix = 2
+                    while (!seenIds.add(safeId)) {
+                        safeId = "${baseId}_${suffix++}"
+                    }
                     val safeName = call.name.takeIf { it.isNotBlank() } ?: "unknown_tool"
                     val safeArgs = call.arguments.takeIf {
                         it.isNotBlank() && jsonNestingWithinLimit(it, 32)
@@ -354,7 +360,7 @@ class AgentLoop(
                     val approval = if (asking) prepared.approval?.let { request ->
                         val target = request.destructivePath
                         val described = when {
-                            target != null && target in createdDirectories -> request.copy(
+                            target != null && call.name == "delete_path" && target in createdDirectories -> request.copy(
                                 title = "Delete folder?",
                                 detail = "${request.detail}\nThis folder may contain files added outside Rivet.",
                                 dangerous = true,

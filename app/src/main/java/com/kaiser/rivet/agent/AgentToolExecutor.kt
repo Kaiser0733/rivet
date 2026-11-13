@@ -106,9 +106,7 @@ class AgentToolExecutor(
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
-        if (reservedGoalMutation(call)) return PreparedAgentTool(call, null) {
-            failure(call, "reserved_goal")
-        }
+        if (reservedGoalMutation(call)) return invalid(call, "reserved_goal")
         return try {
             when (call.name) {
                 "git_status" -> {
@@ -158,16 +156,16 @@ class AgentToolExecutor(
                     require(args.offset >= 0)
                     readOnly(call) {
                         var length = MAX_READ_CHUNK_BYTES
-                        var region = workspace.readRegion(path, args.offset.toLong(), length)
-                        if (args.offset > region.size || region.start != args.offset.toLong()) {
+                        var region = workspace.readRegion(path, args.offset, length)
+                        if (args.offset > region.size || region.start != args.offset) {
                             throw AgentWorkspaceFailure("invalid_offset")
                         }
                         var value = readRegionValue(path, region)
                         while (value.toString().toByteArray(Charsets.UTF_8).size > AgentLoop.MAX_TOOL_RESULT_BYTES) {
                             if (length <= 1) throw AgentWorkspaceFailure("output_limit")
                             length /= 2
-                            region = workspace.readRegion(path, args.offset.toLong(), length)
-                            if (region.start != args.offset.toLong()) throw AgentWorkspaceFailure("invalid_offset")
+                            region = workspace.readRegion(path, args.offset, length)
+                            if (region.start != args.offset) throw AgentWorkspaceFailure("invalid_offset")
                             value = readRegionValue(path, region)
                         }
                         success(call, value, "Read  $path")
@@ -683,7 +681,7 @@ class AgentToolExecutor(
         } catch (_: Exception) { false }
     }
 
-    @Serializable private data class ReadArgs(val path: String, val offset: Int = 0)
+    @Serializable private data class ReadArgs(val path: String, val offset: Long = 0L)
     @Serializable private data class SearchArgs(val query: String, val path: String = "")
     @Serializable private data class SkillArgs(val name: String)
     @Serializable private data class RememberArgs(val fact: String = "")

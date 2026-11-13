@@ -508,4 +508,35 @@ class AgentToolExecutorTest {
         assertTrue(descriptions.getValue("apply_patch").contains("before the final write"))
         assertTrue(descriptions.getValue("apply_patch").contains("hash"))
     }
+
+    @Test
+    fun reservedGoalMutationUsesReadOnlyEffectAndLargeReadOffsetsUseLong() = runTest {
+        var observedOffset = -1L
+        val largeWorkspace = object : AgentWorkspace by FakeWorkspace() {
+            override suspend fun readRegion(path: String, offset: Long, maxBytes: Int): AgentFileRegion {
+                observedOffset = offset
+                return AgentFileRegion(path, "tail", readHash = "a".repeat(64),
+                    size = offset + 4L, start = offset, end = offset + 4L,
+                    sha256 = "a".repeat(64))
+            }
+        }
+        val executor = AgentToolExecutor(largeWorkspace)
+        val goalPrepared = executor.prepare(AgentToolCall(
+            "g1",
+            "write_file",
+            """{"path":".rivet/goal.md","content":"x","expected_sha256":"${"a".repeat(64)}"}""",
+        ))
+        assertEquals(AgentToolEffect.ReadOnly, goalPrepared.effect)
+        val goalResult = goalPrepared.execute()
+        assertTrue(goalResult.error && goalResult.content.contains("reserved_goal"))
+
+        val largeOffset = 3_000_000_000L
+        val readResult = executor.prepare(AgentToolCall(
+            "r1",
+            "read_file",
+            """{"path":"big.bin","offset":$largeOffset}""",
+        )).execute()
+        assertEquals(largeOffset, observedOffset)
+        assertFalse(readResult.error)
+    }
 }

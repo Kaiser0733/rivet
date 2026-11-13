@@ -1680,4 +1680,53 @@ class AgentLoopTest {
         assertEquals("edit", result.callId)
         assertTrue(!result.error && "ok" in result.content)
     }
+
+    @Test
+    fun duplicateTruncatedToolCallIdsAreDeduplicatedAndRenameCreatedFolderIsNotDeleteFolder() = runTest {
+        var turns = 0
+        val approvalTitles = mutableListOf<String>()
+        val loop = AgentLoop(
+            requestModel = { _, _, _ ->
+                turns++
+                when (turns) {
+                    1 -> throw ProviderError.IncompleteGeneration(
+                        reason = "length",
+                        partialText = "Calling",
+                        truncatedToolCalls = listOf(
+                            AgentToolCall("dup", "write_file", "{}"),
+                            AgentToolCall("dup", "write_file", "{}"),
+                        ),
+                    )
+                    2 -> AgentResponse(toolCalls = listOf(
+                        AgentToolCall("c1", "create_directory", """{"path":"tmp"}"""),
+                    ))
+                    3 -> AgentResponse(toolCalls = listOf(
+                        AgentToolCall("c2", "rename_path", """{"path":"tmp","new_name":"renamed"}"""),
+                    ))
+                    else -> AgentResponse(text = "Done")
+                }
+            },
+            prepareTool = { call ->
+                val destructive = if (call.name == "rename_path") "tmp" else null
+                PreparedAgentTool(
+                    call,
+                    AgentApprovalRequest(call, "Action ${call.name}", "detail", destructivePath = destructive),
+                    effect = if (destructive != null) AgentToolEffect.DestructiveWorkspaceMutation
+                    else AgentToolEffect.WorkspaceMutation,
+                ) { AgentToolResult(call.id, call.name, """{"ok":true}""") }
+            },
+            requestApproval = { req ->
+                approvalTitles += req.title
+                true
+            },
+        )
+
+        val result = loop.run(listOf(AgentMessage.user("Go")), emptyList())
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        val truncatedCallIds = result.messages[1].toolCalls.map { it.id }
+        assertEquals(listOf("dup", "dup_2"), truncatedCallIds)
+        assertEquals(truncatedCallIds, result.messages[2].toolResults.map { it.callId })
+        assertTrue(approvalTitles.none { it == "Delete folder?" })
+    }
 }
