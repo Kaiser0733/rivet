@@ -166,16 +166,13 @@ class InternalContextTest {
     }
 
     @Test fun projectionRetainsSkillCatalogEvenWithoutProjectInstructions() {
-        val skillCatalog = AgentMessage(
-            role = AgentRole.Context,
-            text = "skills",
-            internalContext = InternalContext(
-                kind = SKILL_CATALOG_KIND,
-                workspaceId = workspace,
-                content = "<available_skills><skill><name>notes</name></skill></available_skills>",
-                digest = InternalContext.digest("<available_skills>"),
-            ),
-        )
+        val content = "<available_skills><skill><name>notes</name></skill></available_skills>"
+        val skillCatalog = InternalContext(
+            kind = SKILL_CATALOG_KIND,
+            workspaceId = workspace,
+            content = content,
+            digest = InternalContext.digest(content),
+        ).event()
         val projected = ProjectContext.projection(listOf(skillCatalog), emptyList(), summary = "Earlier work")
         assertTrue(projected.any { it.validatedContext()?.kind == SKILL_CATALOG_KIND })
     }

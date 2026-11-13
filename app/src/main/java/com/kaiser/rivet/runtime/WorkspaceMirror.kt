@@ -150,7 +150,7 @@ class WorkspaceMirror(
                     } else {
                         // The provider normalized the created filename earlier; keep the
                         // receipt intact so subsequent syncs do not create duplicates.
-                        return@withLock MirrorSyncResult(MirrorSync.Failed, partial.actualPath, skipped)
+                        return@withLock MirrorSyncResult(MirrorSync.Conflict, path, skipped)
                     }
                 } else {
                     val sameDocument = try {

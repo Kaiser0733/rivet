@@ -58,9 +58,16 @@ data class ProviderListUiState(
 
 // List + editor state for the provider screens. API keys enter through
 // SecretStore only; this layer sees booleans, never key material.
-class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
-    private val store = ProviderStore(app)
-    private val secrets = SecretStore(app)
+class ProvidersViewModel private constructor(
+    app: Application,
+    private val secrets: SecretStore,
+) : AndroidViewModel(app) {
+    constructor(app: Application) : this(app, SecretStore(app))
+
+    internal constructor(app: Application, testKey: javax.crypto.SecretKey) :
+        this(app, SecretStore(app, testKey))
+
+    private val store = ProviderStore(app, secrets)
     private val gitHub = GitHubTokenStore(app)
     private val toolchain = Toolchain(app)
 

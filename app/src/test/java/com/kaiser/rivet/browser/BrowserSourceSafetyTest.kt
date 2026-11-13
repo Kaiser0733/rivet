@@ -23,7 +23,10 @@ class BrowserSourceSafetyTest {
     @Test fun thereIsNoRawEvalToolAndNoFileOpen() {
         val tools = source("BrowserTools.kt")
         assertFalse(tools.contains("\"browser_eval\""))
-        val policy = source("ReaderService.kt")
+        val reader = source("ReaderService.kt")
+        assertTrue(reader.contains("BrowserUrlPolicy.requireReadable("))
+        assertFalse(reader.contains("scheme in setOf(\"http\", \"https\", \"file\")"))
+        val policy = source("BrowserUrlPolicy.kt")
         assertTrue(policy.contains("Project previews use the local preview server"))
         assertFalse(policy.contains("scheme in setOf(\"http\", \"https\", \"file\")"))
     }

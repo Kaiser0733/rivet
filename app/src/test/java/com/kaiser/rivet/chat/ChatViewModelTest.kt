@@ -2002,11 +2002,27 @@ class ChatViewModelTest {
     }
 
     @Test fun offMainConnectivityLostAndAvailableAutoResumePausedTurnAfterJoin() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val authority = "com.kaiser.rivet.connectivity-resume"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        val startedFirstAttempt = CompletableDeferred<Unit>()
         val gate = CompletableDeferred<Unit>()
         var attempts = 0
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = newChatViewModel(app, RejectingPersistence(),
+        val sessions = CodingSessions(app)
+        val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ ->
                 object : ProviderClient {
@@ -2018,15 +2034,20 @@ class ChatViewModelTest {
                         onDelta: (String) -> Unit,
                     ): AgentResponse {
                         attempts++
-                        if (attempts == 1) gate.await()
+                        if (attempts == 1) {
+                            startedFirstAttempt.complete(Unit)
+                            gate.await()
+                        }
                         return AgentResponse(text = "Recovered")
                     }
                 }
             })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading }
+        viewModel.selectProject(tree, flags)
+        await(viewModel) { it.currentSessionWorkspaceId == tree.toString() && !it.projectLoading }
 
         viewModel.send("Network turn")
-        await(viewModel) { it.streaming }
+        withTimeout(5_000) { startedFirstAttempt.await() }
 
         val t = Thread { viewModel.onConnectivityLost() }
         t.start()

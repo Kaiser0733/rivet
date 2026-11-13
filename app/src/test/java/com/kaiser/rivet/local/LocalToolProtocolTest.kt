@@ -37,8 +37,8 @@ class LocalToolProtocolTest {
         val grammar = LocalToolProtocol.grammar(listOf(
             AgentToolDefinition("read_file", "read", buildJsonObject {}),
             AgentToolDefinition("run_command", "run", buildJsonObject {})))
-        assertTrue(grammar.contains("\"read_file\""))
-        assertTrue(grammar.contains("\"run_command\""))
+        assertTrue(grammar.contains("\"\\\"read_file\\\"\""))
+        assertTrue(grammar.contains("\"\\\"run_command\\\"\""))
         assertTrue(grammar.contains("root ::="))
     }
 

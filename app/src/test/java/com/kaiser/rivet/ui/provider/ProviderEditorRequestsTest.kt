@@ -247,7 +247,8 @@ class ProviderEditorRequestsTest {
 
     @Test
     fun fetchModelsOnExistingProviderDoesNotPersistUnsavedEditorChangesBeforeSave() = runBlocking {
-        val viewModel = ProvidersViewModel(app).also { viewModels += it }
+        val testKey = javax.crypto.spec.SecretKeySpec(ByteArray(32) { 1 }, "AES")
+        val viewModel = ProvidersViewModel(app, testKey).also { viewModels += it }
         viewModel.clientFactory = { _, _ ->
             object : com.kaiser.rivet.provider.ProviderClient {
                 override suspend fun listModels() = listOf(

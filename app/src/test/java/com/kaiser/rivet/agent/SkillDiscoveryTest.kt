@@ -270,6 +270,6 @@ class SkillDiscoveryTest {
         }
 
         val withProject = runBlocking { discovery.catalog(workspace, "ws-1") }
-        assertEquals(listOf("project-skill", "global-skill"), withProject.skills.map { it.name })
+        assertEquals(listOf("global-skill", "project-skill"), withProject.skills.map { it.name })
     }
 }
