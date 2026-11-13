@@ -68,4 +68,13 @@ class BrowserSourceSafetyTest {
         assertTrue(safety.contains("cc-number"))
         assertTrue(safety.contains("one-time-code"))
     }
+
+    @Test fun urlFieldWiresFocusLatchThroughOnValueChange() {
+        val screen = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt")).first { it.isFile }.readText()
+        assertFalse(screen.contains("onValueChange = { address = it }"))
+        assertTrue(screen.contains("UrlFieldSelection.Controller"))
+        assertTrue(screen.contains("urlField.onValueChange"))
+        assertTrue(screen.contains("urlField.onFocusChanged"))
+    }
 }

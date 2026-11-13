@@ -92,8 +92,22 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
     val state by session.state.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    var address by remember(state.url) {
+    val urlField = remember { UrlFieldSelection.Controller(state.url) }
+    var address by remember {
         mutableStateOf(TextFieldValue(state.url, selection = TextRange(state.url.length)))
+    }
+    var selectAllLatch by remember { mutableStateOf(false) }
+    LaunchedEffect(state.url) {
+        val synced = urlField.syncExternalUrl(state.url)
+        selectAllLatch = false
+        address = TextFieldValue(synced.text, TextRange(synced.selection.start, synced.selection.end))
+    }
+    LaunchedEffect(selectAllLatch) {
+        if (selectAllLatch) {
+            kotlinx.coroutines.delay(150)
+            urlField.onFocusSettled()
+            selectAllLatch = false
+        }
     }
     var menuOpen by remember { mutableStateOf(false) }
     var settingsOpen by remember { mutableStateOf(false) }
@@ -154,16 +168,40 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                     }
                     OutlinedTextField(
                         value = address,
-                        onValueChange = { address = it },
+                        onValueChange = { incoming ->
+                            val result = urlField.onValueChange(
+                                incoming.text,
+                                UrlFieldSelection.Range(incoming.selection.start, incoming.selection.end),
+                            )
+                            selectAllLatch = urlField.pendingSelectAllOnTap
+                            address = if (result.keepFullSelection) {
+                                incoming.copy(
+                                    selection = TextRange(
+                                        result.field.selection.start,
+                                        result.field.selection.end,
+                                    ),
+                                    composition = null,
+                                )
+                            } else {
+                                incoming
+                            }
+                        },
                         modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
                             .onFocusChanged { focus ->
-                                if (focus.isFocused) {
-                                    val focused = UrlFieldSelection.focus(address.text)
+                                val focused = urlField.onFocusChanged(
+                                    isFocused = focus.isFocused,
+                                    currentText = address.text,
+                                    currentSelection = UrlFieldSelection.Range(
+                                        address.selection.start,
+                                        address.selection.end,
+                                    ),
+                                )
+                                selectAllLatch = urlField.pendingSelectAllOnTap
+                                if (focused != null) {
                                     address = address.copy(
-                                        selection = TextRange(
-                                            focused.selection.start,
-                                            focused.selection.end,
-                                        ))
+                                        selection = TextRange(focused.selection.start, focused.selection.end),
+                                        composition = null,
+                                    )
                                 }
                             },
                         singleLine = true,
