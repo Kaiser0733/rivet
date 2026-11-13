@@ -145,4 +145,24 @@ That is the call.""",
         assertEquals("Here is the answer.", parsed.text)
         assertTrue(parsed.calls.isEmpty())
     }
+
+    @Test
+    fun grammarQuotesToolNamesAsJsonStringsAndRequiresObjectArguments() {
+        val gbnf = LocalToolProtocol.grammar(
+            listOf(
+                com.kaiser.rivet.agent.AgentToolDefinition(
+                    "read_file",
+                    "Read a file",
+                    kotlinx.serialization.json.buildJsonObject {},
+                ),
+                com.kaiser.rivet.agent.AgentToolDefinition(
+                    "write_file",
+                    "Write a file",
+                    kotlinx.serialization.json.buildJsonObject {},
+                ),
+            )
+        )
+        assertTrue(gbnf, gbnf.contains("name ::= \"\\\"read_file\\\"\" | \"\\\"write_file\\\"\""))
+        assertTrue(gbnf, gbnf.contains("\"\\\"arguments\\\"\" ws \":\" ws object ws \"}\""))
+    }
 }

@@ -191,9 +191,15 @@ object LocalToolProtocol {
 
     /** GBNF used only on a retry after a malformed prompted tool call. */
     fun grammar(tools: List<AgentToolDefinition>): String {
-        val names = tools.joinToString(" | ") { "\"${it.name.replace("\"", "\\\"")}\"" }
+        val names = if (tools.isEmpty()) {
+            "string"
+        } else {
+            tools.joinToString(" | ") {
+                "\"\\\"${it.name.replace("\\", "\\\\").replace("\"", "\\\"")}\\\"\""
+            }
+        }
         return """
-            root ::= ws "{" ws "\"name\"" ws ":" ws name ws "," ws "\"arguments\"" ws ":" ws value ws "}" ws
+            root ::= ws "{" ws "\"name\"" ws ":" ws name ws "," ws "\"arguments\"" ws ":" ws object ws "}" ws
             name ::= $names
             value ::= object | array | string | number | "true" | "false" | "null"
             object ::= "{" ws (string ws ":" ws value ws ("," ws string ws ":" ws value ws)*)? "}"

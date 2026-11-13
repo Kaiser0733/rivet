@@ -161,7 +161,7 @@
 ### Severity (b) — Logic Flaws
 
 #### H16 — `LocalToolProtocol.grammar` omits JSON quotes on tool names and allows non-object `arguments`
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`LocalToolProtocolTest.grammarQuotesToolNamesAsJsonStringsAndRequiresObjectArguments` added; `LocalToolProtocol.kt` & `LocalToolProtocolTest.kt` pass `kt-checks.py balance`; full suite pulled transitive `@Serializable` models needing Gradle plugin)
 - **Files**: `app/src/main/java/com/kaiser/rivet/local/LocalToolProtocol.kt:193-197`
 - **Issue**: `names` lacks escaped outer JSON string quotes (`\"...\"`) and `"arguments"` uses `value` instead of `object`, causing llama.cpp grammar-constrained tool calls to emit invalid JSON or non-object arguments.
 - **Fix**: Wrap each tool name in escaped JSON quotes (`"\"${...}\""`) and constrain `"arguments"` to `object`.
