@@ -2000,4 +2000,40 @@ class ChatViewModelTest {
         assertEquals(firstNotice, second.notice)
         assertNull(second.runRecovery)
     }
+
+    @Test fun offMainConnectivityLostAndAvailableAutoResumePausedTurnAfterJoin() = runBlocking {
+        val gate = CompletableDeferred<Unit>()
+        var attempts = 0
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ ->
+                object : ProviderClient {
+                    override suspend fun listModels(): List<ModelInfo> = emptyList()
+                    override suspend fun contextLimit(model: String): ModelContextLimit? = null
+                    override suspend fun testConnection(): TestResult = TestResult(true)
+                    override suspend fun streamAgent(request: AgentRequest): AgentResponse {
+                        attempts++
+                        if (attempts == 1) gate.await()
+                        return AgentResponse(text = "Recovered")
+                    }
+                }
+            })
+        await(viewModel) { it.ready }
+
+        viewModel.send("Network turn")
+        await(viewModel) { it.streaming }
+
+        val t = Thread { viewModel.onConnectivityLost() }
+        t.start()
+        t.join()
+        val t2 = Thread { viewModel.onConnectivityAvailable() }
+        t2.start()
+        t2.join()
+
+        val finished = await(viewModel) { !it.streaming && attempts >= 2 }
+        assertEquals(2, attempts)
+        assertTrue(finished.messages.any { it.text == "Recovered" })
+    }
 }

@@ -442,11 +442,11 @@
 - **JiTTest**: `ChatGptSessionGuardsTest` (3 failures before fix -> `OK (3 tests)` after fix on JVM) + live `ChatGptLoopbackTest` on JVM with `kotlinx-coroutines-core-jvm`.
 
 #### H44 — `ChatViewModel.networkCallback` mutates/reads VM state on `ConnectivityThread` and drops auto-resume
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt:510-523`
+- **Status**: `NEEDS-DEVICE-PROOF`
+- **Files**: `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt:515-535`
 - **Issue**: `NetworkCallback.onAvailable`/`onLost` run off `Main`, reading/mutating non-synchronized `currentCloud`/`generation`/`currentRun` and calling `retryInterruptedTurn()` before `startTurn`'s `finally` completes.
-- **Fix**: Hop onto `viewModelScope.launch` (`Main`) in both callbacks and await `sendJob?.join()` before auto-resuming `RunPauseReason.NetworkLost`.
-- **JiTTest**: Robolectric `ChatViewModelTest` JiTTest (`NEEDS-DEVICE-PROOF` offline).
+- **Fix**: Delegated `onAvailable`/`onLost` to `onConnectivityAvailable()`/`onConnectivityLost()` inside `viewModelScope.launch` (`Main`) and awaited `sendJob?.join()` before auto-resuming `RunPauseReason.NetworkLost`.
+- **JiTTest**: Robolectric `ChatViewModelTest.offMainConnectivityLostAndAvailableAutoResumePausedTurnAfterJoin` (`NEEDS-DEVICE-PROOF` offline).
 
 #### H45 — `BrowserSession` teardown race, missing watchdog on `requestRendererTeardown`, `BrowserIdleArming` deadline reset, swallowed `userOpen` errors
 - **Status**: `PENDING`

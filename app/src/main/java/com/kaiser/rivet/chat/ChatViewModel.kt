@@ -513,13 +513,22 @@ class ChatViewModel private constructor(
     private var pendingRollback: String? = null
     private val connectivity = app.getSystemService(ConnectivityManager::class.java)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
-        override fun onAvailable(network: Network) {
-            val run = currentRun
-            if (run?.pause == RunPauseReason.NetworkLost) {
-                viewModelScope.launch { retryInterruptedTurn() }
+        override fun onAvailable(network: Network) = onConnectivityAvailable()
+        override fun onLost(network: Network) = onConnectivityLost()
+    }
+
+    internal fun onConnectivityAvailable() {
+        viewModelScope.launch {
+            val activeSend = sendJob
+            if (activeSend?.isActive == true) activeSend.join()
+            if (currentRun?.pause == RunPauseReason.NetworkLost) {
+                retryInterruptedTurn()
             }
         }
-        override fun onLost(network: Network) {
+    }
+
+    internal fun onConnectivityLost() {
+        viewModelScope.launch {
             if (currentCloud && _uiState.value.streaming && currentRun?.phase == RunPhase.Running) {
                 pauseCurrentRun(RunPauseReason.NetworkLost)
             }
