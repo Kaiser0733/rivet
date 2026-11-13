@@ -136,13 +136,6 @@ data class BrowserReadResult(
     val refs: List<BrowserElementRef> = emptyList(),
 )
 
-data class BrowserClickTarget(
-    val found: Boolean,
-    val risky: Boolean,
-    val description: String,
-    val inForm: Boolean = false,
-    val tag: String = "",
-)
 
 /**
  * Session-scoped browser state and agent backend. The WebView is owned by the sheet
@@ -196,6 +189,7 @@ class BrowserSession(
     private val memoryProbe = BrowserMemoryProbe(rendererPss = { sampleRendererPss() })
     private var baselineOwnPss = 0L
     private var baselineAvailMem = 0L
+    private var lastOwnGrowthBytes = 0L
     private var observedBrowserBytes = 0L
     private var elementRefs: List<BrowserElementRef> = emptyList()
     private var pendingSnapshotRestore: Pair<String, BrowserSnapshot>? = null
@@ -335,10 +329,13 @@ class BrowserSession(
         }
         saveActiveSnapshot()
         unparkRenderer()
+        elementRefs = emptyList()
+        pendingSnapshotRestore = null
         _state.update {
             it.copy(visible = false, readerMode = false,
                 visualScreenshot = null, pageReady = false, driving = BrowserDriving.Agent,
-                agentRendererUse = false, budgetCloseAction = false)
+                agentRendererUse = false, budgetCloseAction = false,
+                handoff = null, authNotice = null, downloadPrompt = null, loadValveNotice = null)
         }
         disarmHangValve()
         shotStore.cleanSession()
@@ -359,8 +356,8 @@ class BrowserSession(
         else "$line$modes$valve"
     }
 
-    fun refreshBudget(publish: Boolean = true, observedBytes: Long? = null) {
-        if (observedBytes != null) observedBrowserBytes = observedBytes.coerceAtLeast(0L)
+    fun refreshBudget(publish: Boolean = true, ownGrowthBytes: Long? = null) {
+        if (ownGrowthBytes != null) lastOwnGrowthBytes = ownGrowthBytes.coerceAtLeast(0L)
         val manager = app.getSystemService(android.app.ActivityManager::class.java)
         val info = android.app.ActivityManager.MemoryInfo()
         manager?.getMemoryInfo(info)
@@ -369,6 +366,7 @@ class BrowserSession(
         val liveUrl = activeUrl.ifBlank { _state.value.url }
         val loopback = BrowserAuthGuard.isLoopback(liveUrl)
         if (loopback) {
+            lastOwnGrowthBytes = 0L
             observedBrowserBytes = 0L
             budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint,
                 observedBrowserBytes = 0L, loopbackLive = true))
@@ -385,7 +383,9 @@ class BrowserSession(
         disarmHangValve()
         if (baselineAvailMem > 0L) {
             observedBrowserBytes = BrowserObservedCost.bytes(
-                observedBrowserBytes, baselineAvailMem, info.availMem)
+                lastOwnGrowthBytes, baselineAvailMem, info.availMem)
+        } else if (ownGrowthBytes != null) {
+            observedBrowserBytes = lastOwnGrowthBytes
         }
         val previousTier = budget.tier
         budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint,
@@ -476,6 +476,7 @@ class BrowserSession(
         actionLock.withLock {
             val url = BrowserUrlPolicy.validate(rawUrl)
             activeUrl = url
+            elementRefs = emptyList()
             readerCache.navigate()
             refreshBudget(publish = false)
             if (BrowserAuthGuard.isAuthSurface(url)) {
@@ -508,6 +509,7 @@ class BrowserSession(
             idleArming.onActivity()
             val url = BrowserUrlPolicy.validate(rawUrl)
             activeUrl = url
+            elementRefs = emptyList()
             readerCache.navigate()
             refreshBudget(publish = true)
             if (BrowserAuthGuard.isAuthSurface(url)) {
@@ -518,9 +520,10 @@ class BrowserSession(
             activeUrl = url
             reader = null
             unparkRenderer()
+            // Wait until ensureRenderer() eligibility checks pass before flipping rendererVisible.
             _state.update {
-                it.copy(visible = it.visible || userInitiated, rendererVisible = true,
-                    pageReady = false, watchVisible = true, visualScreenshot = null,
+                it.copy(visible = it.visible || userInitiated,
+                    pageReady = false, visualScreenshot = null,
                     url = url, mode = BrowserMode.Renderer,
                     readerMode = false, error = null, notice = null, handoff = null,
                     authNotice = null, loadValveNotice = null)
@@ -543,10 +546,11 @@ class BrowserSession(
 
     suspend fun read(chunk: Int = 0, visibleOnly: Boolean = true): BrowserReadResult = actionLock.withLock {
         val cached = readerCache.cached()
-        val document = if (renderer != null && activeUrl.isNotBlank()) {
-            readRenderedDocument()
-        } else {
-            cached ?: throw BrowserFailure("browser_not_open", "Open a page first.")
+        val document = when {
+            visibleOnly && cached != null && cached.url == activeUrl -> cached
+            renderer != null && activeUrl.isNotBlank() -> readRenderedDocument(visibleOnly)
+            cached != null -> cached
+            else -> throw BrowserFailure("browser_not_open", "Open a page first.")
         }
         if (document.needsRenderer) throw BrowserFailure("browser_needs_renderer",
             "This page needs the renderer for readable text. Rivet will start a quiet visual session.")
@@ -563,10 +567,11 @@ class BrowserSession(
 
     suspend fun find(text: String): List<ReaderHit> = actionLock.withLock {
         val cached = readerCache.cached()
-        val document = if (renderer != null && activeUrl.isNotBlank()) {
-            readRenderedDocument()
-        } else {
-            cached ?: throw BrowserFailure("browser_not_open", "Open a page first.")
+        val document = when {
+            cached != null && cached.url == activeUrl -> cached
+            renderer != null && activeUrl.isNotBlank() -> readRenderedDocument()
+            cached != null -> cached
+            else -> throw BrowserFailure("browser_not_open", "Open a page first.")
         }
         if (document.needsRenderer) throw BrowserFailure("browser_needs_renderer",
             "This page needs the renderer for searchable text. Rivet will start a quiet visual session.")
@@ -711,7 +716,7 @@ class BrowserSession(
     }
 
     private suspend fun scrollY(view: WebView): Int? =
-        runCatching { evaluate(view, "window.scrollY").trim().trim('"').toInt() }.getOrNull()
+        runCatching { BrowserJsParsers.parseScrollYValue(evaluate(view, "window.scrollY")) }.getOrNull()
 
     private fun fileHash(path: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
@@ -1074,8 +1079,7 @@ class BrowserSession(
                 val currentAvail = withContext(Dispatchers.Default) {
                     availableMemBytes() ?: baselineAvailMem
                 }
-                val observed = BrowserObservedCost.bytes(ownGrowth, baselineAvailMem, currentAvail)
-                refreshBudget(observedBytes = observed)
+                refreshBudget(ownGrowthBytes = ownGrowth)
                 if (_state.value.visible) lastActivityAt = System.currentTimeMillis()
             }
         }
@@ -1398,11 +1402,8 @@ class BrowserSession(
             "value:String(e.value||'').slice(0,2000)});});" +
             "return JSON.stringify({scrollY:window.scrollY,fields:f});})()"
 
-    private fun parseScrollY(raw: String): Int {
-        val clean = BrowserElementRefs.unwrapJsResult(raw)
-        val obj = runCatching { org.json.JSONObject(clean) }.getOrNull() ?: return 0
-        return obj.optInt("scrollY", 0)
-    }
+    private fun parseScrollY(raw: String): Int =
+        BrowserJsParsers.parseSnapshotScrollY(raw)
 
     private fun parseSafeFields(raw: String): Map<String, String> {
         val clean = BrowserElementRefs.unwrapJsResult(raw)
@@ -1472,6 +1473,13 @@ class BrowserSession(
             val actual = url ?: view.url ?: activeUrl
             activeUrl = actual
             readerCache.navigate()
+            if (actual == "about:blank" && activeWindowId == null) {
+                activeTitle = ""
+                pageFinished?.complete(Unit)
+                pageFinished = null
+                _state.update { it.copy(url = "", title = "", pageReady = false) }
+                return
+            }
             activeTitle = view.title.orEmpty()
             recordVisit(actual)
             updateActiveWindow(actual, activeTitle)
@@ -1600,18 +1608,8 @@ class BrowserSession(
         }
     }
 
-    private fun parseClickTarget(raw: String): BrowserClickTarget {
-        val clean = BrowserElementRefs.unwrapJsResult(raw)
-        val json = runCatching { org.json.JSONObject(clean) }.getOrNull()
-        if (json != null) {
-            val found = json.optBoolean("found", true)
-            val description = json.optString("description").ifBlank { "page control" }
-            val risky = json.optBoolean("risky", false) ||
-                Regex("(?i)submit|send|publish|pay|buy|post|delete|confirm").containsMatchIn(description)
-            return BrowserClickTarget(found, risky, description)
-        }
-        return BrowserClickTarget(found = false, risky = false, description = "page control")
-    }
+    private fun parseClickTarget(raw: String): BrowserClickTarget =
+        BrowserJsParsers.parseClickTarget(raw)
 
     private fun tapTargetScript(x: Float, y: Float): String = """
         (function(){
@@ -1649,7 +1647,12 @@ class BrowserSession(
     private fun typeScript(field: String, value: String): String = """
         (function(){
           var name=${jsonString(field)};
-          var el=document.querySelector(name)||document.querySelector('[name="'+name.replace(/"/g,'')+'"]');
+          var el=null;
+          try { el=document.querySelector(name); } catch(e) { el=null; }
+          if(!el) {
+            var inputs=[].slice.call(document.querySelectorAll('input,textarea,select'));
+            el=inputs.filter(function(e){return e.name===name||e.id===name;})[0]||null;
+          }
           if(!el) return JSON.stringify({error:'not_found'});
           var type=(el.getAttribute('type')||el.type||'text').toLowerCase();
           var ac=(el.getAttribute('autocomplete')||'').toLowerCase();
@@ -1675,7 +1678,7 @@ class BrowserSession(
         try {
             val location = IntArray(2).also { view.getLocationInWindow(it) }
             val activity = findActivity(view.context)
-            val ok = if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity != null) {
+            val ok = if (_state.value.visible && Build.VERSION.SDK_INT >= Build.VERSION_CODES.O && activity != null) {
                 val done = CompletableDeferred<Boolean>()
                 PixelCopy.request(activity.window,
                     android.graphics.Rect(location[0], location[1],
@@ -1960,6 +1963,7 @@ class BrowserSession(
         paintRecoveryJob = null
         baselineOwnPss = 0L
         baselineAvailMem = 0L
+        lastOwnGrowthBytes = 0L
         observedBrowserBytes = 0L
         rendererReady?.cancel()
         rendererReady = null

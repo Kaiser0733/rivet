@@ -367,11 +367,13 @@
 - **JiTTest**: `BrowserAuthGuardTest.loopbackRecognizesBracketedIpv6AndMixedCaseHosts`, `BrowserUrlPolicyTest.acceptsUppercaseHttpAndHttpsSchemes`, `ReaderExtractorTest.translucentOpacityElementsAreRetainedWhileZeroOpacityAreRemoved` (3 failures before fix -> `OK (14 tests)` after fix on JVM).
 
 #### H37 — `BrowserSession` state flaws: `read`/`find` stale renderer & dropped `visibleOnly`, `openVisual` flag ordering, zombie tab, `observedBrowserBytes` peak latch, `parseClickTarget`/`typeScript`/fractional `scrollY`, hidden screenshot
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt:337-340, 385-388, 474-573, 713, 1213-1237, 1496-1530, 1551-1559, 1594-1632`
+- **Status**: `FIXED` (`K2JVMCompiler` + `JUnitCore` `OK (2 tests)` on `BrowserJsParsersTest`, `kt-checks.py balance` PASS; `BrowserSession` Android/WebView paths verified on device)
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/browser/BrowserJsParsers.kt` (extracted pure JSON/scroll parsers & `BrowserClickTarget`)
+  - `app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt:190-200, 330-395, 475-575, 713, 1070-1080, 1400-1490, 1600-1690, 1960`
 - **Issue**: `read()`/`find()` read stale `renderer` over newer `openText()`, ignore `visibleOnly = false`, and keep old `elementRefs`; `openVisual()` sets `rendererVisible = true` before `ensureRenderer()` guards; `closeWindow()` on last tab loads `"about:blank"` recreating a tab and `endSession()` leaves `handoff`/`downloadPrompt`/`loadValveNotice`; `observedBrowserBytes` latches peaks; `parseClickTarget("null")` returns `found = true` and `typeScript` crashes on non-CSS names; fractional `scrollY` fails `.toIntOrNull()`; hidden `PixelCopy` captures `ChatScreen`.
-- **Fix**: Prefer fresh `readerCache` for `openText` URLs and clear `elementRefs`, run `ensureRenderer` eligibility before flipping `rendererVisible`, clean `endSession` state & skip zombie `about:blank` tab recreation, keep separate `lastOwnGrowthBytes` in budget refresh, guard JS selectors / parse JSON strictly / round `scrollY`, and draw directly from `view.draw(Canvas)` when browser is hidden.
-- **JiTTest**: Pure-Kotlin JVM JiTTests for extracted parsers (`parseClickTarget` / `parseScrollY`) + Robolectric for `BrowserSession`.
+- **Fix**: Preferred fresh `readerCache` matching `activeUrl` in `read()`/`find()`, passed `visibleOnly`, and cleared `elementRefs` on navigation; left `rendererVisible` to `ensureRenderer()`; prevented `"about:blank"` `onPageFinished` from recreating windows when `activeWindowId == null` and cleared transient notices/prompts in `endSession()`; tracked `lastOwnGrowthBytes` separately from headroom drop; extracted `BrowserJsParsers` with strict boolean `found` checks and rounded fractional `scrollY`; guarded `typeScript` `querySelector` with safe `e.name === name` lookup; gated `PixelCopy` on `_state.value.visible`.
+- **JiTTest**: `BrowserJsParsersTest` (2 failures before fix -> `OK (2 tests)` after fix on JVM).
 
 #### H38 — `SpendStore.isLocal` substring matching misclassifies remote hosts (`localhost.evil.com`, `172.200.0.1`)
 - **Status**: `PENDING`
