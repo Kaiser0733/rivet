@@ -506,7 +506,7 @@ private fun buildTerminalLine(
             if (decorations.isNotEmpty()) {
                 span = span.copy(textDecoration = TextDecoration.combine(decorations))
             }
-            withStyle(span) { append(if (text.isEmpty()) " " else text) }
+            withStyle(span) { append(text) }
         }
     }
 }

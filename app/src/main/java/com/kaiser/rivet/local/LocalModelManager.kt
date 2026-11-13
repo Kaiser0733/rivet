@@ -197,11 +197,6 @@ class LocalModelManager(val app: Application) {
         synchronized(nativeLock) { closeLocked() }
     }
 
-    fun tokenCount(entry: LocalModelEntry, text: String): Int = synchronized(nativeLock) {
-        val model = ensureLoadedLocked(entry)
-        LlamaBridge.tokenize(model, text, true).size
-    }
-
     private fun ownPssBytes(): Long = runCatching {
         val info = Debug.MemoryInfo()
         Debug.getMemoryInfo(info)

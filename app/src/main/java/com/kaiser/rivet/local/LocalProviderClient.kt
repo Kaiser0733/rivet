@@ -170,7 +170,6 @@ class LocalProviderClient(
                 }
             }
         }
-        if (roles.isEmpty()) return ""
         // The manager loads the model once and reuses that same slot for generation.
         val applied = manager.templateForPrompt(entry, roles, contents)
         if (applied.isNotBlank()) return applied

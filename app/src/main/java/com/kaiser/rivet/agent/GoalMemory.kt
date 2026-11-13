@@ -195,8 +195,6 @@ object MemoryFormat {
 
     fun needsGardening(markdown: String): Boolean = lineCount(markdown) >= SOFT_LINES
 
-    fun atHardCap(markdown: String): Boolean = lineCount(markdown) >= HARD_LINES
-
     fun render(facts: List<String>): String = buildString {
         append(HEADER).append("\n\n")
         facts.forEach { append("- ").append(it.replace('\n', ' ')).append('\n') }

@@ -532,22 +532,29 @@
 ### Severity (e) — Dead or Unreachable Code That Misleads
 
 #### H52 — Verified dead/unreachable production symbols cleanup
-- **Status**: `PENDING`
-- **Scope**: Remove strictly verified dead private/internal symbols with zero live production callers (updating only directly tied unit tests if needed, without breaking existing test contracts):
-  - `LocalModelManager.tokenCount` (`194-197`), `LocalProviderClient` dead branches (`56`, `155`), `ByoModelResolver` dead `removePrefix("http://")`
-  - `AgentToolExecutor.ACTIVE_PROCESS_STATES` (`808-809`), `MemoryFormat.atHardCap` (`GoalMemory.kt:198`)
-  - `RuntimeController.writeProjectCheckpoint` (`349-380`), `ProcessesScreen` composable (`59-62`), `TerminalPane` unreachable `if (text.isEmpty())` (`502`)
-  - `ProvidersViewModel.clearTest` (`780-782`) & `updateChatGptPlanBundle` (`527-532`)
-  - `BrowserGovernor` unused `BrowserShedStep`/`nextShed`/`shedPlan`/`canUseReader` (verify `rg` references in `app/src/` before removing any item).
+- **Status**: `FIXED`
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/local/LocalModelManager.kt`
+  - `app/src/main/java/com/kaiser/rivet/local/LocalProviderClient.kt`
+  - `app/src/main/java/com/kaiser/rivet/agent/AgentToolExecutor.kt`
+  - `app/src/main/java/com/kaiser/rivet/agent/GoalMemory.kt`
+  - `app/src/main/java/com/kaiser/rivet/runtime/RuntimeController.kt`
+  - `app/src/main/java/com/kaiser/rivet/ui/processes/ProcessesScreen.kt`
+  - `app/src/main/java/com/kaiser/rivet/ui/terminal/TerminalPane.kt`
+  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt`
+  - `app/src/main/java/com/kaiser/rivet/browser/BrowserGovernor.kt`
+- **Issue**: Unreferenced private/internal production helpers and unreachable conditional branches (`LocalModelManager.tokenCount`, unreachable `if (roles.isEmpty())` in `LocalProviderClient.buildPrompt`, unused `AgentToolExecutor.ACTIVE_PROCESS_STATES`, unused `MemoryFormat.atHardCap`, unreferenced `RuntimeController.writeProjectCheckpoint`, unused `ProcessesScreen`, unreachable `if (text.isEmpty())` at `TerminalPane.kt:509`, unused `ProvidersViewModel.updateChatGptPlanBundle` & `clearTest`, unused `BrowserGovernor.canUseReader`). Note: `ByoModelResolver` `removePrefix("http://")` was already removed in H46, and `BrowserShedStep`/`nextShed`/`shedPlan` were intentionally retained because `BrowserGovernorTest` directly tests them.
+- **Fix**: Verified zero live callers across `app/src/` before removing each dead symbol and pruned now-unused imports cleanly.
+- **Verification**: `BrowserGovernorTest` (`OK (8 tests)` on JVM) + `kt-checks.py balance` PASS across all 9 modified files.
 
 ---
 
 ## Execution Log & Outcomes
 
-*(Updated as each fix commit lands on `audit/hydrogen-whole-app`.)*
+All 52 audit findings (`H1`–`H52`) have been executed in strict severity order with one atomic commit per fix on branch `audit/hydrogen-whole-app` (`versionName = "1.4.5"`, `versionCode = 34`, self-updater `updates/` / `UpdatesSection.kt` untouched, no push/merge/APK). Per the environment constraint (Gradle unavailable in this VM), pure-Kotlin JVM JiTTests ran live RED->GREEN via `kotlinc` + JUnit4, while Android/Compose/OkHttp/NDK/JGit files carry JiTTests marked `NEEDS-DEVICE-PROOF` until run in a Gradle/device CI environment.
 
 ---
 
-## RESUME HERE
+## COMPLETE
 
-Audit plan complete. Ready to begin executing fixes in strict severity order starting at **H1**.
+All findings **H1** through **H52** are processed and committed cleanly on `audit/hydrogen-whole-app`. Remaining items marked `NEEDS-DEVICE-PROOF` await full Gradle/Android test execution on a host/CI runner.

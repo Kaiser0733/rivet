@@ -91,8 +91,6 @@ object BrowserGovernor {
         BrowserTier.NoRenderer -> false
     }
 
-    fun canUseReader(tier: BrowserTier): Boolean = true
-
     fun canTakeScreenshot(tier: BrowserTier): Boolean =
         tier == BrowserTier.Normal || tier == BrowserTier.StrictDiet
 

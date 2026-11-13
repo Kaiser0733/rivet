@@ -1,14 +1,12 @@
 package com.kaiser.rivet.runtime
 
 import android.content.Context
-import com.kaiser.rivet.agent.ProjectStateFiles
 import com.kaiser.rivet.storage.GitHubTokenStore
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import java.io.File
-import java.util.Base64
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -369,44 +367,6 @@ class RuntimeController(
                 throw error
             }
         }
-
-    /**
-     * The user-visible half of the non-git delta store: pre-change bytes for only the
-     * files this checkpoint owns. The app-private copy is the restore source of truth
-     * so a project edit cannot corrupt it; this copy is the documented `.rivet` store.
-     */
-    private suspend fun writeProjectCheckpoint(workspaceId: String, record: RunCheckpointInfo) {
-        val after = record.after ?: return
-        val workspace = try { selection.restore()?.first } catch (_: Exception) { null } ?: return
-        if (selection.currentIdentity() != workspaceId) return
-        val store = RunCheckpointStore(File(app.filesDir, "run-checkpoints"), record.workspace)
-        val changed = (record.before.keys + after.keys)
-            .filter { record.before[it] != after[it] }.sorted()
-        val payload = buildString {
-            append("{\"runId\":\"").append(record.runId).append("\",\"sequence\":")
-                .append(record.sequence).append(",\"summary\":\"")
-                .append(record.summary.replace("\\", "\\\\").replace("\"", "\\\""))
-                .append("\",\"gitRef\":")
-                .append(record.gitRef?.let { "\"$it\"" } ?: "null")
-                .append(",\"files\":{")
-            var first = true
-            for (path in changed) {
-                val bytes = runCatching { store.deltaBytes(record, path) }.getOrNull() ?: continue
-                if (bytes.size > 2 * 1024 * 1024) continue
-                if (!first) append(',')
-                first = false
-                append('"').append(path.replace("\\", "\\\\").replace("\"", "\\\""))
-                    .append("\":\"").append(Base64.getEncoder().encodeToString(bytes)).append('"')
-            }
-            append("}}")
-        }
-        try {
-            ProjectStateFiles(workspace).write(
-                ".rivet/checkpoints/${record.runId}/${record.sequence}.json", payload)
-        } catch (_: Exception) {
-            // A read-only project must still have a working app-private restore point.
-        }
-    }
 
     suspend fun runCheckpointPruned(): Int = operations.withLock {
         val identity = selection.currentIdentity() ?: return@withLock 0

@@ -542,13 +542,6 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
 
     fun chatGptClientId(providerId: String): String? = decodeChatGptBundle(providerId)?.clientId
 
-    fun updateChatGptPlanBundle(bundle: ChatGptBundle, onDone: () -> Unit = {}) {
-        viewModelScope.launch {
-            updateChatGptPlanBundleInternal(_editorState.value.config.id, bundle)
-            onDone()
-        }
-    }
-
     private suspend fun updateChatGptPlanBundleInternal(id: String, bundle: ChatGptBundle) {
         val encoded = try {
             Json.encodeToString(ChatGptBundle.serializer(), bundle)
@@ -816,10 +809,6 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         ) {
             _editorState.update { it.copy(fetching = false) }
         }
-    }
-
-    fun clearTest() {
-        _editorState.update { it.copy(test = null) }
     }
 
     fun updateHeadersText(text: String) {
