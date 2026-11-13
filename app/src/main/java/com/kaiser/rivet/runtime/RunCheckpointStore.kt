@@ -15,11 +15,15 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
-import org.eclipse.jgit.api.Git
-import org.eclipse.jgit.api.ResetCommand
+import org.eclipse.jgit.dircache.DirCache
+import org.eclipse.jgit.dircache.DirCacheEntry
+import org.eclipse.jgit.lib.CommitBuilder
 import org.eclipse.jgit.lib.Constants
+import org.eclipse.jgit.lib.FileMode
 import org.eclipse.jgit.lib.PersonIdent
 import org.eclipse.jgit.storage.file.FileRepositoryBuilder
+import org.eclipse.jgit.treewalk.FileTreeIterator
+import org.eclipse.jgit.treewalk.TreeWalk
 
 @Serializable
 data class RunCheckpointInfo(
@@ -350,37 +354,50 @@ private object GitCheckpoint {
             val branch = it.fullBranch
             val original = it.exactRef(branch)?.objectId
             if (original == null) throw CheckpointFailure("no_commit")
-            Git(it).use { git ->
-                try {
-                    git.add().addFilepattern(".").call()
-                    val who = PersonIdent("Rivet", "rivet@local")
-                    val commit = git.commit().setMessage(message).setAllowEmpty(true)
-                        .setAuthor(who)
-                        .setCommitter(who)
-                        .call()
-                    it.updateRef(ref).apply {
-                        setNewObjectId(commit.id)
-                        setForceUpdate(true)
-                    }.forceUpdate()
-                    // Put the visible branch back exactly where it was, then restore the
-                    // index; only the hidden ref keeps the checkpoint commit.
-                    it.updateRef(branch).apply {
-                        setNewObjectId(original)
-                        setForceUpdate(true)
-                    }.forceUpdate()
-                    return commit.name
-                } finally {
-                    try {
-                        it.updateRef(branch).apply {
-                            setNewObjectId(original)
-                            setForceUpdate(true)
-                        }.forceUpdate()
-                    } catch (_: Exception) { }
-                    try {
-                        val restore = original?.name ?: Constants.HEAD
-                        git.reset().setMode(ResetCommand.ResetType.MIXED).setRef(restore).call()
-                    } catch (_: Exception) { }
+            val cache = DirCache.newInCore()
+            val builder = cache.builder()
+            it.newObjectInserter().use { inserter ->
+                TreeWalk(it).use { walk ->
+                    walk.addTree(FileTreeIterator(it))
+                    walk.isRecursive = false
+                    while (walk.next()) {
+                        val path = walk.pathString
+                        if (path == ".git" || path.startsWith(".git/")) continue
+                        val working = walk.getTree(0, FileTreeIterator::class.java)
+                        if (working.isEntryIgnored) continue
+                        if (walk.isSubtree) {
+                            walk.enterSubtree()
+                            continue
+                        }
+                        val mode = working.entryFileMode
+                        if (mode == FileMode.TREE || mode == FileMode.GITLINK) continue
+                        val entry = DirCacheEntry(walk.rawPath).apply {
+                            fileMode = mode
+                            setObjectId(
+                                working.openEntryStream().use { stream ->
+                                    inserter.insert(Constants.OBJ_BLOB, working.entryLength, stream)
+                                },
+                            )
+                        }
+                        builder.add(entry)
+                    }
                 }
+                builder.finish()
+                val treeId = cache.writeTree(inserter)
+                val who = PersonIdent("Rivet", "rivet@local")
+                val commitId = inserter.insert(CommitBuilder().apply {
+                    setTreeId(treeId)
+                    setParentId(original)
+                    author = who
+                    committer = who
+                    this.message = message
+                })
+                inserter.flush()
+                it.updateRef(ref).apply {
+                    setNewObjectId(commitId)
+                    setForceUpdate(true)
+                }.forceUpdate()
+                return commitId.name
             }
         }
     }

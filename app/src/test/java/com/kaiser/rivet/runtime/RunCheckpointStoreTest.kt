@@ -129,4 +129,23 @@ class RunCheckpointStoreTest {
         assertTrue(restore.conflicts.isEmpty())
         assertEquals("before-secret", File(restore.stage, "local.secret").readText())
     }
+
+    @Test fun gitCheckpointPreservesUserStagedIndexEntries() = runBlocking {
+        val project = gitProject()
+        project.resolve("staged.txt").writeText("staged content")
+        project.resolve("unstaged.txt").writeText("before")
+        Git.open(project).use { git ->
+            git.add().addFilepattern("staged.txt").call()
+        }
+
+        val store = RunCheckpointStore(temp.newFolder("git-staged-store"), "ws")
+        val id = store.begin(project, "run-staged", 0, "Edit unstaged")
+        project.resolve("unstaged.txt").writeText("after")
+        assertTrue(store.finish(id, project))
+
+        Git.open(project).use { git ->
+            val status = git.status().call()
+            assertTrue("staged.txt should remain in index added", "staged.txt" in status.added)
+        }
+    }
 }

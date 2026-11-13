@@ -227,11 +227,11 @@
 - **JiTTest**: `GoalMemoryTest.parseExtractsEmbeddedDateWhenStateLineLacksExpectedSeparatorFormat`, `InternalContextTest.projectionRetainsSkillCatalogEvenWithoutProjectInstructions`, and `SkillToolTest.unknownNameDoesNotLeakManualOnlySkills`.
 
 #### H23 — `GitCheckpoint.commit` destroys the user's staged Git index (`git add`) on every run
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/runtime/RunCheckpointStore.kt:329-358`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; JGit + `@Serializable` tests require Gradle)
+- **Files**: `app/src/main/java/com/kaiser/rivet/runtime/RunCheckpointStore.kt:345-400`
 - **Issue**: `git.add().addFilepattern(".")` followed by `git.reset().setMode(MIXED).setRef(HEAD)` unstages all user-staged files in `.git/index`.
-- **Fix**: Build the checkpoint commit tree using an in-memory JGit index / temporary index file so `.git/index` and `HEAD` are untouched.
-- **JiTTest**: JGit `RunCheckpointStoreTest` (`NEEDS-DEVICE-PROOF` offline).
+- **Fix**: Replaced `git.add`/`git.commit`/`git.reset` in `GitCheckpoint.commit` with an in-memory `DirCache.newInCore()` + non-ignored `FileTreeIterator` `TreeWalk` + `CommitBuilder`/`ObjectInserter` writing straight to the hidden checkpoint ref without touching `.git/index` or `branch`/`HEAD`.
+- **JiTTest**: `RunCheckpointStoreTest.gitCheckpointPreservesUserStagedIndexEntries`.
 
 #### H24 — "Undo this run" & `restoreRunCheckpoint` fail on multi-step runs, ignore `sync()` failure, and leak `restore-worktree`
 - **Status**: `PENDING`
