@@ -48,17 +48,6 @@ fun resolveSignInClientId(bundleClientId: String?, pendingClientId: String?): St
     else if (!pendingClientId.isNullOrBlank()) pendingClientId
     else CHATGPT_DYNAMIC_CLIENT_ID
 
-// Error codes from the SIWC errors-and-recovery doc that mean the refresh
-// token is dead: clear local tokens and re-run OAuth with the saved client id.
-internal val CHATGPT_DEAD_REFRESH_ERRORS = setOf(
-    "invalid_grant",
-    "invalid_refresh_token",
-    "token_expired",
-    "refresh_token_expired",
-    "refresh_token_invalidated",
-    "refresh_token_reused",
-)
-
 // --- PKCE / random tokens -------------------------------------------------
 
 /** 64 random bytes, base64url no-pad: 86 chars, inside the 43-128 range. */
@@ -159,42 +148,12 @@ sealed interface ChatGptSignInResult {
     data class ServerRejected(val code: String) : ChatGptSignInResult
 }
 
-sealed interface TokenResult {
-    data class Ok(
-        val accessToken: String,
-        val refreshToken: String,
-        val idToken: String,
-        val expiresInSec: Long,
-        val scope: String,
-    ) : TokenResult
-    data class Failed(val error: String) : TokenResult
-    data object NetworkFailed : TokenResult
-}
-
 // --- Token endpoint -------------------------------------------------------
 
-/** Parses a token-endpoint JSON body into a TokenResult. Pure; unit-testable. */
-internal fun parseTokenResponse(body: String): TokenResult {
-    val obj = parseJsonObject(body) ?: return TokenResult.Failed("invalid_response")
-    val error = obj["error"]?.str()
-    if (error != null) return TokenResult.Failed(error)
-    val access = obj["access_token"]?.str()
-    val refresh = obj["refresh_token"]?.str()
-    val id = obj["id_token"]?.str()
-    if (access == null || refresh == null || id == null) {
-        return TokenResult.Failed("invalid_response")
-    }
-    val expiresIn = (obj["expires_in"] as? JsonPrimitive)?.content?.toLongOrNull() ?: 3600L
-    return TokenResult.Ok(
-        accessToken = access,
-        refreshToken = refresh,
-        idToken = id,
-        expiresInSec = expiresIn,
-        scope = obj["scope"]?.str().orEmpty(),
-    )
-}
-
-private suspend fun postTokenForm(form: FormBody): TokenResult {
+private suspend fun postTokenForm(
+    form: FormBody,
+    requireIdToken: Boolean = true,
+): TokenResult {
     val request = Request.Builder()
         .url(CHATGPT_TOKEN_URL)
         .post(form)
@@ -211,7 +170,7 @@ private suspend fun postTokenForm(form: FormBody): TokenResult {
         } catch (e: Exception) {
             null
         } ?: return TokenResult.Failed("invalid_response")
-        return parseTokenResponse(body)
+        return parseTokenResponse(body, requireIdToken = requireIdToken)
     }
 }
 
@@ -233,6 +192,7 @@ suspend fun exchangeCode(
         .add("client_id", clientId)
         .add("resource", CHATGPT_RESOURCE)
         .build(),
+    requireIdToken = true,
 )
 
 /**
@@ -248,6 +208,7 @@ suspend fun refreshTokens(clientId: String, refreshToken: String): TokenResult =
             .add("refresh_token", refreshToken)
             .add("resource", CHATGPT_RESOURCE)
             .build(),
+        requireIdToken = false,
     )
 
 /** True when the granted scope string includes plan usage. */

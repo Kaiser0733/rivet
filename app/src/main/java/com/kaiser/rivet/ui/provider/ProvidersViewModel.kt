@@ -513,14 +513,9 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         }
     }
 
-    // Decode the stored OAuth bundle (if any) for a ChatGptPlan provider.
-    private fun decodeChatGptBundle(providerId: String): ChatGptBundle? = try {
-        secrets.oauthBundle(providerId)?.let {
-            Json.decodeFromString(ChatGptBundle.serializer(), it)
-        }
-    } catch (_: Exception) {
-        null
-    }
+    // Decode the stored OAuth bundle (if any) for a ChatGptPlan provider using the shared permissive codec.
+    private fun decodeChatGptBundle(providerId: String): ChatGptBundle? =
+        com.kaiser.rivet.provider.decodeChatGptBundleRecord(secrets.oauthBundle(providerId))
 
     fun chatGptEmail(providerId: String): String? = decodeChatGptBundle(providerId)?.email
 
@@ -829,7 +824,11 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     // when expired); every other type uses the API-key slot.
     private suspend fun resolveEditorCredential(config: ProviderConfig, keyInput: String): String {
         if (config.type == ProviderType.ChatGptPlan) {
-            return resolveChatGptAccessToken(secrets, config) ?: throw ChatGptReauthRequired()
+            return when (val token = com.kaiser.rivet.provider.resolveChatGptToken(secrets, config)) {
+                is com.kaiser.rivet.provider.ChatGptTokenResult.Ready -> token.accessToken
+                com.kaiser.rivet.provider.ChatGptTokenResult.NetworkFailed -> throw ProviderError.Network("refresh")
+                com.kaiser.rivet.provider.ChatGptTokenResult.ReauthRequired -> throw ChatGptReauthRequired()
+            }
         }
         return keyInput.trim().ifEmpty { secrets.apiKey(config.id) ?: "" }
     }

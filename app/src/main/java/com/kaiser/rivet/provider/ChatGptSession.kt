@@ -255,9 +255,10 @@ suspend fun runSignIn(
                         // Exchange consumed the code; the pending id's job is
                         // done — the bundle below takes over from here.
                         hostIds.clearPendingClientId()
+                        val idToken = tokens.idToken ?: return ChatGptSignInResult.InvalidCallback
                         val jwks = fetchJwks()
                             ?: return ChatGptSignInResult.NetworkError("Could not fetch signing keys")
-                        val sub = validateIdToken(tokens.idToken, cb.clientId, nonce, jwks)
+                        val sub = validateIdToken(idToken, cb.clientId, nonce, jwks)
                             ?: return ChatGptSignInResult.InvalidCallback
                         if (!hasPlanScope(tokens.scope)) {
                             return ChatGptSignInResult.PlanNotGranted
@@ -267,12 +268,12 @@ suspend fun runSignIn(
                                 clientId = cb.clientId,
                                 accessToken = tokens.accessToken,
                                 refreshToken = tokens.refreshToken,
-                                idToken = tokens.idToken,
+                                idToken = idToken,
                                 expiresInSec = tokens.expiresInSec,
                                 savedAtMs = System.currentTimeMillis(),
                                 scopes = tokens.scope.split(' ').filter { it.isNotEmpty() },
                                 sub = sub,
-                                email = idTokenEmail(tokens.idToken),
+                                email = idTokenEmail(idToken),
                             ),
                         )
                     }
@@ -284,23 +285,48 @@ suspend fun runSignIn(
     }
 }
 
+sealed interface ChatGptRefreshResult {
+    data class Renewed(val bundle: ChatGptBundle) : ChatGptRefreshResult
+    data object ReauthRequired : ChatGptRefreshResult
+    data object NetworkFailed : ChatGptRefreshResult
+}
+
 /**
- * Refreshes an expired access token. Returns the new bundle (with the
- * ROTATED refresh token — persist it) or null when reauth is required.
+ * Refreshes an expired access token while preserving existing scopes/email when
+ * omitted on refresh and distinguishing dead refresh tokens from transient failures.
  */
-suspend fun refreshBundle(bundle: ChatGptBundle): ChatGptBundle? {
+suspend fun refreshBundleResult(bundle: ChatGptBundle): ChatGptRefreshResult {
     return when (val tokens = refreshTokens(bundle.clientId, bundle.refreshToken)) {
-        // Null covers both transient network failure and dead refresh token;
-        // the caller treats null as "reauth required" (safe direction).
-        is TokenResult.NetworkFailed -> null
-        is TokenResult.Failed -> null
-        is TokenResult.Ok -> bundle.copy(
-            accessToken = tokens.accessToken,
-            refreshToken = tokens.refreshToken,
-            idToken = tokens.idToken,
-            expiresInSec = tokens.expiresInSec,
-            savedAtMs = System.currentTimeMillis(),
-            scopes = tokens.scope.split(' ').filter { it.isNotEmpty() },
-        )
+        is TokenResult.Ok -> {
+            val merged = mergeRefreshedBundleFields(
+                currentIdToken = bundle.idToken,
+                currentScopes = bundle.scopes,
+                currentEmail = bundle.email,
+                tokens = tokens,
+                extractEmail = ::idTokenEmail,
+            )
+            ChatGptRefreshResult.Renewed(
+                bundle.copy(
+                    accessToken = merged.accessToken,
+                    refreshToken = merged.refreshToken,
+                    idToken = merged.idToken,
+                    expiresInSec = merged.expiresInSec,
+                    savedAtMs = System.currentTimeMillis(),
+                    scopes = merged.scopes,
+                    email = merged.email,
+                ),
+            )
+        }
+        else -> when (classifyRefreshFailure(tokens)) {
+            ChatGptRefreshFailure.REAUTH_REQUIRED -> ChatGptRefreshResult.ReauthRequired
+            ChatGptRefreshFailure.TRANSIENT -> ChatGptRefreshResult.NetworkFailed
+        }
     }
 }
+
+/**
+ * Refreshes an expired access token. Returns the new bundle (with the
+ * ROTATED refresh token — persist it) or null when refresh failed.
+ */
+suspend fun refreshBundle(bundle: ChatGptBundle): ChatGptBundle? =
+    (refreshBundleResult(bundle) as? ChatGptRefreshResult.Renewed)?.bundle

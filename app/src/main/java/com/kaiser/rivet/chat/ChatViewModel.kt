@@ -270,12 +270,15 @@ private class StoredProviderRuntimeSource(app: Application) : ProviderRuntimeSou
             return ProviderRuntimeResult.Ready(config, "")
         }
         if (config.type == ProviderType.ChatGptPlan) {
-            // OAuth access token (refreshed if expired); the factory's String
-            // slot already carries token-shaped values, so no signature change.
-            val accessToken = resolveChatGptAccessToken(secrets, config)
-                ?: return ProviderRuntimeResult.Failure(
-                    "ChatGPT sign-in expired. Sign in again in Settings.")
-            return ProviderRuntimeResult.Ready(config, accessToken)
+            // OAuth access token (refreshed if expired); transient refresh errors stay retryable.
+            return when (val token = com.kaiser.rivet.provider.resolveChatGptToken(secrets, config)) {
+                is com.kaiser.rivet.provider.ChatGptTokenResult.Ready ->
+                    ProviderRuntimeResult.Ready(config, token.accessToken)
+                com.kaiser.rivet.provider.ChatGptTokenResult.NetworkFailed ->
+                    ProviderRuntimeResult.Failure("Could not reach ChatGPT to refresh your session. Check your connection and try again.")
+                com.kaiser.rivet.provider.ChatGptTokenResult.ReauthRequired ->
+                    ProviderRuntimeResult.Failure("ChatGPT sign-in expired. Sign in again in Settings.")
+            }
         }
         val apiKey = secrets.apiKey(config.id)
             ?: return ProviderRuntimeResult.Failure("No API key stored for \"${config.name}\".")

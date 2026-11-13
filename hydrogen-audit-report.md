@@ -309,14 +309,17 @@
 - **JiTTest**: `ProviderConfigTest.anthropicThinkingModeAcceptsV1BaseUrlAndOpenRouterCeilingScopesModelLimit` and `ProviderConfigTest.settingManualLimitsBeforeModelPreservesThemWhenModelEntered`.
 
 #### H32 — `refreshBundle` drops `scopes`, ignores `idToken` email/optional refresh, masks network vs reauth errors, and strict `Json` in `ProvidersViewModel`
-- **Status**: `PENDING`
+- **Status**: `FIXED` (`K2JVMCompiler` + `JUnitCore` `OK (4 tests)` on `ChatGptRefreshPolicyTest`, `kt-checks.py balance` PASS; `ChatGptSession`/`ChatGptToken` Android integration verified on device)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptSession.kt:291-306`
-  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptAuth.kt:184-195, 244-252`
-  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt:517`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptRefreshPolicy.kt` (extracted pure refresh/token policy & shared `chatGptBundleJson`)
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptAuth.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptSession.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptToken.kt`
+  - `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt`
+  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt`
 - **Issue**: Refresh omitting `"scope"` wipes `bundle.scopes`; `email` isn't updated when `id_token` rotates; refresh omitting `id_token` is rejected; `refreshBundle` collapses `NetworkFailed` vs `CHATGPT_DEAD_REFRESH_ERRORS`; `ProvidersViewModel.decodeChatGptBundle` rejects unknown keys (`Json` vs `Json { ignoreUnknownKeys = true }`).
-- **Fix**: Preserve `bundle.scopes` when `tokens.scope.isBlank()`, accept optional `id_token` on refresh while updating `email` when present, preserve distinct refresh outcomes, and share `ignoreUnknownKeys = true` JSON codec.
-- **JiTTest**: Pure-Kotlin JVM JiTTest (`ChatGptAuth` refresh / `ChatGptBundle` decode).
+- **Fix**: Extracted `ChatGptRefreshPolicy.kt` (`parseTokenResponse` with optional `id_token` on refresh, `mergeRefreshedBundleFields` preserving existing scopes/id_token/email and updating `email` when rotated `id_token` arrives, `classifyRefreshFailure` separating `CHATGPT_DEAD_REFRESH_ERRORS` from transient/network failures, and shared `chatGptBundleJson = Json { ignoreUnknownKeys = true }`). Updated `refreshBundleResult`, `resolveChatGptToken`, `ChatViewModel`, and `ProvidersViewModel` to preserve distinct transient vs reauth errors.
+- **JiTTest**: `ChatGptRefreshPolicyTest` (3 failures before fix -> `OK (4 tests)` after fix on JVM).
 
 #### H33 — `ProvidersViewModel.disconnectGitHub` clears `gitAvailable`, `startChatGptSignIn` orphans UUIDs, and `fetchModels` sets `state.test`
 - **Status**: `PENDING`

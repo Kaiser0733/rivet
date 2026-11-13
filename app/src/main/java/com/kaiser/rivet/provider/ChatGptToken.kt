@@ -3,7 +3,6 @@ package com.kaiser.rivet.provider
 import com.kaiser.rivet.storage.SecretStore
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
-import kotlinx.serialization.json.Json
 
 // Single choke point for "valid ChatGPT plan access token". Used by both the
 // send-time path (ChatViewModel) and the editor path (ProvidersViewModel) so
@@ -12,39 +11,51 @@ import kotlinx.serialization.json.Json
 // Refresh tokens ROTATE: every refresh response carries a replacement. The
 // mutex serializes refreshes so two concurrent callers can never race a
 // rotating token; the new bundle is persisted BEFORE the token is handed
-// out. Returns null when reauth is required (no bundle, malformed bundle,
-// dead refresh, or persist failure) — the caller surfaces a sign-in-again
-// message. A null from refreshBundle() covers both transient network failure
-// and dead refresh token; we deliberately do not clear the stored bundle
-// here because we cannot distinguish the two.
+// out. Transient network failures are surfaced separately from dead refresh
+// tokens so offline sends never masquerade as expired sessions.
 private val chatGptRefreshMutex = Mutex()
 
-private val bundleJson = Json { ignoreUnknownKeys = true }
+sealed interface ChatGptTokenResult {
+    data class Ready(val accessToken: String) : ChatGptTokenResult
+    data object ReauthRequired : ChatGptTokenResult
+    data object NetworkFailed : ChatGptTokenResult
+}
+
+internal fun decodeChatGptBundleRecord(raw: String?): ChatGptBundle? = try {
+    raw?.let { chatGptBundleJson.decodeFromString(ChatGptBundle.serializer(), it) }
+} catch (_: Exception) {
+    null
+}
+
+suspend fun resolveChatGptToken(
+    secrets: SecretStore,
+    config: ProviderConfig,
+): ChatGptTokenResult {
+    val bundle = decodeChatGptBundleRecord(secrets.oauthBundle(config.id))
+        ?: return ChatGptTokenResult.ReauthRequired
+    if (!bundle.accessTokenExpired()) return ChatGptTokenResult.Ready(bundle.accessToken)
+
+    return chatGptRefreshMutex.withLock {
+        // Re-read: another caller may have refreshed or signed out while we waited.
+        val fresh = decodeChatGptBundleRecord(secrets.oauthBundle(config.id))
+            ?: return@withLock ChatGptTokenResult.ReauthRequired
+        if (!fresh.accessTokenExpired()) return@withLock ChatGptTokenResult.Ready(fresh.accessToken)
+        val renewed = when (val result = refreshBundleResult(fresh)) {
+            is ChatGptRefreshResult.Renewed -> result.bundle
+            ChatGptRefreshResult.ReauthRequired -> return@withLock ChatGptTokenResult.ReauthRequired
+            ChatGptRefreshResult.NetworkFailed -> return@withLock ChatGptTokenResult.NetworkFailed
+        }
+        val encoded = try {
+            chatGptBundleJson.encodeToString(ChatGptBundle.serializer(), renewed)
+        } catch (_: Exception) {
+            return@withLock ChatGptTokenResult.ReauthRequired
+        }
+        if (!secrets.saveOAuthBundle(config.id, encoded)) return@withLock ChatGptTokenResult.ReauthRequired
+        ChatGptTokenResult.Ready(renewed.accessToken)
+    }
+}
 
 suspend fun resolveChatGptAccessToken(
     secrets: SecretStore,
     config: ProviderConfig,
-): String? {
-    fun decode(raw: String?): ChatGptBundle? = try {
-        raw?.let { bundleJson.decodeFromString(ChatGptBundle.serializer(), it) }
-    } catch (e: Exception) {
-        null
-    }
-
-    val bundle = decode(secrets.oauthBundle(config.id)) ?: return null
-    if (!bundle.accessTokenExpired()) return bundle.accessToken
-
-    return chatGptRefreshMutex.withLock {
-        // Re-read: another caller may have refreshed while we waited.
-        val fresh = decode(secrets.oauthBundle(config.id)) ?: bundle
-        if (!fresh.accessTokenExpired()) return@withLock fresh.accessToken
-        val renewed = refreshBundle(fresh) ?: return@withLock null
-        val encoded = try {
-            bundleJson.encodeToString(ChatGptBundle.serializer(), renewed)
-        } catch (e: Exception) {
-            return@withLock null
-        }
-        if (!secrets.saveOAuthBundle(config.id, encoded)) return@withLock null
-        renewed.accessToken
-    }
-}
+): String? = (resolveChatGptToken(secrets, config) as? ChatGptTokenResult.Ready)?.accessToken
