@@ -29,9 +29,10 @@ object ToolchainEntryAudit {
         gitExecLinks: Map<String, String>,
         nativeDir: String,
     ): ToolchainEntryAuditReport {
-        val nativePrefix = nativeDir.trimEnd(File.separatorChar) + File.separator
+        val trimmedNative = nativeDir.trim().trimEnd(File.separatorChar)
+        val nativePrefix = if (trimmedNative.isEmpty()) null else trimmedNative + File.separator
         fun kind(target: String): ToolchainEntryKind =
-            if (target.startsWith(nativePrefix)) ToolchainEntryKind.NativeLinked
+            if (nativePrefix != null && target.startsWith(nativePrefix)) ToolchainEntryKind.NativeLinked
             else ToolchainEntryKind.WritableFile
         val entries = ArrayList<ToolchainEntry>()
         for ((name, target) in farmLinks) {

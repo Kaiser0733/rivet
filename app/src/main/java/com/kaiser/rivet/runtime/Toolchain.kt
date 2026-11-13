@@ -285,9 +285,29 @@ internal class Toolchain(context: Context) {
                     }
                 }
                 .start()
+            val outputTail = StringBuilder()
+            val reader = Thread({
+                try {
+                    process.inputStream.bufferedReader().use { input ->
+                        val buffer = CharArray(2048)
+                        while (true) {
+                            val count = input.read(buffer)
+                            if (count < 0) break
+                            outputTail.append(buffer, 0, count)
+                            if (outputTail.length > 4096) {
+                                outputTail.delete(0, outputTail.length - 4096)
+                            }
+                        }
+                    }
+                } catch (_: Exception) { }
+            }, "rivet-ensurepip-drain").apply {
+                isDaemon = true
+                start()
+            }
             val finished = process.waitFor(60, TimeUnit.SECONDS)
             if (!finished) process.destroyForcibly()
-            val output = process.inputStream.bufferedReader().use { it.readText() }
+            reader.join(1_000)
+            val output = outputTail.toString()
             if (!finished) {
                 Log.w("Toolchain", "ensurepip timed out; python has no pip scripts")
             } else if (process.exitValue() != 0) {

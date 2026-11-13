@@ -245,13 +245,13 @@
 - **JiTTest**: `RunCheckpointStoreTest.stageRestoreRunUndoesAllStepsOfMultiStepRunUsingLatestAfterAndEarliestBefore`.
 
 #### H25 — `Toolchain.preparePip` pipe-buffer deadlock & `ToolchainEntryAudit` misclassifying all paths when `nativeDir == ""`
-- **Status**: `PENDING`
+- **Status**: `FIXED` (`ToolchainEntryAuditBlankDirTest` live RED->GREEN on JVM via `K2JVMCompiler` + `JUnitCore`; `Toolchain.kt` `kt-checks.py balance` PASS; `preparePip` runtime requires Android)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/runtime/Toolchain.kt:288-290`
-  - `app/src/main/java/com/kaiser/rivet/runtime/ToolchainEntryAudit.kt:32-35`
+  - `app/src/main/java/com/kaiser/rivet/runtime/Toolchain.kt:287-308`
+  - `app/src/main/java/com/kaiser/rivet/runtime/ToolchainEntryAudit.kt:32-36`
 - **Issue**: `preparePip` calls `waitFor` before reading `process.inputStream` (>64KB output deadlocks); `ToolchainEntryAudit` turns `nativeDir = ""` into `nativePrefix = "/"`, classifying `/data/...` writable files as `NativeLinked`.
-- **Fix**: Drain `process.inputStream` on a reader/before `waitFor` (with bounded buffer); treat blank `nativeDir` as matching no native prefix (`ToolchainEntryKind.WritableFile`).
-- **JiTTest**: Pure-Kotlin JVM JiTTest for `ToolchainEntryAudit.audit(..., nativeDir = "")`.
+- **Fix**: Drained `process.inputStream` continuously on a bounded daemon reader thread before `waitFor(60, TimeUnit.SECONDS)` in `preparePip`; rejected blank `nativeDir` in `ToolchainEntryAudit.audit` so `nativePrefix == null` classifies paths as `ToolchainEntryKind.WritableFile`.
+- **JiTTest**: `ToolchainEntryAuditBlankDirTest.blankNativeDirDoesNotClassifyWritablePathsAsNativeLinked` (verified RED `expected:<WritableFile> but was:<NativeLinked>` -> GREEN `OK (1 test)`).
 
 #### H26 — `ManagedProcesses.redactCommand` drops flags and leaks quoted Bearer tokens
 - **Status**: `PENDING`
