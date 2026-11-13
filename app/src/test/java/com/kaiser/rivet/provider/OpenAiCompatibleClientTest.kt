@@ -712,4 +712,13 @@ class OpenAiCompatibleClientTest {
             assertTrue(!body.contains("not-in-context"))
         }
     }
+
+    @Test
+    fun blankToolDeltaIdDoesNotOverwriteEarlierCallIdAndRequestModelSelectsCeiling() {
+        val stream = OpenAiAgentStream(onDelta = {})
+        stream.accept("""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"call_1","function":{"name":"read_file","arguments":"{\"path\":"}}]}}]}""")
+        stream.accept("""{"choices":[{"delta":{"tool_calls":[{"index":0,"id":"","function":{"arguments":"\"a\"}"}}]},"finish_reason":"tool_calls"}]}""")
+        val response = stream.response(completed = true)
+        assertEquals("call_1", response.toolCalls.single().id)
+    }
 }

@@ -83,27 +83,22 @@ internal fun Response.errorText(): String? {
 }
 
 // Best-effort extraction of a human-readable message from any of the error
-// body shapes in use ({"error":{"message"}}, {"message"}).
-private fun errorBodyText(body: String?): String? = try {
+// body shapes in use ({"error":{"message"}}, {"error":"..."}, {"message"}).
+internal fun errorBodyText(body: String?): String? {
     val obj = parseJsonObject(body ?: return null) ?: return null
-    when {
-        "error" in obj -> obj["error"]!!.jsonObject["message"]?.jsonPrimitive?.content
-        "message" in obj -> obj["message"]?.jsonPrimitive?.content
-        else -> null
-    }
-} catch (e: IllegalArgumentException) {
-    null
+    val errorElement = obj["error"]
+    return errorElement?.obj()?.get("message")?.str()
+        ?: errorElement?.str()
+        ?: obj["message"]?.str()
 }
 
-private fun errorBodyCode(body: String?): String? = try {
-    val error = parseJsonObject(body ?: return null)?.get("error")?.jsonObject
+internal fun errorBodyCode(body: String?): String? {
+    val error = parseJsonObject(body ?: return null)?.get("error")?.obj()
     // Providers disagree on where the machine-readable code lives, and a numeric HTTP code
     // says nothing that the status line did not: prefer the first value that is a word.
     val values = listOf("status", "type", "code")
-        .mapNotNull { key -> error?.get(key)?.jsonPrimitive?.content }
-    values.firstOrNull { value -> value.any(Char::isLetter) } ?: values.firstOrNull()
-} catch (e: IllegalArgumentException) {
-    null
+        .mapNotNull { key -> error?.get(key)?.str() }
+    return values.firstOrNull { value -> value.any(Char::isLetter) } ?: values.firstOrNull()
 }
 
 fun httpError(code: Int, body: String?): ProviderError {

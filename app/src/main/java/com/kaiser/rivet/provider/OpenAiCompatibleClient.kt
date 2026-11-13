@@ -63,7 +63,7 @@ internal class OpenAiCompatibleClient(
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)
-            (config.resolvedManualMaxOutputTokens(request.model) ?: config.openRouterOutputCeiling())?.let {
+            (config.resolvedManualMaxOutputTokens(request.model) ?: config.openRouterOutputCeiling(request.model))?.let {
                 put("max_completion_tokens", it)
             }
             if (config.type == ProviderType.OpenAi || config.type == ProviderType.OpenRouter) {
@@ -166,7 +166,7 @@ internal class OpenAiAgentStream(
             val index = value["index"]?.jsonPrimitive?.intOrNull
                 ?: throw ProviderError.InvalidResponse("tool index missing")
             val pending = tools.getOrPut(index) { Pending() }
-            value["id"]?.str()?.let { pending.id = it }
+            value["id"]?.str()?.takeIf { it.isNotBlank() }?.let { pending.id = it }
             value["function"]?.obj()?.let { function ->
                 function["name"]?.str()?.let(pending.name::append)
                 function["arguments"]?.str()?.let(pending.arguments::append)

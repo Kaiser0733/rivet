@@ -46,4 +46,13 @@ class HttpErrorTest {
         assertTrue(e is ProviderError.ProviderMessage)
         assertTrue((e as ProviderError.ProviderMessage).text.contains("418"))
     }
+
+    @Test
+    fun jsonNullAndStringErrorShapesNeverLeakLiteralNullString() {
+        assertTrue(errorBodyText("""{"error":{"message":null}}""") == null)
+        assertTrue(errorBodyText("""{"error":null,"message":"fallback message"}""") == "fallback message")
+        assertTrue(errorBodyText("""{"error":"rate_limited"}""") == "rate_limited")
+        assertTrue(errorBodyCode("""{"error":{"code":null,"status":"INVALID_ARGUMENT"}}""") == "INVALID_ARGUMENT")
+        assertTrue(errorBodyCode("""{"error":"string_error"}""") == null)
+    }
 }

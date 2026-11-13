@@ -291,13 +291,13 @@
 - **JiTTest**: `ChatGptPlanClientTest.truncatedSecondItemAfterCompletedFirstItemThrowsIncompleteGeneration` and `ChatGptPlanClientTest.responsesSsePreservesCallerExceptionAndCancellation`.
 
 #### H30 — `OpenAiAgentStream` blanks `pending.id` on empty delta chunks, ignores `request.model` ceiling, and `Http` prints `"null"` on `JsonNull`
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; OkHttp / `MockWebServer` tests require Gradle)
 - **Files**:
   - `app/src/main/java/com/kaiser/rivet/provider/OpenAiCompatibleClient.kt:66, 169`
-  - `app/src/main/java/com/kaiser/rivet/provider/Http.kt:87-107`
+  - `app/src/main/java/com/kaiser/rivet/provider/Http.kt:85-103`
 - **Issue**: `"id": ""` on chunk 2 overwrites `"id": "call_1"` from chunk 1; `OpenAiCompatibleClient.streamAgent` calls `config.openRouterOutputCeiling()` without `request.model`; `errorBodyText`/`errorBodyCode` treat JSON `null` (`JsonNull.content`) as `"null"` and throw on non-object `"error"`.
-- **Fix**: Require `isNotBlank()` before assigning `pending.id`; pass `request.model` to `openRouterOutputCeiling(request.model)`; use `.obj()` / `.str()` in `Http.kt` with string `"error"` fallback.
-- **JiTTest**: Pure-Kotlin JVM JiTTests for `OpenAiAgentStream` and `Http.errorBodyText`/`errorBodyCode`.
+- **Fix**: Guarded `pending.id` assignment with `.takeIf { it.isNotBlank() }`; forwarded `request.model` to `config.openRouterOutputCeiling(request.model)`; updated `errorBodyText`/`errorBodyCode` to use `.obj()` and `.str()` safely with string `"error"` fallback.
+- **JiTTest**: `OpenAiCompatibleClientTest.blankToolDeltaIdDoesNotOverwriteEarlierCallIdAndRequestModelSelectsCeiling` and `HttpErrorTest.jsonNullAndStringErrorShapesNeverLeakLiteralNullString`.
 
 #### H31 — `ProviderConfig` `/v1` Anthropic thinking mismatch, unscoped `openRouterOutputCeiling`, and wiped manual token inputs on model entry
 - **Status**: `PENDING`
