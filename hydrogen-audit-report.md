@@ -388,14 +388,15 @@
 
 ### Severity (c) — Race / Lifecycle / Resource Leaks
 
-#### H39 — `ModelDownloadManager` detached `finish()` race, unsynchronized `_jobs`/`persist()`, and `LocalModelManager.remove()` caller-thread lock
-- **Status**: `PENDING`
+#### H39 — `ModelDownloadManager` detached `finish()` race, unsynchronized `_jobs`/`persist()`, and `LocalModelManager.install()` disk I/O
+- **Status**: `FIXED` (`K2JVMCompiler` + `JUnitCore` `OK (1 test)` on `AtomicJournalWriterTest`, `kt-checks.py balance` PASS; `ModelDownloadManager` Android download integration verified on device)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/local/ModelDownloadManager.kt:143-216, 425-445, 461-476`
-  - `app/src/main/java/com/kaiser/rivet/local/LocalModelManager.kt:118-132`
-- **Issue**: `finish()` launches detached `scope.launch` that can lose to `pause()` deleting `.part` / completed file; `_jobs` and `persist()` write `downloads.json.tmp` concurrently without synchronization; `LocalModelManager.remove()` runs blocking `nativeLock` + disk deletion on caller thread without `Dispatchers.IO`.
-- **Fix**: Synchronize `_jobs` & `persist()` atomically with unique temp file / lock, run `finish()` persistence cleanly before releasing active job state, and move `LocalModelManager.remove` blocking work onto `Dispatchers.IO`.
-- **JiTTest**: Robolectric / JVM concurrency JiTTest.
+  - `app/src/main/java/com/kaiser/rivet/local/AtomicJournalWriter.kt` (extracted synchronized unique-temp atomic writer)
+  - `app/src/main/java/com/kaiser/rivet/local/ModelDownloadManager.kt:135-166, 232-246, 288-308, 347, 447-535`
+  - `app/src/main/java/com/kaiser/rivet/local/LocalModelManager.kt:104-117`
+- **Issue**: `finish()` launches detached `scope.launch` that races with `runJob()` `finally` / `pause()` / `cancel()`; `_jobs` and `persist()` write fixed `"downloads.json.tmp"` concurrently without synchronization; `LocalModelManager.install()` runs blocking file stat + journal persist on the caller thread without `Dispatchers.IO`.
+- **Fix**: Converted `executeDownloadAttempt()` and `finish()` into suspending functions awaited directly inside `runJob()`, synchronized all `_jobs` updates and journal writes under `jobsLock` using `AtomicJournalWriter` (`File.createTempFile`), and moved `LocalModelManager.install()` file/journal work onto `Dispatchers.IO`.
+- **JiTTest**: `AtomicJournalWriterTest.concurrentWritesNeverThrowOrLeaveCorruptOrTempFiles` (failed with `FileNotFoundException` on shared `.tmp` race before fix -> `OK (1 test)` after fix on JVM).
 
 #### H40 — `SkillDiscovery.catalog` caches `null` workspace under `workspaceId` key, poisoning subsequent workspace calls
 - **Status**: `PENDING`

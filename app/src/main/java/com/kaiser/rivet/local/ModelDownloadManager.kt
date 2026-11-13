@@ -132,6 +132,7 @@ class ModelDownloadManager(
         .writeTimeout(30, TimeUnit.SECONDS)
         .build()
 
+    private val jobsLock = Any()
     private val _jobs = MutableStateFlow(load())
     val jobs: StateFlow<Map<String, DownloadJob>> = _jobs.asStateFlow()
     private var runner: Job? = null
@@ -146,17 +147,19 @@ class ModelDownloadManager(
 
     fun setWifiOnlyPreference(enabled: Boolean) {
         wifiOnly = enabled
-        val updated = _jobs.value.mapValues { (_, job) ->
-            val targetWifiOnly = DownloadPolicy.effectiveWifiOnly(
-                globalWifiOnly = enabled,
-                allowMobile = job.allowMobile,
-                sizeBytes = job.entry.size,
-            )
-            if (targetWifiOnly == job.wifiOnly) job else job.copy(wifiOnly = targetWifiOnly)
-        }
-        if (updated != _jobs.value) {
-            _jobs.value = updated
-            persist()
+        synchronized(jobsLock) {
+            val updated = _jobs.value.mapValues { (_, job) ->
+                val targetWifiOnly = DownloadPolicy.effectiveWifiOnly(
+                    globalWifiOnly = enabled,
+                    allowMobile = job.allowMobile,
+                    sizeBytes = job.entry.size,
+                )
+                if (targetWifiOnly == job.wifiOnly) job else job.copy(wifiOnly = targetWifiOnly)
+            }
+            if (updated != _jobs.value) {
+                _jobs.value = updated
+                persistLocked()
+            }
         }
     }
 
@@ -236,9 +239,11 @@ class ModelDownloadManager(
             runner = null
             activeToken = 0
         }
-        _jobs.value[id]?.let { models.partFor(it.entry).delete() }
-        _jobs.value = _jobs.value - id
-        persist()
+        synchronized(jobsLock) {
+            _jobs.value[id]?.let { models.partFor(it.entry).delete() }
+            _jobs.value = _jobs.value - id
+            persistLocked()
+        }
         stopServiceIfIdle()
     }
 
@@ -287,18 +292,20 @@ class ModelDownloadManager(
 
     fun cleanupStaleParts() {
         val cutoff = System.currentTimeMillis() - 7L * 24 * 60 * 60 * 1000
-        val stale = _jobs.value.values.filter {
-            it.updatedAt < cutoff && models.partFor(it.entry).isFile
+        synchronized(jobsLock) {
+            val stale = _jobs.value.values.filter {
+                it.updatedAt < cutoff && models.partFor(it.entry).isFile
+            }
+            for (job in stale) {
+                models.partFor(job.entry).delete()
+                _jobs.value = _jobs.value - job.entry.id
+            }
+            val known = _jobs.value.values.map { models.partFor(it.entry) }.toSet()
+            root.listFiles()?.filter {
+                it.name.endsWith(".gguf.part") && it !in known && it.lastModified() < cutoff
+            }?.forEach { it.delete() }
+            persistLocked()
         }
-        for (job in stale) {
-            models.partFor(job.entry).delete()
-            _jobs.value = _jobs.value - job.entry.id
-        }
-        val known = _jobs.value.values.map { models.partFor(it.entry) }.toSet()
-        root.listFiles()?.filter {
-            it.name.endsWith(".gguf.part") && it !in known && it.lastModified() < cutoff
-        }?.forEach { it.delete() }
-        persist()
     }
 
     fun freeBytes(): Long = try {
@@ -344,7 +351,7 @@ class ModelDownloadManager(
         }
     }
 
-    private fun executeDownloadAttempt(
+    private suspend fun executeDownloadAttempt(
         job: DownloadJob,
         part: File,
         allowRange: Boolean,
@@ -444,8 +451,8 @@ class ModelDownloadManager(
         }
     }
 
-    private fun finish(job: DownloadJob, part: File, etag: String?, expected: String?,
-                       token: Long) {
+    private suspend fun finish(job: DownloadJob, part: File, etag: String?, expected: String?,
+                               token: Long) {
         val id = job.entry.id
         // Cancel/delete can happen while the response is being finalized. Do not
         // resurrect a journal row for a model the user just removed.
@@ -477,26 +484,30 @@ class ModelDownloadManager(
             part.copyTo(target, overwrite = true)
             part.delete()
         }
-        if (activeToken != token) return
-        scope.launch {
-            if (activeToken != token || _jobs.value[id] == null) {
-                target.delete()
-                return@launch
-            }
-            val failure = runCatching {
-                models.install(job.entry, job.byo, checksum != null)
-                models.activate(job.entry)
-            }.exceptionOrNull()
-            if (_jobs.value[id] == null) {
-                runCatching { models.remove(job.entry) }
-                target.delete()
+        if (activeToken != token || _jobs.value[id] == null) {
+            target.delete()
+            return
+        }
+        val failure = runCatching {
+            models.install(job.entry, job.byo, checksum != null)
+            models.activate(job.entry)
+        }.exceptionOrNull()
+        val removedMidInstall = synchronized(jobsLock) {
+            if (_jobs.value[id] == null || activeToken != token) {
+                true
             } else if (failure != null) {
-                set(job.copy(status = DownloadStatus.Failed,
+                setLocked(job.copy(status = DownloadStatus.Failed,
                     error = failure.message ?: "The model could not be registered."))
+                false
             } else {
                 _jobs.value = _jobs.value - id
-                persist()
+                persistLocked()
+                false
             }
+        }
+        if (removedMidInstall) {
+            runCatching { models.remove(job.entry) }
+            target.delete()
         }
     }
 
@@ -514,19 +525,21 @@ class ModelDownloadManager(
     }
 
     private fun set(job: DownloadJob) {
-        _jobs.value = _jobs.value + (job.entry.id to job)
-        persist()
+        synchronized(jobsLock) { setLocked(job) }
     }
 
-    private fun persist() {
+    private fun setLocked(job: DownloadJob) {
+        _jobs.value = _jobs.value + (job.entry.id to job)
+        persistLocked()
+    }
+
+    private fun persistLocked() {
         runCatching {
-            val temp = File(root, "downloads.json.tmp")
-            temp.writeText(json.encodeToString(DownloadsDocument.serializer(),
-                DownloadsDocument(_jobs.value.values.toList())))
-            if (!temp.renameTo(journal)) {
-                journal.writeText(temp.readText())
-                temp.delete()
-            }
+            val encoded = json.encodeToString(
+                DownloadsDocument.serializer(),
+                DownloadsDocument(_jobs.value.values.toList()),
+            )
+            AtomicJournalWriter.write(journal, encoded, jobsLock)
         }
     }
 

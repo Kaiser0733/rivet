@@ -102,15 +102,17 @@ class LocalModelManager(val app: Application) {
     }
 
     suspend fun install(entry: LocalModelEntry, byo: Boolean, checksumVerified: Boolean) {
-        val file = fileFor(entry)
-        if (!file.isFile || file.length() != entry.size) {
-            throw LocalFailure("The downloaded model file is incomplete.")
-        }
-        val model = InstalledLocalModel(entry, byo, checksumVerified)
-        synchronized(stateLock) {
-            val next = _installed.value.filterNot { it.entry.id == entry.id } + model
-            _installed.value = next
-            persist(next)
+        withContext(Dispatchers.IO) {
+            val file = fileFor(entry)
+            if (!file.isFile || file.length() != entry.size) {
+                throw LocalFailure("The downloaded model file is incomplete.")
+            }
+            val model = InstalledLocalModel(entry, byo, checksumVerified)
+            synchronized(stateLock) {
+                val next = _installed.value.filterNot { it.entry.id == entry.id } + model
+                _installed.value = next
+                persist(next)
+            }
         }
         syncProviders()
     }
