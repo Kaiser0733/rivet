@@ -227,8 +227,14 @@ class ManagedProcesses {
             if (stopAndKind.second) finishPreview(id)
             true
         } catch (e: CancellationException) {
+            if (ForegroundStartPolicy.shouldFinishPersistentOnStopError(stopAndKind.second, threw = true)) {
+                finishPreview(id, failed = true)
+            }
             throw e
         } catch (_: Exception) {
+            if (ForegroundStartPolicy.shouldFinishPersistentOnStopError(stopAndKind.second, threw = true)) {
+                finishPreview(id, failed = true)
+            }
             false
         }
     }
@@ -256,8 +262,17 @@ class ManagedProcesses {
                 stop()
                 if (persistent) finishPreview(id)
             }
-            catch (e: CancellationException) { throw e }
-            catch (_: Exception) { /* Other owned processes still need their stop signal. */ }
+            catch (e: CancellationException) {
+                if (ForegroundStartPolicy.shouldFinishPersistentOnStopError(persistent, threw = true)) {
+                    finishPreview(id, failed = true)
+                }
+                throw e
+            }
+            catch (_: Exception) {
+                if (ForegroundStartPolicy.shouldFinishPersistentOnStopError(persistent, threw = true)) {
+                    finishPreview(id, failed = true)
+                }
+            }
         }
     }
 
@@ -367,12 +382,13 @@ class ManagedProcesses {
             synchronized(lock) { if (serviceWaiter === waiter) serviceWaiter = null }
             return@withLock false
         }
-        val started = withTimeoutOrNull(SERVICE_START_TIMEOUT_MS) { waiter.await() } ?: false
+        val awaited = withTimeoutOrNull(SERVICE_START_TIMEOUT_MS) { waiter.await() }
         synchronized(lock) {
             if (serviceWaiter === waiter) serviceWaiter = null
-            serviceStarted = started
+            val resolved = ForegroundStartPolicy.reconcileServiceStarted(awaited, serviceStarted)
+            serviceStarted = resolved
+            resolved
         }
-        started
     }
 
     internal fun onForegroundServiceStarted(started: Boolean) = synchronized(lock) {

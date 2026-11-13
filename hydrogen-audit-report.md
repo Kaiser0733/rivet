@@ -419,14 +419,15 @@
 - **JiTTest**: `TerminalStartGateTest` (3 failures before fix -> `OK (3 tests)` after fix on JVM) + `InteractiveTerminalTest.closingWhileEngineCreateIsInFlightClosesTheCreatedEngineAndDoesNotLeak`.
 
 #### H42 — `ManagedProcesses` service-start race & slot leak, `PersistentProcessService` non-stopping one-shot actions, `ProjectDownloader` cancel race
-- **Status**: `PENDING`
+- **Status**: `FIXED`
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/runtime/ManagedProcesses.kt:216-261, 353-375`
-  - `app/src/main/java/com/kaiser/rivet/runtime/PersistentProcessService.kt:37-62`
-  - `app/src/main/java/com/kaiser/rivet/runtime/ProjectDownloader.kt:95-97, 143-150`
+  - `app/src/main/java/com/kaiser/rivet/runtime/ForegroundStartPolicy.kt`
+  - `app/src/main/java/com/kaiser/rivet/runtime/ManagedProcesses.kt`
+  - `app/src/main/java/com/kaiser/rivet/runtime/PersistentProcessService.kt`
+  - `app/src/main/java/com/kaiser/rivet/runtime/ProjectDownloader.kt`
 - **Issue**: `ensureForegroundService` overwrites `serviceStarted` after `withTimeoutOrNull` racing with `onForegroundServiceStarted`/`Stopped`; `stop`/`stopAll` omit `finishPreview(id, failed = true)` on exceptions, leaking `MAX_PERSISTENT_PROCESSES` slots; `PersistentProcessService` leaves service alive on `ACTION_RAISE`/`ACTION_PAUSE`/`ACTION_APPROVE`/`ACTION_DENY`; `ProjectDownloader` cancel can delete `staged` before `onResponse` creates `FileOutputStream(target)`.
-- **Fix**: Preserve callback-driven `serviceStarted` state on timeout; wrap persistent `stop`/`stopAll` cleanup in `try/catch` calling `finishPreview(id, failed = true)`; call `stopSelfResult(startId)`/`stopIfIdle()` for one-shot actions when not foregrounded; guard `ProjectDownloader` staging cleanup with an `AtomicBoolean` cancelled flag.
-- **JiTTest**: Pure-Kotlin JVM JiTTest for `ManagedProcesses` slot leak / `serviceStarted` race; Robolectric for `PersistentProcessService`.
+- **Fix**: Extracted pure `ForegroundStartPolicy.reconcileServiceStarted`/`shouldFinishPersistentOnStopError` and wired them in `ManagedProcesses.ensureForegroundService`/`stop`/`stopAll`; called `stopIfIdle()` on one-shot notification actions in `PersistentProcessService.onStartCommand`; synchronized `ProjectDownloader` staging open/delete behind `stageLock` + `AtomicBoolean` aborted flag.
+- **JiTTest**: `ForegroundStartPolicyTest` (2 failures before fix -> `OK (2 tests)` after fix on JVM) + `ManagedProcessesTest.failedPersistentPreviewStopStillReleasesPersistentSlot`.
 
 #### H43 — `ChatGptToken` refresh/sign-out race, uninterruptible `CountDownLatch` in `ChatGptLoopback`, and `ProvidersViewModel` callback/save races
 - **Status**: `PENDING`

@@ -6,6 +6,7 @@ import java.io.FileOutputStream
 import java.io.IOException
 import java.security.MessageDigest
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -69,10 +70,15 @@ class ProjectDownloader internal constructor(
                         if (staleFiles.any { !it.delete() }) throw DownloadFailure("storage")
                         val staged = try { File.createTempFile(PROCESS_STAGING_PREFIX, STAGING_SUFFIX, storage) }
                             catch (_: Exception) { throw DownloadFailure("storage") }
+                        val stageLock = Any()
+                        val aborted = AtomicBoolean(false)
                         try {
-                            when (val result = fetch(target, staged)) {
+                            when (val result = fetch(target, staged, stageLock, aborted)) {
                                 is FetchResult.Redirect -> {
-                                    staged.delete()
+                                    synchronized(stageLock) {
+                                        aborted.set(true)
+                                        staged.delete()
+                                    }
                                     if (redirects >= MAX_REDIRECTS) throw DownloadFailure("redirect_blocked")
                                     val resolved = target.resolve(result.location)
                                         ?: throw DownloadFailure("redirect_blocked")
@@ -93,13 +99,22 @@ class ProjectDownloader internal constructor(
                                 }
                             }
                         } catch (e: CancellationException) {
-                            staged.delete()
+                            synchronized(stageLock) {
+                                aborted.set(true)
+                                staged.delete()
+                            }
                             throw e
                         } catch (e: DownloadFailure) {
-                            staged.delete()
+                            synchronized(stageLock) {
+                                aborted.set(true)
+                                staged.delete()
+                            }
                             throw e
                         } catch (_: Exception) {
-                            staged.delete()
+                            synchronized(stageLock) {
+                                aborted.set(true)
+                                staged.delete()
+                            }
                             throw DownloadFailure("network_error")
                         }
                     }
@@ -118,9 +133,17 @@ class ProjectDownloader internal constructor(
 
     fun hostForDisplay(url: String): String = validatedUrl(url).host
 
-    private suspend fun fetch(url: HttpUrl, target: File): FetchResult = suspendCancellableCoroutine { continuation ->
+    private suspend fun fetch(
+        url: HttpUrl,
+        target: File,
+        stageLock: Any,
+        aborted: AtomicBoolean,
+    ): FetchResult = suspendCancellableCoroutine { continuation ->
         val call = client.newCall(Request.Builder().url(url).get().build())
-        continuation.invokeOnCancellation { call.cancel() }
+        continuation.invokeOnCancellation {
+            aborted.set(true)
+            call.cancel()
+        }
         call.enqueue(object : Callback {
             override fun onFailure(call: Call, error: IOException) {
                 if (continuation.isActive) continuation.resumeWithException(error)
@@ -140,25 +163,35 @@ class ProjectDownloader internal constructor(
                             val digest = MessageDigest.getInstance("SHA-256")
                             var total = 0L
                             var tooLarge = false
-                            FileOutputStream(target).use { output ->
-                                body.byteStream().use { input ->
-                                    val buffer = ByteArray(BUFFER_BYTES)
-                                    while (true) {
-                                        if (!continuation.isActive) {
-                                            call.cancel()
-                                            throw CancellationException("Download cancelled")
+                            val stream = synchronized(stageLock) {
+                                if (aborted.get() || !continuation.isActive) {
+                                    throw CancellationException("Download cancelled")
+                                }
+                                FileOutputStream(target)
+                            }
+                            try {
+                                stream.use { output ->
+                                    body.byteStream().use { input ->
+                                        val buffer = ByteArray(BUFFER_BYTES)
+                                        while (true) {
+                                            if (aborted.get() || !continuation.isActive) {
+                                                call.cancel()
+                                                throw CancellationException("Download cancelled")
+                                            }
+                                            val count = input.read(buffer)
+                                            if (count < 0) break
+                                            total += count
+                                            if (total > MAX_DOWNLOAD_BYTES) {
+                                                tooLarge = true
+                                                break
+                                            }
+                                            digest.update(buffer, 0, count)
+                                            output.write(buffer, 0, count)
                                         }
-                                        val count = input.read(buffer)
-                                        if (count < 0) break
-                                        total += count
-                                        if (total > MAX_DOWNLOAD_BYTES) {
-                                            tooLarge = true
-                                            break
-                                        }
-                                        digest.update(buffer, 0, count)
-                                        output.write(buffer, 0, count)
                                     }
                                 }
+                            } finally {
+                                if (aborted.get()) synchronized(stageLock) { target.delete() }
                             }
                             if (tooLarge) FetchResult.TooLarge
                             else if (contentLength >= 0 && total != contentLength) FetchResult.HttpError(value.code)

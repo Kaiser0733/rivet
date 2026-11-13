@@ -44,19 +44,23 @@ class PersistentProcessService : Service() {
             }
             ACTION_PAUSE -> {
                 AgentRunControl.requestPause()
+                stopIfIdle()
                 return START_NOT_STICKY
             }
             ACTION_APPROVE -> {
                 NotificationApprovals.resolve(intent?.getLongExtra(EXTRA_APPROVAL_TOKEN, -1) ?: -1, true)
+                stopIfIdle()
                 return START_NOT_STICKY
             }
             ACTION_DENY -> {
                 NotificationApprovals.resolve(intent?.getLongExtra(EXTRA_APPROVAL_TOKEN, -1) ?: -1, false)
+                stopIfIdle()
                 return START_NOT_STICKY
             }
             ACTION_RAISE -> {
                 AgentRunControl.requestRaise()
                 getSystemService(NotificationManager::class.java).cancel(BUDGET_NOTIFICATION_ID)
+                stopIfIdle()
                 return START_NOT_STICKY
             }
         }

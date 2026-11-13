@@ -189,4 +189,17 @@ class ManagedProcessesTest {
             action()
             AgentToolResult(call.id, call.name, "{}")
         }
+
+    @Test fun failedPersistentPreviewStopStillReleasesPersistentSlot() {
+        val processes = ManagedProcesses()
+        val id = processes.registerPreview("ws", "Project", "index.html", "http://127.0.0.1:8080") {
+            throw IllegalStateException("stop failed")
+        }!!
+        processes.markPreviewRunning(id)
+
+        assertFalse(processes.stop(id))
+        assertEquals(0, processes.activePersistentCount())
+        assertTrue(processes.canStartPersistent())
+        assertEquals(ManagedProcessStatus.Failed, processes.processes.value.single().status)
+    }
 }
