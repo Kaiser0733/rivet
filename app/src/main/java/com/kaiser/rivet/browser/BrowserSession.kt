@@ -836,7 +836,7 @@ class BrowserSession(
                   return {label:(e.innerText||e.value||e.getAttribute('aria-label')||'').trim(),tag:(e.tagName||'').toLowerCase()};
                 }))
             """.trimIndent())
-            BrowserElementRefs.fromJson(raw.trim().trim('"').replace("\\\"", "\""))
+            BrowserElementRefs.fromJson(raw)
         }.getOrDefault(emptyList())
         if (result.text.isBlank()) throw BrowserFailure("browser_empty",
             "This page has no readable text. If the page is still loading, retry browser_read after it finishes.")
@@ -1398,13 +1398,16 @@ class BrowserSession(
             "value:String(e.value||'').slice(0,2000)});});" +
             "return JSON.stringify({scrollY:window.scrollY,fields:f});})()"
 
-    private fun parseScrollY(raw: String): Int =
-        Regex("\"scrollY\"\\s*:\\s*(\\d+)").find(raw)?.groupValues?.get(1)?.toIntOrNull() ?: 0
+    private fun parseScrollY(raw: String): Int {
+        val clean = BrowserElementRefs.unwrapJsResult(raw)
+        val obj = runCatching { org.json.JSONObject(clean) }.getOrNull() ?: return 0
+        return obj.optInt("scrollY", 0)
+    }
 
     private fun parseSafeFields(raw: String): Map<String, String> {
-        val json = runCatching {
-            org.json.JSONObject(raw.trim('"').replace("\\\"", "\""))
-        }.getOrNull() ?: return emptyMap()
+        val clean = BrowserElementRefs.unwrapJsResult(raw)
+        if (clean.isEmpty()) return emptyMap()
+        val json = runCatching { org.json.JSONObject(clean) }.getOrNull() ?: return emptyMap()
         val array = json.optJSONArray("fields") ?: return emptyMap()
         val result = linkedMapOf<String, String>()
         for (i in 0 until array.length()) {
@@ -1598,13 +1601,16 @@ class BrowserSession(
     }
 
     private fun parseClickTarget(raw: String): BrowserClickTarget {
-        val clean = raw.trim().trim('"').replace("\\\"", "\"")
-        val risky = Regex("\"risky\"\\s*:\\s*true").containsMatchIn(clean) ||
-            Regex("(?i)submit|send|publish|pay|buy|post|delete|confirm").containsMatchIn(clean)
-        val found = !clean.contains("\"found\":false")
-        val description = Regex("\"description\"\\s*:\\s*\"([^\"]*)\"").find(clean)?.groupValues?.get(1)
-            ?: "page control"
-        return BrowserClickTarget(found, risky, description)
+        val clean = BrowserElementRefs.unwrapJsResult(raw)
+        val json = runCatching { org.json.JSONObject(clean) }.getOrNull()
+        if (json != null) {
+            val found = json.optBoolean("found", true)
+            val description = json.optString("description").ifBlank { "page control" }
+            val risky = json.optBoolean("risky", false) ||
+                Regex("(?i)submit|send|publish|pay|buy|post|delete|confirm").containsMatchIn(description)
+            return BrowserClickTarget(found, risky, description)
+        }
+        return BrowserClickTarget(found = false, risky = false, description = "page control")
     }
 
     private fun tapTargetScript(x: Float, y: Float): String = """

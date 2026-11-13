@@ -148,7 +148,7 @@
 - **JiTTest**: Robolectric / Android `BrowserSession` JiTTest + pure helper test where extractable.
 
 #### H15 — Broken WebView JSON string unescaping & regex `BrowserElementRefs.fromJson` drop form fields and controls
-- **Status**: `PENDING`
+- **Status**: `FIXED` (`BrowserElementRefTest` PASS `OK (2 tests)` on JVM with `{`, `}`, escaped quotes, and WebView JSON string wrapping; `BrowserSession.kt` passes `kt-checks.py balance`)
 - **Files**:
   - `app/src/main/java/com/kaiser/rivet/browser/BrowserElementRef.kt:8-20`
   - `app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt:838, 1361-1364, 1551-1559`
