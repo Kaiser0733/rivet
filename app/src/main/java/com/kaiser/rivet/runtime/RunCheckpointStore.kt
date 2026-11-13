@@ -66,7 +66,16 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
                 try { GitCheckpoint.commit(worktree, ref(runId, sequence), "Rivet checkpoint $runId/$sequence") }
                 catch (_: Exception) { null }
             } else null
-            val delta = if (gitRef == null) copyBefore(worktree, folder, before) else emptyList()
+            val deltaPaths = if (gitRef == null) {
+                before.keys
+            } else {
+                GitCheckpoint.missingPaths(
+                    worktree,
+                    gitRef,
+                    before.filterValues { !it.directory }.keys,
+                )
+            }
+            val delta = copyBefore(worktree, folder, before.filterKeys { it in deltaPaths })
             if (folderSize(folder) > maxBytes) {
                 removeTree(folder)
                 throw CheckpointFailure("storage")
@@ -86,7 +95,7 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
             return@withContext false
         }
         val changed = changedPaths(record.before, after)
-        val delta = if (record.gitRef == null) retainOnly(folder, changed) else emptyList()
+        val delta = retainOnly(folder, changed)
         write(folder, record.copy(after = after, delta = delta))
         prune()
         true
@@ -126,16 +135,25 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
             val stage = File(folder(record.id), "restore-worktree")
             if (stage.exists()) removeTree(stage)
             copyTree(worktree, stage)
-            for (path in changed) {
+            for (path in changed.sortedDescending()) {
                 val target = File(stage, path)
                 val before = record.before[path]
-                if (before == null || before.directory) {
-                    target.delete()
-                } else {
-                    val bytes = readBefore(record, path, worktree) ?: throw CheckpointFailure("corrupt")
-                    target.parentFile?.mkdirs()
-                    FileOutputStream(target).use { it.write(bytes) }
+                when {
+                    before == null -> removeTree(target)
+                    before.directory -> {
+                        if (target.exists() && !target.isDirectory) removeTree(target)
+                        target.mkdirs()
+                    }
+                    else -> if (target.isDirectory) removeTree(target)
                 }
+            }
+            for (path in changed) {
+                val before = record.before[path] ?: continue
+                if (before.directory) continue
+                val target = File(stage, path)
+                val bytes = readBefore(record, path, worktree) ?: throw CheckpointFailure("corrupt")
+                target.parentFile?.mkdirs()
+                FileOutputStream(target).use { it.write(bytes) }
             }
             RunCheckpointRestore(stage, changed, emptyList())
         }
@@ -150,7 +168,9 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
 
     private fun readBefore(record: RunCheckpointInfo, path: String, worktree: File): ByteArray? {
         val ref = record.gitRef
-        if (ref != null) return GitCheckpoint.read(worktree, ref, path)
+        if (ref != null) {
+            GitCheckpoint.read(worktree, ref, path)?.let { return it }
+        }
         val source = File(folder(record.id), "delta/$path")
         return if (source.isFile) source.readBytes() else null
     }
@@ -172,10 +192,15 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
         val delta = File(folder, "delta")
         if (!delta.exists()) return emptyList()
         val wanted = changed.toSet()
+        val retained = mutableListOf<String>()
         Files.walkFileTree(delta.toPath(), object : SimpleFileVisitor<Path>() {
             override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
                 val relative = delta.toPath().relativize(file).joinToString("/")
-                if (relative !in wanted) Files.delete(file)
+                if (relative !in wanted) {
+                    Files.delete(file)
+                } else {
+                    retained.add(relative)
+                }
                 return FileVisitResult.CONTINUE
             }
             override fun postVisitDirectory(dir: Path, error: java.io.IOException?): FileVisitResult {
@@ -183,7 +208,7 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
                 return FileVisitResult.CONTINUE
             }
         })
-        return changed
+        return retained
     }
 
     private fun prune() {
@@ -357,6 +382,18 @@ private object GitCheckpoint {
                     } catch (_: Exception) { }
                 }
             }
+        }
+    }
+
+    fun missingPaths(worktree: File, ref: String, paths: Collection<String>): Set<String> {
+        val repo = FileRepositoryBuilder().setGitDir(File(worktree, ".git"))
+            .setWorkTree(worktree).build()
+        repo.use {
+            val missing = hashSetOf<String>()
+            for (path in paths) {
+                if (it.resolve("$ref:$path") == null) missing.add(path)
+            }
+            return missing
         }
     }
 

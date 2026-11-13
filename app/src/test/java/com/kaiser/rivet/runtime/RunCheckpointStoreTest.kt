@@ -83,4 +83,50 @@ class RunCheckpointStoreTest {
         assertTrue(store.lastPruned > 0)
         assertTrue(store.history().size < 3)
     }
+
+    @Test fun stageRestoreHandlesNewDirectoriesAndFileDirectorySwaps() = runBlocking {
+        val project = temp.newFolder("swaps")
+        project.resolve("wasFile").writeText("old file")
+        project.resolve("wasEmptyDir").mkdirs()
+        val store = RunCheckpointStore(temp.newFolder("swaps-store"), "ws")
+        val id = store.begin(project, "run-swap", 0, "Before swap")
+
+        project.resolve("wasFile").delete()
+        project.resolve("wasFile/nested").mkdirs()
+        project.resolve("wasFile/nested/a.txt").writeText("inside new dir")
+        project.resolve("wasEmptyDir").delete()
+        project.resolve("wasEmptyDir").writeText("now a file")
+        project.resolve("addedDir/sub").mkdirs()
+        project.resolve("addedDir/sub/new.txt").writeText("created")
+        assertTrue(store.finish(id, project))
+
+        val restore = store.stageRestore(store.history().single(), project)
+        assertTrue(restore.conflicts.isEmpty())
+        assertTrue(File(restore.stage, "wasFile").isFile)
+        assertEquals("old file", File(restore.stage, "wasFile").readText())
+        assertTrue(File(restore.stage, "wasEmptyDir").isDirectory)
+        assertEquals(emptyList<String>(), File(restore.stage, "wasEmptyDir").list()?.toList() ?: emptyList())
+        assertFalse(File(restore.stage, "addedDir").exists())
+    }
+
+    @Test fun gitCheckpointRestoresModifiedGitignoredFilesViaDeltaFallback() = runBlocking {
+        val project = gitProject()
+        project.resolve(".gitignore").writeText("*.secret\n")
+        project.resolve("local.secret").writeText("before-secret")
+        Git.open(project).use { git ->
+            git.add().addFilepattern(".gitignore").call()
+            git.commit().setMessage("ignore secrets").setAuthor("Test", "test@example.com")
+                .setCommitter("Test", "test@example.com").call()
+        }
+        val store = RunCheckpointStore(temp.newFolder("git-ignored-store"), "ws")
+        val id = store.begin(project, "run-ignored", 0, "Before secret edit")
+        project.resolve("local.secret").writeText("after-secret")
+        assertTrue(store.finish(id, project))
+
+        val record = store.history().single()
+        assertNotNull(record.gitRef)
+        val restore = store.stageRestore(record, project)
+        assertTrue(restore.conflicts.isEmpty())
+        assertEquals("before-secret", File(restore.stage, "local.secret").readText())
+    }
 }

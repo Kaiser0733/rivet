@@ -66,7 +66,7 @@
 - **JiTTest**: Robolectric JiTTest in `WorkspaceMirrorTest` (`NEEDS-DEVICE-PROOF` offline).
 
 #### H5 — `RunCheckpointStore.stageRestore` fails on new directories, file↔directory replacements, and gitignored files
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`RunCheckpointStoreTest` JiTTests added for deepest-first dir deletion, file↔dir swaps, and gitignored file delta fallback; `RunCheckpointStore.kt` & `RunCheckpointStoreTest.kt` pass `kt-checks.py balance`; requires Gradle JGit + `kotlinx-serialization` plugin to execute)
 - **Files**: `app/src/main/java/com/kaiser/rivet/runtime/RunCheckpointStore.kt:129-140, 265-269, 329-358`
 - **Issue**:
   1. Ascending loop calls `target.delete()` on non-empty added directories (leaving empty dirs behind), crashes with `FileNotFoundException` when a file was replaced by a directory, and deletes without recreating empty directories replaced by files.
