@@ -2011,9 +2011,12 @@ class ChatViewModelTest {
             { _, _ ->
                 object : ProviderClient {
                     override suspend fun listModels(): List<ModelInfo> = emptyList()
-                    override suspend fun contextLimit(model: String): ModelContextLimit? = null
-                    override suspend fun testConnection(): TestResult = TestResult(true)
-                    override suspend fun streamAgent(request: AgentRequest): AgentResponse {
+                    override suspend fun testConnection(): TestResult = TestResult(true, "ok")
+                    override suspend fun streamAgent(
+                        request: AgentRequest,
+                        onReasoning: (String) -> Unit,
+                        onDelta: (String) -> Unit,
+                    ): AgentResponse {
                         attempts++
                         if (attempts == 1) gate.await()
                         return AgentResponse(text = "Recovered")

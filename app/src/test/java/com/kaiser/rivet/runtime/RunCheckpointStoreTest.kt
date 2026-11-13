@@ -105,7 +105,7 @@ class RunCheckpointStoreTest {
         assertTrue(File(restore.stage, "wasFile").isFile)
         assertEquals("old file", File(restore.stage, "wasFile").readText())
         assertTrue(File(restore.stage, "wasEmptyDir").isDirectory)
-        assertEquals(emptyList<String>(), File(restore.stage, "wasEmptyDir").list()?.toList() ?: emptyList())
+        assertEquals(emptyList<String>(), File(restore.stage, "wasEmptyDir").list()?.toList() ?: emptyList<String>())
         assertFalse(File(restore.stage, "addedDir").exists())
     }
 

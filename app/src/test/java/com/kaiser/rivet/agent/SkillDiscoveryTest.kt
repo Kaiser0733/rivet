@@ -1,5 +1,6 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
 import java.io.File
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
@@ -231,7 +232,16 @@ class SkillDiscoveryTest {
         assertEquals(listOf("global-skill"), globalOnly.skills.map { it.name })
 
         val workspace = object : AgentWorkspace {
-            override val identity: String = "ws-1"
+            override suspend fun stat(path: String): AgentWorkspaceEntry {
+                if (path.isNotEmpty() && path !in nodes) throw AgentWorkspaceFailure("missing")
+                val value = nodes[path]
+                return AgentWorkspaceEntry(path, path.isEmpty() || value == null, value?.length?.toLong())
+            }
+            override suspend fun observeStructural(path: String, recursive: Boolean): WorkspaceStructuralStamp {
+                if (path.isNotEmpty() && path !in nodes) throw AgentWorkspaceFailure("missing")
+                val dir = path.isEmpty() || nodes[path] == null
+                return WorkspaceStructuralStamp(path, parentOf(path), dir, null, recursive)
+            }
             override suspend fun list(path: String): List<AgentWorkspaceEntry> =
                 nodes.entries.filter { parentOf(it.key) == path }
                     .map { AgentWorkspaceEntry(it.key, it.value == null, it.value?.length?.toLong()) }
@@ -239,15 +249,24 @@ class SkillDiscoveryTest {
                 val text = nodes[path] ?: throw AgentWorkspaceFailure("missing")
                 return AgentFileSnapshot(path, text, "", text.length.toLong())
             }
-            override suspend fun exists(path: String): Boolean = path in nodes
-            override suspend fun isDirectory(path: String): Boolean = nodes[path] == null && path in nodes
-            override suspend fun write(path: String, content: String): AgentFileSnapshot = throw UnsupportedOperationException()
-            override suspend fun createDirectory(path: String) = throw UnsupportedOperationException()
-            override suspend fun delete(path: String) = throw UnsupportedOperationException()
-            override suspend fun rename(path: String, newName: String) = throw UnsupportedOperationException()
-            override suspend fun move(source: String, destDir: String) = throw UnsupportedOperationException()
-            override suspend fun copy(source: String, dest: String) = throw UnsupportedOperationException()
-            override suspend fun diff(path: String): String = ""
+            override suspend fun search(path: String, query: String): AgentSearchReport =
+                AgentSearchReport(emptyList(), limited = false, filesScanned = 0, entriesVisited = 0, bytesScanned = 0L, skipped = 0)
+            override suspend fun write(path: String, content: String, expectedHash: String): AgentFileSnapshot =
+                throw UnsupportedOperationException()
+            override suspend fun patch(path: String, expectedHash: String, edits: List<AgentTextEdit>): AgentFileSnapshot =
+                throw UnsupportedOperationException()
+            override suspend fun createFile(path: String): AgentCreatedFile = throw UnsupportedOperationException()
+            override suspend fun createDirectory(path: String): AgentWorkspaceEntry = throw UnsupportedOperationException()
+            override suspend fun rename(path: String, newName: String, approved: WorkspaceStructuralStamp): AgentWorkspaceEntry =
+                throw UnsupportedOperationException()
+            override suspend fun move(
+                path: String,
+                destination: String,
+                approvedSource: WorkspaceStructuralStamp,
+                approvedDestination: WorkspaceStructuralStamp,
+            ): AgentWorkspaceEntry = throw UnsupportedOperationException()
+            override suspend fun delete(path: String, approved: WorkspaceStructuralStamp) =
+                throw UnsupportedOperationException()
         }
 
         val withProject = runBlocking { discovery.catalog(workspace, "ws-1") }

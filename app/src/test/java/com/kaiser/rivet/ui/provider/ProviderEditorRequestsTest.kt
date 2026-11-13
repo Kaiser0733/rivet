@@ -251,7 +251,7 @@ class ProviderEditorRequestsTest {
         viewModel.clientFactory = { _, _ ->
             object : com.kaiser.rivet.provider.ProviderClient {
                 override suspend fun listModels() = listOf(
-                    ModelInfo("gpt-4o", "GPT-4o", contextWindow = 128_000)
+                    ModelInfo("gpt-4o", "GPT-4o", inputLimitTokens = 128_000)
                 )
                 override suspend fun testConnection() = com.kaiser.rivet.provider.TestResult(true, "ok")
                 override suspend fun streamAgent(

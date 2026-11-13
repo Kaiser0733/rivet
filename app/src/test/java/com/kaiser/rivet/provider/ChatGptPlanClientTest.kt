@@ -1,6 +1,7 @@
 package com.kaiser.rivet.provider
 
 import com.kaiser.rivet.agent.AgentMessage
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import okhttp3.mockwebserver.MockResponse
 import okhttp3.mockwebserver.MockWebServer

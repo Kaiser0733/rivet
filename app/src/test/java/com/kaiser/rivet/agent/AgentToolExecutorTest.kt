@@ -515,9 +515,8 @@ class AgentToolExecutorTest {
         val largeWorkspace = object : AgentWorkspace by FakeWorkspace() {
             override suspend fun readRegion(path: String, offset: Long, maxBytes: Int): AgentFileRegion {
                 observedOffset = offset
-                return AgentFileRegion(path, "tail", readHash = "a".repeat(64),
-                    size = offset + 4L, start = offset, end = offset + 4L,
-                    sha256 = "a".repeat(64))
+                return AgentFileRegion(path, "tail", sha256 = "a".repeat(64),
+                    size = offset + 4L, start = offset, end = offset + 4L)
             }
         }
         val executor = AgentToolExecutor(largeWorkspace)

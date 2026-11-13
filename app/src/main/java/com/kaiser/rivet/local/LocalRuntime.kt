@@ -13,7 +13,7 @@ object LocalRuntime {
 
     @Volatile
     var downloads: ModelDownloadManager? = null
-        private set
+        internal set
 
     fun initialize(app: Application): LocalModelManager = synchronized(this) {
         manager ?: LocalModelManager(app).also { created ->
