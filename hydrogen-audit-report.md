@@ -487,11 +487,13 @@
 - **JiTTest**: `GoalMutationGuardTest` (2 failures before fix -> `OK (2 tests)`) + `SkillScriptMatchTest` (`OK (3 tests)` on JVM).
 
 #### H48 — `LocalPreviewServer` case-sensitive `.git` block, missing `Host` check, and tiny connection queue
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/runtime/LocalPreviewServer.kt:35-36, 65, 73-76, 198, 204-240`
+- **Status**: `FIXED`
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/runtime/LocalPreviewPolicy.kt`
+  - `app/src/main/java/com/kaiser/rivet/runtime/LocalPreviewServer.kt`
 - **Issue**: `/.GIT/config` bypasses `it == ".git"` on case-insensitive filesystems; missing `Host` header validation exposes DNS rebinding; `CLIENT_QUEUE_LIMIT = 2` drops parallel asset loads.
-- **Fix**: Use `it.equals(".git", ignoreCase = true)`, validate `Host` is loopback (`127.0.0.1[:port]` / `localhost[:port]` / `[::1][:port]`), and raise `CLIENT_QUEUE_LIMIT` to handle normal browser concurrency (e.g. `16`).
-- **JiTTest**: Pure-Kotlin JVM `ServerSocket` JiTTest against `LocalPreviewServer`.
+- **Fix**: Extracted `LocalPreviewPolicy` (`isDisallowedGitSegment` case-insensitive check and `isLoopbackHostHeader` validation for `127.0.0.1`/`localhost`/`[::1]` matching bound port); applied across `PreviewPaths.parse`, `LocalPreviewServer` init, `resolve`, and `readRequest` (rejecting duplicate/missing/non-loopback `Host` headers); raised `CLIENT_QUEUE_LIMIT` to `16` with 4 worker threads.
+- **JiTTest**: `LocalPreviewPolicyTest` (`OK (2 tests)` on JVM) + `LocalPreviewServerTest` (`rejectsCaseInsensitiveGitPathsAndNonLoopbackHostHeaders`, `servesBurstOfConcurrentAssetRequestsWithoutDropping`). Note: `LocalPreviewServerTest`'s live `runBlocking(Dispatchers.IO)` calls require Gradle's full coroutines/atomicfu classpath (`Connection reset` when `Dispatchers.IO` isn't initialized under bare `kotlinc`).
 
 #### H49 — OkHttp follows redirects with custom API-key headers, discovery endpoints unpinned to HTTPS, weak JWT `aud`/`sub`/`kty` checks
 - **Status**: `PENDING`

@@ -138,14 +138,84 @@ class LocalPreviewServerTest {
         return request(server.url, method, path)
     }
 
-    private fun request(url: String, method: String, path: String): String {
+    private fun request(url: String, method: String, path: String, host: String = "127.0.0.1"): String {
         val port = url.substringAfterLast(':').substringBefore('/')
         return Socket("127.0.0.1", port.toInt()).use { socket ->
             socket.soTimeout = 4_000
-            socket.getOutputStream().write("$method $path HTTP/1.1\r\nHost: 127.0.0.1\r\n\r\n"
+            socket.getOutputStream().write("$method $path HTTP/1.1\r\nHost: $host\r\n\r\n"
                 .toByteArray(StandardCharsets.US_ASCII))
             socket.getOutputStream().flush()
             socket.getInputStream().readBytes().toString(StandardCharsets.UTF_8)
+        }
+    }
+
+    @Test fun rejectsCaseInsensitiveGitPathsAndNonLoopbackHostHeaders() {
+        val files = mapOf("site/index.html" to "<h1>ok</h1>".toByteArray())
+        val entries = mapOf(
+            "site/index.html" to WorkspaceEntry(WorkspacePath.parse("site/index.html"), "idx", false, "text/html", 9L),
+        )
+        val server = LocalPreviewServer(
+            WorkspacePath.parse("site"), WorkspacePath.parse("site/index.html"),
+            workspaceIsCurrent = { true },
+            stat = { entries[it.value] ?: error("missing") },
+            copyTo = { path, output, _ ->
+                val b = files.getValue(path.value)
+                output.write(b)
+                b.size.toLong()
+            },
+        )
+        server.start()
+        try {
+            assertTrue(request(server.url, "GET", "/.GIT/config").startsWith("HTTP/1.1 400"))
+            assertTrue(request(server.url, "GET", "/sub/.Git/HEAD").startsWith("HTTP/1.1 400"))
+            assertTrue(request(server.url, "GET", "/", host = "evil.example").startsWith("HTTP/1.1 400"))
+            assertTrue(request(server.url, "GET", "/", host = "127.0.0.1.evil.com").startsWith("HTTP/1.1 400"))
+            val rejected = try { PreviewPaths.parse("site", ".GIT/config"); false } catch (_: Exception) { true }
+            assertTrue(".GIT/config must be rejected by PreviewPaths", rejected)
+        } finally {
+            server.close()
+        }
+    }
+
+    @Test fun servesBurstOfConcurrentAssetRequestsWithoutDropping() {
+        val bytes = "body{}".toByteArray()
+        val entries = mapOf(
+            "site/index.html" to WorkspaceEntry(WorkspacePath.parse("site/index.html"), "idx", false, "text/html", bytes.size.toLong()),
+            "site/app.js" to WorkspaceEntry(WorkspacePath.parse("site/app.js"), "js", false, "application/javascript", bytes.size.toLong()),
+        )
+        val gate = java.util.concurrent.CountDownLatch(1)
+        val entered = java.util.concurrent.CountDownLatch(2)
+        val server = LocalPreviewServer(
+            WorkspacePath.parse("site"), WorkspacePath.parse("site/index.html"),
+            workspaceIsCurrent = { true },
+            stat = {
+                entered.countDown()
+                gate.await(3, java.util.concurrent.TimeUnit.SECONDS)
+                entries[it.value] ?: error("missing")
+            },
+            copyTo = { _, output, _ -> output.write(bytes); bytes.size.toLong() },
+        )
+        server.start()
+        try {
+            val pool = java.util.concurrent.Executors.newFixedThreadPool(10)
+            try {
+                val futures = (1..10).map {
+                    pool.submit(java.util.concurrent.Callable {
+                        request(server.url, "GET", "/app.js")
+                    })
+                }
+                assertTrue(entered.await(3, java.util.concurrent.TimeUnit.SECONDS))
+                Thread.sleep(100)
+                gate.countDown()
+                val responses = futures.map { it.get(5, java.util.concurrent.TimeUnit.SECONDS) }
+                assertTrue("All 10 concurrent responses must succeed: $responses",
+                    responses.all { it.startsWith("HTTP/1.1 200") })
+            } finally {
+                pool.shutdownNow()
+            }
+        } finally {
+            gate.countDown()
+            server.close()
         }
     }
 }

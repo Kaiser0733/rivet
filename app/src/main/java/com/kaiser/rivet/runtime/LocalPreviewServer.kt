@@ -33,7 +33,7 @@ internal data class PreviewPaths(val root: WorkspacePath, val entry: WorkspacePa
             val canonical = if (requested.isWithin(rootPath)) requested
                 else WorkspacePath.parse("${rootPath.value}/${requested.value}")
             require(canonical.isWithin(rootPath) &&
-                (rootPath.segments + canonical.segments).none { it == ".git" })
+                (rootPath.segments + canonical.segments).none(LocalPreviewPolicy::isDisallowedGitSegment))
             return PreviewPaths(rootPath, canonical)
         }
     }
@@ -62,7 +62,7 @@ internal class LocalPreviewServer(
     init {
         require(!rootPath.isRoot || !entryPath.isRoot)
         require(entryPath.isWithin(rootPath))
-        require((rootPath.segments + entryPath.segments).none { it == ".git" })
+        require((rootPath.segments + entryPath.segments).none(LocalPreviewPolicy::isDisallowedGitSegment))
     }
 
     fun start(): String {
@@ -70,7 +70,7 @@ internal class LocalPreviewServer(
         try {
             socket.reuseAddress = false
             socket.bind(InetSocketAddress(InetAddress.getByName("127.0.0.1"), 0), CLIENT_QUEUE_LIMIT)
-            clients = ThreadPoolExecutor(2, 2, 0L, TimeUnit.MILLISECONDS,
+            clients = ThreadPoolExecutor(4, 4, 0L, TimeUnit.MILLISECONDS,
                 ArrayBlockingQueue(CLIENT_QUEUE_LIMIT), { task ->
                     Thread(task, "RivetPreviewClient").apply { isDaemon = true }
                 }, ThreadPoolExecutor.AbortPolicy())
@@ -195,7 +195,10 @@ internal class LocalPreviewServer(
         if (decoded == "/") return entryPath
         val relative = decoded.removePrefix("/")
         val segments = relative.split('/')
-        if (segments.any { it.isEmpty() || it == "." || it == ".." || it == ".git" }) {
+        if (segments.any {
+                it.isEmpty() || it == "." || it == ".." || LocalPreviewPolicy.isDisallowedGitSegment(it)
+            }
+        ) {
             throw IllegalArgumentException()
         }
         return WorkspacePath.parse(if (rootPath.isRoot) relative else "${rootPath.value}/$relative")
@@ -224,18 +227,32 @@ internal class LocalPreviewServer(
             parts[2] !in setOf("HTTP/1.0", "HTTP/1.1")) throw IllegalArgumentException()
         var contentLength = 0L
         var hasTransferEncoding = false
+        var hostHeader: String? = null
+        var seenHost = false
         while (true) {
             val header = line()
             if (header.isEmpty()) break
             val colon = header.indexOf(':')
             if (colon <= 0) throw IllegalArgumentException()
+            val value = header.substring(colon + 1).trim()
             when (header.substring(0, colon).trim().lowercase()) {
-                "content-length" -> contentLength = header.substring(colon + 1).trim().toLongOrNull()
+                "content-length" -> contentLength = value.toLongOrNull()
                     ?: throw IllegalArgumentException()
                 "transfer-encoding" -> hasTransferEncoding = true
+                "host" -> {
+                    if (seenHost) throw IllegalArgumentException()
+                    seenHost = true
+                    hostHeader = value
+                }
             }
         }
         if (contentLength != 0L || hasTransferEncoding) throw IllegalArgumentException()
+        if (parts[2] == "HTTP/1.1" && !LocalPreviewPolicy.isLoopbackHostHeader(hostHeader, socket.localPort)) {
+            throw IllegalArgumentException()
+        }
+        if (hostHeader != null && !LocalPreviewPolicy.isLoopbackHostHeader(hostHeader, socket.localPort)) {
+            throw IllegalArgumentException()
+        }
         return Request(parts[0], parts[1])
     }
 
@@ -278,7 +295,7 @@ internal class LocalPreviewServer(
         private const val SAF_REQUEST_TIMEOUT_MS = 20_000L
         private const val MAX_HEADER_BYTES = 16 * 1024
         private const val MAX_REQUEST_LINE_BYTES = 4 * 1024
-        private const val CLIENT_QUEUE_LIMIT = 2
+        private const val CLIENT_QUEUE_LIMIT = 16
 
         fun contentType(name: String): String = when (name.substringAfterLast('.', "").lowercase()) {
             "html", "htm" -> "text/html; charset=utf-8"
