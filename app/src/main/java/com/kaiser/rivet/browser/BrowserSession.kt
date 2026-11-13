@@ -1940,8 +1940,13 @@ class BrowserSession(
     }
 
     private fun onDownloadRequested(url: String, disposition: String?, mime: String?, length: Long) {
-        val name = disposition?.substringAfter("filename=", "")?.trim('"')
-            ?.takeIf { it.isNotBlank() } ?: url.substringAfterLast('/').ifBlank { "download" }
+        if (!BrowserDownloadPolicy.isSupportedDownloadUrl(url)) {
+            _state.update { it.copy(error = "Only http:// and https:// downloads are supported.") }
+            return
+        }
+        val rawName = disposition?.substringAfter("filename=", "")?.trim('"')
+            ?.takeIf { it.isNotBlank() } ?: url.substringAfterLast('/')
+        val name = BrowserDownloadPolicy.sanitizeFileName(rawName)
         val size = length.coerceAtLeast(0)
         val metered = runCatching {
             val cm = app.getSystemService(ConnectivityManager::class.java)
@@ -1956,14 +1961,19 @@ class BrowserSession(
     }
 
     private fun enqueueDownload(prompt: BrowserDownloadPrompt) {
-        val request = DownloadManager.Request(Uri.parse(prompt.url))
-            .setTitle(prompt.fileName)
-            .setDescription("Downloaded by Rivet's browser")
-            .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
-            .setDestinationInExternalFilesDir(app, Environment.DIRECTORY_DOWNLOADS, prompt.fileName)
+        if (!BrowserDownloadPolicy.isSupportedDownloadUrl(prompt.url)) {
+            _state.update { it.copy(error = "Only http:// and https:// downloads are supported.") }
+            return
+        }
+        val safeName = BrowserDownloadPolicy.sanitizeFileName(prompt.fileName)
         runCatching {
+            val request = DownloadManager.Request(Uri.parse(prompt.url))
+                .setTitle(safeName)
+                .setDescription("Downloaded by Rivet's browser")
+                .setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE_NOTIFY_COMPLETED)
+                .setDestinationInExternalFilesDir(app, Environment.DIRECTORY_DOWNLOADS, safeName)
             (app.getSystemService(Context.DOWNLOAD_SERVICE) as DownloadManager).enqueue(request)
-            _state.update { it.copy(notice = "Downloading ${prompt.fileName} (${prompt.sizeBytes / 1024}KB).") }
+            _state.update { it.copy(notice = "Downloading $safeName (${prompt.sizeBytes / 1024}KB).") }
         }.onFailure {
             _state.update { state -> state.copy(error = "The download could not start.") }
         }

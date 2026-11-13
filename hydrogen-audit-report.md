@@ -131,7 +131,7 @@
 - **JiTTest**: Compose / Robolectric JiTTest (`NEEDS-DEVICE-PROOF` offline).
 
 #### H13 — `BrowserSession.enqueueDownload` crashes on non-HTTP(S) URIs (`blob:`, `data:`)
-- **Status**: `PENDING`
+- **Status**: `FIXED` (`BrowserDownloadPolicyTest` PASS `OK (2 tests)` on JVM for `http`/`https` scheme validation & filename sanitization; `BrowserSession.kt` passes `kt-checks.py balance`)
 - **Files**: `app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt:1958-1970`
 - **Issue**: `DownloadManager.Request(Uri.parse(prompt.url))` and `setDestinationInExternalFilesDir` run outside `runCatching`, crashing the main thread on `blob:`/`data:` URLs or invalid paths.
 - **Fix**: Validate `http`/`https` scheme via pure `BrowserDownloadPolicy` helper, sanitize filename, and move request construction inside `runCatching`.
