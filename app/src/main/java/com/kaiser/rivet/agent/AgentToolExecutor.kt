@@ -298,6 +298,7 @@ class AgentToolExecutor(
                     require(args.command.isNotBlank() && '\u0000' !in args.command &&
                         args.command.toByteArray(Charsets.UTF_8).size <= 8192)
                     val cwd = path(args.cwd, root = true)
+                    val matchedScripts = matchSkillScripts(args.command, skills, cwd = cwd)
                     require(args.timeoutMs in 1000..MAX_COMMAND_TIMEOUT_MS)
                     PreparedAgentTool(
                         call,
@@ -308,7 +309,8 @@ class AgentToolExecutor(
                         basicAutonomyRisk = ApprovalPolicy.basicCommandRisk(args.command),
                         modelRequestsApproval = args.askUser,
                         blockedReason = ApprovalPolicy.blockedCommandReason(args.command),
-                        skillScript = matchSkillScript(args.command, skills),
+                        skillScript = matchedScripts.firstOrNull(),
+                        skillScripts = matchedScripts,
                     ) {
                         execute(call) {
                             val result = runCommand?.invoke(args.command, cwd, args.timeoutMs.toLong())
@@ -669,15 +671,14 @@ class AgentToolExecutor(
         @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
     )
     private fun reservedGoalMutation(call: AgentToolCall): Boolean {
-        if (call.name !in setOf("write_file", "apply_patch", "create_file", "create_directory",
-                "delete_path", "rename_path", "move_path", "download_file")) return false
         return try {
             val value = json.parseToJsonElement(call.arguments).jsonObject
-            listOf("path", "new_name", "destination").any { key ->
-                val target = value[key]?.jsonPrimitive?.contentOrNull
-                    ?.replace('\\', '/')?.removePrefix("./")?.trimStart('/')
-                target == GoalDocument.PATH
-            }
+            GoalMutationGuard.isReservedMutation(
+                toolName = call.name,
+                path = value["path"]?.jsonPrimitive?.contentOrNull,
+                newName = value["new_name"]?.jsonPrimitive?.contentOrNull,
+                destination = value["destination"]?.jsonPrimitive?.contentOrNull,
+            )
         } catch (_: Exception) { false }
     }
 

@@ -88,8 +88,6 @@ data class AgentApprovalRequest(
     val approvalToken: Long = 0L,
 )
 
-enum class AutonomyMode { Ask, BasicYolo, Yolo }
-
 /** Execution effects drive integrity work independently from human confirmation. */
 enum class AgentToolEffect(
     val changesWorkspace: Boolean = false,
@@ -144,6 +142,7 @@ class PreparedAgentTool(
     val blockedReason: String? = null,
     /** Set for a command that references an installed skill's bundled files. */
     val skillScript: SkillScriptHit? = null,
+    val skillScripts: List<SkillScriptHit> = emptyList(),
     val execute: suspend () -> AgentToolResult,
 )
 

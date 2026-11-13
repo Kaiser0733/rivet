@@ -473,13 +473,18 @@
 - **JiTTest**: `ByoModelResolverTest` + `LocalChecksumPolicyTest` (`3 failures` before fix -> `OK (6 tests)` after fix on JVM).
 
 #### H47 — Reserved `.rivet/goal.md` bypasses & `SkillScriptGate` matching gaps (`cwd`, `cd --`, `./`, multi-skill)
-- **Status**: `PENDING`
+- **Status**: `FIXED`
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/agent/AgentToolExecutor.kt:313, 673-682`
-  - `app/src/main/java/com/kaiser/rivet/agent/SkillScriptGate.kt:1-83`
-- **Issue**: `reservedGoalMutation` only inspects direct `path` (missable by deleting `.rivet`, renaming/moving `.rivet` or `dir` into `.rivet`, or renaming/moving a file to `goal.md` inside `.rivet`); `matchSkillScript` omits command `cwd`, misses `cd --` and `./`, and stops at the first matching skill alphabetically.
-- **Fix**: Cover `.rivet` ancestor mutations and destination paths of `rename_path`/`move_path` in `reservedGoalMutation`; pass `cwd` into `matchSkillScript`, handle `cd --`/`./`, and collect/match across all skills cleanly.
-- **JiTTest**: Pure-Kotlin JVM JiTTests for `SkillScriptGate` and `AgentToolExecutor.reservedGoalMutation`.
+  - `app/src/main/java/com/kaiser/rivet/agent/GoalMutationGuard.kt`
+  - `app/src/main/java/com/kaiser/rivet/agent/AutonomyMode.kt`
+  - `app/src/main/java/com/kaiser/rivet/agent/SkillScriptMatcher.kt`
+  - `app/src/main/java/com/kaiser/rivet/agent/AgentToolExecutor.kt`
+  - `app/src/main/java/com/kaiser/rivet/agent/SkillScriptGate.kt`
+  - `app/src/main/java/com/kaiser/rivet/agent/AgentProtocol.kt`
+  - `app/src/main/java/com/kaiser/rivet/agent/AgentLoop.kt`
+- **Issue**: `reservedGoalMutation` only inspects direct `path` (missable by deleting/renaming/moving `.rivet`, renaming `dir/foo` to `.rivet/goal.md`, or moving `*/goal.md` into `.rivet`); `matchSkillScript` omits command `cwd`, misses `cd --`/`pushd`/`./`, and stops at the first matching skill alphabetically even if a second matched skill is unapproved.
+- **Fix**: Extracted `GoalMutationGuard` covering `.rivet` ancestor mutations and reconstructed destinations of `rename_path`/`move_path`; updated `SkillScriptGate` with `matchSkillScripts(command, catalog, cwd)` handling `cwd`, `./`, `cd --`/`pushd`, and multi-skill approval collection across `AgentToolExecutor` and `AgentLoop`.
+- **JiTTest**: `GoalMutationGuardTest` (2 failures before fix -> `OK (2 tests)`) + `SkillScriptMatchTest` (`OK (3 tests)` on JVM).
 
 #### H48 — `LocalPreviewServer` case-sensitive `.git` block, missing `Host` check, and tiny connection queue
 - **Status**: `PENDING`

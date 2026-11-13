@@ -14,70 +14,50 @@ internal enum class SkillScriptGate {
     ExistingApproval,
 }
 
-private fun isPathChar(value: Char): Boolean =
-    value.isLetterOrDigit() || value == '.' || value == '_' || value == '-'
-
 /**
- * Matches a command against the base directory of every directory skill in [catalog].
- *
- * A hit is a reference to a path *inside* a skill folder, or a `cd <folder>` target, using
- * either the catalog form (project-relative like `.rivet/skills/notes`) or an absolute
- * form that contains it (mirror paths, the global folder under app storage). Matching is
- * boundary-aware, so `.rivet/skills/notes2` is not `notes`; a skill's name in prose or a
- * relative `scripts/x` with no skill folder is not a hit. Flat-file skills share their
- * root with siblings and bundle nothing runnable, so they never match.
+ * Matches a command and optional [cwd] against every directory skill in [catalog], returning
+ * all matched skills in catalog order.
  */
-internal fun matchSkillScript(command: String, catalog: SkillCatalog?): SkillScriptHit? {
+internal fun matchSkillScripts(
+    command: String,
+    catalog: SkillCatalog?,
+    cwd: String = "",
+): List<SkillScriptHit> {
     val skills = catalog?.skills.orEmpty()
-    if (command.isEmpty() || skills.isEmpty()) return null
-    val text = command.replace('\\', '/')
-    for (skill in skills) {
-        val base = skill.source?.baseDir?.trimEnd('/')?.replace('\\', '/') ?: continue
-        if (base.isEmpty() || base.substringAfterLast('/') != skill.name) continue
-        var from = 0
-        while (true) {
-            val index = text.indexOf(base, from)
-            if (index < 0) break
-            from = index + 1
-            val before = text.getOrNull(index - 1)
-            if (before != null && isPathChar(before)) continue
-            val after = text.getOrNull(index + base.length)
-            val inside = after == '/'
-            val boundary = after == null || after.isWhitespace() || after in "\"'`;&|)"
-            if (inside || (boundary && isCdTarget(text, index))) {
-                return SkillScriptHit(skill, referencedPath(text, index, base.length))
-            }
-        }
+    if ((command.isEmpty() && cwd.isEmpty()) || skills.isEmpty()) return emptyList()
+    val byName = skills.associateBy { it.name }
+    val targets = skills.map { SkillScriptTarget(it.name, it.source?.baseDir) }
+    return SkillScriptMatcher.matchTargets(command, targets, cwd).mapNotNull { matched ->
+        byName[matched.name]?.let { SkillScriptHit(it, matched.path) }
     }
-    return null
 }
 
-/** True when the token before the base directory is `cd` (quotes allowed). */
-private fun isCdTarget(text: String, index: Int): Boolean {
-    val head = text.substring(0, index).trimEnd()
-    val token = head.trimEnd('"', '\'').trimEnd()
-        .takeLastWhile { !it.isWhitespace() && it !in ";&|(" }
-    return token == "cd"
-}
-
-/** The command text from the base directory to the end of its path token. */
-private fun referencedPath(text: String, index: Int, length: Int): String {
-    var end = index + length
-    while (end < text.length && !text[end].isWhitespace() && text[end] !in "\"'`;&|)") end++
-    return text.substring(index, end)
-}
+/** Single-hit wrapper retained for callers and existing tests. */
+internal fun matchSkillScript(
+    command: String,
+    catalog: SkillCatalog?,
+    cwd: String = "",
+): SkillScriptHit? = matchSkillScripts(command, catalog, cwd).firstOrNull()
 
 /**
- * The first-run decision for one command: only add a prompt when the mode would otherwise
- * run the command silently. YOLO removes every approval, so the gate is inert there.
+ * The first-run decision for one command covering all matched skills: asks whenever any matched
+ * skill has not yet been approved. YOLO disables the gate entirely.
  */
+internal fun skillScriptGate(
+    mode: AutonomyMode,
+    hits: List<SkillScriptHit>,
+    approved: Set<String>,
+    baseAsks: Boolean,
+): SkillScriptGate {
+    if (!SkillScriptMatcher.isGateNeeded(mode == AutonomyMode.Yolo, hits.map { it.skill.name }, approved)) {
+        return SkillScriptGate.None
+    }
+    return if (baseAsks) SkillScriptGate.ExistingApproval else SkillScriptGate.InsertApproval
+}
+
 internal fun skillScriptGate(
     mode: AutonomyMode,
     hit: SkillScriptHit?,
     approved: Set<String>,
     baseAsks: Boolean,
-): SkillScriptGate {
-    if (mode == AutonomyMode.Yolo) return SkillScriptGate.None
-    if (hit == null || hit.skill.name in approved) return SkillScriptGate.None
-    return if (baseAsks) SkillScriptGate.ExistingApproval else SkillScriptGate.InsertApproval
-}
+): SkillScriptGate = skillScriptGate(mode, listOfNotNull(hit), approved, baseAsks)
