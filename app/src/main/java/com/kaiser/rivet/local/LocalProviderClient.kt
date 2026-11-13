@@ -15,6 +15,8 @@ import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 
 /**
@@ -61,6 +63,10 @@ class LocalProviderClient(
         val maxTokens = config.resolvedManualMaxOutputTokens() ?: 512
 
         return withContext(Dispatchers.IO) {
+            val job = coroutineContext[Job]
+            val cancelHook = job?.invokeOnCompletion { cause ->
+                if (cause is CancellationException) manager.stopGeneration()
+            }
             try {
                 val prompt = buildPrompt(entry, system, request.messages)
                 var thermalPause: String? = null
@@ -74,27 +80,33 @@ class LocalProviderClient(
                     topP = 0.95f,
                     grammar = null,
                     onToken = { delta ->
-                        visible.feed(delta).takeIf { it.isNotEmpty() }?.let(onDelta)
-                        emitted++
-                        // Sustained generation is where throttling actually happens. Check
-                        // periodically and stop the native loop at the next token boundary.
-                        if (emitted % 32 == 0 && thermalPause == null) {
-                            thermalPause = LocalThermal.pauseReason(app)
-                            if (thermalPause != null) manager.stopGeneration()
+                        if (job?.isCancelled == true) {
+                            manager.stopGeneration()
+                        } else {
+                            visible.feed(delta).takeIf { it.isNotEmpty() }?.let(onDelta)
+                            emitted++
+                            // Sustained generation is where throttling actually happens. Check
+                            // periodically and stop the native loop at the next token boundary.
+                            if (emitted % 32 == 0 && thermalPause == null) {
+                                thermalPause = LocalThermal.pauseReason(app)
+                                if (thermalPause != null) manager.stopGeneration()
+                            }
                         }
                     },
                 )
+                coroutineContext.ensureActive()
                 thermalPause?.let { throw ProviderError.ProviderMessage(it) }
                 visible.finish().takeIf { it.isNotEmpty() }?.let(onDelta)
-                var parsed = LocalToolProtocol.parse(text, tools.map { it.name }.toSet())
+                var visibleText = LocalThinkingFilter.strip(text)
+                var parsed = LocalToolProtocol.parse(visibleText, tools.map { it.name }.toSet())
                 // Prompted tool formats are the fallback path. If a model starts a tool
                 // call but does not produce parseable JSON, constrain one retry with GBNF.
                 if (parsed.calls.isEmpty() && tools.isNotEmpty() &&
                     entry.toolCalling == LocalToolCalling.Prompted &&
-                    LocalToolProtocol.looksLikeToolAttempt(text)) {
+                    LocalToolProtocol.looksLikeToolAttempt(visibleText)) {
                     val correction = "Your previous reply could not be parsed as a tool call. " +
                         "Return exactly one JSON object with \"name\" and \"arguments\" keys. " +
-                        "Previous reply: " + text.take(200)
+                        "Previous reply: " + visibleText.take(200)
                     val retryPrompt = buildPrompt(entry, system,
                         request.messages + AgentMessage(AgentRole.User, text = correction))
                     text = manager.generate(
@@ -104,9 +116,13 @@ class LocalProviderClient(
                         temperature = 0.2f,
                         topP = 0.95f,
                         grammar = LocalToolProtocol.grammar(tools),
-                        onToken = {},
+                        onToken = {
+                            if (job?.isCancelled == true) manager.stopGeneration()
+                        },
                     )
-                    parsed = LocalToolProtocol.parse(text, tools.map { it.name }.toSet())
+                    coroutineContext.ensureActive()
+                    visibleText = LocalThinkingFilter.strip(text)
+                    parsed = LocalToolProtocol.parse(visibleText, tools.map { it.name }.toSet())
                 }
                 val answer = stripUntaggedToolMusing(LocalThinkingFilter.strip(parsed.text))
                 if (answer.isBlank() && parsed.calls.isEmpty()) {
@@ -122,6 +138,8 @@ class LocalProviderClient(
                 throw e
             } catch (e: LocalFailure) {
                 throw ProviderError.ProviderMessage(e.message ?: "The local model could not run.")
+            } finally {
+                cancelHook?.dispose()
             }
         }
     }

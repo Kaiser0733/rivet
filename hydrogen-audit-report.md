@@ -175,11 +175,13 @@
 - **JiTTest**: `LocalThinkingFilterTest.splitThinkingCloseTagDoesNotLeakIngSuffixAndIgnoresUnmatchedInnerTag` (verified RED `AssertionError expected:<[]answer> but was:<[ing>]answer>` -> GREEN `OK (10 tests)`).
 
 #### H18 — `LocalProviderClient` parses tool calls before stripping `<think>` blocks and ignores coroutine cancellation
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/local/LocalProviderClient.kt:89-111`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; `LocalToolProtocolTest` + `LocalProviderClient` require `@Serializable` plugin / Android runtime)
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/local/LocalProviderClient.kt:65-145`
+  - `app/src/main/java/com/kaiser/rivet/local/LocalToolProtocol.kt:88-123`
 - **Issue**: `LocalToolProtocol.parse` / `looksLikeToolAttempt` inspect raw output before `LocalThinkingFilter.strip(raw)` (so `<think>...</think>{"name":...}` or JSON examples inside `<think>` misfire), and `withContext(Dispatchers.IO)` doesn't invoke `manager.stopGeneration()` on job cancellation.
-- **Fix**: Strip `<think>` blocks first via `LocalThinkingFilter.strip` before parsing tool calls / counting `looksLikeToolAttempt`, and cancel generation via coroutine cancellation handler (`invokeOnCompletion` / `suspendCancellableCoroutine` / `CoroutineScope` cancellation bridge).
-- **JiTTest**: Pure-Kotlin JVM JiTTest (if parsing helper extracted cleanly) + client unit test.
+- **Fix**: Strip `<think>` blocks inside `LocalToolProtocol.parse` and `looksLikeToolAttempt` as well as in `LocalProviderClient` (initial and retry output), and attach `coroutineContext[Job]?.invokeOnCompletion` + `ensureActive()` cancellation checks to call `manager.stopGeneration()` immediately on job cancellation.
+- **JiTTest**: `LocalToolProtocolTest.ignoresToolJsonAndAttemptsInsideThinkingBlocks`.
 
 #### H19 — `ModelDownloadManager` preserves stale `prior.wifiOnly` and wedges on HTTP 416 when `.part` > expected size
 - **Status**: `PENDING`

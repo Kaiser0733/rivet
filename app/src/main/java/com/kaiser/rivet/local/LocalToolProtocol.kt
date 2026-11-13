@@ -86,38 +86,41 @@ object LocalToolProtocol {
     }
 
     fun parse(output: String, allowed: Set<String> = coreTools): ParsedLocalOutput {
+        val visible = LocalThinkingFilter.strip(output)
         val calls = mutableListOf<AgentToolCall>()
         for (tag in TAGS) {
             var from = 0
             while (true) {
-                val open = output.indexOf(tag.open, from, ignoreCase = true)
+                val open = visible.indexOf(tag.open, from, ignoreCase = true)
                 if (open < 0) break
                 val bodyStart = open + tag.open.length
                 val close = tag.close?.let { marker ->
-                    output.indexOf(marker, bodyStart, ignoreCase = true).takeIf { it >= 0 }
-                } ?: output.length
-                val bodyEnd = close.coerceAtMost(output.length)
-                val body = output.substring(bodyStart, bodyEnd)
+                    visible.indexOf(marker, bodyStart, ignoreCase = true).takeIf { it >= 0 }
+                } ?: visible.length
+                val bodyEnd = close.coerceAtMost(visible.length)
+                val body = visible.substring(bodyStart, bodyEnd)
                 val parsed = parseCalls(body, allowed)
                 calls += parsed
-                if (close >= output.length) break
+                if (close >= visible.length) break
                 from = bodyEnd + (tag.close?.length ?: 0)
             }
         }
         if (calls.isEmpty()) {
-            for ((start, end) in jsonObjectRanges(output)) {
-                parseObject(output.substring(start, end + 1), allowed)?.let { calls += it }
+            for ((start, end) in jsonObjectRanges(visible)) {
+                parseObject(visible.substring(start, end + 1), allowed)?.let { calls += it }
             }
         }
-        if (calls.isEmpty()) return ParsedLocalOutput(output.trim(), emptyList())
+        if (calls.isEmpty()) return ParsedLocalOutput(visible.trim(), emptyList())
         // Prose around a prompted call is tool musing, not an answer. The final
         // answer arrives in the next model step after the tool result.
         return ParsedLocalOutput("", calls)
     }
 
-    fun looksLikeToolAttempt(text: String): Boolean =
-        TAGS.any { text.contains(it.open, ignoreCase = true) } ||
-            (text.contains("\"name\"") && (text.contains("\"arguments\"") || text.contains("\"parameters\"")))
+    fun looksLikeToolAttempt(text: String): Boolean {
+        val visible = LocalThinkingFilter.strip(text)
+        return TAGS.any { visible.contains(it.open, ignoreCase = true) } ||
+            (visible.contains("\"name\"") && (visible.contains("\"arguments\"") || visible.contains("\"parameters\"")))
+    }
 
     private fun parseCalls(raw: String, allowed: Set<String>): List<AgentToolCall> {
         val direct = parseObject(raw, allowed)

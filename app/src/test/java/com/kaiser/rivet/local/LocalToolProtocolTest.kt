@@ -165,4 +165,16 @@ That is the call.""",
         assertTrue(gbnf, gbnf.contains("name ::= \"\\\"read_file\\\"\" | \"\\\"write_file\\\"\""))
         assertTrue(gbnf, gbnf.contains("\"\\\"arguments\\\"\" ws \":\" ws object ws \"}\""))
     }
+
+    @Test
+    fun ignoresToolJsonAndAttemptsInsideThinkingBlocks() {
+        val raw = """
+            <think>I could call {"name":"read_file","arguments":{"path":"a.kt"}} or <tool_call>{"name":"read_file"}</tool_call></think>
+            Here is the plain answer.
+        """.trimIndent()
+        val parsed = LocalToolProtocol.parse(raw, setOf("read_file"))
+        assertTrue(parsed.calls.isEmpty())
+        assertEquals("Here is the plain answer.", parsed.text)
+        assertTrue(!LocalToolProtocol.looksLikeToolAttempt(raw))
+    }
 }
