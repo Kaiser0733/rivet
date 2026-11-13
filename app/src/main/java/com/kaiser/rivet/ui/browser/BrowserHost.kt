@@ -19,9 +19,6 @@ private class HeldWebView {
  * The only WebView in the app. Composition removes the view before release; only
  * then does the host stop and destroy it, and only then does the session clear the
  * renderer card/visibility state.
- *
- * The WebView sits in a host FrameLayout so the stale-paint ladder can remove and
- * re-add the same view, forcing a fresh surface without losing the session.
  */
 @Composable
 fun BrowserHost(session: BrowserSession, modifier: Modifier = Modifier) {
@@ -35,19 +32,11 @@ fun BrowserHost(session: BrowserSession, modifier: Modifier = Modifier) {
             held.view = web
             frame.addView(web, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
-            session.surfaceReattacher = {
-                val params = web.layoutParams ?: FrameLayout.LayoutParams(
-                    ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT)
-                (web.parent as? ViewGroup)?.removeView(web)
-                frame.addView(web, params)
-                web.requestLayout()
-            }
             session.attach(web)
             frame
         },
         modifier = modifier,
         onRelease = { frame ->
-            session.surfaceReattacher = null
             val web = held.view ?: (0 until frame.childCount)
                 .map { frame.getChildAt(it) }
                 .filterIsInstance<WebView>()

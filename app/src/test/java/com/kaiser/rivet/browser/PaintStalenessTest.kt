@@ -16,4 +16,29 @@ class PaintStalenessTest {
     @Test fun aPageThatCannotScrollIsNotCalledStale() {
         assertFalse(PaintStaleness.isStale(FrameProbe(0, "same"), FrameProbe(0, "same")))
     }
+
+    @Test fun unchangedHashAcrossDifferentUrlIsNavigationStale() {
+        assertTrue(
+            PaintStaleness.isNavigationStale(
+                previous = NavigationFrame("https://a.com", "h1"),
+                current = NavigationFrame("https://b.com", "h1"),
+            )
+        )
+    }
+
+    @Test fun unchangedHashOnSameUrlOrChangedHashIsNotNavigationStale() {
+        assertFalse(PaintStaleness.isNavigationStale(null, NavigationFrame("https://b.com", "h1")))
+        assertFalse(
+            PaintStaleness.isNavigationStale(
+                previous = NavigationFrame("https://a.com", "h1"),
+                current = NavigationFrame("https://a.com", "h1"),
+            )
+        )
+        assertFalse(
+            PaintStaleness.isNavigationStale(
+                previous = NavigationFrame("https://a.com", "h1"),
+                current = NavigationFrame("https://b.com", "h2"),
+            )
+        )
+    }
 }

@@ -221,7 +221,7 @@ class BrowserSession(
     private var paintRecoveryJob: kotlinx.coroutines.Job? = null
     private val rotationScroll = ScrollRestore()
     private var scrollLayoutListener: android.view.View.OnLayoutChangeListener? = null
-    var surfaceReattacher: (() -> Unit)? = null
+    private var lastPaintedFrame: NavigationFrame? = null
 
     private val _state = MutableStateFlow(BrowserUiState(
         allowJs = prefs.getBoolean("allow_js", true),
@@ -664,7 +664,7 @@ class BrowserSession(
         readerSampleJob = scope.launch {
             kotlinx.coroutines.delay(900)
             if (_state.value.readerMode || readerReloaded) return@launch
-            val verdict = samplePaint() ?: return@launch
+            val verdict = samplePaint(_state.value.url) ?: return@launch
             if (verdict == PaintVerdict.Stale) {
                 recoverStalePaint(_state.value.url)
             } else if (verdict == PaintVerdict.BlankWithDom) {
@@ -674,7 +674,7 @@ class BrowserSession(
         }
     }
 
-    private suspend fun samplePaint(): PaintVerdict? {
+    private suspend fun samplePaint(sampledUrl: String? = null): PaintVerdict? {
         val view = renderer ?: return null
         if (view.width <= 0 || view.height <= 0) return null
         val dom = evaluate(view, "document.body?document.body.innerText.length:0")
@@ -709,6 +709,10 @@ class BrowserSession(
             return PaintVerdict.Unknown
         }
         return try {
+            if (!sampledUrl.isNullOrBlank() &&
+                PaintStaleness.isNavigationStale(lastPaintedFrame, NavigationFrame(sampledUrl, firstHash))) {
+                return PaintVerdict.Stale
+            }
             val scrolled = scrolledY
             if (startY != null && scrolled != null && scrolled != startY && secondHash.isNotEmpty() &&
                 PaintStaleness.isStale(FrameProbe(startY, firstHash),
@@ -717,24 +721,27 @@ class BrowserSession(
             val right = bitmap.width - left
             val top = bitmap.height / 4
             val bottom = bitmap.height - bitmap.height / 8
+            val sampleStartX = left.coerceAtLeast(0)
+            val sampleStartY = top.coerceAtLeast(0)
+            val cols = if (right > sampleStartX) (right - sampleStartX + 7) / 8 else 0
+            val rows = if (bottom > sampleStartY) (bottom - sampleStartY + 7) / 8 else 0
+            val pixels = IntArray(cols * rows)
             var total = 0
-            var nearWhite = 0
-            var y = top.coerceAtLeast(0)
+            var y = sampleStartY
             while (y < bottom) {
-                var x = left.coerceAtLeast(0)
+                var x = sampleStartX
                 while (x < right) {
-                    val color = bitmap.getPixel(x, y)
-                    val r = android.graphics.Color.red(color)
-                    val g = android.graphics.Color.green(color)
-                    val b = android.graphics.Color.blue(color)
-                    if (r >= 245 && g >= 245 && b >= 245) nearWhite++
-                    total++
+                    pixels[total++] = bitmap.getPixel(x, y)
                     x += 8
                 }
                 y += 8
             }
-            val fraction = if (total == 0) 0f else nearWhite.toFloat() / total
-            PaintVerdict.decide(dom, sampled = true, nearWhiteFraction = fraction)
+            val sampledPixels = if (total == pixels.size) pixels else pixels.copyOf(total)
+            val verdict = PaintVerdict.classifyPixels(dom, sampledPixels)
+            if (verdict == PaintVerdict.Painted && !sampledUrl.isNullOrBlank()) {
+                lastPaintedFrame = NavigationFrame(sampledUrl, firstHash)
+            }
+            verdict
         } finally {
             bitmap.recycle()
             File(firstShot.path).delete()
@@ -773,25 +780,14 @@ class BrowserSession(
         paintRecoveryJob = scope.launch {
             val view = renderer ?: return@launch
             android.util.Log.w("BrowserPaint", "stale frame detected; starting recovery ladder url=$url")
-            unparkRenderer()
+            unparkRenderer(verifyPaint = false)
             view.onResume()
             view.visibility = android.view.View.VISIBLE
             view.invalidate()
             delay(250)
-            if (samplePaint() != PaintVerdict.Stale) {
+            if (samplePaint(url) != PaintVerdict.Stale) {
                 android.util.Log.i("BrowserPaint", "recovered-with-ladder step=resume")
                 return@launch
-            }
-            val reattach = surfaceReattacher
-            if (reattach != null) {
-                reattach.invoke()
-                delay(400)
-                if (samplePaint() != PaintVerdict.Stale) {
-                    android.util.Log.i("BrowserPaint", "recovered-with-ladder step=reattach")
-                    return@launch
-                }
-            } else {
-                android.util.Log.w("BrowserPaint", "recovery step=reattach unavailable")
             }
             saveActiveSnapshot()
             pendingRestart = PendingPaintRestart(url,
@@ -810,7 +806,7 @@ class BrowserSession(
             kotlinx.coroutines.delay(1_500)
             if (!_state.value.visible || _state.value.readerMode ||
                 _state.value.url != url || !_state.value.pageReady) return@launch
-            val verdict = samplePaint() ?: return@launch
+            val verdict = samplePaint(url) ?: return@launch
             if (verdict == PaintVerdict.Stale) {
                 recoverStalePaint(url)
                 return@launch
@@ -1086,7 +1082,7 @@ class BrowserSession(
         baselineJob = scope.launch(Dispatchers.Default) {
             baselineOwnPss = runCatching { memoryProbe.sample().ownPssBytes }.getOrDefault(0L)
         }
-        view.setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+        view.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
         configure(view)
         rendererReady?.complete(view)
         view.webViewClient = clientFor(view)
@@ -2076,6 +2072,7 @@ class BrowserSession(
         paintWatchdogJob = null
         paintRecoveryJob?.cancel()
         paintRecoveryJob = null
+        lastPaintedFrame = null
         baselineOwnPss = 0L
         baselineAvailMem = 0L
         lastOwnGrowthBytes = 0L

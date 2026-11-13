@@ -116,4 +116,17 @@ class BrowserSourceSafetyTest {
         assertFalse(screen.contains("runCatching { session.showReader() }"))
         assertTrue(screen.contains("state.url.isBlank() && (!state.rendererVisible || state.activeWindowId == null)"))
     }
+
+    @Test fun rendererAttachDisablesHardwareLayerAndDropsSurfaceReattach() {
+        val session = source("BrowserSession.kt")
+        assertTrue(session.contains("view.setLayerType(android.view.View.LAYER_TYPE_NONE, null)"))
+        assertFalse(session.contains("LAYER_TYPE_HARDWARE"))
+        assertFalse(session.contains("surfaceReattacher"))
+        assertTrue(session.contains("PaintVerdict.classifyPixels"))
+        assertTrue(session.contains("PaintStaleness.isNavigationStale"))
+
+        val host = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt")).first { it.isFile }.readText()
+        assertFalse(host.contains("surfaceReattacher"))
+    }
 }

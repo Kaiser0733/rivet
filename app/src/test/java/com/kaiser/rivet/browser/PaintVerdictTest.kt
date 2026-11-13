@@ -31,4 +31,21 @@ class PaintVerdictTest {
     @Test fun anUnsampledFrameIsUnknownNeverBlank() {
         assertEquals(PaintVerdict.Unknown, PaintVerdict.decide(0, sampled = false, nearWhiteFraction = 1f))
     }
+
+    @Test fun uniformDarkPixelsWithDomAreClassifiedAsBlankWithDom() {
+        val pixels = IntArray(64) { 0xFF232324.toInt() }
+        assertEquals(PaintVerdict.BlankWithDom, PaintVerdict.classifyPixels(800, pixels))
+    }
+
+    @Test fun uniformBlackPixelsWithoutDomAreClassifiedAsBlankNoDom() {
+        val pixels = IntArray(64) { 0xFF000000.toInt() }
+        assertEquals(PaintVerdict.BlankNoDom, PaintVerdict.classifyPixels(0, pixels))
+    }
+
+    @Test fun darkBackgroundWithLightTextRemainsPainted() {
+        val pixels = IntArray(64) { index ->
+            if (index % 16 == 0) 0xFFF0F0F0.toInt() else 0xFF18181A.toInt()
+        }
+        assertEquals(PaintVerdict.Painted, PaintVerdict.classifyPixels(800, pixels))
+    }
 }
