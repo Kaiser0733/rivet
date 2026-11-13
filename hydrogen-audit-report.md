@@ -191,11 +191,14 @@
 - **JiTTest**: `DownloadPolicyTest.effectiveWifiOnlyRespectsGlobalDisableAndExplicitMobileAllow` and `DownloadPolicyTest.http416RestartsOversizedOrRejectedPartInsteadOfWedging`.
 
 #### H20 — `ByoModelResolver` fails on uppercase `HTTPS://`, corrupts `+` and branches, and mishandles repos named `blob`/`resolve`
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/local/ByoModelResolver.kt:1-141`
-- **Issue**: Case-sensitive `removePrefix("https://")` rejects `HTTPS://...`; searching for `"blob"`/`"resolve"` segment across `owner/repo` misparses repos named `blob`/`resolve`; `URLDecoder.decode` turns literal `+` in filenames into spaces.
-- **Fix**: Parse URL using `java.net.URI` / `HttpUrl`, lowercase scheme/host, inspect path segments strictly after `<owner>/<repo>`, decode `%XX` without `+`->space mangling.
-- **JiTTest**: Pure-Kotlin JVM JiTTest (`ByoModelResolverTest`).
+- **Status**: `FIXED` (`ByoModelResolverTest` live RED->GREEN on JVM via `K2JVMCompiler` + `JUnitCore`; `kt-checks.py balance` PASS)
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/local/ByoLinkParser.kt` (new pure helper)
+  - `app/src/main/java/com/kaiser/rivet/local/ByoModelResolver.kt:1-60`
+  - `app/src/main/java/com/kaiser/rivet/local/ModelCatalogue.kt:45-52`
+- **Issue**: Case-sensitive `removePrefix("https://")` rejects `HTTPS://...`; searching for `"blob"`/`"resolve"` segment across `owner/repo` misparses repos named `blob`/`resolve`; `URLDecoder.decode` turns literal `+` in filenames into spaces; hardcoded `resolve/main/` drops non-`main` branches.
+- **Fix**: Extracted `ByoLinkParser` using `java.net.URI` (case-insensitive `https` and host check), matching `"blob"`/`"resolve"` strictly at path segment index 2 (`<owner>/<repo>/(blob|resolve)/<revision>/<file>`), decoding `%XX` UTF-8 bytes without converting `+` to spaces, rejecting `%2e%2e` traversal segments, and adding defaulted `revision: String = "main"` to `LocalModelEntry` + `ByoLinkParser.downloadUrl`.
+- **JiTTest**: `ByoModelResolverTest` (`parsesUppercaseSchemeAndHostPreservingPlusAndBranch`, `doesNotConfuseOwnerOrRepoNamedBlobOrResolveWithPathDelimiter`, `rejectsTraversalEvenWhenPercentEncoded`; verified RED 2 failures -> GREEN `OK (3 tests)`).
 
 #### H21 — `AgentToolExecutor.reservedGoalMutation` lacks `ReadOnly`, `AgentLoop` truncates duplicate call IDs & mislabels move/rename folder prompts, `ReadArgs.offset` is `Int`
 - **Status**: `PENDING`

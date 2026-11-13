@@ -4,8 +4,6 @@ import com.kaiser.rivet.provider.http
 import com.kaiser.rivet.provider.quick
 import com.kaiser.rivet.provider.readBoundedBody
 import java.io.IOException
-import java.net.URLDecoder
-import java.nio.charset.StandardCharsets
 import java.util.Locale
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.jsonArray
@@ -24,9 +22,13 @@ class ByoModelResolver(private val client: OkHttpClient = http) {
     private val json = Json { ignoreUnknownKeys = true }
 
     suspend fun resolve(rawUrl: String): ByoResolvedModel {
-        val parsed = parse(rawUrl)
+        val parsed = try {
+            ByoLinkParser.parse(rawUrl)
+        } catch (e: IllegalArgumentException) {
+            throw LocalFailure(e.message ?: "Paste an https://huggingface.co link.")
+        }
         val file = parsed.file ?: findSingleGguf(parsed.repo)
-        val downloadUrl = "https://huggingface.co/${parsed.repo}/resolve/main/$file?download=true"
+        val downloadUrl = ByoLinkParser.downloadUrl(parsed.repo, parsed.revision, file)
         val (size, sha) = inspect(downloadUrl)
         val name = file.substringAfterLast('/').removeSuffix(".gguf")
             .replace('-', ' ').replace('_', ' ').trim().ifBlank { "Custom model" }
@@ -49,6 +51,7 @@ class ByoModelResolver(private val client: OkHttpClient = http) {
                 name = name,
                 repo = parsed.repo,
                 file = file,
+                revision = parsed.revision,
                 size = size,
                 params = params,
                 ramFloor = ramFloor,
@@ -60,38 +63,6 @@ class ByoModelResolver(private val client: OkHttpClient = http) {
             ),
             sha,
         )
-    }
-
-    private data class ParsedLink(val repo: String, val file: String?)
-
-    private fun parse(rawUrl: String): ParsedLink {
-        val url = rawUrl.trim()
-        if (!url.startsWith("https://", ignoreCase = true)) {
-            throw LocalFailure("Paste an https://huggingface.co link.")
-        }
-        val withoutQuery = url.substringBefore('?').substringBefore('#')
-        val parts = withoutQuery.removePrefix("https://").removePrefix("http://").split('/')
-            .filter { it.isNotBlank() }
-        if (parts.size < 3 || !parts[0].equals("huggingface.co", true) &&
-            !parts[0].equals("www.huggingface.co", true)) {
-            throw LocalFailure("Only Hugging Face links are supported here.")
-        }
-        val repo = "${parts[1]}/${parts[2]}"
-        if (!Regex("^[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+$").matches(repo)) {
-            throw LocalFailure("That does not look like a Hugging Face repo.")
-        }
-        var file: String? = null
-        val blob = parts.indexOfFirst { it == "blob" || it == "resolve" }
-        if (blob >= 0 && parts.size > blob + 2) {
-            file = parts.drop(blob + 2).joinToString("/").let {
-                URLDecoder.decode(it, StandardCharsets.UTF_8.name())
-            }
-        }
-        if (file != null && (!file.lowercase(Locale.ROOT).endsWith(".gguf") ||
-                file.split('/').any { it == ".." || it.isBlank() })) {
-            throw LocalFailure("That link is not a GGUF file. Choose a .gguf file or a repo with one.")
-        }
-        return ParsedLink(repo, file)
     }
 
     private fun findSingleGguf(repo: String): String {

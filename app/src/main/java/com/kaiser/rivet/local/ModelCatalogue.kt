@@ -43,11 +43,12 @@ data class LocalModelEntry(
     val blurb: String,
     /** Verified Hugging Face LFS hash when the repo publishes one. */
     val sha256: String? = null,
+    val revision: String = "main",
 ) {
     val id: String get() = "$repo/$file"
     val fileName: String get() = file.substringAfterLast('/')
     val paramsB: Double get() = params.removeSuffix("B").toDoubleOrNull() ?: 0.0
-    val downloadUrl: String get() = "https://huggingface.co/$repo/resolve/main/$file?download=true"
+    val downloadUrl: String get() = ByoLinkParser.downloadUrl(repo, revision, file)
 }
 
 @Serializable
