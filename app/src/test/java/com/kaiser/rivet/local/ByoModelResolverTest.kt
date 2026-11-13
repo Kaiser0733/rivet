@@ -44,4 +44,17 @@ class ByoModelResolverTest {
         }.exceptionOrNull()
         assertTrue(error is IllegalArgumentException)
     }
+
+    @Test
+    fun rejectsDotAndDotDotInOwnerOrRepo() {
+        listOf(
+            "https://huggingface.co/../secret",
+            "https://huggingface.co/./secret",
+            "https://huggingface.co/alice/..",
+            "https://huggingface.co/alice/.",
+        ).forEach { url ->
+            val error = runCatching { ByoLinkParser.parse(url) }.exceptionOrNull()
+            assertTrue("Expected rejection for $url", error is IllegalArgumentException)
+        }
+    }
 }

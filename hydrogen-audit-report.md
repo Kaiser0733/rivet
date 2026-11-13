@@ -462,13 +462,15 @@
 ### Severity (d) — Security-by-Structure Holes
 
 #### H46 — `ByoModelResolver` allows `.`/`..` & unvalidated `rfilename` paths; `ModelDownloadManager` marks HTTP `ETag` as `checksumVerified`
-- **Status**: `PENDING`
+- **Status**: `FIXED`
 - **Files**:
+  - `app/src/main/java/com/kaiser/rivet/local/LocalChecksumPolicy.kt`
+  - `app/src/main/java/com/kaiser/rivet/local/ByoLinkParser.kt`
   - `app/src/main/java/com/kaiser/rivet/local/ByoModelResolver.kt`
-  - `app/src/main/java/com/kaiser/rivet/local/ModelDownloadManager.kt:403, 432`
-- **Issue**: `repoPattern` allows `..` segments and HF API `rfilename` isn't validated for path traversal or safe filename; HTTP `ETag` is treated as cryptographic checksum verification (`checksumVerified = true`).
-- **Fix**: Reject `.`/`..` in owner/repo, validate/basename `rfilename`, and only set `checksumVerified = true` when verified against an actual SHA-256 checksum (never `ETag`).
-- **JiTTest**: Pure-Kotlin JVM JiTTest for `ByoModelResolver`.
+  - `app/src/main/java/com/kaiser/rivet/local/ModelDownloadManager.kt`
+- **Issue**: `REPO_PATTERN` allows `.`/`..` owner/repo segments, decoded `/` or `\` in path segments, and HF API `rfilename` isn't validated for path traversal or safe filename; HTTP `ETag` is treated as cryptographic checksum verification (`checksumVerified = true`).
+- **Fix**: Extracted `LocalChecksumPolicy` (`isPublishedChecksumVerified` and `sanitizeRelativeGgufPath`); rejected `.`/`..` owner/repo segments and unsafe `revision`/`fileSegments` in `ByoLinkParser`; validated `rfilename` via `sanitizeRelativeGgufPath` in `ByoModelResolver.findSingleGguf`; ensured `ModelDownloadManager.finish` only passes `checksumVerified = true` when verified against a trusted SHA-256 pin (never ETag alone).
+- **JiTTest**: `ByoModelResolverTest` + `LocalChecksumPolicyTest` (`3 failures` before fix -> `OK (6 tests)` after fix on JVM).
 
 #### H47 — Reserved `.rivet/goal.md` bypasses & `SkillScriptGate` matching gaps (`cwd`, `cd --`, `./`, multi-skill)
 - **Status**: `PENDING`

@@ -462,7 +462,8 @@ class ModelDownloadManager(
         if (job.entry.size > 0 && part.length() != job.entry.size) {
             throw IOException("The downloaded file is the wrong size. Start the download again.")
         }
-        val checksum = expected ?: DownloadPolicy.checksumFromEtag(etag) ?: job.entry.sha256
+        val etagChecksum = DownloadPolicy.checksumFromEtag(etag)
+        val checksum = expected ?: etagChecksum ?: job.entry.sha256
         if (checksum != null) {
             val actual = digest(part)
             if (!actual.equals(checksum, ignoreCase = true)) {
@@ -488,8 +489,15 @@ class ModelDownloadManager(
             target.delete()
             return
         }
+        val checksumVerified = LocalChecksumPolicy.isPublishedChecksumVerified(
+            expectedSha256 = expected,
+            catalogSha256 = job.entry.sha256,
+            etagSha256 = etagChecksum,
+            byo = job.byo,
+            actualSha256Matched = checksum != null,
+        )
         val failure = runCatching {
-            models.install(job.entry, job.byo, checksum != null)
+            models.install(job.entry, job.byo, checksumVerified)
             models.activate(job.entry)
         }.exceptionOrNull()
         val removedMidInstall = synchronized(jobsLock) {

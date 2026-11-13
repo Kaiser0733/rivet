@@ -72,9 +72,10 @@ class ByoModelResolver(private val client: OkHttpClient = http) {
             if (!response.isSuccessful) throw LocalFailure("Hugging Face did not return that repo.")
             val root = json.parseToJsonElement(response.readBoundedBody(4 * 1024 * 1024)
                 ?: throw LocalFailure("Hugging Face returned an empty repo.")).jsonObject
-            val files = root["siblings"]?.jsonArray?.mapNotNull {
-                it.jsonObject["rfilename"]?.jsonPrimitive?.content
-            }?.filter { it.lowercase(Locale.ROOT).endsWith(".gguf") }.orEmpty()
+            val files = root["siblings"]?.jsonArray?.mapNotNull { sibling ->
+                sibling.jsonObject["rfilename"]?.jsonPrimitive?.content
+                    ?.let(LocalChecksumPolicy::sanitizeRelativeGgufPath)
+            }.orEmpty()
             if (files.isEmpty()) throw LocalFailure("That repo has no GGUF files.")
             files.firstOrNull { it.lowercase(Locale.ROOT).contains("q4_k_m") }?.let { return it }
             if (files.size == 1) return files.single()

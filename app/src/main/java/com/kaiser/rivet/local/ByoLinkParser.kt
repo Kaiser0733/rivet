@@ -37,7 +37,9 @@ internal object ByoLinkParser {
         val owner = decodePercent(rawSegments[0])
         val repoName = decodePercent(rawSegments[1])
         val repo = "$owner/$repoName"
-        if (!REPO_PATTERN.matches(repo)) {
+        if (owner == "." || owner == ".." || repoName == "." || repoName == ".." ||
+            !REPO_PATTERN.matches(repo)
+        ) {
             throw IllegalArgumentException("That does not look like a Hugging Face repo.")
         }
         if (rawSegments.size == 2) {
@@ -53,13 +55,15 @@ internal object ByoLinkParser {
         val revision = decodePercent(rawSegments[3])
         val fileSegments = rawSegments.drop(4).map { decodePercent(it) }
         if (revision.isBlank() || revision == "." || revision == ".." ||
-            fileSegments.any { it.isBlank() || it == "." || it == ".." }) {
+            '/' in revision || '\\' in revision || '\u0000' in revision ||
+            fileSegments.any {
+                it.isBlank() || it == "." || it == ".." || '/' in it || '\\' in it || '\u0000' in it
+            }
+        ) {
             throw IllegalArgumentException("That link is not a GGUF file. Choose a .gguf file or a repo with one.")
         }
-        val file = fileSegments.joinToString("/")
-        if (!file.lowercase(Locale.ROOT).endsWith(".gguf")) {
-            throw IllegalArgumentException("That link is not a GGUF file. Choose a .gguf file or a repo with one.")
-        }
+        val file = LocalChecksumPolicy.sanitizeRelativeGgufPath(fileSegments.joinToString("/"))
+            ?: throw IllegalArgumentException("That link is not a GGUF file. Choose a .gguf file or a repo with one.")
         return ParsedByoLink(repo = repo, revision = revision, file = file)
     }
 
