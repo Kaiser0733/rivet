@@ -341,19 +341,19 @@
 - **JiTTest**: `ChatTurnSegmentationTest` (3 failures before fix -> `OK (3 tests)` after fix on JVM).
 
 #### H35 — Composer `/goal` draft wedging, stale `runRecovery`, `ModelSheet` stranded `loadError`, and `RivetApp` nav overlap
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; Compose/`ChatViewModelTest` require Gradle under AGP/Android SDK)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt:1901-1929`
-  - `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt:652-676, 737-741`
-  - `app/src/main/java/com/kaiser/rivet/ui/chat/ModelSheet.kt:196-203`
-  - `app/src/main/java/com/kaiser/rivet/ui/RivetApp.kt:122-128`
+  - `app/src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt:699-701, 1885-1934`
+  - `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt:169-171, 675-678, 795-852`
+  - `app/src/main/java/com/kaiser/rivet/ui/chat/ModelSheet.kt:181-277`
+  - `app/src/main/java/com/kaiser/rivet/ui/RivetApp.kt:122-135`
 - **Issue**:
   1. `/goal` never clears `draft` and wedges `pendingText != null` if `notice` string didn't change.
   2. `refreshGoalMemory` retains `else it.runRecovery` when no run is resumable.
   3. `ModelSheet` hides provider switch rows & `ManageProvidersRow` when `loadError != null` (including `Local` keyless provider).
   4. `RivetApp` notification navigation opens `processesOpen` without closing `terminalOpen` / `browser` / `modelsOpen` / `editing`.
-- **Fix**: Track a monotonic command/submission ack or clear `draft`/`pendingText` on `/goal`; set `runRecovery = if (resumable) ... else null`; keep provider jump rows & Manage Providers accessible under `loadError` and avoid API-key error for `Local`; close overlay panes on `processNavigationRequest`.
-- **JiTTest**: Structural `kt-checks.py` + Compose/Robolectric JiTTest (`NEEDS-DEVICE-PROOF` offline).
+- **Fix**: Added `commandAckCount` to `ChatUiState` (incremented on every `/goal` outcome) and included it in `InputBar`'s ack check so `/goal` clears `draft` and `pendingText` even when `notice` is unchanged; cleared `runRecovery = null` in `refreshGoalMemory` when not resumable; moved `fetching`/`loadError` inside `ModelSheet`'s `LazyColumn` so `ProviderJumpRow`s and `ManageProvidersRow` always remain accessible; closed all overlays (`editing`, `modelsOpen`, `terminalOpen`, `installOpen`, `browser.close()`) in `RivetApp` on `processNavigationRequest`.
+- **JiTTest**: `ChatViewModelTest.goalCommandIncrementsCommandAckCountEvenWhenNoticeUnchanged`.
 
 #### H36 — Pure-Kotlin browser policy/extractor flaws: IPv6 `[::1]` loopback, uppercase URL scheme, `opacity: 0.x` removal
 - **Status**: `PENDING`

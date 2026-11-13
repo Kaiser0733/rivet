@@ -167,6 +167,7 @@ data class ChatUiState(
     val undoing: Boolean = false,
     val notice: String? = null,
     val acceptedMessageCount: Long = 0,
+    val commandAckCount: Long = 0,
     // When the running turn started, on the monotonic clock. The turn owns this, not the row
     // that prints it: a start held inside the live-status list item was lost whenever the list
     // relaid it out (a long thinking block folding does exactly that) and came back as 0s.
@@ -674,7 +675,7 @@ class ChatViewModel private constructor(
                 notice = if (externalGoal) "Goal changed outside Rivet; reloaded." else it.notice,
                 runRecovery = if (resumable)
                     "Run ${run?.plainState() ?: "paused"} after ${run?.lastCompletedStep ?: 0} completed step(s). Resume to continue."
-                else it.runRecovery,
+                else null,
                 interruptedTurn = it.interruptedTurn || resumable)
         }
         if (workspace != null) refreshRunCheckpoints()
@@ -793,7 +794,10 @@ class ChatViewModel private constructor(
                 var goal = projectStored ?: sessionStored
                 when (command) {
                     is GoalCommand.Set -> {
-                        if (command.text.isBlank()) return@launch
+                        if (command.text.isBlank()) {
+                            _uiState.update { it.copy(commandAckCount = it.commandAckCount + 1) }
+                            return@launch
+                        }
                         val next = GoalDocument.replaceGoal(goal, command.text, sessionId)
                         if (files != null) files.saveGoal(next)
                         else sessionGoals.save(sessionId, next)
@@ -802,16 +806,19 @@ class ChatViewModel private constructor(
                         if (files != null) knownGoalMarkdown = GoalDocument.render(next)
                         goal = next
                         _uiState.update { it.copy(goal = next, goalLine = next.calmLine(),
-                            notice = "Goal set: ${next.text.take(160)}", error = null) }
+                            notice = "Goal set: ${next.text.take(160)}", error = null,
+                            commandAckCount = it.commandAckCount + 1) }
                     }
                     GoalCommand.Status -> _uiState.update {
                         it.copy(notice = goal?.statusLine()
                             ?: "No goal is set. Use /goal <what you want to achieve>.",
-                            error = null)
+                            error = null,
+                            commandAckCount = it.commandAckCount + 1)
                     }
                     GoalCommand.Pause, GoalCommand.Resume, GoalCommand.Done, GoalCommand.Clear -> {
                         if (goal == null) {
-                            _uiState.update { it.copy(notice = "No goal is set.", error = null) }
+                            _uiState.update { it.copy(notice = "No goal is set.", error = null,
+                                commandAckCount = it.commandAckCount + 1) }
                             return@launch
                         }
                         val state = when (command) {
@@ -836,13 +843,13 @@ class ChatViewModel private constructor(
                                 GoalState.Active -> "Goal resumed."
                                 GoalState.Done -> "Goal marked done."
                                 GoalState.Dropped -> "Goal cleared."
-                            }, error = null) }
+                            }, error = null, commandAckCount = it.commandAckCount + 1) }
                     }
                 }
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
                 _uiState.update { it.copy(error = "Rivet couldn't update the goal. Try again.",
-                    errorAction = null) }
+                    errorAction = null, commandAckCount = it.commandAckCount + 1) }
             }
         }
     }

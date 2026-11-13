@@ -185,24 +185,8 @@ fun ModelSheet(
                                 onManageProviders()
                             }
 
-                            editorState.fetching -> Row(
-                                Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                            ) {
-                                CircularProgressIndicator(Modifier.size(20.dp))
-                            }
-
-                            loadError != null -> Column(Modifier.padding(horizontal = 12.dp)) {
-                                Text(loadError, color = MaterialTheme.colorScheme.error,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 3, overflow = TextOverflow.Ellipsis)
-                                TextButton(onClick = providersViewModel::fetchModels) {
-                                    Text(stringResource(R.string.provider_fetch_models))
-                                }
-                            }
-
                             else -> {
-                                if (editorState.models.isNotEmpty()) {
+                                if (!editorState.fetching && loadError == null && editorState.models.isNotEmpty()) {
                                     OutlinedTextField(value = query, onValueChange = { query = it },
                                         placeholder = { Text(stringResource(R.string.provider_search_models)) },
                                         singleLine = true,
@@ -217,6 +201,26 @@ fun ModelSheet(
                                                 GroupLabel(displaySafeText(config.name))
                                             }
                                             when {
+                                                editorState.fetching -> item(key = "fetching-${config.id}") {
+                                                    Row(
+                                                        Modifier.fillMaxWidth().padding(horizontal = 12.dp, vertical = 12.dp),
+                                                        verticalAlignment = Alignment.CenterVertically,
+                                                    ) {
+                                                        CircularProgressIndicator(Modifier.size(20.dp))
+                                                    }
+                                                }
+
+                                                loadError != null -> item(key = "error-${config.id}") {
+                                                    Column(Modifier.padding(horizontal = 12.dp)) {
+                                                        Text(loadError, color = MaterialTheme.colorScheme.error,
+                                                            style = MaterialTheme.typography.bodySmall,
+                                                            maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                                        TextButton(onClick = providersViewModel::fetchModels) {
+                                                            Text(stringResource(R.string.provider_fetch_models))
+                                                        }
+                                                    }
+                                                }
+
                                                 editorState.models.isEmpty() -> {
                                                     if (editorConfig.model.isNotBlank()) {
                                                         item(key = "current-${config.id}") {

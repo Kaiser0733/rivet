@@ -1982,4 +1982,22 @@ class ChatViewModelTest {
         assertEquals(0L, limited.acceptedMessageCount)
         assertEquals(1, persistence.saveAttempts)
     }
+
+    @Test fun goalCommandIncrementsCommandAckCountEvenWhenNoticeUnchanged() = runBlocking {
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready }
+
+        viewModel.send("/goal status")
+        val first = await(viewModel) { it.commandAckCount == 1L }
+        val firstNotice = first.notice
+
+        viewModel.send("/goal status")
+        val second = await(viewModel) { it.commandAckCount == 2L }
+        assertEquals(firstNotice, second.notice)
+        assertNull(second.runRecovery)
+    }
 }

@@ -697,6 +697,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         projectBinding == ProjectBindingState.Matched,
                     hasProvider = providers.configs.isNotEmpty(),
                     acceptedMessageCount = state.acceptedMessageCount,
+                    commandAckCount = state.commandAckCount,
                     error = state.error, notice = state.notice, sessionId = state.currentSessionId,
                     skills = userSkills,
                     onRequestSkills = chatViewModel::refreshUserSkills,
@@ -1882,6 +1883,7 @@ internal fun isGoalCommand(text: String): Boolean {
 
 @Composable
 private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
+                     commandAckCount: Long = 0,
                      hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
                      skills: List<Skill> = emptyList(),
@@ -1900,8 +1902,9 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     val draft = draftFor(drafts, sessionId)
     var pendingText by rememberSaveable { mutableStateOf<String?>(null) }
     var submittedAt by rememberSaveable { mutableStateOf(0L) }
-    LaunchedEffect(acceptedMessageCount, streaming, error, notice, sessionId) {
-        if (pendingText != null && acceptedMessageCount > submittedAt) {
+    val ackCount = acceptedMessageCount + commandAckCount
+    LaunchedEffect(ackCount, streaming, error, notice, sessionId) {
+        if (pendingText != null && ackCount > submittedAt) {
             if (draft == pendingText) drafts = withDraft(drafts, sessionId, "")
             pendingText = null
         } else if (!streaming && (error != null || notice != null)) {
@@ -1923,7 +1926,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         val text = draftToSend(draft, canSend)
         if (text != null) {
             pendingText = draft
-            submittedAt = acceptedMessageCount
+            submittedAt = ackCount
             onSend(text)
         }
     }

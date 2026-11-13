@@ -121,9 +121,14 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val saveableStates = rememberSaveableStateHolder()
         LaunchedEffect(processNavigationRequest) {
             if (processNavigationRequest > 0) {
-                // A notification's deep link opens the tools slide instead of replacing chat.
+                // A notification's deep link opens the tools slide cleanly above no stale overlays.
                 if (drawerState.isOpen) drawerState.close()
                 settingsOpen = false
+                editing = false
+                modelsOpen = false
+                terminalOpen = false
+                installOpen = false
+                if (browserState.visible) chatViewModel.browser.close()
                 processesOpen = true
             }
         }
