@@ -1525,20 +1525,19 @@ class BrowserSession(
         }
 
         override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? {
+            // Never intercept or replace main-frame document navigations under any diet tier.
+            if (request.isForMainFrame) return null
             val rules = BrowserDiet.rulesFor(budget.tier, _state.value.fullPage)
             val url = request.url.toString()
             val tracker = BrowserDiet.isTrackerHost(request.url.host.orEmpty())
-            val kind = when {
-                request.requestHeaders["Accept"]?.contains("image", true) == true ||
-                    url.matches(Regex("(?i).*\\.(png|jpe?g|gif|webp|svg|avif)(\\?.*)?$")) ->
-                    BrowserResourceKind.Image
-                url.matches(Regex("(?i).*\\.(woff2?|ttf|otf)(\\?.*)?$")) -> BrowserResourceKind.Font
-                url.matches(Regex("(?i).*\\.(mp4|webm|m4s|mp3)(\\?.*)?$")) -> BrowserResourceKind.Media
-                tracker -> BrowserResourceKind.Tracker
-                else -> BrowserResourceKind.Other
-            }
+            val kind = BrowserDiet.classifyResource(
+                url = url,
+                isForMainFrame = request.isForMainFrame,
+                acceptHeader = request.requestHeaders["Accept"],
+                secFetchDest = request.requestHeaders["Sec-Fetch-Dest"],
+            )
             val declared = request.requestHeaders["Content-Length"]?.toLongOrNull() ?: 0L
-            if (BrowserDiet.shouldBlock(url, kind, declared, rules)) {
+            if (BrowserDiet.shouldBlock(url, kind, declared, rules, isForMainFrame = request.isForMainFrame)) {
                 if (kind == BrowserResourceKind.Image && !tracker) {
                     return WebResourceResponse("image/png", "binary",
                         ByteArrayInputStream(BrowserDiet.placeholderPng()))
