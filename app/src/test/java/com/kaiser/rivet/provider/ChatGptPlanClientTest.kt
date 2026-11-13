@@ -313,4 +313,44 @@ class ChatGptPlanClientTest {
             assertEquals(1, events.size)
         }
     }
+
+    @Test
+    fun truncatedSecondItemAfterCompletedFirstItemThrowsIncompleteGeneration() {
+        val stream = ResponsesAgentStream(onReasoning = {}, onDelta = {})
+        stream.accept("""{"type":"response.output_text.delta","delta":"Checking..."}""")
+        stream.accept("""{"type":"response.output_text.done"}""")
+        stream.accept("""{"type":"response.output_item.added","output_index":1,"item":{"type":"function_call","call_id":"c1","name":"read_file","arguments":""}}""")
+        stream.accept("""{"type":"response.function_call_arguments.delta","output_index":1,"delta":"{\"path\":\"a"}""")
+
+        try {
+            stream.response()
+            fail("expected incomplete generation for unfinished second item")
+        } catch (_: ProviderError.IncompleteGeneration) {
+            // Expected
+        }
+    }
+
+    @Test
+    fun responsesSsePreservesCallerExceptionAndCancellation() = runBlocking {
+        val server = okhttp3.mockwebserver.MockWebServer()
+        server.enqueue(
+            okhttp3.mockwebserver.MockResponse()
+                .setResponseCode(200)
+                .setHeader("Content-Type", "text/event-stream")
+                .setBody("data: {\"type\":\"response.created\"}\n\n"),
+        )
+        server.start()
+        try {
+            val client = okhttp3.OkHttpClient()
+            val req = okhttp3.Request.Builder().url(server.url("/v1/responses")).build()
+            try {
+                client.responsesSse(req) { throw IllegalStateException("caller abort") }
+                fail("expected IllegalStateException")
+            } catch (e: IllegalStateException) {
+                assertEquals("caller abort", e.message)
+            }
+        } finally {
+            server.shutdown()
+        }
+    }
 }

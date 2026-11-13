@@ -280,13 +280,15 @@
 - **JiTTest**: `WorkspaceMirrorTest.safInvalidPosixFilenamesAreSkippedWithoutCrashingSyncOrPrepare` (tightened to exact `listOf("foo.")`) and `WorkspaceMirrorTest.dirVsFileConflictWithDescendantsReportsConflictAndSkipsChildrenCleanly`.
 
 #### H29 — `ResponsesAgentStream` latches `itemDone` permanently and `OkHttpClient.responsesSse` relabels caller exceptions
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/provider/ChatGptPlanClient.kt:185, 201-203, 259-261, 293, 373, 388-392`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; `ChatGptPlanClientTest` requires OkHttp/`MockWebServer` under Gradle)
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptPlanClient.kt:165-330`
+  - `app/src/main/java/com/kaiser/rivet/provider/Http.kt:390-395`
 - **Issue**:
   1. `itemDone = true` stays true after the first item finishes, so a truncated second item (`function_call` without `output_item.done` or `completed`) is accepted as complete.
   2. `responsesSse` catches `onEvent` exceptions and `CancellationException` and relabels them as `ProviderError.InvalidResponse("malformed stream event")`.
-- **Fix**: Reset `itemDone = false` when a new item/delta begins and require every `PendingCall` to be marked `done` (or `completed == true`); mirror `Http.kt`'s `StreamCallbackFailure` and `CancellationException` pass-through in `responsesSse`.
-- **JiTTest**: Pure-Kotlin JVM JiTTest for `ResponsesAgentStream` multi-item truncation; `MockWebServer` JiTTest for `responsesSse` (`NEEDS-DEVICE-PROOF` offline).
+- **Fix**: Reset `itemDone = false` when a new text/message/function item or argument delta starts and tracked `done: Boolean` per `PendingCall` (`allCallsDone && itemDone`); delegated `responsesSse` directly to `Http.kt`'s `sse(...)` while also passing through `CancellationException` cleanly before `catch (_: Exception)` in `Http.kt`.
+- **JiTTest**: `ChatGptPlanClientTest.truncatedSecondItemAfterCompletedFirstItemThrowsIncompleteGeneration` and `ChatGptPlanClientTest.responsesSsePreservesCallerExceptionAndCancellation`.
 
 #### H30 — `OpenAiAgentStream` blanks `pending.id` on empty delta chunks, ignores `request.model` ceiling, and `Http` prints `"null"` on `JsonNull`
 - **Status**: `PENDING`

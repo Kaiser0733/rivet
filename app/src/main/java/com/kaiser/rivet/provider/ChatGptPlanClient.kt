@@ -6,7 +6,6 @@ import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.modelMessages
-import kotlinx.coroutines.suspendCancellableCoroutine
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -15,18 +14,10 @@ import kotlinx.serialization.json.intOrNull
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.longOrNull
 import kotlinx.serialization.json.put
-import okhttp3.Call
-import okhttp3.Callback
 import okhttp3.MediaType.Companion.toMediaType
 import okhttp3.OkHttpClient
 import okhttp3.Request
 import okhttp3.RequestBody.Companion.toRequestBody
-import okhttp3.Response
-import java.io.EOFException
-import java.io.IOException
-import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.coroutines.resume
-import kotlin.coroutines.resumeWithException
 
 // Sign in with ChatGPT (SIWC) inference client. Talks to the Responses API
 // (POST /v1/responses), NOT /chat/completions — the wire format, SSE events,
@@ -175,6 +166,7 @@ internal class ResponsesAgentStream(
         var id: String? = null,
         var name: String? = null,
         val arguments: StringBuilder = StringBuilder(),
+        var done: Boolean = false,
     )
 
     private val text = StringBuilder()
@@ -188,6 +180,7 @@ internal class ResponsesAgentStream(
         val root = parseJsonObject(payload) ?: throw ProviderError.InvalidResponse("invalid stream event")
         when (root["type"]?.str()) {
             "response.output_text.delta", "response.refusal.delta" -> {
+                itemDone = false
                 root["delta"]?.str()?.takeIf { it.isNotEmpty() }?.let { value ->
                     text.append(value); onDelta(value)
                 }
@@ -198,7 +191,12 @@ internal class ResponsesAgentStream(
                     onReasoning(value)
                 }
             }
-            "response.output_text.done", "response.refusal.done", "response.function_call_arguments.done" -> {
+            "response.output_text.done", "response.refusal.done" -> {
+                itemDone = true
+            }
+            "response.function_call_arguments.done" -> {
+                val index = root["output_index"]?.jsonPrimitive?.intOrNull
+                if (index != null) toolCalls[index]?.done = true
                 itemDone = true
             }
             "response.completed", "response.done" -> {
@@ -235,9 +233,16 @@ internal class ResponsesAgentStream(
             }
             "response.output_item.added" -> {
                 val item = root["item"]?.obj() ?: return
-                if (item["type"]?.str() != "function_call") return
+                val type = item["type"]?.str()
+                if (type == "message") {
+                    itemDone = false
+                    return
+                }
+                if (type != "function_call") return
                 val index = root["output_index"]?.jsonPrimitive?.intOrNull ?: return
+                itemDone = false
                 val pending = toolCalls.getOrPut(index) { PendingCall() }
+                pending.done = false
                 pending.id = item["call_id"]?.str() ?: item["id"]?.str()
                 pending.name = item["name"]?.str()
                 item["arguments"]?.str()?.let { pending.arguments.append(it) }
@@ -254,15 +259,18 @@ internal class ResponsesAgentStream(
                         if (pending.arguments.isEmpty()) {
                             item["arguments"]?.str()?.let { pending.arguments.append(it) }
                         }
+                        pending.done = true
                     }
-                }
-                if (type == "message" || type == "function_call") {
+                    itemDone = true
+                } else if (type == "message") {
                     itemDone = true
                 }
             }
             "response.function_call_arguments.delta" -> {
                 val index = root["output_index"]?.jsonPrimitive?.intOrNull ?: return
+                itemDone = false
                 val pending = toolCalls.getOrPut(index) { PendingCall() }
+                pending.done = false
                 root["delta"]?.str()?.let { pending.arguments.append(it) }
             }
         }
@@ -290,7 +298,9 @@ internal class ResponsesAgentStream(
             }
             throw err
         }
-        val finishedCleanly = completed || (itemDone && (text.isNotEmpty() || toolCalls.isNotEmpty()))
+        val allCallsDone = toolCalls.values.all { it.done }
+        val finishedCleanly = completed ||
+            (allCallsDone && itemDone && (text.isNotEmpty() || toolCalls.isNotEmpty()))
         if (!finishedCleanly) throw ProviderError.IncompleteGeneration("incomplete stream")
         return AgentResponse(
             text = text.toString(),
@@ -327,71 +337,5 @@ internal suspend fun OkHttpClient.responsesSse(
     clockMillis: () -> Long = ::monotonicMillis,
     onEvent: (String) -> Unit,
 ) {
-    suspendCancellableCoroutine<Unit> { cont ->
-        val call = newCall(request)
-        val terminal = AtomicBoolean(false)
-        cont.invokeOnCancellation {
-            terminal.set(true)
-            call.cancel()
-        }
-        call.enqueue(object : Callback {
-            override fun onFailure(call: Call, e: IOException) {
-                if (terminal.compareAndSet(false, true)) {
-                    cont.resumeWithException(networkError(e))
-                }
-            }
-
-            override fun onResponse(call: Call, response: Response) {
-                response.use {
-                    try {
-                        if (!it.isSuccessful) throw httpError(it.code, it.errorText())
-                        requireEventStream(it)
-                        val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
-                        var responseBytes = 0
-                        var lastProgressAt = clockMillis()
-                        while (!terminal.get()) {
-                            val line = try {
-                                source.readUtf8LineStrict(MAX_SSE_LINE_BYTES.toLong())
-                            } catch (_: EOFException) {
-                                if (source.buffer.size > MAX_SSE_LINE_BYTES) {
-                                    throw ProviderError.ResponseTooLarge()
-                                }
-                                break
-                            }
-                            val now = clockMillis()
-                            responseBytes += line.toByteArray(Charsets.UTF_8).size + 2
-                            if (responseBytes > MAX_SSE_RESPONSE_BYTES) {
-                                throw ProviderError.ResponseTooLarge()
-                            }
-                            if (line.startsWith("data:")) {
-                                val payload = line.removePrefix("data:").trim()
-                                if (payload == "[DONE]") break
-                                if (payload.isNotEmpty()) {
-                                    // Same rule as http.sse: a real payload is progress and
-                                    // is accepted before the deadline is judged.
-                                    lastProgressAt = now
-                                    if (!terminal.get()) onEvent(payload)
-                                    continue
-                                }
-                            }
-                            if (now - lastProgressAt > progressDeadlineMs) {
-                                throw ProviderError.Timeout("progress")
-                            }
-                        }
-                        if (terminal.compareAndSet(false, true)) cont.resume(Unit)
-                    } catch (e: IOException) {
-                        if (terminal.compareAndSet(false, true)) {
-                            cont.resumeWithException(networkError(e))
-                        }
-                    } catch (e: ProviderError) {
-                        if (terminal.compareAndSet(false, true)) cont.resumeWithException(e)
-                    } catch (_: Exception) {
-                        if (terminal.compareAndSet(false, true)) {
-                            cont.resumeWithException(ProviderError.InvalidResponse("malformed stream event"))
-                        }
-                    }
-                }
-            }
-        })
-    }
+    sse(request, progressDeadlineMs, clockMillis, onEvent)
 }

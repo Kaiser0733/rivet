@@ -388,6 +388,8 @@ internal suspend fun OkHttpClient.sse(
                             }
                         }
                         if (terminal.compareAndSet(false, true)) cont.resume(completed)
+                    } catch (e: kotlinx.coroutines.CancellationException) {
+                        if (terminal.compareAndSet(false, true)) cont.resumeWithException(e)
                     } catch (e: IOException) {
                         if (terminal.compareAndSet(false, true)) {
                             cont.resumeWithException(networkError(e))
