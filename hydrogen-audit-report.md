@@ -124,7 +124,7 @@
 - **JiTTest**: Robolectric `ProvidersViewModel` JiTTest (`NEEDS-DEVICE-PROOF` offline).
 
 #### H12 — `SkillInstallDialog` crashes on non-`SkillInstallFailure` exceptions and re-triggers import on rotation
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (Pure-Kotlin `SkillInstallStepPolicyTest` PASS `OK (2 tests)` on JVM; `SkillInstallDialog.kt` & helpers pass `kt-checks.py balance`; Compose/Activity configuration rotation UI verification pending device/CI run)
 - **Files**: `app/src/main/java/com/kaiser/rivet/ui/provider/SkillInstallDialog.kt:88-116, 140-142, 175-205`
 - **Issue**: `SecurityException` / `FileNotFoundException` / generic `Exception` escape `openZip`/`submitLink`/`ChooseStep`/`ReviewStep.onInstall` unhandled; `step` is not saved and `LaunchedEffect(initialZip)` re-runs on activity recreation.
 - **Fix**: Catch `Exception` (rethrowing `CancellationException`) into `InstallStep.Failed(...)` across all install paths and track processed `initialZip` across configuration changes.

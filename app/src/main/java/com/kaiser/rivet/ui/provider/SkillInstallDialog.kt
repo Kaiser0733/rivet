@@ -85,34 +85,65 @@ internal fun SkillInstallDialog(
     val skillsRoot = remember(context) { globalSkillsRoot(context.filesDir) }
     val scope = rememberCoroutineScope()
     var link by rememberSaveable { mutableStateOf("") }
+    var handledInitialZipUri by rememberSaveable { mutableStateOf<String?>(null) }
+    var savedStepKind by rememberSaveable { mutableStateOf<String?>(null) }
+    var savedStepDetail by rememberSaveable { mutableStateOf("") }
     var step by remember {
         mutableStateOf<InstallStep>(
-            if (initialZip == null) InstallStep.Link() else InstallStep.Busy("Reading the zip…"),
+            when (savedStepKind) {
+                SkillInstallStepPolicy.KIND_INSTALLED -> InstallStep.Installed(savedStepDetail)
+                SkillInstallStepPolicy.KIND_FAILED -> InstallStep.Failed(savedStepDetail)
+                else -> if (SkillInstallStepPolicy.shouldRunInitialZip(
+                        initialZip?.toString(), handledInitialZipUri, savedStepKind)) {
+                    InstallStep.Busy("Reading the zip…")
+                } else {
+                    InstallStep.Link()
+                }
+            },
         )
     }
 
+    fun markFailed(message: String) {
+        savedStepKind = SkillInstallStepPolicy.KIND_FAILED
+        savedStepDetail = message
+        step = InstallStep.Failed(message)
+    }
+
+    fun markInstalled(name: String) {
+        savedStepKind = SkillInstallStepPolicy.KIND_INSTALLED
+        savedStepDetail = name
+        step = InstallStep.Installed(name)
+    }
+
     fun review(payload: SkillPayload) {
+        savedStepKind = SkillInstallStepPolicy.KIND_LINK
         step = InstallStep.Review(payload, installConflict(skillsRoot, payload.skill.name))
     }
 
-    fun fail(error: SkillInstallFailure) {
-        step = InstallStep.Failed(error.message ?: "The skill couldn't be installed.")
+    fun fail(error: Exception) {
+        markFailed(SkillInstallStepPolicy.failureMessage(error))
     }
 
     suspend fun openZip(uri: Uri) {
-        val zipLabel = sharedZipName(context, uri)
         try {
+            val zipLabel = sharedZipName(context, uri)
             val zip = copySharedZip(context, uri)
             val roots = zipSkillCandidates(zip)
             when {
-                roots.isEmpty() -> step = InstallStep.Failed("That zip doesn't contain a SKILL.md.")
+                roots.isEmpty() -> markFailed("That zip doesn't contain a SKILL.md.")
                 roots.size == 1 -> review(readZipSkill(zip, roots[0], zipLabel))
-                else -> step = InstallStep.Choose(null, zip, zipLabel,
-                    roots.map { labelFor(it, zipLabel) to it })
+                else -> {
+                    savedStepKind = SkillInstallStepPolicy.KIND_LINK
+                    step = InstallStep.Choose(null, zip, zipLabel,
+                        roots.map { labelFor(it, zipLabel) to it })
+                }
             }
-        } catch (e: SkillInstallFailure) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             fail(e)
         }
+        handledInitialZipUri = uri.toString()
     }
 
     suspend fun submitLink() {
@@ -126,19 +157,25 @@ internal fun SkillInstallDialog(
             val candidates = githubCandidates(source)
             when {
                 candidates.isEmpty() ->
-                    step = InstallStep.Failed("No folder with a SKILL.md was found there.")
+                    markFailed("No folder with a SKILL.md was found there.")
                 candidates.size == 1 -> review(fetchGitHubSkill(source, candidates[0].path))
                 else -> step = InstallStep.Choose(source, null, "", candidates.map {
                     labelFor(it.path, "") to it.path
                 })
             }
-        } catch (e: SkillInstallFailure) {
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: Exception) {
             fail(e)
         }
     }
 
     LaunchedEffect(initialZip) {
-        if (initialZip != null) openZip(initialZip)
+        val uriKey = initialZip?.toString()
+        if (initialZip != null && SkillInstallStepPolicy.shouldRunInitialZip(
+                uriKey, handledInitialZipUri, savedStepKind)) {
+            openZip(initialZip)
+        }
     }
 
     Dialog(onDismissRequest = onDismiss,
@@ -181,7 +218,9 @@ internal fun SkillInstallDialog(
                                         else -> throw SkillInstallFailure("That skill couldn't be read.")
                                     }
                                     review(payload)
-                                } catch (e: SkillInstallFailure) {
+                                } catch (e: CancellationException) {
+                                    throw e
+                                } catch (e: Exception) {
                                     fail(e)
                                 }
                             }
@@ -195,11 +234,11 @@ internal fun SkillInstallDialog(
                                     try {
                                         installSkill(current.payload, skillsRoot)
                                         onInstalled()
-                                        step = InstallStep.Installed(current.payload.skill.name)
-                                    } catch (e: SkillInstallFailure) {
-                                        fail(e)
+                                        markInstalled(current.payload.skill.name)
                                     } catch (e: CancellationException) {
                                         throw e
+                                    } catch (e: Exception) {
+                                        fail(e)
                                     }
                                 }
                             },
