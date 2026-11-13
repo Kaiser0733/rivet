@@ -1,16 +1,11 @@
 package com.kaiser.rivet.provider
 
 import kotlinx.serialization.Serializable
-import kotlinx.serialization.json.JsonArray
-import kotlinx.serialization.json.JsonPrimitive
 import okhttp3.FormBody
 import okhttp3.Request
 import java.net.URLEncoder
-import java.security.KeyFactory
 import java.security.MessageDigest
 import java.security.SecureRandom
-import java.security.Signature
-import java.security.spec.RSAPublicKeySpec
 import java.util.Base64
 
 // Sign in with ChatGPT (SIWC) auth core: dynamic client registration + PKCE
@@ -223,21 +218,19 @@ fun hasPlanScope(grantedScope: String): Boolean =
 suspend fun fetchJwks(): String? {
     val configBody = try {
         val req = requestBuilder(CHATGPT_OPENID_CONFIG_URL).get().build()
-        http.quick().await(req).use { it.readBoundedBody() }
+        http.quick().await(req).use { if (it.isSuccessful) it.readBoundedBody() else null }
     } catch (e: Exception) {
         null
     } ?: return null
     val jwksUri = parseJsonObject(configBody)?.get("jwks_uri")?.str() ?: return null
+    if (!ChatGptIdTokenValidator.isPinnedHttpsEndpoint(jwksUri)) return null
     return try {
         val req = requestBuilder(jwksUri).get().build()
-        http.quick().await(req).use { it.readBoundedBody() }
+        http.quick().await(req).use { if (it.isSuccessful) it.readBoundedBody() else null }
     } catch (e: Exception) {
         null
     }
 }
-
-private fun b64UrlDecode(s: String): ByteArray =
-    Base64.getUrlDecoder().decode(s)
 
 /**
  * Validates an ID token per the SIWC spec: RS256 signature against the JWKS,
@@ -250,67 +243,22 @@ fun validateIdToken(
     expectedNonce: String,
     jwksJson: String,
     nowMs: Long = System.currentTimeMillis(),
-): String? {
-    val parts = idToken.split('.')
-    if (parts.size != 3) return null
-    val header = try {
-        parseJsonObject(String(b64UrlDecode(parts[0]), Charsets.UTF_8))
-    } catch (e: IllegalArgumentException) {
-        null
-    } ?: return null
-    if (header["alg"]?.str() != "RS256") return null
-    val kid = header["kid"]?.str() ?: return null
-
-    val jwk = parseJsonObject(jwksJson)?.get("keys")?.let { keys ->
-        (keys as? JsonArray)
-            ?.mapNotNull { it.obj() }
-            ?.firstOrNull { it["kid"]?.str() == kid }
-    } ?: return null
-    val n = try { b64UrlDecode(jwk["n"]?.str() ?: return null) } catch (e: IllegalArgumentException) { return null }
-    val e = try { b64UrlDecode(jwk["e"]?.str() ?: return null) } catch (e: IllegalArgumentException) { return null }
-
-    // RS256 signature over "header.payload".
-    val signatureValid = try {
-        val keySpec = RSAPublicKeySpec(
-            java.math.BigInteger(1, n),
-            java.math.BigInteger(1, e),
-        )
-        val publicKey = KeyFactory.getInstance("RSA").generatePublic(keySpec)
-        val sig = Signature.getInstance("SHA256withRSA")
-        sig.initVerify(publicKey)
-        sig.update("${parts[0]}.${parts[1]}".toByteArray(Charsets.US_ASCII))
-        sig.verify(b64UrlDecode(parts[2]))
-    } catch (ex: Exception) {
-        false
-    }
-    if (!signatureValid) return null
-
-    val claims = try {
-        parseJsonObject(String(b64UrlDecode(parts[1]), Charsets.UTF_8))
-    } catch (ex: IllegalArgumentException) {
-        null
-    } ?: return null
-    if (claims["iss"]?.str() != CHATGPT_ISSUER) return null
-    val audOk = when (val aud = claims["aud"]) {
-        is JsonPrimitive ->
-            aud.takeIf { it.isString }?.content == expectedClientId
-        is JsonArray ->
-            aud.mapNotNull { it.str() }.size == 1 && aud[0].str() == expectedClientId
-        else -> false
-    }
-    if (!audOk) return null
-    val expSec = (claims["exp"] as? JsonPrimitive)?.content?.toLongOrNull() ?: return null
-    if (expSec <= nowMs / 1000 - 60) return null // 60s clock tolerance
-    if (claims["nonce"]?.str() != expectedNonce) return null
-    return claims["sub"]?.str()
-}
+): String? = ChatGptIdTokenValidator.validateIdToken(
+    idToken = idToken,
+    expectedIssuer = CHATGPT_ISSUER,
+    expectedClientId = expectedClientId,
+    expectedNonce = expectedNonce,
+    jwksJson = jwksJson,
+    nowMs = nowMs,
+)
 
 /** Best-effort revoke of a ChatGPT refresh token. Returns false on any failure. */
 suspend fun revokeChatGptRefreshToken(clientId: String, refreshToken: String): Boolean {
     return try {
         val configBody = http.quick().await(requestBuilder(CHATGPT_OPENID_CONFIG_URL).get().build())
-            .use { it.readBoundedBody() } ?: return false
+            .use { if (it.isSuccessful) it.readBoundedBody() else null } ?: return false
         val endpoint = parseJsonObject(configBody)?.get("revocation_endpoint")?.str() ?: return false
+        if (!ChatGptIdTokenValidator.isPinnedHttpsEndpoint(endpoint)) return false
         val request = Request.Builder()
             .url(endpoint)
             .post(
@@ -329,13 +277,5 @@ suspend fun revokeChatGptRefreshToken(clientId: String, refreshToken: String): B
 }
 
 /** Best-effort `email` claim from an ID token payload; null when absent. */
-fun idTokenEmail(idToken: String): String? {
-    val parts = idToken.split('.')
-    if (parts.size != 3) return null
-    return try {
-        parseJsonObject(String(b64UrlDecode(parts[1]), Charsets.UTF_8))
-            ?.get("email")?.str()
-    } catch (e: IllegalArgumentException) {
-        null
-    }
-}
+fun idTokenEmail(idToken: String): String? =
+    ChatGptIdTokenValidator.idTokenEmail(idToken)

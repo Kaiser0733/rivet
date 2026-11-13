@@ -152,4 +152,14 @@ class ChatGptIdTokenTest {
         )
         assertNull(validateIdToken(tokenArr, "oaiapp_x", "n123", jwksArr, nowMs))
     }
+
+    @Test fun mixedTypeAudArrayRejected() {
+        val (token, jwks) = mint(claims(aud = """["oaiapp_x",123]"""))
+        assertNull(validateIdToken(token, "oaiapp_x", "n123", jwks, nowMs))
+    }
+
+    @Test fun blankSubRejected() {
+        val (token, jwks) = mint(claims(sub = ""))
+        assertNull(validateIdToken(token, "oaiapp_x", "n123", jwks, nowMs))
+    }
 }

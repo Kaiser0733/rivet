@@ -27,6 +27,8 @@ internal val http: OkHttpClient = OkHttpClient.Builder()
     .connectTimeout(15, TimeUnit.SECONDS)
     .readTimeout(300, TimeUnit.SECONDS) // SSE streams idle between deltas
     .writeTimeout(30, TimeUnit.SECONDS)
+    .followRedirects(false)
+    .followSslRedirects(false)
     .addInterceptor { chain ->
         try {
             chain.proceed(chain.request())

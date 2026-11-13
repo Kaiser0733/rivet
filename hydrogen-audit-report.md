@@ -496,13 +496,14 @@
 - **JiTTest**: `LocalPreviewPolicyTest` (`OK (2 tests)` on JVM) + `LocalPreviewServerTest` (`rejectsCaseInsensitiveGitPathsAndNonLoopbackHostHeaders`, `servesBurstOfConcurrentAssetRequestsWithoutDropping`). Note: `LocalPreviewServerTest`'s live `runBlocking(Dispatchers.IO)` calls require Gradle's full coroutines/atomicfu classpath (`Connection reset` when `Dispatchers.IO` isn't initialized under bare `kotlinc`).
 
 #### H49 — OkHttp follows redirects with custom API-key headers, discovery endpoints unpinned to HTTPS, weak JWT `aud`/`sub`/`kty` checks
-- **Status**: `PENDING`
+- **Status**: `FIXED`
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/provider/Http.kt:26-42`
-  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptAuth.kt:263-277, 304-310, 334-369`
+  - `app/src/main/java/com/kaiser/rivet/provider/Http.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptAuth.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptIdTokenValidator.kt`
 - **Issue**: Default OkHttp redirects forward `x-api-key`, `x-goog-api-key`, and form `refresh_token` across redirects; `fetchJwks`/`revokeChatGptRefreshToken` don't enforce `isHttps` or `isSuccessful`; `validateIdToken` accepts `["client", 123]` in `aud`, empty `sub`, and non-RSA `kty`.
-- **Fix**: Disable `followRedirects(false).followSslRedirects(false)` on `http`; require `isSuccessful` + `https` scheme (+ expected host/valid HttpUrl) in `fetchJwks`/`revokeChatGptRefreshToken`; require `aud` array elements to be strings (`aud.size == 1 && aud[0].str() == expectedClientId`), `jwk["kty"]?.str() == "RSA"`, and non-blank `sub`.
-- **JiTTest**: Pure-Kotlin JVM JiTTest for `validateIdToken` checks (`aud`, `sub`, `kty`).
+- **Fix**: Disabled `followRedirects(false).followSslRedirects(false)` on the shared `http` client; extracted pure `ChatGptIdTokenValidator` and enforced `isPinnedHttpsEndpoint` (`https`, no userinfo, standard port 443, `openai.com` domain) + `isSuccessful` response checks in `fetchJwks`/`revokeChatGptRefreshToken`; hardened JWK validation (`kty == "RSA"`, optional `use == "sig"`, optional `alg == "RS256"`), single-element `aud` array validation (`aud.size == 1 && aud[0].str() == expectedClientId`), and non-blank `sub`.
+- **JiTTest**: `ChatGptIdTokenValidatorTest` (4 failures before fix -> `OK (4 tests)` on JVM) + new cases in `ChatGptIdTokenTest` (`mixedTypeAudArrayRejected`, `blankSubRejected`).
 
 #### H50 — Loopback OAuth listener aborts on wrong-`state` requests & invalid `%` escapes; unvalidated custom provider headers
 - **Status**: `PENDING`
