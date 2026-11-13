@@ -1370,9 +1370,19 @@ class BrowserSession(
             }
             captureThumbnail(view, id)
         } else {
+            // currentUrl is derived from historyUrls[historyIndex], not a stored
+            // field, so record a changed URL by appending to the history.
+            val newUrl = urlSnapshot.ifBlank { current.currentUrl.orEmpty() }
+            val urlChanged = newUrl.isNotBlank() && current.currentUrl != newUrl
+            val history = if (urlChanged) {
+                (current.historyUrls.take(current.historyIndex + 1) + newUrl).takeLast(50)
+            } else {
+                current.historyUrls
+            }
             val saved = current.copy(
                 title = titleSnapshot,
-                currentUrl = urlSnapshot.ifBlank { current.currentUrl },
+                historyUrls = history,
+                historyIndex = if (urlChanged) history.lastIndex.coerceAtLeast(0) else current.historyIndex,
                 lastUsedAt = System.currentTimeMillis(),
             )
             windows[id] = saved
