@@ -118,7 +118,6 @@ fun ModelSheet(
         if (openedFor != null) load(openedFor)
     }
 
-    // fetchModels reports a missing credential through `test`, not `fetchError`.
     val loadError = editorState.fetchError
         ?: editorState.test?.takeIf { !it.ok }?.message
     val filteredModels = remember(editorState.models, editorConfig.model, query) {

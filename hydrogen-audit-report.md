@@ -322,11 +322,13 @@
 - **JiTTest**: `ChatGptRefreshPolicyTest` (3 failures before fix -> `OK (4 tests)` after fix on JVM).
 
 #### H33 — `ProvidersViewModel.disconnectGitHub` clears `gitAvailable`, `startChatGptSignIn` orphans UUIDs, and `fetchModels` sets `state.test`
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt:160-167, 282-327, 360-383, 724-727`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; `ProviderEditorRequestsTest` Robolectric suite requires Gradle under AGP/Android SDK)
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt:162-169, 284-345, 381, 437-470, 713-726`
+  - `app/src/main/java/com/kaiser/rivet/ui/chat/ModelSheet.kt:121-123`
 - **Issue**: `disconnectGitHub` resets `gitAvailable = false`; new ChatGPT sign-in ignores `_editorState.config.id` and persists `model = ""` before resolving models; missing API key in `fetchModels` writes to `test` instead of `fetchError`.
-- **Fix**: Preserve `gitAvailable` via `it.copy(...)`; use editor's target config ID and resolve model before persisting; write missing-key error to `fetchError` (leaving `ModelSheet` / editor consistent).
-- **JiTTest**: Robolectric `ProvidersViewModel` JiTTest (`NEEDS-DEVICE-PROOF` offline).
+- **Fix**: Updated `disconnectGitHub` to use `it.copy(connected = false, busy = false, error = null)` preserving `gitAvailable`; passed `editorId` into `saveChatGptPlanProviderInternal`, resolved the model before persisting the OAuth bundle and provider config, and updated matching `_editorState`; changed missing-key check in `fetchModels` to write to `fetchError` (skipping API-key checks for `Local`).
+- **JiTTest**: `ProviderEditorRequestsTest.fetchModelsWithoutKeyWritesFetchErrorInsteadOfTestStatus` and `ProviderEditorRequestsTest.signInChatGptPlanUsesEditorIdAndSkipsPersistWhenModelFetchFails`.
 
 #### H34 — Index-keyed `messageReasoning` and `turnDurationsMs` desync across filtering, trimming, compaction, and mid-turn slices
 - **Status**: `PENDING`

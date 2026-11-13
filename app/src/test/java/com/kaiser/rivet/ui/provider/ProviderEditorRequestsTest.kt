@@ -283,4 +283,53 @@ class ProviderEditorRequestsTest {
         val persisted = viewModel.listState.value.configs.first { it.id == existing.id }
         assertEquals("Saved Name", persisted.name)
     }
+
+    @Test
+    fun fetchModelsWithoutKeyWritesFetchErrorInsteadOfTestStatus() = runBlocking {
+        val viewModel = ProvidersViewModel(app).also { viewModels += it }
+        viewModel.startNewProvider(ProviderType.OpenAi)
+        viewModel.fetchModels()
+
+        val state = viewModel.editorState.value
+        assertEquals("Enter an API key first.", state.fetchError)
+        assertNull(state.test)
+    }
+
+    @Test
+    fun signInChatGptPlanUsesEditorIdAndSkipsPersistWhenModelFetchFails() = runBlocking {
+        val viewModel = ProvidersViewModel(app).also { viewModels += it }
+        viewModel.startNewProvider(ProviderType.ChatGptPlan)
+        val editorId = viewModel.editorState.value.config.id
+        viewModel.clientFactory = { _, _ ->
+            object : com.kaiser.rivet.provider.ProviderClient {
+                override suspend fun listModels() = emptyList<ModelInfo>()
+                override suspend fun testConnection() = com.kaiser.rivet.provider.TestResult(true, "ok")
+                override suspend fun streamAgent(
+                    request: com.kaiser.rivet.provider.AgentRequest,
+                    onReasoning: (String) -> Unit,
+                    onDelta: (String) -> Unit,
+                ) = com.kaiser.rivet.agent.AgentResponse(text = "ok")
+            }
+        }
+        viewModel.signInRunner = { _, _, _, _, _ ->
+            ChatGptSignInResult.Success(
+                com.kaiser.rivet.provider.ChatGptBundle(
+                    clientId = "oai_1",
+                    accessToken = "acc",
+                    refreshToken = "ref",
+                    idToken = "idt",
+                    expiresInSec = 3600L,
+                    savedAtMs = System.currentTimeMillis(),
+                    scopes = listOf("openid", "chatgpt.tokens.use.direct"),
+                    sub = "sub1",
+                    email = "user@example.com",
+                )
+            )
+        }
+        viewModel.startChatGptSignIn {}
+        withTimeout(5_000) {
+            viewModel.editorState.first { !it.signingIn && it.signInError != null }
+        }
+        assertFalse(viewModel.listState.value.configs.any { it.id == editorId || it.model.isBlank() })
+    }
 }
