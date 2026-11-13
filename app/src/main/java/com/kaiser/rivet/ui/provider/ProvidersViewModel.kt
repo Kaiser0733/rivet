@@ -641,6 +641,21 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
             val state = _editorState.value
             val config = state.config.withModelId(state.config.model, state.models)
             if (config.model.isBlank()) return@launch
+            val invalidHeader = config.headers.firstOrNull {
+                !com.kaiser.rivet.provider.ProviderHeaderPolicy.isValidHeaderName(it.name) ||
+                    !com.kaiser.rivet.provider.ProviderHeaderPolicy.isValidHeaderValue(it.value)
+            }
+            if (invalidHeader != null) {
+                _editorState.update {
+                    it.copy(
+                        test = TestUi(
+                            false,
+                            "Invalid custom header \"${invalidHeader.name}\". Use ASCII header token names and printable ASCII values.",
+                        ),
+                    )
+                }
+                return@launch
+            }
             if (state.keyInput.isNotBlank() &&
                 !secrets.saveApiKey(config.id, state.keyInput.trim())
             ) {

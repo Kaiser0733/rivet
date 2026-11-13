@@ -319,11 +319,10 @@ internal fun anthropicThinkingMode(config: ProviderConfig): AnthropicThinkingMod
     }
 }
 
-// Free-form headers may never override a transport's auth headers; a stray
-// Authorization here could shadow or resend the stored key.
-fun List<ProviderHeader>.sanitized(): List<ProviderHeader> = filterNot {
-    val n = it.name.trim().lowercase()
-    n == "authorization" || n == "x-api-key" || n == "x-goog-api-key"
+// Free-form headers may never override a transport's auth headers or pass
+// invalid names/control characters that crash OkHttp's Request.Builder.
+fun List<ProviderHeader>.sanitized(): List<ProviderHeader> = filter {
+    ProviderHeaderPolicy.isPermittedCustomHeader(it.name, it.value)
 }
 
 fun parseHeaders(text: String): List<ProviderHeader> =

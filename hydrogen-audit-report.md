@@ -506,14 +506,16 @@
 - **JiTTest**: `ChatGptIdTokenValidatorTest` (4 failures before fix -> `OK (4 tests)` on JVM) + new cases in `ChatGptIdTokenTest` (`mixedTypeAudArrayRejected`, `blankSubRejected`).
 
 #### H50 — Loopback OAuth listener aborts on wrong-`state` requests & invalid `%` escapes; unvalidated custom provider headers
-- **Status**: `PENDING`
+- **Status**: `FIXED`
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptSession.kt:104-154, 239-243`
-  - `app/src/main/java/com/kaiser/rivet/provider/ProviderConfig.kt:310-319`
-  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt:609-646`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptLoopback.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ChatGptSession.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ProviderHeaderPolicy.kt`
+  - `app/src/main/java/com/kaiser/rivet/provider/ProviderConfig.kt`
+  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt`
 - **Issue**: Any third-party request to `/auth/callback*` aborts an active sign-in even with wrong `state` or `Error` callback; `/auth/callbackEVIL` matches `startsWith`; `URLDecoder` throws uncaught; invalid HTTP header names/values crash `Request.Builder.header` at turn time.
-- **Fix**: Pass expected `state` to `ChatGptLoopback` (keep listening / return 400 on mismatched/missing `state` or non-exact path) and catch `IllegalArgumentException` in `parseQuery`; validate HTTP header name/value grammar before saving in `ProvidersViewModel.save()` / sanitize safely.
-- **JiTTest**: Pure-Kotlin JVM JiTTest for `ChatGptLoopback` state validation & header validation helper.
+- **Fix**: Added `expectedState` / `setExpectedState(state)` to `ChatGptLoopback` and wired it from `runSignIn`; enforced exact `rawPath == callbackPath` check, caught `IllegalArgumentException` in `parseQuery` with HTTP 400 without completing/aborting sign-in, and kept listening on wrong/missing `state`; extracted `ProviderHeaderPolicy` enforcing RFC 7230 token names and printable ASCII values in both `ProviderConfig.sanitized()` and `ProvidersViewModel.save()`.
+- **JiTTest**: `ProviderHeaderPolicyTest` + `ChatGptLoopbackTest` (4 failures before fix -> `OK (6 tests)` on JVM).
 
 #### H51 — `ReaderExtractor` permits uppercase `JAVASCRIPT:`/`data:`/`vbscript:` links; `BrowserSession` raw `Content-Disposition` filename & unescaped CSS `[name="..."]`
 - **Status**: `PENDING`

@@ -149,13 +149,16 @@ class ProviderConfigTest {
     }
 
     @Test
-    fun headerSanitizationDropsAuthHeaders() {
+    fun headerSanitizationDropsAuthAndMalformedHeaders() {
         val headers = listOf(
             ProviderHeader("Authorization", "Bearer evil"),
             ProviderHeader("authorization", "Bearer evil"),
             ProviderHeader("x-api-key", "evil"),
             ProviderHeader("X-Goog-Api-Key", "evil"),
             ProviderHeader("x-goog-api-key", "evil"),
+            ProviderHeader("Bad Header", "space-in-name"),
+            ProviderHeader("X-Ctl", "line1\r\nInjected: yes"),
+            ProviderHeader("X-NonAscii", "val\u2603"),
             ProviderHeader("X-Custom", "keep"),
         )
         val kept = headers.sanitized()

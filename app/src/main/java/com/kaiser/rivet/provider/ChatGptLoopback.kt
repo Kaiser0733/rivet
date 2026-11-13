@@ -1,6 +1,7 @@
 package com.kaiser.rivet.provider
 
 import java.io.BufferedReader
+import java.io.InputStream
 import java.io.InputStreamReader
 import java.io.OutputStream
 import java.net.InetSocketAddress
@@ -38,6 +39,7 @@ internal const val CHATGPT_SIGNIN_TIMEOUT_MS = 300_000L
 class ChatGptLoopback(
     port: Int = 0,
     private val callbackPath: String = "/auth/callback",
+    expectedState: String? = null,
 ) {
     private val server: ServerSocket = ServerSocket().apply {
         reuseAddress = false
@@ -45,10 +47,15 @@ class ChatGptLoopback(
     }
     private val resultDeferred = CompletableDeferred<ChatGptCallback>()
     @Volatile private var running = false
+    @Volatile private var requiredState: String? = expectedState
     private var acceptThread: Thread? = null
 
     val actualPort: Int
         get() = server.localPort
+
+    fun setExpectedState(state: String?) {
+        requiredState = state
+    }
 
     fun start() {
         running = true
@@ -97,25 +104,40 @@ class ChatGptLoopback(
 
     private fun handleCallback(client: Socket) {
         client.soTimeout = CALLBACK_SOCKET_TIMEOUT_MS
-        val input = BufferedReader(InputStreamReader(client.getInputStream(), Charsets.US_ASCII))
+        processRequest(client.getInputStream(), client.getOutputStream())
+    }
+
+    internal fun processRequest(inputStream: InputStream, outputStream: OutputStream) {
+        val input = BufferedReader(InputStreamReader(inputStream, Charsets.US_ASCII))
         val requestLine = input.readLine() ?: return
-        val parts = requestLine.split(' ')
-        if (parts.size != 3 || parts[0] != "GET") {
-            respond(client.getOutputStream(), 405, "Method Not Allowed")
-            return
-        }
-        val target = parts[1]
-        if (!target.startsWith(callbackPath)) {
-            // Not our callback (e.g. favicon); stay alive for the real one.
-            respond(client.getOutputStream(), 404, "Not Found")
-            return
-        }
-        // Drain headers before responding.
+        // Drain request headers before responding so clients always read the status line cleanly.
         while (true) {
             val line = input.readLine() ?: break
             if (line.isEmpty()) break
         }
+        val parts = requestLine.split(' ')
+        if (parts.size != 3 || parts[0] != "GET") {
+            respond(outputStream, 405, "Method Not Allowed")
+            return
+        }
+        val target = parts[1]
+        val rawPath = target.substringBefore('?')
+        if (rawPath != callbackPath) {
+            // Not our exact callback (e.g. favicon or prefix lookalike); stay alive for the real one.
+            respond(outputStream, 404, "Not Found")
+            return
+        }
         val params = parseQuery(target.substringAfter('?', "").ifEmpty { null })
+        if (params == null) {
+            respond(outputStream, 400, "Bad Request")
+            return
+        }
+        val expected = requiredState
+        if (expected != null && params["state"] != expected) {
+            // Wrong/missing state must never abort or complete an active sign-in attempt.
+            respond(outputStream, 400, "Bad Request")
+            return
+        }
         val callback = when (val error = params["error"]) {
             null -> {
                 val code = params["code"]
@@ -136,14 +158,13 @@ class ChatGptLoopback(
         // Minimal close-tab page; one line of English, no resources.
         val page = "<html><body><p>You can close this tab and return to Rivet.</p></body></html>"
         val bytes = page.toByteArray(Charsets.UTF_8)
-        val out = client.getOutputStream()
-        out.write("HTTP/1.1 200 OK\r\n".toByteArray(Charsets.US_ASCII))
-        out.write("Content-Type: text/html; charset=utf-8\r\n".toByteArray(Charsets.US_ASCII))
-        out.write("Cache-Control: no-store\r\n".toByteArray(Charsets.US_ASCII))
-        out.write("Content-Length: ${bytes.size}\r\nConnection: close\r\n\r\n"
+        outputStream.write("HTTP/1.1 200 OK\r\n".toByteArray(Charsets.US_ASCII))
+        outputStream.write("Content-Type: text/html; charset=utf-8\r\n".toByteArray(Charsets.US_ASCII))
+        outputStream.write("Cache-Control: no-store\r\n".toByteArray(Charsets.US_ASCII))
+        outputStream.write("Content-Length: ${bytes.size}\r\nConnection: close\r\n\r\n"
             .toByteArray(Charsets.US_ASCII))
-        out.write(bytes)
-        out.flush()
+        outputStream.write(bytes)
+        outputStream.flush()
         resultDeferred.complete(callback)
     }
 
@@ -156,17 +177,21 @@ class ChatGptLoopback(
         out.flush()
     }
 
-    private fun parseQuery(rawQuery: String?): Map<String, String> {
+    private fun parseQuery(rawQuery: String?): Map<String, String>? {
         if (rawQuery.isNullOrEmpty()) return emptyMap()
-        return rawQuery.split('&').mapNotNull { pair ->
+        val parsed = linkedMapOf<String, String>()
+        for (pair in rawQuery.split('&')) {
             val idx = pair.indexOf('=')
-            if (idx < 0) null
-            else {
+            if (idx < 0) continue
+            try {
                 val k = URLDecoder.decode(pair.substring(0, idx), "UTF-8")
                 val v = URLDecoder.decode(pair.substring(idx + 1), "UTF-8")
-                k to v
+                parsed[k] = v
+            } catch (_: IllegalArgumentException) {
+                return null
             }
-        }.toMap()
+        }
+        return parsed
     }
 
     companion object {

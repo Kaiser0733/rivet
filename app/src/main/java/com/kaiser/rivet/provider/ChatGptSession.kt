@@ -43,6 +43,7 @@ suspend fun runSignIn(
     val nonce = randomToken()
     val loopback = session.loopback()
     try {
+        loopback.setExpectedState(state)
         loopback.start()
         val port = loopback.actualPort
         val redirectUri = "http://127.0.0.1:$port$CHATGPT_CALLBACK_PATH"
