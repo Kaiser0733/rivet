@@ -60,7 +60,11 @@ private data class PartialCreate(
     val path: String,
     val documentId: String,
     val target: MirrorEntry,
+    val actualPath: String? = null,
 )
+
+private fun isExcludedPath(path: String, excluded: Set<String>): Boolean =
+    path in excluded || excluded.any { path.startsWith("$it/") || it.startsWith("$path/") }
 
 private val emptyFile = MirrorEntry(false, 0, MessageDigest.getInstance("SHA-256").digest().toHex())
 
@@ -122,7 +126,7 @@ class WorkspaceMirror(
             // through the full pass below so it is re-checked and can clear.
             if (before.excluded.isEmpty() && local == before.entries) {
                 if (pendingCreate != null) {
-                    clearPartialCreate()
+                    if (local[pendingCreate.path] == null) clearPartialCreate()
                     return@withLock MirrorSyncResult(MirrorSync.Conflict, pendingCreate.path, skipped)
                 }
                 val externalOnly = safSnapshot()
@@ -139,18 +143,29 @@ class WorkspaceMirror(
             var partial = pendingCreate
             if (partial != null) {
                 val path = partial.path
-                val sameDocument = try {
-                    workspace.stat(WorkspacePath.parse(path)).documentId == partial.documentId
-                } catch (e: CancellationException) { throw e
-                } catch (_: Exception) { false }
-                if (!sameDocument || before.entries[path] != null || local[path] != partial.target ||
-                    (external[path] != emptyFile && external[path] != partial.target)) {
-                    clearPartialCreate()
-                    return@withLock MirrorSyncResult(MirrorSync.Conflict, path)
-                }
-                if (external[path] == partial.target) {
-                    clearPartialCreate()
-                    partial = null
+                if (partial.actualPath != null) {
+                    if (local[path] == null) {
+                        clearPartialCreate()
+                        partial = null
+                    } else {
+                        // The provider normalized the created filename earlier; keep the
+                        // receipt intact so subsequent syncs do not create duplicates.
+                        return@withLock MirrorSyncResult(MirrorSync.Failed, partial.actualPath, skipped)
+                    }
+                } else {
+                    val sameDocument = try {
+                        workspace.stat(WorkspacePath.parse(path)).documentId == partial.documentId
+                    } catch (e: CancellationException) { throw e
+                    } catch (_: Exception) { false }
+                    if (!sameDocument || before.entries[path] != null || local[path] != partial.target ||
+                        (external[path] != emptyFile && external[path] != partial.target)) {
+                        clearPartialCreate()
+                        return@withLock MirrorSyncResult(MirrorSync.Conflict, path, skipped)
+                    }
+                    if (external[path] == partial.target) {
+                        clearPartialCreate()
+                        partial = null
+                    }
                 }
             }
             // A path is a true overlap only when BOTH sides moved away from the
@@ -174,30 +189,53 @@ class WorkspaceMirror(
             })
             try {
                 val removed = before.entries.keys.filter { it.isNotEmpty() &&
-                    it !in excluded &&
+                    !isExcludedPath(it, excluded) &&
                     (it !in local || local[it]?.directory != before.entries[it]?.directory) }
                     .sortedByDescending { it.count { char -> char == '/' } }
                 for (path in removed) {
+                    if (isExcludedPath(path, excluded)) continue
                     selected()
                     if (external[path] == null) continue
                     val old = before.entries[path]!!
-                    workspace.deleteIfUnchanged(WorkspacePath.parse(path),
-                        if (old.directory) null else SafWorkspace.BinaryFingerprint(
-                            old.size ?: throw MirrorFailure("baseline_invalid", path),
-                            old.sha256 ?: throw MirrorFailure("baseline_invalid", path)))
+                    try {
+                        workspace.deleteIfUnchanged(WorkspacePath.parse(path),
+                            if (old.directory) null else SafWorkspace.BinaryFingerprint(
+                                old.size ?: throw MirrorFailure("baseline_invalid", path),
+                                old.sha256 ?: throw MirrorFailure("baseline_invalid", path)))
+                    } catch (failure: WorkspaceFailure) {
+                        if (failure.reason == WorkspaceFailure.Reason.CONFLICT) {
+                            excluded += path
+                        } else {
+                            return@withLock MirrorSyncResult(MirrorSync.Failed, path, skipped)
+                        }
+                    }
                 }
                 val addedDirs = local.filter { (path, entry) -> path.isNotEmpty() && entry.directory &&
-                    path !in excluded && before.entries[path] != entry }
+                    !isExcludedPath(path, excluded) && before.entries[path] != entry }
                     .keys.sortedBy { it.count { char -> char == '/' } }
                 for (path in addedDirs) {
+                    if (isExcludedPath(path, excluded)) continue
                     selected()
                     if (external[path]?.directory == true) continue
-                    val created = workspace.createDirectory(WorkspacePath.parse(path))
-                    if (created.path.value != path) return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value)
+                    if (external[path]?.directory == false) {
+                        excluded += path
+                        continue
+                    }
+                    try {
+                        val created = workspace.createDirectory(WorkspacePath.parse(path))
+                        if (created.path.value != path) return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value, skipped)
+                    } catch (failure: WorkspaceFailure) {
+                        if (failure.reason == WorkspaceFailure.Reason.CONFLICT) {
+                            excluded += path
+                        } else {
+                            return@withLock MirrorSyncResult(MirrorSync.Failed, path, skipped)
+                        }
+                    }
                 }
                 val changedFiles = local.filter { (path, entry) -> !entry.directory &&
-                    path !in excluded && entry != before.entries[path] }.keys.sorted()
+                    !isExcludedPath(path, excluded) && entry != before.entries[path] }.keys.sorted()
                 for (path in changedFiles) {
+                    if (isExcludedPath(path, excluded)) continue
                     selected()
                     if (external[path] == local[path]) continue
                     val relative = WorkspacePath.parse(path)
@@ -208,18 +246,26 @@ class WorkspaceMirror(
                         if (partial?.path == path) {
                             emptyFile.sha256!!
                         } else {
-                            val created = workspace.createFile(relative)
+                            val created = try {
+                                workspace.createFile(relative)
+                            } catch (failure: WorkspaceFailure) {
+                                if (failure.reason == WorkspaceFailure.Reason.CONFLICT) {
+                                    excluded += path
+                                    continue
+                                }
+                                return@withLock MirrorSyncResult(MirrorSync.Failed, path, skipped)
+                            }
                             if (created.path.value != path) {
                                 // The provider gave the document a different name, so this
                                 // path can never be written. Keep the receipt: it is what
                                 // stops the next sync creating a second copy of it.
                                 writePartialCreate(PartialCreate(workspace.tree.toString(), path,
-                                    created.documentId, local[path]!!))
-                                return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value)
+                                    created.documentId, local[path]!!, actualPath = created.path.value))
+                                return@withLock MirrorSyncResult(MirrorSync.Failed, created.path.value, skipped)
                             }
                             val fingerprint = workspace.fingerprint(created.path)
                             if (fingerprint.size != emptyFile.size || fingerprint.sha256 != emptyFile.sha256) {
-                                return@withLock MirrorSyncResult(MirrorSync.Conflict, path)
+                                return@withLock MirrorSyncResult(MirrorSync.Conflict, path, skipped)
                             }
                             partial = PartialCreate(workspace.tree.toString(), path, created.documentId, local[path]!!)
                             writePartialCreate(partial)
@@ -232,11 +278,11 @@ class WorkspaceMirror(
                     } catch (failure: WorkspaceFailure) {
                         if (failure.reason == WorkspaceFailure.Reason.CONFLICT) {
                             if (createdId != null) clearPartialCreate()
-                            return@withLock MirrorSyncResult(MirrorSync.Conflict, path)
+                            return@withLock MirrorSyncResult(MirrorSync.Conflict, path, skipped)
                         }
                         // Name the file that could not be written; a bare "failed" tells
                         // the user nothing about which path needs attention.
-                        return@withLock MirrorSyncResult(MirrorSync.Failed, path)
+                        return@withLock MirrorSyncResult(MirrorSync.Failed, path, skipped)
                     }
                     if (partial?.path == path) {
                         clearPartialCreate()
@@ -249,18 +295,19 @@ class WorkspaceMirror(
                 // change would be baselined but left stale in the mirror forever.
                 adoptExternalOnly(external, before.entries, localChanged, excluded)
                 val verified = safSnapshot()
-                val updatedLocal = localSnapshot(skipped = skipped)
+                val finalSkipped = mutableListOf<String>()
+                val updatedLocal = localSnapshot(skipped = finalSkipped)
                 val mismatch = (verified.keys + updatedLocal.keys).firstOrNull {
-                    it !in excluded && verified[it] != updatedLocal[it]
+                    !isExcludedPath(it, excluded) && verified[it] != updatedLocal[it]
                 }
-                if (mismatch != null) return@withLock MirrorSyncResult(MirrorSync.Failed, mismatch, skipped)
+                if (mismatch != null) return@withLock MirrorSyncResult(MirrorSync.Failed, mismatch, finalSkipped)
                 writeBaseline(current, MirrorBaseline(workspace.tree.toString(), verified,
                     excluded.toSet()))
                 clearPartialCreate()
                 MirrorSyncResult(
                     if (excluded.isEmpty()) MirrorSync.Ok else MirrorSync.Conflict,
                     excluded.sorted().firstOrNull(),
-                    skipped,
+                    finalSkipped,
                     excluded.sorted(),
                 )
             } catch (e: CancellationException) { throw e
@@ -428,7 +475,7 @@ class WorkspaceMirror(
     ) {
         val paths = (external.keys + before.keys).filter { path ->
             path.isNotEmpty() && external[path] != before[path] &&
-                path !in localChanged && path !in excluded
+                !isExcludedPath(path, localChanged) && !isExcludedPath(path, excluded)
         }
         // Deletions first, deepest first, so a missing external directory cannot
         // be recreated by a later child write.

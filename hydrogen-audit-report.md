@@ -273,11 +273,11 @@
 - **JiTTest**: `TerminalScrollPolicyTest` (`scrollsCursorIntoViewWhenImeShrinksViewportWithZeroTranscriptRows`, `leavesPromptAtTopWhenScreenFitsWithoutScrollback`; verified RED -> GREEN `OK (2 tests)`).
 
 #### H28 — `WorkspaceMirror.sync()` clears `partial-create.json` on 2nd sync, duplicates `skipped`, and misclassifies dir conflicts
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/runtime/WorkspaceMirror.kt:119, 140-150, 160-200, 212-218, 252`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; `WorkspaceMirrorTest` requires Robolectric/SAF under Gradle)
+- **Files**: `app/src/main/java/com/kaiser/rivet/runtime/WorkspaceMirror.kt:64-67, 124-295, 465`
 - **Issue**: Clearing `partial-create.json` when SAF normalized the name allows duplicate creation on the 3rd sync; passing the same `skipped` list to two `localSnapshot` calls duplicates entries; descendant paths of conflicting file↔dir paths fail instead of excluding/reporting `Conflict`.
-- **Fix**: Keep/record normalized-create exclusions accurately, capture fresh `skipped` from the post-sync snapshot, and handle parent/child `WorkspaceFailure(CONFLICT)` cleanly.
-- **JiTTest**: Robolectric `WorkspaceMirrorTest` JiTTest (`NEEDS-DEVICE-PROOF` offline).
+- **Fix**: Recorded `actualPath` on `PartialCreate` and kept normalized-name receipts across repeated syncs until the local uncreatable file is removed; captured post-sync `finalSkipped` in a fresh list (`result.skipped` asserts exact singletons); added `isExcludedPath` ancestor/descendant exclusion and caught `WorkspaceFailure(CONFLICT)` cleanly across delete/mkdir/createFile.
+- **JiTTest**: `WorkspaceMirrorTest.safInvalidPosixFilenamesAreSkippedWithoutCrashingSyncOrPrepare` (tightened to exact `listOf("foo.")`) and `WorkspaceMirrorTest.dirVsFileConflictWithDescendantsReportsConflictAndSkipsChildrenCleanly`.
 
 #### H29 — `ResponsesAgentStream` latches `itemDone` permanently and `OkHttpClient.responsesSse` relabels caller exceptions
 - **Status**: `PENDING`

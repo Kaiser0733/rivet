@@ -829,8 +829,24 @@ class WorkspaceMirrorTest {
         val result = mirror.sync()
 
         assertEquals(MirrorSync.Ok, result.state)
-        assertTrue("foo." in result.skipped)
+        assertEquals(listOf("foo."), result.skipped)
         assertEquals("after", String(bytes("ok.txt")))
         assertFalse(mirror.prepare().worktree.path.isEmpty())
+    }
+
+    @Test fun dirVsFileConflictWithDescendantsReportsConflictAndSkipsChildrenCleanly() = runBlocking {
+        source("ok.txt", "before".toByteArray())
+        val mirror = mirror()
+        val root = mirror.prepare().worktree
+        File(root, "clash/child.txt").apply {
+            parentFile?.mkdirs()
+            writeText("local child")
+        }
+        source("clash", "external file".toByteArray())
+
+        val result = mirror.sync()
+
+        assertEquals(MirrorSync.Conflict, result.state)
+        assertTrue("clash" in result.conflicts)
     }
 }
