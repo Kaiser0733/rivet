@@ -87,4 +87,18 @@ class GoalMemoryTest {
         val sessionOnly = GoalMemoryContext.updates(emptyList(), null, goal, "").single()
         assertNotNull(sessionOnly.validatedContext())
     }
+
+    @Test fun parseExtractsEmbeddedDateWhenStateLineLacksExpectedSeparatorFormat() {
+        val parsed = GoalDocument.parse(
+            """
+            # Goal
+            Ship cleanly
+
+            ## State
+            Active since 2026-10-15 · note
+            """.trimIndent(),
+        )
+        assertNotNull(parsed)
+        assertEquals("2026-10-15", parsed!!.setOn)
+    }
 }

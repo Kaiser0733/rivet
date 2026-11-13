@@ -82,8 +82,8 @@ data class GoalDocument(
             val match = STATE.find(stateLine)
             val state = match?.groupValues?.getOrNull(1)?.let(GoalState::parse) ?: GoalState.Active
             val setOn = match?.groupValues?.getOrNull(2)?.takeIf { it.isNotBlank() }
-                ?: stateLine.takeIf { it.isNotBlank() }?.substringBefore('·')?.trim()?.takeIf { it.isNotBlank() }
                 ?: DATE.find(stateLine)?.value
+                ?: stateLine.takeIf { it.isNotBlank() }?.substringBefore('·')?.trim()?.takeIf { it.isNotBlank() }
                 ?: "unknown"
             val session = match?.groupValues?.getOrNull(3)?.takeIf { it.isNotBlank() } ?: fallbackSession
             val progress = if (progressAt >= 0) lines.subList(progressAt + 1, lines.size)

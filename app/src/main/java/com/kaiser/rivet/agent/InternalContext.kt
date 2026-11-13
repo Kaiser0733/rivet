@@ -216,15 +216,10 @@ internal object ProjectContext {
             source.lastOrNull { it.validatedContext()?.let { data ->
                 data.workspaceId == workspace && data.kind == "project_notice" } == true }
                 ?.takeIf { it.internalContext!!.content.isNotBlank() }?.let { prefix += it }
-            // Compaction drops context messages; keep the newest catalog so the model's
-            // skill list survives the rewrite instead of waiting a step to be re-added.
-            source.lastOrNull { it.validatedContext()?.let { data ->
-                data.workspaceId == workspace && data.kind == SKILL_CATALOG_KIND } == true }
-                ?.let { prefix += it }
         }
-        // Goal, memory, run journal and availability are snapshots, not deltas; keep the
-        // newest of each through compaction so a long turn cannot summarize the goal away.
-        for (kind in listOf(GoalMemoryContext.KIND, RunContext.KIND, "rollback", ToolchainContext.KIND)) {
+        // Skills, goal, memory, run journal and availability are snapshots, not deltas; keep
+        // the newest of each through compaction even when a project has no AGENTS.md file.
+        for (kind in listOf(SKILL_CATALOG_KIND, GoalMemoryContext.KIND, RunContext.KIND, "rollback", ToolchainContext.KIND)) {
             source.lastOrNull { it.validatedContext()?.let { data ->
                 data.workspaceId == workspace && data.kind == kind } == true }
                 ?.let { prefix += it }

@@ -18,7 +18,7 @@ internal fun skillToolResult(
     val skills = catalog?.skills.orEmpty()
     val skill = skills.firstOrNull { it.name == name }
     if (skill == null) {
-        val available = skills.map { it.name }
+        val available = skills.filter { it.modelInvocable }.map { it.name }
         return AgentToolResult(call.id, call.name, buildJsonObject {
             put("error", "skill_not_found")
             put("retryable", false)

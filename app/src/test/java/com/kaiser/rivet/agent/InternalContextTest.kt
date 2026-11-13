@@ -164,4 +164,19 @@ class InternalContextTest {
         assertNotNull(msg.validatedContext())
         assertTrue(msg.internalContext!!.content.toByteArray(Charsets.UTF_8).size <= ProjectInstructions.PER_FILE_BYTES)
     }
+
+    @Test fun projectionRetainsSkillCatalogEvenWithoutProjectInstructions() {
+        val skillCatalog = AgentMessage(
+            role = AgentRole.Context,
+            text = "skills",
+            internalContext = InternalContext(
+                kind = SKILL_CATALOG_KIND,
+                workspaceId = workspace,
+                content = "<available_skills><skill><name>notes</name></skill></available_skills>",
+                digest = InternalContext.digest("<available_skills>"),
+            ),
+        )
+        val projected = ProjectContext.projection(listOf(skillCatalog), emptyList(), summary = "Earlier work")
+        assertTrue(projected.any { it.validatedContext()?.kind == SKILL_CATALOG_KIND })
+    }
 }

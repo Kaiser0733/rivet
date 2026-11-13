@@ -214,17 +214,17 @@
 - **JiTTest**: `AgentToolExecutorTest.reservedGoalMutationUsesReadOnlyEffectAndLargeReadOffsetsUseLong` and `AgentLoopTest.duplicateTruncatedToolCallIdsAreDeduplicatedAndRenameCreatedFolderIsNotDeleteFolder`.
 
 #### H22 — `GoalDocument.parse` masks `DATE` fallback, `ProjectContext.projection` drops `SKILL_CATALOG_KIND`, `SkillTool` leaks hidden skill names
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; agent `@Serializable` tests require Gradle)
 - **Files**:
   - `app/src/main/java/com/kaiser/rivet/agent/GoalMemory.kt:84-87`
-  - `app/src/main/java/com/kaiser/rivet/agent/InternalContext.kt:185-205`
-  - `app/src/main/java/com/kaiser/rivet/agent/SkillTool.kt:21`
+  - `app/src/main/java/com/kaiser/rivet/agent/InternalContext.kt:215-228`
+  - `app/src/main/java/com/kaiser/rivet/agent/SkillTool.kt:20-23`
 - **Issue**:
   1. `GoalDocument.parse` line `85` returns full `stateLine.substringBefore('·')` even if it's `"Active"`, preventing line `86`'s `DATE.find(stateLine)` from running.
   2. `ProjectContext.projection` skips `SKILL_CATALOG_KIND` when `latestProject == null` (repos without `AGENTS.md`).
   3. `SkillTool` leaks `disable-model-invocation` skill names in its `skill_not_found` error hint.
-- **Fix**: Run `DATE.find(stateLine)?.value` before arbitrary `substringBefore('·')`; render `SKILL_CATALOG_KIND` independently of `latestProject`; filter `catalog.skills.filter { !it.disableModelInvocation }` in `SkillTool` error hint.
-- **JiTTest**: Pure-Kotlin JVM JiTTests for all three fixes.
+- **Fix**: Checked `DATE.find(stateLine)?.value` before arbitrary `substringBefore('·')`; retained `SKILL_CATALOG_KIND` alongside other snapshots outside `if (latestProject != null)`; filtered `skills.filter { it.modelInvocable }` in `skillToolResult`'s error hint.
+- **JiTTest**: `GoalMemoryTest.parseExtractsEmbeddedDateWhenStateLineLacksExpectedSeparatorFormat`, `InternalContextTest.projectionRetainsSkillCatalogEvenWithoutProjectInstructions`, and `SkillToolTest.unknownNameDoesNotLeakManualOnlySkills`.
 
 #### H23 — `GitCheckpoint.commit` destroys the user's staged Git index (`git add`) on every run
 - **Status**: `PENDING`

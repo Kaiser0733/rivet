@@ -65,4 +65,18 @@ class SkillToolTest {
         assertTrue(result.content.contains("skill_not_found"))
         assertTrue(result.content.contains("No skills are installed"))
     }
+
+    @Test fun unknownNameDoesNotLeakManualOnlySkills() {
+        val result = skillToolResult(
+            call,
+            catalog(
+                skill("public-skill", disableModelInvocation = false),
+                skill("secret-manual-skill", disableModelInvocation = true),
+            ),
+            "missing",
+        )
+        assertTrue(result.error)
+        assertTrue(result.content.contains("public-skill"))
+        assertFalse(result.content.contains("secret-manual-skill"))
+    }
 }
