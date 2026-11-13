@@ -518,13 +518,14 @@
 - **JiTTest**: `ProviderHeaderPolicyTest` + `ChatGptLoopbackTest` (4 failures before fix -> `OK (6 tests)` on JVM).
 
 #### H51 — `ReaderExtractor` permits uppercase `JAVASCRIPT:`/`data:`/`vbscript:` links; `BrowserSession` raw `Content-Disposition` filename & unescaped CSS `[name="..."]`
-- **Status**: `PENDING`
+- **Status**: `FIXED`
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/browser/ReaderExtractor.kt:124-126`
-  - `app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt:1690-1696, 1942-1944`
+  - `app/src/main/java/com/kaiser/rivet/browser/ReaderExtractor.kt`
+  - `app/src/main/java/com/kaiser/rivet/browser/BrowserDownloadPolicy.kt`
+  - `app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt`
 - **Issue**: Case-sensitive `!href.startsWith("javascript:")` allows `JAVASCRIPT:`/`data:`/`vbscript:` links; raw `Content-Disposition` `filename` passes `..` and `/` into `setDestinationInExternalFilesDir`; unescaped webpage `<input name>` breaks `querySelector('[name="..."]')` in `loadSnapshotState`.
-- **Fix**: Allow only `http://` / `https://` links (case-insensitive) in `ReaderExtractor`; extract & test safe basename sanitization in `BrowserDownloadPolicy`; match `e.name === k` over `querySelectorAll('input,textarea,select')` while skipping `password`/`hidden`/`file`.
-- **JiTTest**: Pure-Kotlin JVM JiTTest (`ReaderExtractor` with `jsoup` + `BrowserDownloadPolicy`).
+- **Fix**: Allowed only case-insensitive `http://` / `https://` links in `ReaderExtractor`; added `BrowserDownloadPolicy.extractFileName` (handling RFC 6266 `filename*=`/`filename=` parameters safely) and hardened `sanitizeFileName` against percent-encoded traversal and trailing/leading dots, wiring it from `BrowserSession.onDownloadRequested`; updated `BrowserSession.loadSnapshotState` to match `e.name === k` across `querySelectorAll('input,textarea,select')` while skipping `password`/`hidden`/`file` inputs.
+- **JiTTest**: `ReaderExtractorTest` + `BrowserDownloadPolicyTest` (2 failures before fix -> `OK (9 tests)` on JVM).
 
 ---
 

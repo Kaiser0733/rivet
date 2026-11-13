@@ -1767,8 +1767,11 @@ class BrowserSession(
             val fields = snapshot.formFields
             if (fields.isNotEmpty()) {
                 val script = "(function(){var f=${org.json.JSONObject(fields)};" +
-                    "for(var k in f){var e=document.querySelector('[name=\"'+k+'\"]');" +
-                    "if(e&&e.type!=='password')e.value=f[k];}})()"
+                    "var els=document.querySelectorAll('input,textarea,select');" +
+                    "for(var k in f){if(!Object.prototype.hasOwnProperty.call(f,k))continue;" +
+                    "for(var i=0;i<els.length;i++){var e=els[i];" +
+                    "if(e.name===k){var t=(e.type||'').toLowerCase();" +
+                    "if(t!=='password'&&t!=='hidden'&&t!=='file'){e.value=f[k];}break;}}}})()"
                 view.evaluateJavascript(script, null)
             }
         }
@@ -2023,9 +2026,7 @@ class BrowserSession(
             _state.update { it.copy(error = "Only http:// and https:// downloads are supported.") }
             return
         }
-        val rawName = disposition?.substringAfter("filename=", "")?.trim('"')
-            ?.takeIf { it.isNotBlank() } ?: url.substringAfterLast('/')
-        val name = BrowserDownloadPolicy.sanitizeFileName(rawName)
+        val name = BrowserDownloadPolicy.extractFileName(disposition, url)
         val size = length.coerceAtLeast(0)
         val metered = runCatching {
             val cm = app.getSystemService(ConnectivityManager::class.java)

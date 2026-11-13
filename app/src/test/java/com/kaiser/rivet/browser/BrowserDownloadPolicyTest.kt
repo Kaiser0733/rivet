@@ -23,5 +23,21 @@ class BrowserDownloadPolicyTest {
         assertEquals("report.pdf", BrowserDownloadPolicy.sanitizeFileName("../../evil/report.pdf?token=1"))
         assertEquals("download", BrowserDownloadPolicy.sanitizeFileName(".."))
         assertEquals("secret", BrowserDownloadPolicy.sanitizeFileName(".secret"))
+        assertEquals("secret.txt", BrowserDownloadPolicy.sanitizeFileName("..%2F..%2Fsecret.txt"))
+        assertEquals("report.pdf", BrowserDownloadPolicy.sanitizeFileName("report.pdf... "))
+        assertEquals(
+            "evil.pdf",
+            BrowserDownloadPolicy.extractFileName(
+                "attachment; filename=\"../../evil.pdf\"; modification-date=\"Wed\"",
+                "https://example.com/fallback",
+            ),
+        )
+        assertEquals(
+            "report.pdf",
+            BrowserDownloadPolicy.extractFileName(
+                "attachment; filename*=UTF-8''..%2F..%2Freport.pdf",
+                "https://example.com/fallback",
+            ),
+        )
     }
 }

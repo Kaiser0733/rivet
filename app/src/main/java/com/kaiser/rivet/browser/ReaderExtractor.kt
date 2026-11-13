@@ -90,6 +90,12 @@ object ReaderExtractor {
         }
     }
 
+    private fun isSafeReaderHref(href: String): Boolean {
+        val trimmed = href.trim()
+        return trimmed.startsWith("https://", ignoreCase = true) ||
+            trimmed.startsWith("http://", ignoreCase = true)
+    }
+
     private fun score(element: Element): Int {
         val text = element.text().length
         val link = element.select("a").sumOf { it.text().length }
@@ -122,7 +128,7 @@ object ReaderExtractor {
                             val href = node.absUrl("href").ifBlank { node.attr("href") }
                             val label = node.text().trim()
                             if (label.isNotEmpty()) {
-                                if (href.isNotBlank() && !href.startsWith("javascript:")) {
+                                if (isSafeReaderHref(href)) {
                                     out.append('[').append(label).append("](").append(href).append(')')
                                 } else out.append(label)
                             }

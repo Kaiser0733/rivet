@@ -68,4 +68,26 @@ class ReaderExtractorTest {
         assertFalse(doc.text.contains("Fully transparent element removed"))
         assertFalse(doc.text.contains("Decimal zero transparent element removed"))
     }
+
+    @Test fun stripsNonHttpAndCaseInsensitiveScriptLinks() {
+        val html = """<html><body><article>
+            <p>Article body paragraph with enough text content for readability extraction to keep it.</p>
+            <div>
+              <a href="JAVASCRIPT:alert(1)">ClickJs</a>
+              <a href="data:text/html,hi">ClickData</a>
+              <a href="vbscript:msgbox(1)">ClickVbs</a>
+              <a href="HTTPS://example.com/safe">SafeHttps</a>
+              <a href="http://example.com/plain">SafeHttp</a>
+            </div>
+        </article></body></html>"""
+        val docNoBase = ReaderExtractor.extract(html, "")
+        assertFalse(docNoBase.text.contains("](JAVASCRIPT:", ignoreCase = true))
+        assertFalse(docNoBase.text.contains("](data:", ignoreCase = true))
+        assertFalse(docNoBase.text.contains("](vbscript:", ignoreCase = true))
+        assertTrue(docNoBase.text.contains("ClickJs"))
+        assertTrue(docNoBase.text.contains("ClickData"))
+        assertTrue(docNoBase.text.contains("ClickVbs"))
+        assertTrue(docNoBase.text.contains("[SafeHttps](https://example.com/safe)", ignoreCase = true))
+        assertTrue(docNoBase.text.contains("[SafeHttp](http://example.com/plain)"))
+    }
 }
