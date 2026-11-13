@@ -185,7 +185,7 @@ private fun terminalErrorMessage(code: String?): String? = when (code) {
     null -> null
     "workspace_unavailable" -> "No workspace is selected. Choose a project in the chat first."
     "process_limit" -> "No process slot is free. Stop a running process and try again."
-    "sync_required" -> "The workspace is syncing. Try again when it finishes."
+    "sync_required" -> "The workspace has conflicting changes. Resolve them before opening a terminal."
     "sync_timeout" -> "The workspace took too long to sync. The terminal is usable again; try once more."
     "sync_failed" -> "The workspace couldn't finish syncing. The terminal is usable again; try once more."
     "thermal_blocked" -> "The phone is too hot. Wait for it to cool before opening a terminal."
@@ -253,6 +253,7 @@ private fun TerminalArea(
                     session = session,
                     emulator = emulator,
                     requestedColumns = columns,
+                    visibleRows = rows,
                     terminalStyle = terminalStyle,
                     imeText = imeText,
                     onImeText = { imeText = it },
@@ -288,6 +289,7 @@ private fun TerminalGrid(
     session: InteractiveTerminalSession,
     emulator: TerminalEmulator,
     requestedColumns: Int,
+    visibleRows: Int,
     terminalStyle: TextStyle,
     imeText: String,
     onImeText: (String) -> Unit,
@@ -335,11 +337,16 @@ private fun TerminalGrid(
                 else if (!canForward) follow = true
             }
     }
-    LaunchedEffect(revision, totalRows) {
-        // The screen already fits the viewport. Only scrollback needs the bottom row,
-        // otherwise the shell's first prompt would be pushed off the top.
-        if (follow && transcriptRows > 0 && totalRows > 0) {
-            listState.scrollToItem(totalRows - 1)
+    LaunchedEffect(revision, totalRows, cursorIndex, visibleRows) {
+        // The screen already fits the viewport unless the IME shrinks visibleRows below cursorIndex.
+        TerminalScrollPolicy.cursorScrollTargetRow(
+            follow = follow,
+            transcriptRows = transcriptRows,
+            totalRows = totalRows,
+            cursorIndex = cursorIndex,
+            visibleRows = visibleRows,
+        )?.let { target ->
+            listState.scrollToItem(target)
         }
     }
 

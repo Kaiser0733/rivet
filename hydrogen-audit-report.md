@@ -263,13 +263,14 @@
 - **JiTTest**: `CommandRedactorTest` (`preservesUserAndPasswordFlagsWhileRedactingValues`, `redactsQuotedAndUnquotedBearerAuthorizationTokensWithoutLeakingSecret`; verified RED 2 failures -> GREEN `OK (2 tests)`).
 
 #### H27 — `RuntimeController.openTerminal` never settles dirty mirrors and `TerminalPane` hides cursor behind IME when `transcriptRows == 0`
-- **Status**: `PENDING`
+- **Status**: `FIXED` (`TerminalScrollPolicyTest` live RED->GREEN on JVM via `K2JVMCompiler` + `JUnitCore`; `RuntimeController.kt` & `TerminalPane.kt` `kt-checks.py balance` PASS; `openTerminal` sync requires Android/SAF)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/runtime/RuntimeController.kt:188`
-  - `app/src/main/java/com/kaiser/rivet/ui/terminal/TerminalPane.kt:188, 338-344`
+  - `app/src/main/java/com/kaiser/rivet/runtime/RuntimeController.kt:175-199`
+  - `app/src/main/java/com/kaiser/rivet/ui/terminal/TerminalScrollPolicy.kt` (extracted pure helper)
+  - `app/src/main/java/com/kaiser/rivet/ui/terminal/TerminalPane.kt:188, 255, 290, 340-350`
 - **Issue**: `openTerminal` returns `"sync_required"` instead of calling `active.sync()` when `ready.dirty`, and `TerminalPane` shows *"The workspace is syncing..."*; `TerminalGrid` (`341`) skips scrolling `cursorIndex` into view when `transcriptRows == 0` even after IME shrinks visible height below `cursorIndex` (preserving `InteractiveTerminal.requestResize`'s intentional no-SIGWINCH optimization!).
-- **Fix**: Call `active.sync()` in `openTerminal` when `ready.dirty` (matching `runCommand`), improve `"sync_required"` message, and scroll `cursorIndex` into view in `TerminalGrid` when `totalRows > 0 && (transcriptRows > 0 || cursorIndex >= visibleRows)` without touching `InteractiveTerminal.requestResize`.
-- **JiTTest**: Structural `kt-checks.py` + Robolectric/UI JiTTest (`NEEDS-DEVICE-PROOF` offline).
+- **Fix**: Updated `RuntimeController.openTerminal` to invoke `active.sync()` when `dirty` (matching `runCommand`); clarified `"sync_required"` message; extracted `TerminalScrollPolicy.cursorScrollTargetRow` and passed `visibleRows` into `TerminalGrid` so `cursorIndex >= visibleRows` scrolls the cursor into view even when `transcriptRows == 0`, without touching `InteractiveTerminal.requestResize`.
+- **JiTTest**: `TerminalScrollPolicyTest` (`scrollsCursorIntoViewWhenImeShrinksViewportWithZeroTranscriptRows`, `leavesPromptAtTopWhenScreenFitsWithoutScrollback`; verified RED -> GREEN `OK (2 tests)`).
 
 #### H28 — `WorkspaceMirror.sync()` clears `partial-create.json` on 2nd sync, duplicates `skipped`, and misclassifies dir conflicts
 - **Status**: `PENDING`

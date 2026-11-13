@@ -172,20 +172,32 @@ class RuntimeController(
             return@withLock TerminalLaunch(error = code)
         }
         governor.commandStarted()
-        val ready = try {
-            withTimeout(WORKSPACE_SYNC_TIMEOUT_MS) { active.prepare() }
+        val readyCheck = try {
+            withTimeout(WORKSPACE_SYNC_TIMEOUT_MS) {
+                var state = active.prepare()
+                if (state.dirty) {
+                    when (active.sync().state) {
+                        MirrorSync.Conflict -> return@withTimeout null to "sync_required"
+                        MirrorSync.Failed -> return@withTimeout null to "sync_failed"
+                        MirrorSync.Ok, MirrorSync.NoChanges -> Unit
+                    }
+                    state = active.prepare()
+                }
+                if (state.dirty) null to "sync_required" else state to null
+            }
         } catch (e: TimeoutCancellationException) {
             // The last complete worktree is still a usable terminal root. Never leave
             // the pane on a sync spinner just because SAF or the device is slow.
             val fallback = active.worktree.takeIf { it.isDirectory }
                 ?: return@withLock TerminalLaunch(error = "sync_timeout")
-            MirrorReady(fallback, dirty = false)
+            MirrorReady(fallback, dirty = false) to null
         } catch (e: CancellationException) {
             throw e
         } catch (_: Exception) {
             return@withLock TerminalLaunch(error = "sync_failed")
         }
-        if (ready.dirty) return@withLock TerminalLaunch(error = "sync_required")
+        readyCheck.second?.let { errorCode -> return@withLock TerminalLaunch(error = errorCode) }
+        val ready = readyCheck.first ?: return@withLock TerminalLaunch(error = "sync_failed")
         toolchain.ensurePrepared()
         val credentialFile = if (toolchain.gitReady) {
             withContext(Dispatchers.IO) { gitHub.refresh() }
