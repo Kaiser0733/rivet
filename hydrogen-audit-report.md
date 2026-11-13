@@ -331,13 +331,14 @@
 - **JiTTest**: `ProviderEditorRequestsTest.fetchModelsWithoutKeyWritesFetchErrorInsteadOfTestStatus` and `ProviderEditorRequestsTest.signInChatGptPlanUsesEditorIdAndSkipsPersistWhenModelFetchFails`.
 
 #### H34 — Index-keyed `messageReasoning` and `turnDurationsMs` desync across filtering, trimming, compaction, and mid-turn slices
-- **Status**: `PENDING`
+- **Status**: `FIXED` (`K2JVMCompiler` + `JUnitCore` `OK (3 tests)` on `ChatTurnSegmentationTest`, `kt-checks.py balance` PASS; `ChatViewModel` integration verified on device)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt:748, 1763-1775, 2131, 2144-2155`
-  - `app/src/main/java/com/kaiser/rivet/ui/chat/ChatProcessGroups.kt:397-463`
+  - `app/src/main/java/com/kaiser/rivet/ui/chat/ChatTurnSegmentation.kt` (extracted pure segmentation + metadata remapping)
+  - `app/src/main/java/com/kaiser/rivet/ui/chat/ChatProcessGroups.kt`
+  - `app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt:748-765, 1775-1800, 2162-2185`
 - **Issue**: `AgentRole.Context` injection shifts indices during streaming while `recent()` strips `Context` at turn end; `send()` `.takeLast(100)` and `compactContext` do not shift `messageReasoning`; `segmentTurnItems` creates `turnIndex = 0` for leading orphan non-User slices whereas `finish()` keys `turnDurationsMs` by `visible.count { User } - 1`.
-- **Fix**: Align `turnDurationsMs` alignment with `segmentTurnItems` (or exclude orphan pre-user slice from incrementing user turn index / use consistent turn indexing) and compute reasoning association without counting stripped `AgentRole.Context` messages (updating indices cleanly on trim/compaction).
-- **JiTTest**: Pure-Kotlin JVM JiTTest for `segmentTurnItems` turn index alignment on mid-turn window slices.
+- **Fix**: Extracted `ChatTurnSegmentation.kt`; separated `userTurnIndex` from visual `currentTurnIndex` in `segmentTurnItems` so orphan pre-user slices never receive or shift user turn durations; shifted `messageReasoning` and `turnDurationsMs` during `.takeLast(100)` trimming in `send()` and `onMessage()`; added `remapTurnMetadataAfterVisibilityChange` in `finish()` to remap indices across stripped `AgentRole.Context` rows and trimmed/compacted prefixes.
+- **JiTTest**: `ChatTurnSegmentationTest` (3 failures before fix -> `OK (3 tests)` after fix on JVM).
 
 #### H35 — Composer `/goal` draft wedging, stale `runRecovery`, `ModelSheet` stranded `loadError`, and `RivetApp` nav overlap
 - **Status**: `PENDING`

@@ -747,12 +747,29 @@ class ChatViewModel private constructor(
         // this same message object for its durable copy; retries do not pass through here.
         val accepted = AgentMessage.user(trimmed)
         _uiState.update { state ->
+            val appended = state.messages + accepted
+            val dropCount = (appended.size - 100).coerceAtLeast(0)
+            val nextMessages = appended.takeLast(100)
+            val shiftedReasoning = if (dropCount == 0) state.messageReasoning
+            else state.messageReasoning.mapNotNull { (idx, reasoning) ->
+                val nextIdx = idx - dropCount
+                if (nextIdx >= 0) nextIdx to reasoning else null
+            }.toMap()
+            val droppedUsers = if (dropCount == 0) 0
+            else appended.take(dropCount).count { it.role == AgentRole.User }
+            val shiftedDurations = if (droppedUsers == 0) state.turnDurationsMs
+            else state.turnDurationsMs.mapNotNull { (turnIdx, ms) ->
+                val nextTurn = turnIdx - droppedUsers
+                if (nextTurn >= 0) nextTurn to ms else null
+            }.toMap()
             state.copy(
-                messages = (state.messages + accepted).takeLast(100),
+                messages = nextMessages,
                 acceptedMessageCount = state.acceptedMessageCount + 1,
                 streaming = true,
                 turnStartedAt = SystemClock.elapsedRealtime(),
                 streamingText = "", streamingReasoning = "",
+                messageReasoning = shiftedReasoning,
+                turnDurationsMs = shiftedDurations,
                 activity = "Getting ready…",
                 toolLifecycle = emptyList(), commandRunning = false,
                 error = null, errorAction = null, notice = null,
@@ -1781,6 +1798,13 @@ class ChatViewModel private constructor(
                                             val nextIdx = idx - dropCount
                                             if (nextIdx >= 0) nextIdx to text else null
                                         }.toMap()
+                                    val droppedUsers = if (dropCount == 0) 0
+                                        else appended.take(dropCount).count { it.role == AgentRole.User }
+                                    val shiftedDurations = if (droppedUsers == 0) state.turnDurationsMs
+                                        else state.turnDurationsMs.mapNotNull { (turnIdx, ms) ->
+                                            val nextTurn = turnIdx - droppedUsers
+                                            if (nextTurn >= 0) nextTurn to ms else null
+                                        }.toMap()
                                     val nextReasoning = if (message.role == AgentRole.Assistant &&
                                         finishedReasoning.isNotBlank()) {
                                         shiftedReasoning + ((nextMessages.size - 1) to finishedReasoning)
@@ -1791,6 +1815,7 @@ class ChatViewModel private constructor(
                                         streamingReasoning = if (message.role == AgentRole.Assistant) ""
                                             else state.streamingReasoning,
                                         messageReasoning = nextReasoning,
+                                        turnDurationsMs = shiftedDurations,
                                         toolLifecycle = state.toolLifecycle.filterNot {
                                             it.correlationKey in completedToolKeys
                                         },
@@ -2160,19 +2185,28 @@ class ChatViewModel private constructor(
             else -> null
         }
         _uiState.update { state ->
-            val nextReasoning = if (error == ProviderError.EmptyResponse.text() && state.messages.isNotEmpty()) {
+            val rawReasoning = if (error == ProviderError.EmptyResponse.text() && state.messages.isNotEmpty()) {
                 state.messageReasoning - (state.messages.size - 1)
             } else state.messageReasoning
+            val remapped = com.kaiser.rivet.ui.chat.remapTurnMetadataAfterVisibilityChange(
+                oldMessages = state.messages,
+                newMessages = visible,
+                oldReasoning = rawReasoning,
+                oldDurations = state.turnDurationsMs,
+                isInternal = { it.role == AgentRole.Context || it.internalContext != null },
+                isUser = { it.role == AgentRole.User },
+                sameMessage = { a, b -> a.role == b.role && a.text == b.text && a.toolCalls == b.toolCalls },
+            )
             val unchanged = renameRevision == titleRenameRevision
             val turnIndex = visible.count { it.role == AgentRole.User } - 1
             val elapsed = state.turnStartedAt?.let { start ->
                 (SystemClock.elapsedRealtime() - start).coerceAtLeast(0)
             }
             val nextDurations = if (turnIndex >= 0 && elapsed != null && result.stopReason == AgentStopReason.Completed) {
-                state.turnDurationsMs + (turnIndex to elapsed)
-            } else state.turnDurationsMs
+                remapped.durations + (turnIndex to elapsed)
+            } else remapped.durations
             state.copy(messages = visible, streaming = false, streamingText = "", streamingReasoning = "",
-                messageReasoning = nextReasoning, pendingApproval = null,
+                messageReasoning = remapped.reasoning, pendingApproval = null,
                 turnDurationsMs = nextDurations,
                 toolLifecycle = emptyList(), commandRunning = false,
                 sessions = if (unchanged && history != null) history else state.sessions,
