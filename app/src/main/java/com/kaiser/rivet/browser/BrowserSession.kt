@@ -198,6 +198,7 @@ class BrowserSession(
     private var baselineAvailMem = 0L
     private var observedBrowserBytes = 0L
     private var elementRefs: List<BrowserElementRef> = emptyList()
+    private var pendingSnapshotRestore: Pair<String, BrowserSnapshot>? = null
     private var idleJob: kotlinx.coroutines.Job? = null
     private val idleArming = BrowserIdleArming()
     private var appBackgrounded = false
@@ -1117,9 +1118,36 @@ class BrowserSession(
         CookieManager.getInstance().flush()
         renderer?.clearCache(true)
         renderer?.clearHistory()
-        app.cacheDir.resolve("browser-snapshots").deleteRecursively()
         snapshots.clear()
-        _state.update { it.copy(notice = "Browser data cleared.") }
+        File(app.filesDir, "browser-snapshots").deleteRecursively()
+        shotStore.cleanSession()
+        File(app.filesDir, "browser-shots").deleteRecursively()
+        trail.clear()
+        readerCache.navigate()
+        windows.clear()
+        activeWindowId = null
+        activeUrl = ""
+        activeTitle = ""
+        reader = null
+        pendingSnapshotRestore = null
+        elementRefs = emptyList()
+        _state.update {
+            it.copy(
+                activeWindowId = null,
+                windows = emptyList(),
+                domains = emptyList(),
+                url = "",
+                title = "",
+                readerText = "",
+                chunkIndex = 0,
+                chunkCount = 0,
+                chunkAnchor = "",
+                pageReady = false,
+                visualScreenshot = null,
+                downloadPrompt = null,
+                notice = "Browser data cleared.",
+            )
+        }
     }
 
     /** Reader-first gets one interaction step, then the renderer is destroyed. */
@@ -1180,18 +1208,20 @@ class BrowserSession(
         activeWindowId = id
         activeUrl = target.currentUrl.orEmpty()
         activeTitle = target.title
+        pendingSnapshotRestore = null
         unparkRenderer()
         refreshBudget()
         _state.update { it.copy(activeWindowId = id, url = activeUrl, title = activeTitle,
             fidelity = BrowserFidelity.Reloaded, windows = windowSummaries()) }
         val view = renderer
         if (view != null && activeUrl.isNotBlank()) {
+            pendingSnapshotRestore = id to target
             view.loadUrl(activeUrl)
-            loadSnapshotState(view, target)
         }
     }
 
     fun newWindow() {
+        pendingSnapshotRestore = null
         unparkRenderer()
         val id = createWindow("about:blank")
         activeWindowId = id
@@ -1310,17 +1340,30 @@ class BrowserSession(
     private fun saveActiveSnapshot() {
         val id = activeWindowId ?: return
         val current = windows[id] ?: return
+        val titleSnapshot = activeTitle
+        val urlSnapshot = activeUrl
         val view = renderer
         if (view != null) {
             view.evaluateJavascript(snapshotScript()) { raw ->
-                val saved = current.copy(title = activeTitle, lastUsedAt = System.currentTimeMillis(),
-                    scrollY = parseScrollY(raw), formFields = parseSafeFields(raw))
+                if (!windows.containsKey(id)) return@evaluateJavascript
+                val latest = windows[id] ?: current
+                val hasDomSnapshot = !raw.isNullOrBlank() && raw != "null" && raw != "undefined"
+                val saved = latest.copy(
+                    title = titleSnapshot,
+                    lastUsedAt = System.currentTimeMillis(),
+                    scrollY = if (hasDomSnapshot) parseScrollY(raw) else latest.scrollY,
+                    formFields = if (hasDomSnapshot) parseSafeFields(raw) else latest.formFields,
+                )
                 windows[id] = saved
                 snapshots.save(saved)
             }
             captureThumbnail(view, id)
         } else {
-            val saved = current.copy(title = activeTitle, lastUsedAt = System.currentTimeMillis())
+            val saved = current.copy(
+                title = titleSnapshot,
+                currentUrl = urlSnapshot.ifBlank { current.currentUrl },
+                lastUsedAt = System.currentTimeMillis(),
+            )
             windows[id] = saved
             snapshots.save(saved)
         }
@@ -1435,9 +1478,15 @@ class BrowserSession(
                 mode = BrowserMode.Renderer, rendererVisible = true, pageReady = true,
                 fidelity = BrowserFidelity.Reloaded) }
             refreshBudget()
-            val windowScroll = activeWindowId?.let { windows[it]?.scrollY } ?: 0
-            if (windowScroll > 0 || rotationScroll.target > 0) {
-                restoreScroll(view, maxOf(windowScroll, rotationScroll.target))
+            val pending = pendingSnapshotRestore?.takeIf { (windowId, _) -> windowId == activeWindowId }?.second
+            pendingSnapshotRestore = null
+            if (pending != null) {
+                loadSnapshotState(view, pending)
+            } else {
+                val windowScroll = activeWindowId?.let { windows[it]?.scrollY } ?: 0
+                if (windowScroll > 0 || rotationScroll.target > 0) {
+                    restoreScroll(view, maxOf(windowScroll, rotationScroll.target))
+                }
             }
             armPaintWatchdog(actual)
             if (!BrowserAuthGuard.isLoopback(actual)) {

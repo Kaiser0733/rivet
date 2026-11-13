@@ -138,7 +138,7 @@
 - **JiTTest**: Pure-Kotlin JVM JiTTest for `BrowserDownloadPolicy.isSupportedDownloadUrl` / `sanitizeFileName`.
 
 #### H14 — Cross-tab snapshot corruption, premature form restore, and broken `clearBrowserData()`
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (Robolectric `BrowserSessionClearDataTest` added; `BrowserSession.kt` & `BrowserSessionClearDataTest.kt` pass `kt-checks.py balance`; requires Android/Gradle Robolectric WebView/CookieManager run)
 - **Files**: `app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt:164, 1115-1123, 1175-1192, 1685-1698`
 - **Issue**:
   1. `saveActiveSnapshot()` reads mutable `activeTitle` after async `evaluateJavascript` when `selectWindow()` has already overwritten `activeTitle`, and writes empty fields when JS returns `"null"`.
