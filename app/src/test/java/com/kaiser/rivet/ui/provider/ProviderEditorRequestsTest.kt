@@ -244,4 +244,43 @@ class ProviderEditorRequestsTest {
         assertFalse(viewModel.editorState.value.signingIn)
         assertNull(viewModel.editorState.value.signInError)
     }
+
+    @Test
+    fun fetchModelsOnExistingProviderDoesNotPersistUnsavedEditorChangesBeforeSave() = runBlocking {
+        val viewModel = ProvidersViewModel(app).also { viewModels += it }
+        viewModel.clientFactory = { _, _ ->
+            object : com.kaiser.rivet.provider.ProviderClient {
+                override suspend fun listModels() = listOf(
+                    ModelInfo("gpt-4o", "GPT-4o", contextWindow = 128_000)
+                )
+                override suspend fun testConnection() = com.kaiser.rivet.provider.TestResult(true, "ok")
+                override suspend fun streamAgent(
+                    request: com.kaiser.rivet.provider.AgentRequest,
+                    onReasoning: (String) -> Unit,
+                    onDelta: (String) -> Unit,
+                ) = com.kaiser.rivet.agent.AgentResponse(text = "ok")
+            }
+        }
+        viewModel.startNewProvider(ProviderType.OpenAi)
+        viewModel.updateConfig { it.copy(name = "Saved Name", model = "gpt-4o") }
+        viewModel.setKeyInput("sk-test-secret")
+        val saved = CompletableDeferred<Unit>()
+        viewModel.save { saved.complete(Unit) }
+        withTimeout(5_000) { saved.await() }
+        val existing = withTimeout(5_000) {
+            viewModel.listState.first { it.configs.any { cfg -> cfg.name == "Saved Name" } }
+                .configs.first { it.name == "Saved Name" }
+        }
+
+        viewModel.startEdit(existing.id)
+        viewModel.updateConfig { it.copy(name = "Unsaved Rename") }
+        viewModel.fetchModels()
+        withTimeout(5_000) {
+            viewModel.editorState.first { !it.fetching && it.models.isNotEmpty() }
+        }
+        viewModel.closeEditor()
+
+        val persisted = viewModel.listState.value.configs.first { it.id == existing.id }
+        assertEquals("Saved Name", persisted.name)
+    }
 }

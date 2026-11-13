@@ -117,7 +117,7 @@
 - **JiTTest**: Pure-Kotlin JVM JiTTest (`ChatGptAuth` parseTokenResponse / validateIdToken).
 
 #### H11 — `ProvidersViewModel.fetchModels` silently persists unsaved editor edits
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`ProviderEditorRequestsTest.fetchModelsOnExistingProviderDoesNotPersistUnsavedEditorChangesBeforeSave` added; `ProvidersViewModel.kt` & `ProviderEditorRequestsTest.kt` pass `kt-checks.py balance`; requires Gradle Robolectric test run)
 - **Files**: `app/src/main/java/com/kaiser/rivet/ui/provider/ProvidersViewModel.kt:746-763`
 - **Issue**: While editing an existing provider, `fetchModels` calls `store.save(updated)` whenever `nextConfig != it.config`, committing unsaved edits (`name`, `baseUrl`, `headers`, `reasoning`) even if the user later clicks Cancel.
 - **Fix**: Keep refreshed model metadata in `_editorState` without calling `store.save(updated)` inside `fetchModels()` (or update only previously stored metadata without saving uncommitted fields).

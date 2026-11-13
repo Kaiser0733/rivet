@@ -76,6 +76,8 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
     private val editorRequests = ProviderEditorRequests(viewModelScope)
     private var chatGptSession: ChatGptSignInSession? = null
     private var signInJob: Job? = null
+    internal var clientFactory: (ProviderConfig, String) -> com.kaiser.rivet.provider.ProviderClient =
+        ::providerClient
     internal var signInRunner: suspend (
         String,
         (String) -> Unit,
@@ -730,9 +732,8 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
         if (!editorRequests.tryLaunch(state.config.id) { ticket ->
                 try {
                     val credential = resolveEditorCredential(state.config, state.keyInput)
-                    val models = providerClient(state.config, credential).listModels()
+                    val models = clientFactory(state.config, credential).listModels()
                     if (isCurrent(ticket)) {
-                        var refreshedExisting: ProviderConfig? = null
                         _editorState.update {
                             val nextConfig = when {
                                 it.config.model.isBlank() && models.isNotEmpty() ->
@@ -742,9 +743,6 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                                         it.config.selectListedModel(matched)
                                     } ?: it.config
                                 else -> it.config
-                            }
-                            if (!it.isNew && nextConfig != it.config) {
-                                refreshedExisting = nextConfig
                             }
                             val modelChanged = nextConfig.model != it.config.model
                             it.copy(
@@ -757,9 +755,6 @@ class ProvidersViewModel(app: Application) : AndroidViewModel(app) {
                                     nextConfig.resolvedManualMaxOutputTokens()?.toString().orEmpty()
                                 } else it.maxOutputTokensInput,
                             )
-                        }
-                        refreshedExisting?.let { updated ->
-                            try { store.save(updated) } catch (_: Exception) { }
                         }
                     }
                 } catch (e: CancellationException) {
