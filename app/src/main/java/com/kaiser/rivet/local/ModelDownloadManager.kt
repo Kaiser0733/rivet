@@ -59,6 +59,8 @@ private data class DownloadsDocument(val jobs: List<DownloadJob> = emptyList())
 /** Pure policy so storage and mobile-data rules are testable without Android. */
 enum class NetworkKind { Wifi, Cellular, Other }
 
+enum class Http416Action { Finish, RestartFromScratch, Fail }
+
 object DownloadPolicy {
     const val KEEP_FREE_BYTES = 1_000_000_000L
     const val WARN_BELOW_BYTES = 2_500_000_000L
@@ -80,6 +82,15 @@ object DownloadPolicy {
     }
 
     fun wifiOnlyByDefault(sizeBytes: Long): Boolean = sizeBytes > WIFI_DEFAULT_THRESHOLD
+
+    fun effectiveWifiOnly(globalWifiOnly: Boolean, allowMobile: Boolean, sizeBytes: Long): Boolean =
+        !allowMobile && globalWifiOnly && wifiOnlyByDefault(sizeBytes)
+
+    fun http416Action(partBytes: Long, expectedBytes: Long, rangedAttempt: Boolean): Http416Action = when {
+        expectedBytes > 0 && partBytes == expectedBytes -> Http416Action.Finish
+        rangedAttempt -> Http416Action.RestartFromScratch
+        else -> Http416Action.Fail
+    }
 
     /** A metered Wi-Fi network is never called mobile data. */
     fun meteredWarning(kind: NetworkKind, sizeBytes: Long): String {
@@ -135,6 +146,18 @@ class ModelDownloadManager(
 
     fun setWifiOnlyPreference(enabled: Boolean) {
         wifiOnly = enabled
+        val updated = _jobs.value.mapValues { (_, job) ->
+            val targetWifiOnly = DownloadPolicy.effectiveWifiOnly(
+                globalWifiOnly = enabled,
+                allowMobile = job.allowMobile,
+                sizeBytes = job.entry.size,
+            )
+            if (targetWifiOnly == job.wifiOnly) job else job.copy(wifiOnly = targetWifiOnly)
+        }
+        if (updated != _jobs.value) {
+            _jobs.value = updated
+            persist()
+        }
     }
 
     fun job(id: String): DownloadJob? = _jobs.value[id]
@@ -152,23 +175,27 @@ class ModelDownloadManager(
         val prior = _jobs.value[entry.id]
         val part = models.partFor(entry)
         val offset = if (part.isFile) part.length() else 0L
+        val effectiveAllowMobile = allowMobile || (prior?.allowMobile == true)
+        val effectiveWifiOnly = DownloadPolicy.effectiveWifiOnly(
+            globalWifiOnly = wifiOnly,
+            allowMobile = effectiveAllowMobile,
+            sizeBytes = entry.size,
+        )
         val job = (prior ?: DownloadJob(
             entry = entry,
             status = DownloadStatus.Queued,
             downloaded = offset,
             total = entry.size,
-            wifiOnly = wifiOnly && DownloadPolicy.wifiOnlyByDefault(entry.size),
-            allowMobile = allowMobile,
+            wifiOnly = effectiveWifiOnly,
+            allowMobile = effectiveAllowMobile,
             byo = byo,
         )).copy(
             status = DownloadStatus.Queued,
             downloaded = offset,
             total = entry.size,
             error = null,
-            wifiOnly = if (allowMobile) false
-            else if (prior == null) (wifiOnly && DownloadPolicy.wifiOnlyByDefault(entry.size))
-            else prior.wifiOnly,
-            allowMobile = allowMobile,
+            wifiOnly = effectiveWifiOnly,
+            allowMobile = effectiveAllowMobile,
             updatedAt = System.currentTimeMillis(),
         )
         DownloadPolicy.refusal(freeBytes(), (entry.size - offset).coerceAtLeast(1))?.let {
@@ -285,57 +312,7 @@ class ModelDownloadManager(
         val part = models.partFor(job.entry)
         if (activeToken != token) return
         try {
-            set(job.copy(status = DownloadStatus.Downloading, error = null,
-                downloaded = part.length(), updatedAt = System.currentTimeMillis()))
-            val request = Request.Builder()
-                .url(job.entry.downloadUrl)
-                .header("Range", "bytes=${part.length().coerceAtLeast(0)}-")
-                .header("Accept-Encoding", "identity")
-                .get()
-                .build()
-            val call = client.newCall(request)
-            activeCall = call
-            call.execute().use { response ->
-                if (response.code == 416 && part.length() == job.entry.size) {
-                    finish(job, part, response.header("ETag"), job.entry.sha256, token)
-                    return
-                }
-                if (!response.isSuccessful) {
-                    throw IOException("The download server returned HTTP ${response.code}.")
-                }
-                val rangeStart = if (response.code == 206) part.length() else 0L
-                if (response.code != 206 && part.length() > 0) {
-                    // The server ignored Range and is sending the whole file. Restart
-                    // cleanly rather than stitching two different responses together.
-                    part.delete()
-                }
-                val body = response.body ?: throw IOException("The download response was empty.")
-                val contentLength = body.contentLength()
-                val linkedSize = response.header("X-Linked-Size")?.toLongOrNull()
-                val total = when {
-                    contentLength >= 0 -> contentLength + rangeStart
-                    linkedSize != null && linkedSize > 0 -> linkedSize
-                    else -> job.entry.size
-                }
-                if (total > 0 && total != job.total) {
-                    set(_jobs.value[id]?.copy(total = total, updatedAt = System.currentTimeMillis()) ?: return)
-                }
-                val etag = response.header("ETag") ?: response.header("X-Linked-ETag")
-                val existingEtag = _jobs.value[id]?.etag
-                if (existingEtag != null && etag != null && existingEtag != etag) {
-                    throw IOException("The model file changed on Hugging Face. Start the download again.")
-                }
-                set((_jobs.value[id] ?: job).copy(etag = existingEtag ?: etag,
-                    total = total, updatedAt = System.currentTimeMillis()))
-                FileOutputStream(part, rangeStart > 0).use { output ->
-                    copy(response.body!!.byteStream(), output, part, total, id, token)
-                }
-                if (part.length() != job.entry.size) {
-                    throw IOException("The download stopped early. Resume to finish it.")
-                }
-                finish(job.copy(etag = etag ?: existingEtag), part, etag,
-                    job.entry.sha256, token)
-            }
+            executeDownloadAttempt(job, part, allowRange = true, token = token)
         } catch (e: CancellationException) {
             if (activeToken != token) throw e
             val current = _jobs.value[id] ?: throw e
@@ -364,6 +341,84 @@ class ModelDownloadManager(
                 runner = null
             }
             stopServiceIfIdle()
+        }
+    }
+
+    private fun executeDownloadAttempt(
+        job: DownloadJob,
+        part: File,
+        allowRange: Boolean,
+        token: Long,
+    ) {
+        val id = job.entry.id
+        set((_jobs.value[id] ?: job).copy(status = DownloadStatus.Downloading, error = null,
+            downloaded = part.length(), updatedAt = System.currentTimeMillis()))
+        val requestBuilder = Request.Builder()
+            .url(job.entry.downloadUrl)
+            .header("Accept-Encoding", "identity")
+            .get()
+        if (allowRange && part.length() > 0) {
+            requestBuilder.header("Range", "bytes=${part.length()}-")
+        }
+        val call = client.newCall(requestBuilder.build())
+        activeCall = call
+        var restartFromScratch = false
+        call.execute().use { response ->
+            if (response.code == 416) {
+                when (DownloadPolicy.http416Action(part.length(), job.entry.size, allowRange)) {
+                    Http416Action.Finish -> {
+                        finish(job, part, response.header("ETag"), job.entry.sha256, token)
+                        return
+                    }
+                    Http416Action.RestartFromScratch -> {
+                        part.delete()
+                        set((_jobs.value[id] ?: job).copy(downloaded = 0L,
+                            updatedAt = System.currentTimeMillis()))
+                        restartFromScratch = true
+                        return@use
+                    }
+                    Http416Action.Fail ->
+                        throw IOException("The download server returned HTTP 416.")
+                }
+            }
+            if (!response.isSuccessful) {
+                throw IOException("The download server returned HTTP ${response.code}.")
+            }
+            val rangeStart = if (response.code == 206 && allowRange) part.length() else 0L
+            if (response.code != 206 && part.length() > 0) {
+                // The server ignored Range and is sending the whole file. Restart
+                // cleanly rather than stitching two different responses together.
+                part.delete()
+            }
+            val body = response.body ?: throw IOException("The download response was empty.")
+            val contentLength = body.contentLength()
+            val linkedSize = response.header("X-Linked-Size")?.toLongOrNull()
+            val total = when {
+                contentLength >= 0 -> contentLength + rangeStart
+                linkedSize != null && linkedSize > 0 -> linkedSize
+                else -> job.entry.size
+            }
+            if (total > 0 && total != job.total) {
+                set(_jobs.value[id]?.copy(total = total, updatedAt = System.currentTimeMillis()) ?: return)
+            }
+            val etag = response.header("ETag") ?: response.header("X-Linked-ETag")
+            val existingEtag = _jobs.value[id]?.etag
+            if (existingEtag != null && etag != null && existingEtag != etag) {
+                throw IOException("The model file changed on Hugging Face. Start the download again.")
+            }
+            set((_jobs.value[id] ?: job).copy(etag = existingEtag ?: etag,
+                total = total, updatedAt = System.currentTimeMillis()))
+            FileOutputStream(part, rangeStart > 0).use { output ->
+                copy(response.body!!.byteStream(), output, part, total, id, token)
+            }
+            if (part.length() != job.entry.size) {
+                throw IOException("The download stopped early. Resume to finish it.")
+            }
+            finish(job.copy(etag = etag ?: existingEtag), part, etag,
+                job.entry.sha256, token)
+        }
+        if (restartFromScratch && activeToken == token) {
+            executeDownloadAttempt(job, part, allowRange = false, token = token)
         }
     }
 

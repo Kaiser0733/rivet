@@ -43,4 +43,32 @@ class DownloadPolicyTest {
         assertNull(DownloadPolicy.checksumFromEtag("W/\"abc\""))
         assertNull(DownloadPolicy.checksumFromEtag("\"$hash-and-more\""))
     }
+
+    @Test
+    fun effectiveWifiOnlyRespectsGlobalDisableAndExplicitMobileAllow() {
+        val large = 2_000_000_000L
+        assertTrue(DownloadPolicy.effectiveWifiOnly(globalWifiOnly = true, allowMobile = false, sizeBytes = large))
+        assertTrue(!DownloadPolicy.effectiveWifiOnly(globalWifiOnly = false, allowMobile = false, sizeBytes = large))
+        assertTrue(!DownloadPolicy.effectiveWifiOnly(globalWifiOnly = true, allowMobile = true, sizeBytes = large))
+    }
+
+    @Test
+    fun http416RestartsOversizedOrRejectedPartInsteadOfWedging() {
+        assertEquals(
+            Http416Action.Finish,
+            DownloadPolicy.http416Action(partBytes = 1000L, expectedBytes = 1000L, rangedAttempt = true),
+        )
+        assertEquals(
+            Http416Action.RestartFromScratch,
+            DownloadPolicy.http416Action(partBytes = 1500L, expectedBytes = 1000L, rangedAttempt = true),
+        )
+        assertEquals(
+            Http416Action.RestartFromScratch,
+            DownloadPolicy.http416Action(partBytes = 400L, expectedBytes = 1000L, rangedAttempt = true),
+        )
+        assertEquals(
+            Http416Action.Fail,
+            DownloadPolicy.http416Action(partBytes = 0L, expectedBytes = 1000L, rangedAttempt = false),
+        )
+    }
 }

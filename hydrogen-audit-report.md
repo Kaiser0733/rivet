@@ -184,11 +184,11 @@
 - **JiTTest**: `LocalToolProtocolTest.ignoresToolJsonAndAttemptsInsideThinkingBlocks`.
 
 #### H19 — `ModelDownloadManager` preserves stale `prior.wifiOnly` and wedges on HTTP 416 when `.part` > expected size
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/local/ModelDownloadManager.kt:168-171, 299-305, 333-336`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; `DownloadPolicyTest` / `ModelDownloadManager` require Gradle/Android SDK runtime)
+- **Files**: `app/src/main/java/com/kaiser/rivet/local/ModelDownloadManager.kt:85-92, 145-190, 295-380`
 - **Issue**: When global `wifiOnly` is turned off, paused/queued jobs keep `prior.wifiOnly == true` and never resume on metered networks; HTTP 416 recovery only deletes `.part` when `part.length() == entry.size`, leaving oversized `.part` files permanently wedged.
-- **Fix**: Respect global `!wifiOnly` (or explicit `allowMobile`) for existing jobs, and delete/restart `.part` on HTTP 416 whenever `part.length() >= entry.size` or the server rejects range.
-- **JiTTest**: Pure-Kotlin / Robolectric JiTTest in `ModelDownloadManagerTest`.
+- **Fix**: Added `DownloadPolicy.effectiveWifiOnly` & `DownloadPolicy.http416Action`; updated `setWifiOnlyPreference` and `start` to recompute job `wifiOnly` while preserving `allowMobile`; extracted `executeDownloadAttempt` to delete mismatched/oversized `.part` on HTTP 416 and restart cleanly without `Range` instead of wedging.
+- **JiTTest**: `DownloadPolicyTest.effectiveWifiOnlyRespectsGlobalDisableAndExplicitMobileAllow` and `DownloadPolicyTest.http416RestartsOversizedOrRejectedPartInsteadOfWedging`.
 
 #### H20 — `ByoModelResolver` fails on uppercase `HTTPS://`, corrupts `+` and branches, and mishandles repos named `blob`/`resolve`
 - **Status**: `PENDING`
