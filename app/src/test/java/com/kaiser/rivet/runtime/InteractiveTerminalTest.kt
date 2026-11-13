@@ -258,4 +258,38 @@ class InteractiveTerminalTest {
         assertEquals(2, engine.resizes)
         assertEquals(Triple(100, 12, 8), engine.lastSize)
     }
+
+    @Test fun closingWhileEngineCreateIsInFlightClosesTheCreatedEngineAndDoesNotLeak() = runTest {
+        val engines = mutableListOf<FakeEngine>()
+        val closed = mutableListOf<String>()
+        lateinit var holder: InteractiveTerminalSession
+        holder = InteractiveTerminalSession(
+            scope = this,
+            launchFactory = {
+                TerminalLaunch(managedId = "m-inflight", workspaceIdentity = "A", cwd = "")
+            },
+            engineFactory = TerminalEngineFactory { launch, observer ->
+                holder.close()
+                FakeEngine(observer, launch).also { engines += it }
+            },
+            onNaturalExit = { _, _ -> },
+            onClosed = { id -> closed += id },
+            onStopRecorded = { _ -> },
+            treeWatcher = object : TerminalTreeWatcher {
+                override suspend fun watch(pid: Int, memoryCapBytes: Long?,
+                                           terminate: suspend () -> Unit): String? = null
+            },
+            killGroup = { _ -> },
+            killDescendants = { _ -> },
+        )
+        holder.open("A")
+        holder.ensureStarted(80, 24, 8, 16)
+        settle()
+
+        val created = engines.single()
+        assertTrue(created.closed)
+        assertEquals(listOf("m-inflight"), closed)
+        assertFalse(holder.state.value.running)
+        assertTrue(holder.state.value.ended)
+    }
 }

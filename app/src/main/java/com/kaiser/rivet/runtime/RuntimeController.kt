@@ -163,6 +163,9 @@ class RuntimeController(
 
     /** One interactive shell: the command environment plus a folder-only prompt. */
     internal suspend fun openTerminal(job: Job): TerminalLaunch = operations.withLock {
+        if (!TerminalStartGate.canAcceptManagedRegistration(job.isActive)) {
+            return@withLock TerminalLaunch(error = "cancelled")
+        }
         val active = currentMirror()
             ?: return@withLock TerminalLaunch(error = "workspace_unavailable")
         val readings = governor.readings()
@@ -212,6 +215,9 @@ class RuntimeController(
             terminalShellPath(toolchain.binDir)
         } else SYSTEM_SHELL
         val managedId = managedProcesses?.let { registry ->
+            if (!TerminalStartGate.canAcceptManagedRegistration(job.isActive)) {
+                return@withLock TerminalLaunch(error = "cancelled")
+            }
             registry.registerCommand("Terminal", "", identity, projectName(), job)
                 ?: return@withLock TerminalLaunch(error = "process_limit")
         }

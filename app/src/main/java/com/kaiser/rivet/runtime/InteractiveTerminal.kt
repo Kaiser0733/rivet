@@ -122,14 +122,20 @@ internal class InteractiveTerminalSession(
         // a dead cwd is unusable, so close that shell and let ensureStarted launch a
         // fresh one in the current worktree.
         val liveCwd = launch?.cwd
-        if (engine != null && !liveCwd.isNullOrEmpty() && !File(liveCwd).isDirectory) {
-            closeInternal(markEnded = false)
-            finished = false
-            requested = true
-        }
         val existing = launch?.workspaceIdentity
-        if (engine != null && projectIdentity != null && existing != null &&
-            existing != projectIdentity) close()
+        when (TerminalStartGate.decideOpenReset(
+            hasLiveEngine = engine != null,
+            isStarting = starting,
+            liveCwd = liveCwd,
+            cwdExists = liveCwd.isNullOrEmpty() || File(liveCwd).isDirectory,
+            projectIdentity = projectIdentity,
+            existingIdentity = existing,
+            jobCancelled = sessionJob?.isCancelled == true,
+        )) {
+            TerminalOpenReset.CLOSE_SILENT -> closeInternal(markEnded = false)
+            TerminalOpenReset.CLOSE_ENDED -> close()
+            TerminalOpenReset.NONE -> Unit
+        }
         if (finished) {
             finished = false
             mutableState.update { it.copy(ended = false, error = null, exitCode = null) }
@@ -157,8 +163,11 @@ internal class InteractiveTerminalSession(
         val job = Job()
         sessionJob = job
         job.invokeOnCompletion {
-            // A stop from the Processes surface cancels this job.
-            if (ticket == generation && !finished) closeInternal(markEnded = true)
+            // A stop from the Processes surface cancels this job from its caller's thread.
+            // Hop cleanup onto scope so engine creation/close stay serialized on the session owner.
+            scope.launch {
+                if (ticket == generation && !finished) closeInternal(markEnded = true)
+            }
         }
         scope.launch {
             val launch = try {
@@ -168,8 +177,17 @@ internal class InteractiveTerminalSession(
             } catch (_: Exception) {
                 TerminalLaunch(error = "runtime_unavailable")
             }
-            if (ticket != generation || !requested) {
+            if (!TerminalStartGate.canCompleteLaunch(
+                    ticket = ticket,
+                    currentGeneration = generation,
+                    finished = finished,
+                    requested = requested,
+                    jobActive = job.isActive,
+                )) {
                 launch.managedId?.let(onClosed)
+                if (ticket == generation && !finished && !job.isActive) {
+                    closeInternal(markEnded = true)
+                }
                 return@launch
             }
             if (launch.error != null) {
@@ -183,6 +201,22 @@ internal class InteractiveTerminalSession(
                 throw e
             } catch (_: Exception) {
                 null
+            }
+            if (!TerminalStartGate.canAcceptCreatedEngine(
+                    ticket = ticket,
+                    currentGeneration = generation,
+                    finished = finished,
+                    requested = requested,
+                    jobActive = job.isActive,
+                )) {
+                if (created != null) {
+                    created.close()
+                    killSession(created.pid)
+                }
+                if (ticket == generation && !finished) {
+                    closeInternal(markEnded = !job.isActive)
+                }
+                return@launch
             }
             if (created == null) {
                 failStart("runtime_unavailable", launch.managedId)
@@ -305,6 +339,7 @@ internal class InteractiveTerminalSession(
     private fun failStart(error: String, managedId: String?) {
         starting = false
         finished = true
+        launch = null
         val job = sessionJob
         sessionJob = null
         job?.cancel()
@@ -326,6 +361,8 @@ internal class InteractiveTerminalSession(
         val ended = engine
         engine = null
         val previous = launch
+        launch = null
+        launch = null
         val pid = ended?.pid ?: 0
         ended?.close()
         killSession(pid)
@@ -351,6 +388,7 @@ internal class InteractiveTerminalSession(
         val ended = engine
         engine = null
         val previous = launch
+        launch = null
         val pid = ended?.pid ?: 0
         ended?.close()
         killSession(pid)

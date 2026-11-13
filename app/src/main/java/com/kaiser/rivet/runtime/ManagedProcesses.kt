@@ -83,6 +83,7 @@ class ManagedProcesses {
         projectName: String?,
         job: Job,
     ): String? = synchronized(lock) {
+        if (!TerminalStartGate.canAcceptManagedRegistration(job.isActive)) return@synchronized null
         if (entries.values.count { it.info.status in ACTIVE && it.persistent } >= MAX_PERSISTENT_PROCESSES ||
             entries.values.count { it.info.status in ACTIVE } >= activeLimit) return null
         val id = UUID.randomUUID().toString()

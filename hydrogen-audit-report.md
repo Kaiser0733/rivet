@@ -408,13 +408,15 @@
 - **JiTTest**: `SkillCatalogCacheTest` (1 failure before fix -> `OK (1 test)` after fix on JVM) + `SkillDiscoveryTest.catalogWithNullWorkspaceDoesNotPoisonSubsequentWorkspaceCatalog`.
 
 #### H41 — `InteractiveTerminalSession` races between `ensureStarted`, `open`, `closeInternal`, and `job.invokeOnCompletion`
-- **Status**: `PENDING`
+- **Status**: `FIXED`
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/runtime/InteractiveTerminal.kt:119-138, 157-217, 341-365`
-  - `app/src/main/java/com/kaiser/rivet/runtime/RuntimeController.kt:165-214`
-- **Issue**: Closing while `engineFactory.create` is in flight sets `finished = true` while `engine == null`, then `ensureStarted` stores `created` and skips `closeInternal`, leaking PTY/process; `open()` ignores `starting == true`; `job.invokeOnCompletion` races synchronously off `scope` and `RuntimeController` registers an already-cancelled `job`.
-- **Fix**: Check `ticket != generation || finished || job.isCancelled` right after `engineFactory.create` and close `created` directly if stale; cancel stale starts in `open()` when `starting`; run stop cleanup cleanly and reject cancelled jobs before `registerCommand`.
-- **JiTTest**: Pure-Kotlin JVM JiTTest with fake `TerminalEngineFactory` / `InteractiveTerminalSession` (checking coroutines-test or simple fake).
+  - `app/src/main/java/com/kaiser/rivet/runtime/TerminalStartGate.kt`
+  - `app/src/main/java/com/kaiser/rivet/runtime/InteractiveTerminal.kt`
+  - `app/src/main/java/com/kaiser/rivet/runtime/RuntimeController.kt`
+  - `app/src/main/java/com/kaiser/rivet/runtime/ManagedProcesses.kt`
+- **Issue**: Closing while `engineFactory.create` is in flight sets `finished = true` while `engine == null`, then `ensureStarted` stores `created` and skips `closeInternal`, leaking PTY/process; `open()` ignores `starting == true`; `job.invokeOnCompletion` races synchronously off `scope` and `RuntimeController`/`ManagedProcesses` register an already-cancelled `job`.
+- **Fix**: Extracted pure `TerminalStartGate` predicates and wired them across `InteractiveTerminalSession.open`/`ensureStarted`, `RuntimeController.openTerminal`, and `ManagedProcesses.registerCommand`; hopped `job.invokeOnCompletion` cleanup onto `scope`; closed/killed any engine created after close/cancellation/generation change; cleared `launch` on close/exit to prevent double `onClosed`.
+- **JiTTest**: `TerminalStartGateTest` (3 failures before fix -> `OK (3 tests)` after fix on JVM) + `InteractiveTerminalTest.closingWhileEngineCreateIsInFlightClosesTheCreatedEngineAndDoesNotLeak`.
 
 #### H42 — `ManagedProcesses` service-start race & slot leak, `PersistentProcessService` non-stopping one-shot actions, `ProjectDownloader` cancel race
 - **Status**: `PENDING`
