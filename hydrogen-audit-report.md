@@ -254,11 +254,13 @@
 - **JiTTest**: `ToolchainEntryAuditBlankDirTest.blankNativeDirDoesNotClassifyWritablePathsAsNativeLinked` (verified RED `expected:<WritableFile> but was:<NativeLinked>` -> GREEN `OK (1 test)`).
 
 #### H26 — `ManagedProcesses.redactCommand` drops flags and leaks quoted Bearer tokens
-- **Status**: `PENDING`
-- **Files**: `app/src/main/java/com/kaiser/rivet/runtime/ManagedProcesses.kt:447-453`
+- **Status**: `FIXED` (`CommandRedactorTest` live RED->GREEN on JVM via `K2JVMCompiler` + `JUnitCore`; `ManagedProcesses.kt` `kt-checks.py balance` PASS)
+- **Files**:
+  - `app/src/main/java/com/kaiser/rivet/runtime/CommandRedactor.kt` (extracted pure helper)
+  - `app/src/main/java/com/kaiser/rivet/runtime/ManagedProcesses.kt:447`
 - **Issue**: Line `450` drops `--user`/`--password` flag names (`"$1[redacted]"` missing capture group for flag), and line `452` exposes tokens in quoted `"Authorization: Bearer secret"` headers.
-- **Fix**: Preserve the `--user`/`--username`/`--password` flag name capture group and redact quoted/unquoted `Authorization: Bearer ...` tokens cleanly.
-- **JiTTest**: Pure-Kotlin JVM JiTTest (testing `redactCommand` / `registerCommand`).
+- **Fix**: Extracted `CommandRedactor.redact`, capturing both `--user`/`--username`/`--password` flag names + separator (`$1$2[redacted]`) and matching quoted/unquoted `Authorization: Bearer|Basic|Token ...` values cleanly without exposing secrets.
+- **JiTTest**: `CommandRedactorTest` (`preservesUserAndPasswordFlagsWhileRedactingValues`, `redactsQuotedAndUnquotedBearerAuthorizationTokensWithoutLeakingSecret`; verified RED 2 failures -> GREEN `OK (2 tests)`).
 
 #### H27 — `RuntimeController.openTerminal` never settles dirty mirrors and `TerminalPane` hides cursor behind IME when `transcriptRows == 0`
 - **Status**: `PENDING`
