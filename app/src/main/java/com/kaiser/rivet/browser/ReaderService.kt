@@ -7,8 +7,6 @@ import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
 
-class BrowserFailure(val code: String, override val message: String = code) : Exception(message)
-
 class BrowserHandoff(val url: String, val reason: String) : Exception(reason)
 
 /** Renderer-free fetching and extraction. Never sets a User-Agent. */
@@ -69,21 +67,4 @@ class ReaderService(private val client: OkHttpClient = defaultClient()) {
             .followSslRedirects(false)
             .build()
     }
-}
-
-object BrowserUrlPolicy {
-    fun validate(raw: String): String {
-        val url = raw.trim()
-        if (url.isEmpty()) throw BrowserFailure("browser_invalid_url", "Enter a page address.")
-        val uri = runCatching { java.net.URI(url) }.getOrNull()
-            ?: throw BrowserFailure("browser_invalid_url", "That page address is not valid.")
-        if (uri.userInfo != null) throw BrowserFailure("browser_invalid_url", "Page addresses with credentials are not allowed.")
-        if (uri.scheme !in setOf("http", "https")) {
-            throw BrowserFailure("browser_scheme", "Rivet's browser opens http and https pages. Project previews use the local preview server.")
-        }
-        if (uri.host.isNullOrBlank()) throw BrowserFailure("browser_invalid_url", "That page has no host.")
-        return uri.toString()
-    }
-
-    fun requireReadable(raw: String): String = validate(raw)
 }

@@ -55,4 +55,17 @@ class ReaderExtractorTest {
         assertEquals(2, hits.size)
         assertTrue(hits.all { it.snippet.contains("two") })
     }
+
+    @Test fun translucentOpacityElementsAreRetainedWhileZeroOpacityAreRemoved() {
+        val html = """<html><body><article>
+            <p>Main article body with enough words to score well cleanly in reader mode.</p>
+            <div style="opacity: 0.5"><p>Translucent element stays visible</p></div>
+            <div style="opacity:0"><p>Fully transparent element removed</p></div>
+            <div style="opacity: 0.00;"><p>Decimal zero transparent element removed</p></div>
+        </article></body></html>"""
+        val doc = ReaderExtractor.extract(html, "https://example.com/article")
+        assertTrue(doc.text.contains("Translucent element stays visible"))
+        assertFalse(doc.text.contains("Fully transparent element removed"))
+        assertFalse(doc.text.contains("Decimal zero transparent element removed"))
+    }
 }

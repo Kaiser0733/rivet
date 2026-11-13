@@ -36,4 +36,11 @@ class BrowserAuthGuardTest {
         assertTrue(BrowserAuthGuard.hasPasswordField(html))
         assertTrue(BrowserAuthGuard.needsHandoff("https://example.com/account", html))
     }
+
+    @Test fun loopbackRecognizesBracketedIpv6AndMixedCaseHosts() {
+        assertTrue(BrowserAuthGuard.isLoopback("http://[::1]:8123/index.html"))
+        assertTrue(BrowserAuthGuard.isLoopback("http://LOCALHOST:3000/"))
+        assertFalse(BrowserAuthGuard.isLoopback("http://[::1]/oauth/authorize?client_id=x&redirect_uri=y") &&
+            BrowserAuthGuard.isAuthSurface("http://[::1]/oauth/authorize?client_id=x&redirect_uri=y"))
+    }
 }

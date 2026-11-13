@@ -26,6 +26,7 @@ data class ReaderDocument(
 object ReaderExtractor {
     const val CHUNK_CHARS = 12_000
     private const val MIN_TEXT = 240
+    private val OPACITY_ZERO_REGEX = Regex("""(?:^|;)opacity:0(?:\.0+)?(?:;|$)""")
     private val BLOCK_TAGS = setOf("p", "div", "section", "article", "main", "ul", "ol", "table",
         "blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "br", "li")
 
@@ -82,7 +83,7 @@ object ReaderExtractor {
         doc.select("[style]").forEach { element ->
             val style = element.attr("style").lowercase().replace(Regex("\\s+"), "")
             if (style.contains("display:none") || style.contains("visibility:hidden") ||
-                style.contains("opacity:0") || style.contains("left:-") ||
+                OPACITY_ZERO_REGEX.containsMatchIn(style) || style.contains("left:-") ||
                 style.contains("top:-9") || style.contains("transform:translate(-")) {
                 element.remove()
             }

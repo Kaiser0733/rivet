@@ -356,14 +356,15 @@
 - **JiTTest**: `ChatViewModelTest.goalCommandIncrementsCommandAckCountEvenWhenNoticeUnchanged`.
 
 #### H36 — Pure-Kotlin browser policy/extractor flaws: IPv6 `[::1]` loopback, uppercase URL scheme, `opacity: 0.x` removal
-- **Status**: `PENDING`
+- **Status**: `FIXED` (`K2JVMCompiler` + `JUnitCore` `OK (14 tests)` across `BrowserAuthGuardTest`, `BrowserUrlPolicyTest`, `ReaderExtractorTest`, `kt-checks.py balance` PASS)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/browser/BrowserAuthGuard.kt:34-37`
-  - `app/src/main/java/com/kaiser/rivet/browser/ReaderService.kt:81`
-  - `app/src/main/java/com/kaiser/rivet/browser/ReaderExtractor.kt:85, 124-126`
-- **Issue**: `URI.host` for IPv6 loopback is `"[::1]"` (`isLoopback` misses it and uppercase hosts); `BrowserUrlPolicy.validate` rejects `HTTP://`/`HTTPS://`; `ReaderExtractor.removeHidden` matches `opacity:0.5` / `0.8`; (`ReaderExtractor` link filter fixed alongside in `H51` or together here).
-- **Fix**: Strip `[...]` and lowercase host in `isLoopback`; lowercase `uri.scheme` in `BrowserUrlPolicy.validate`; use boundary regex for `opacity: 0(.0+)?`.
-- **JiTTest**: Pure-Kotlin JVM JiTTest (`BrowserAuthGuard`, `BrowserUrlPolicy`, `ReaderExtractor` with `jsoup`).
+  - `app/src/main/java/com/kaiser/rivet/browser/BrowserAuthGuard.kt:34-39`
+  - `app/src/main/java/com/kaiser/rivet/browser/BrowserUrlPolicy.kt` (extracted pure URL policy)
+  - `app/src/main/java/com/kaiser/rivet/browser/ReaderService.kt`
+  - `app/src/main/java/com/kaiser/rivet/browser/ReaderExtractor.kt:29, 86`
+- **Issue**: `URI.host` for IPv6 loopback is `"[::1]"` (`isLoopback` misses it and uppercase hosts); `BrowserUrlPolicy.validate` rejects `HTTP://`/`HTTPS://`; `ReaderExtractor.removeHidden` matches `opacity:0.5` / `0.8`.
+- **Fix**: Trimmed brackets `[...]` and lowercased `uri.host` in `BrowserAuthGuard.isLoopback`; lowercased `uri.scheme` in `BrowserUrlPolicy.validate` (extracted into pure `BrowserUrlPolicy.kt`); replaced substring `"opacity:0"` with boundary regex `(?:^|;)opacity:0(?:\.0+)?(?:;|$)` in `ReaderExtractor.removeHidden`.
+- **JiTTest**: `BrowserAuthGuardTest.loopbackRecognizesBracketedIpv6AndMixedCaseHosts`, `BrowserUrlPolicyTest.acceptsUppercaseHttpAndHttpsSchemes`, `ReaderExtractorTest.translucentOpacityElementsAreRetainedWhileZeroOpacityAreRemoved` (3 failures before fix -> `OK (14 tests)` after fix on JVM).
 
 #### H37 — `BrowserSession` state flaws: `read`/`find` stale renderer & dropped `visibleOnly`, `openVisual` flag ordering, zombie tab, `observedBrowserBytes` peak latch, `parseClickTarget`/`typeScript`/fractional `scrollY`, hidden screenshot
 - **Status**: `PENDING`

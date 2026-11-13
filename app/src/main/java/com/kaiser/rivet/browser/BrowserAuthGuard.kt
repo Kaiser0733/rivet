@@ -33,7 +33,8 @@ object BrowserAuthGuard {
 
     fun isLoopback(url: String): Boolean = runCatching {
         val uri = URI(url)
-        uri.host in setOf("127.0.0.1", "localhost", "::1")
+        val host = uri.host?.trim('[', ']')?.lowercase(Locale.ROOT) ?: return@runCatching false
+        host in setOf("127.0.0.1", "localhost", "::1")
     }.getOrDefault(false)
 
     fun isAuthSurface(url: String): Boolean {
