@@ -259,4 +259,49 @@ class ProviderConfigTest {
             )
         }
     }
+
+    @Test
+    fun anthropicThinkingModeAcceptsV1BaseUrlAndOpenRouterCeilingScopesModelLimit() {
+        val anthropicV1 = ProviderConfig(
+            id = "a",
+            name = "Anthropic",
+            type = ProviderType.Anthropic,
+            baseUrl = "https://api.anthropic.com/v1/",
+            model = "claude-sonnet-4-5",
+        )
+        assertEquals(AnthropicThinkingMode.Manual, anthropicThinkingMode(anthropicV1))
+
+        val openRouter = ProviderConfig(
+            id = "or",
+            name = "OpenRouter",
+            type = ProviderType.OpenRouter,
+            baseUrl = ProviderType.OpenRouter.defaultBaseUrl,
+            model = "other/model",
+            modelContextLimit = ModelContextLimit(
+                model = "stale/model",
+                baseUrl = ProviderType.OpenRouter.defaultBaseUrl,
+                inputLimitTokens = 100_000,
+                maxOutputTokens = 1024,
+            ),
+            manualContextWindowTokens = 64_000,
+        )
+        assertEquals(null, openRouter.openRouterOutputCeiling("unconfigured/model"))
+        assertEquals(12_000, openRouter.openRouterOutputCeiling("other/model"))
+    }
+
+    @Test
+    fun settingManualLimitsBeforeModelPreservesThemWhenModelEntered() {
+        val initial = ProviderConfig(
+            id = "o",
+            name = "OpenAI",
+            type = ProviderType.OpenAi,
+            baseUrl = ProviderType.OpenAi.defaultBaseUrl,
+            model = "",
+        )
+            .withManualContextWindow(65_536)
+            .withManualMaxOutputTokens(4_096)
+        val afterModel = initial.withModelId("gpt-4.1")
+        assertEquals(65_536, afterModel.manualContextWindowForModel("gpt-4.1"))
+        assertEquals(4_096, afterModel.resolvedManualMaxOutputTokens("gpt-4.1"))
+    }
 }

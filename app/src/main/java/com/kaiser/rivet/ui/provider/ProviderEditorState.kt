@@ -92,13 +92,16 @@ internal fun ProviderEditorState.withConfigUpdate(
     val next = transform(config)
     val endpointChanged = next.type != config.type || next.baseUrl != config.baseUrl
     val modelChanged = next.model != config.model
+    val enteringModelFromBlank = config.model.isBlank() && next.model.isNotBlank()
     return copy(
         config = next,
         contextWindowInput = if (modelChanged) {
-            next.manualContextWindowForModel()?.toString().orEmpty()
+            next.manualContextWindowForModel()?.toString()
+                ?: if (enteringModelFromBlank) contextWindowInput else ""
         } else contextWindowInput,
         maxOutputTokensInput = if (modelChanged) {
-            next.resolvedManualMaxOutputTokens()?.toString().orEmpty()
+            next.resolvedManualMaxOutputTokens()?.toString()
+                ?: if (enteringModelFromBlank) maxOutputTokensInput else ""
         } else maxOutputTokensInput,
         test = null,
         fetchError = null,

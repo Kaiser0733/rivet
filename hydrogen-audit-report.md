@@ -300,13 +300,13 @@
 - **JiTTest**: `OpenAiCompatibleClientTest.blankToolDeltaIdDoesNotOverwriteEarlierCallIdAndRequestModelSelectsCeiling` and `HttpErrorTest.jsonNullAndStringErrorShapesNeverLeakLiteralNullString`.
 
 #### H31 — `ProviderConfig` `/v1` Anthropic thinking mismatch, unscoped `openRouterOutputCeiling`, and wiped manual token inputs on model entry
-- **Status**: `PENDING`
+- **Status**: `NEEDS-DEVICE-PROOF` (`kt-checks.py balance` PASS; `ProviderConfigTest` requires `@Serializable` under Gradle)
 - **Files**:
-  - `app/src/main/java/com/kaiser/rivet/provider/ProviderConfig.kt:176-181, 208-219, 296-300`
-  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProviderEditorState.kt:89-106`
+  - `app/src/main/java/com/kaiser/rivet/provider/ProviderConfig.kt:125, 176-232, 308`
+  - `app/src/main/java/com/kaiser/rivet/ui/provider/ProviderEditorState.kt:94-106`
 - **Issue**: `anthropicThinkingMode` rejects `https://api.anthropic.com/v1`; `openRouterOutputCeiling` ignores `model`/`baseUrl` match on `modelContextLimit`; setting manual limits while `model.isBlank()` is wiped when typing a model name afterward.
-- **Fix**: Normalize `baseUrl` with `.trim().trimEnd('/').removeSuffix("/v1")`; check `it.model == targetModel && it.baseUrl == baseUrl` in `openRouterOutputCeiling`; preserve manual limits across blank->non-blank model transition.
-- **JiTTest**: Pure-Kotlin JVM JiTTests on `ProviderConfig` & `ProviderEditorState`.
+- **Fix**: Normalized Anthropic `baseUrl` with `.trim().trimEnd('/').removeSuffix("/v1")`; parameterized `trustedInputLimitTokens(targetModel)` and `openRouterOutputCeiling(targetModel)` while gating `modelContextLimit` on matching `model && baseUrl`; preserved manual limits in `withModelId`, `selectListedModel`, and `ProviderEditorState.withConfigUpdate` across blank -> non-blank model transitions.
+- **JiTTest**: `ProviderConfigTest.anthropicThinkingModeAcceptsV1BaseUrlAndOpenRouterCeilingScopesModelLimit` and `ProviderConfigTest.settingManualLimitsBeforeModelPreservesThemWhenModelEntered`.
 
 #### H32 — `refreshBundle` drops `scopes`, ignores `idToken` email/optional refresh, masks network vs reauth errors, and strict `Json` in `ProvidersViewModel`
 - **Status**: `PENDING`
