@@ -3,6 +3,7 @@ package com.kaiser.rivet.runtime
 import java.io.File
 import java.io.FileInputStream
 import java.io.FileOutputStream
+import java.io.IOException
 import java.nio.file.FileVisitResult
 import java.nio.file.Files
 import java.nio.file.Path
@@ -266,11 +267,27 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
                 if (dir != root.toPath()) {
                     val path = relative(root, dir)
                     if (isIgnored(path, ignored)) return FileVisitResult.SKIP_SUBTREE
-                    entries[path] = CheckpointEntry(true)
-                    zip?.putNextEntry(ZipEntry("$path/"))
-                    zip?.closeEntry()
+                    // Defer `.rivet` until postVisitDirectory: when `.rivet` is created
+                    // solely to hold skipped app state (`.rivet/runs`, `.rivet/checkpoints`),
+                    // recording an empty `.rivet` directory poisons Undo after recordPost.
+                    if (path != ".rivet") {
+                        entries[path] = CheckpointEntry(true)
+                        zip?.putNextEntry(ZipEntry("$path/"))
+                        zip?.closeEntry()
+                    }
                 }
                 if (entries.size > MAX_ENTRIES) throw CheckpointFailure("checkpoint_limit")
+                return FileVisitResult.CONTINUE
+            }
+
+            override fun postVisitDirectory(dir: Path, exc: IOException?): FileVisitResult {
+                if (exc != null) throw exc
+                context.ensureActive()
+                if (dir != root.toPath() && relative(root, dir) == ".rivet" &&
+                    entries.keys.any { it.startsWith(".rivet/") }) {
+                    entries[".rivet"] = CheckpointEntry(true)
+                    if (entries.size > MAX_ENTRIES) throw CheckpointFailure("checkpoint_limit")
+                }
                 return FileVisitResult.CONTINUE
             }
 
