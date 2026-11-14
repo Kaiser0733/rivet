@@ -70,6 +70,7 @@ class LocalProviderClient(
             }
             try {
                 val prompt = buildPrompt(entry, system, request.messages)
+                coroutineContext.ensureActive()
                 var thermalPause: String? = null
                 var emitted = 0
                 val visible = LocalThinkingFilter()
@@ -111,6 +112,7 @@ class LocalProviderClient(
                         "Previous reply: " + visibleText.take(200)
                     val retryPrompt = buildPrompt(entry, system,
                         request.messages + AgentMessage(AgentRole.User, text = correction))
+                    coroutineContext.ensureActive()
                     text = manager.generate(
                         entry = entry,
                         prompt = retryPrompt,

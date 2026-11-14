@@ -120,10 +120,15 @@ class WorkerSessionStoreTest {
 
         store.saveWorker(oldDone)
         store.saveMessages("w-old", listOf(AgentMessage.user("old brief"), AgentMessage.assistant("old done")), interrupted = false)
+        // Re-save the terminal worker row so updatedAt reflects the test's synthetic completion time
+        // (mirroring WorkerRunner, which writes the final worker record after appendMessages).
+        store.saveWorker(oldDone)
         store.saveWorker(recentDone)
         store.saveMessages("w-recent", listOf(AgentMessage.user("recent brief"), AgentMessage.assistant("recent done")), interrupted = false)
+        store.saveWorker(recentDone)
         store.saveWorker(deletedSessWorker)
         store.saveMessages("w-del", listOf(AgentMessage.user("del brief")), interrupted = false)
+        store.saveWorker(deletedSessWorker)
 
         // Deleting a parent session removes its workers, transcripts, and spawn grant.
         store.deleteForSession("sess-1")

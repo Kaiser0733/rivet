@@ -249,10 +249,10 @@ internal class SubagentSupervisor(
         skill: Skill?,
         resuming: Boolean = false,
     ) {
+        if (!entry.local) {
+            liveCloudWorkers.add(worker.id)
+        }
         val job = scope.launch {
-            if (!entry.local) {
-                liveCloudWorkers.add(worker.id)
-            }
             try {
                 val loaded = services.providerSource.loadFor(entry.config.id)
                 if (loaded is ProviderRuntimeResult.Failure) {
@@ -323,6 +323,9 @@ internal class SubagentSupervisor(
             }
         }
         activeJobs[worker.id] = job
+        job.invokeOnCompletion {
+            liveCloudWorkers.remove(worker.id)
+        }
     }
 
     private suspend fun drainQueue() {

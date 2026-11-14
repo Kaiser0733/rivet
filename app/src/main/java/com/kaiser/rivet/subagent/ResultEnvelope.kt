@@ -136,38 +136,46 @@ object ResultEnvelope {
             return initial
         }
 
-        // First pass: proportionally truncate verified.diff across envelopes that carry a diff.
+        // First pass: proportionally truncate verified.diff across envelopes that carry a diff,
+        // budgeting by JSON-encoded string bytes so escaped newlines/quotes cannot overshoot maxTotalBytes.
         val strippedDiffs = parsed.map { replaceDiff(it, "", markTruncated = hasNonEmptyDiff(it)) }
         val baseBytes = render(strippedDiffs).toByteArray(Charsets.UTF_8).size
-        val availableDiffBytes = (maxTotalBytes - baseBytes - (parsed.size * 16)).coerceAtLeast(0)
-        val diffByteSizes = parsed.map { diffText(it).toByteArray(Charsets.UTF_8).size }
-        val totalDiffBytes = diffByteSizes.sum()
+        // Reserve 1 byte per worker in case a smaller diff stays untruncated ("false" vs "true").
+        val availableDiffBytes = (maxTotalBytes - baseBytes - parsed.size).coerceAtLeast(0)
+        val diffEncodedSizes = parsed.map { jsonEncodedContentBytes(diffText(it)) }
+        val totalDiffBytes = diffEncodedSizes.sum()
 
-        val diffCapped = if (totalDiffBytes > 0 && availableDiffBytes > 0) {
-            parsed.mapIndexed { idx, obj ->
+        fun capDiffs(items: List<JsonObject>, budgetBytes: Int): List<JsonObject> {
+            if (totalDiffBytes <= 0 || budgetBytes <= 0) {
+                return items.map { replaceDiff(it, "", markTruncated = hasNonEmptyDiff(it)) }
+            }
+            return items.mapIndexed { idx, obj ->
                 val rawDiff = diffText(obj)
-                val currentBytes = diffByteSizes[idx]
+                val currentBytes = diffEncodedSizes[idx]
                 if (currentBytes == 0) {
                     obj
                 } else {
-                    val share = ((availableDiffBytes.toLong() * currentBytes.toLong()) / totalDiffBytes.toLong()).toInt()
-                    val cut = truncateUtf8ByLines(rawDiff, share)
+                    val share = ((budgetBytes.toLong() * currentBytes.toLong()) / totalDiffBytes.toLong()).toInt()
+                    val cut = truncateJsonEncodedByLines(rawDiff, share)
                     replaceDiff(obj, cut, markTruncated = cut.length < rawDiff.length)
                 }
             }
-        } else {
-            strippedDiffs
         }
 
+        val diffCapped = capDiffs(parsed, availableDiffBytes)
         val afterDiffCap = render(diffCapped)
         if (afterDiffCap.toByteArray(Charsets.UTF_8).size <= maxTotalBytes) {
             return afterDiffCap
         }
 
-        // Second pass (fallback if non-diff fields alone exceed maxTotalBytes): trim claimed findings/summary.
+        // Second pass (fallback if non-diff fields alone exceed maxTotalBytes): trim claimed findings/summary,
+        // then fit truncated diffs into whatever budget remains.
         val perWorkerClaimBudget = ((maxTotalBytes / parsed.size.coerceAtLeast(1)) - 256).coerceAtLeast(64)
-        val fullyCapped = strippedDiffs.map { trimClaimed(it, perWorkerClaimBudget) }
-        return render(fullyCapped)
+        val trimmedClaims = parsed.map { trimClaimed(it, perWorkerClaimBudget) }
+        val strippedAfterClaimTrim = trimmedClaims.map { replaceDiff(it, "", markTruncated = hasNonEmptyDiff(it)) }
+        val claimTrimBaseBytes = render(strippedAfterClaimTrim).toByteArray(Charsets.UTF_8).size
+        val remainingDiffBudget = (maxTotalBytes - claimTrimBaseBytes - parsed.size).coerceAtLeast(0)
+        return render(capDiffs(trimmedClaims, remainingDiffBudget))
     }
 
     private fun diffText(envelope: JsonObject): String =
@@ -211,19 +219,45 @@ object ResultEnvelope {
         }
     }
 
-    private fun truncateUtf8ByLines(text: String, maxBytes: Int): String {
-        if (maxBytes <= 0 || text.isEmpty()) return ""
-        if (text.toByteArray(Charsets.UTF_8).size <= maxBytes) return text
+    private fun jsonEncodedContentBytes(text: String): Int =
+        (JsonPrimitive(text).toString().toByteArray(Charsets.UTF_8).size - 2).coerceAtLeast(0)
+
+    private fun truncateJsonEncodedByLines(text: String, maxEncodedBytes: Int): String {
+        if (maxEncodedBytes <= 0 || text.isEmpty()) return ""
+        if (jsonEncodedContentBytes(text) <= maxEncodedBytes) return text
+        val lines = text.split('\n')
         val builder = StringBuilder()
-        var used = 0
-        for (line in text.split('\n')) {
-            val lineBytes = line.toByteArray(Charsets.UTF_8).size + 1
-            if (used + lineBytes > maxBytes) break
-            builder.append(line).append('\n')
-            used += lineBytes
+        var usedEncoded = 0
+        for ((index, line) in lines.withIndex()) {
+            val lineEncoded = jsonEncodedContentBytes(line)
+            val sepEncoded = if (index < lines.lastIndex) 2 else 0 // JSON-escaped "\\n"
+            if (usedEncoded + lineEncoded + sepEncoded > maxEncodedBytes) break
+            builder.append(line)
+            if (index < lines.lastIndex) builder.append('\n')
+            usedEncoded += lineEncoded + sepEncoded
         }
         if (builder.isNotEmpty()) return builder.toString()
-        return truncateUtf8(text, maxBytes)
+        return truncateJsonEncodedPrefix(text, maxEncodedBytes)
+    }
+
+    private fun truncateJsonEncodedPrefix(text: String, maxEncodedBytes: Int): String {
+        if (maxEncodedBytes <= 0 || text.isEmpty()) return ""
+        if (jsonEncodedContentBytes(text) <= maxEncodedBytes) return text
+        // Shrink by character index (backing off surrogate pairs) so JSON escaping stays within budget.
+        var low = 0
+        var high = text.length
+        while (low < high) {
+            val mid = (low + high + 1) ushr 1
+            val safeEnd = if (mid < text.length && Character.isLowSurrogate(text[mid])) mid - 1 else mid
+            val candidate = text.substring(0, safeEnd.coerceAtLeast(0))
+            if (jsonEncodedContentBytes(candidate) <= maxEncodedBytes) {
+                low = mid
+            } else {
+                high = mid - 1
+            }
+        }
+        val finalEnd = if (low < text.length && Character.isLowSurrogate(text[low])) (low - 1).coerceAtLeast(0) else low
+        return text.substring(0, finalEnd)
     }
 
     private fun truncateUtf8(text: String, maxBytes: Int): String {
