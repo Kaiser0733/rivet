@@ -5,8 +5,10 @@ import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
 import java.util.Locale
+import kotlinx.serialization.Serializable
 
 /** One configured model the user has authorised for subagents. */
+@Serializable
 data class PoolEntry(
     val configId: String,
     val model: String,
@@ -16,6 +18,7 @@ data class PoolEntry(
  * Persisted user choice. The pool is an allow-list, never a suggestion list:
  * an unticked provider/model cannot be selected by the coordinator.
  */
+@Serializable
 data class SubagentPoolState(
     val allowAgentChoice: Boolean = true,
     val entries: List<PoolEntry> = emptyList(),

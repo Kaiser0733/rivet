@@ -26,10 +26,13 @@ import com.kaiser.rivet.provider.withManualContextWindow
 import com.kaiser.rivet.provider.withManualMaxOutputTokens
 import com.kaiser.rivet.provider.withModelId
 import com.kaiser.rivet.runtime.Toolchain
+import com.kaiser.rivet.subagent.PoolEntry
+import com.kaiser.rivet.subagent.SubagentPoolState
 import com.kaiser.rivet.storage.GitHubTokenStore
 import com.kaiser.rivet.storage.HostIdStore
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
+import com.kaiser.rivet.storage.SubagentPoolStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
@@ -68,6 +71,7 @@ class ProvidersViewModel private constructor(
         this(app, SecretStore(app, testKey))
 
     private val store = ProviderStore(app, secrets)
+    private val subagentStore = SubagentPoolStore(app, store)
     private val gitHub = GitHubTokenStore(app)
     private val toolchain = Toolchain(app)
 
@@ -79,6 +83,9 @@ class ProvidersViewModel private constructor(
 
     private val _editorState = MutableStateFlow(ProviderEditorState())
     val editorState: StateFlow<ProviderEditorState> = _editorState.asStateFlow()
+
+    private val _subagentPoolState = MutableStateFlow(SubagentPoolState())
+    val subagentPoolState: StateFlow<SubagentPoolState> = _subagentPoolState.asStateFlow()
 
     private val editorRequests = ProviderEditorRequests(viewModelScope)
     private var chatGptSession: ChatGptSignInSession? = null
@@ -104,6 +111,15 @@ class ProvidersViewModel private constructor(
     }
 
     init {
+        viewModelScope.launch {
+            try {
+                subagentStore.state.collect { _subagentPoolState.value = it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Keep the conservative empty pool; the page still shows the toggle.
+            }
+        }
         viewModelScope.launch {
             try {
                 store.configs.collect { configs ->
@@ -143,6 +159,39 @@ class ProvidersViewModel private constructor(
                         else -> "Rivet could not read $count custom headers and removed them. Add them again in Settings if you still need them."
                     })
                 }
+            }
+        }
+    }
+
+    fun setSubagentAllowAgentChoice(allow: Boolean) {
+        updateSubagentPool { it.copy(allowAgentChoice = allow) }
+    }
+
+    fun toggleSubagentModel(config: ProviderConfig) {
+        val entry = PoolEntry(config.id, config.model)
+        updateSubagentPool { state ->
+            val entries = if (entry in state.entries) state.entries - entry
+            else state.entries + entry
+            state.copy(entries = entries)
+        }
+    }
+
+    fun setFixedSubagentModel(config: ProviderConfig) {
+        updateSubagentPool { state ->
+            state.copy(fixed = PoolEntry(config.id, config.model))
+        }
+    }
+
+    private fun updateSubagentPool(transform: (SubagentPoolState) -> SubagentPoolState) {
+        val next = transform(_subagentPoolState.value)
+        _subagentPoolState.value = next
+        viewModelScope.launch {
+            try {
+                subagentStore.save(next)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Keep the in-memory choice for this sheet; a later change can retry the write.
             }
         }
     }

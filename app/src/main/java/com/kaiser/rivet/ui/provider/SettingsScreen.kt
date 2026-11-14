@@ -72,7 +72,7 @@ private val MAX_WIDTH = 680.dp
 
 // The section that is open at level 2. Remembered by RivetApp, so Android Back can step
 // detail -> list -> dismiss instead of closing the sheet in one go.
-internal enum class SettingsSection { Providers, Models, Appearance, Agent, Memory, GitHub, Skills, Updates, About }
+internal enum class SettingsSection { Providers, Models, Appearance, Agent, Subagents, Memory, GitHub, Skills, Updates, About }
 
 /**
  * The body of the settings modal sheet: a two-level page — a section list, and one
@@ -111,6 +111,7 @@ fun SettingsScreen(
     onSendFeedback: () -> Unit = {},
 ) {
     val state by viewModel.listState.collectAsState()
+    val subagentState by viewModel.subagentPoolState.collectAsState()
     val gitHubState by viewModel.gitHubState.collectAsState()
     // Level 2 lives here, not in the host: the sheet is only a container.
     var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
@@ -241,6 +242,7 @@ fun SettingsScreen(
                     },
                     themeSummary = themeMode.name,
                     autonomySummary = autonomyDisplayName(autonomyMode),
+                    subagentSummary = subagentSummary(subagentState, state.configs),
                     skillSummary = skillCountSummary(skillCatalog),
                     memorySummary = if (hasProject) "${memoryLines.size} durable line${if (memoryLines.size == 1) "" else "s"}"
                         else "Open a project",
@@ -293,6 +295,15 @@ fun SettingsScreen(
                     spendCaps = spendCaps,
                     userPricePerMillionUsd = userPricePerMillionUsd,
                     onSaveSpend = onSaveSpend,
+                    subagentSummary = subagentSummary(subagentState, state.configs),
+                    onOpenSubagents = { section = SettingsSection.Subagents },
+                )
+                SettingsSection.Subagents -> SubagentsSettings(
+                    state = subagentState,
+                    configs = state.configs,
+                    onAllowAgentChoice = viewModel::setSubagentAllowAgentChoice,
+                    onToggleModel = viewModel::toggleSubagentModel,
+                    onFixedModel = viewModel::setFixedSubagentModel,
                 )
                 SettingsSection.GitHub -> GitHubDetail(
                     connected = gitHubState.connected,
@@ -355,6 +366,7 @@ private fun SettingsSection.title(): String = when (this) {
     SettingsSection.Models -> "Models"
     SettingsSection.Appearance -> "Appearance"
     SettingsSection.Agent -> "Agent"
+    SettingsSection.Subagents -> "Subagents"
     SettingsSection.Memory -> "Memory"
     SettingsSection.GitHub -> "GitHub"
     SettingsSection.Skills -> "Skills"
@@ -367,6 +379,7 @@ private fun SectionList(
     providerSummary: String,
     themeSummary: String,
     autonomySummary: String,
+    subagentSummary: String,
     skillSummary: String,
     memorySummary: String,
     gitHubSummary: String,
@@ -386,6 +399,7 @@ private fun SectionList(
                 SettingsSection.Models -> "Models" to "Download and run a model on this phone"
                 SettingsSection.Appearance -> "Appearance" to themeSummary
                 SettingsSection.Agent -> "Agent" to autonomySummary
+                SettingsSection.Subagents -> "Subagents" to subagentSummary
                 SettingsSection.Memory -> "Memory" to memorySummary
                 SettingsSection.GitHub -> "GitHub" to gitHubSummary
                 SettingsSection.Skills -> "Skills" to skillSummary
@@ -397,6 +411,7 @@ private fun SectionList(
                 SettingsSection.Models -> R.drawable.ic_processes // local inference
                 SettingsSection.Appearance -> R.drawable.ic_visibility // sun/moon for theme
                 SettingsSection.Agent -> R.drawable.ic_processes // robot/processes for agent
+                SettingsSection.Subagents -> R.drawable.ic_processes // delegated model pool
                 SettingsSection.Memory -> R.drawable.ic_files // durable project facts
                 SettingsSection.GitHub -> R.drawable.ic_files // repository and token settings
                 SettingsSection.Skills -> R.drawable.ic_files // skill folders and instructions
@@ -779,6 +794,8 @@ private fun AgentDetail(
     spendCaps: SpendCaps,
     userPricePerMillionUsd: Double?,
     onSaveSpend: (SpendCaps, Double?) -> Unit,
+    subagentSummary: String,
+    onOpenSubagents: () -> Unit,
 ) {
     var perRunUsd by remember(spendCaps) { mutableStateOf(spendCaps.perRunUsd?.toString().orEmpty()) }
     var monthlyUsd by remember(spendCaps) { mutableStateOf(spendCaps.monthlyUsd?.toString().orEmpty()) }
@@ -788,7 +805,16 @@ private fun AgentDetail(
         mutableStateOf(userPricePerMillionUsd?.toString().orEmpty())
     }
     DetailScroll {
-        
+        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onOpenSubagents),
+            verticalAlignment = Alignment.CenterVertically) {
+            Text("Subagents · $subagentSummary", Modifier.weight(1f),
+                style = MaterialTheme.typography.bodyLarge)
+            Icon(painterResource(R.drawable.ic_chevron_right), null, Modifier.size(20.dp),
+                tint = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+            modifier = Modifier.padding(horizontal = 4.dp, vertical = 4.dp))
+
         listOf(
             AutonomyMode.Ask to "Ask before changes and commands.",
             AutonomyMode.BasicYolo to "Routine changes can run automatically. Rivet still asks for higher-risk actions.",
