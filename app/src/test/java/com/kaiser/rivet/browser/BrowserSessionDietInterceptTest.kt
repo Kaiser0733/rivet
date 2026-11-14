@@ -1,5 +1,6 @@
 package com.kaiser.rivet.browser
 
+import android.app.ActivityManager
 import android.app.Application
 import android.net.Uri
 import android.webkit.WebResourceRequest
@@ -12,6 +13,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowActivityManager
 
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
@@ -31,6 +34,7 @@ class BrowserSessionDietInterceptTest {
 
     @Test fun strictDietNeverInterceptsMainFrameHtmlWithImageAcceptHeader() {
         val app: Application = RuntimeEnvironment.getApplication()
+        setAvailableMemory(app)
         val session = BrowserSession(app, models = null)
         val webView = WebView(app)
         session.attach(webView)
@@ -62,5 +66,16 @@ class BrowserSessionDietInterceptTest {
         assertNotNull("Subresource images remain blocked with 1x1 PNG under StrictDiet", imageResponse)
         assertEquals("image/png", imageResponse!!.mimeType)
         session.endSession()
+    }
+
+    private fun setAvailableMemory(app: Application) {
+        val manager = requireNotNull(app.getSystemService(ActivityManager::class.java))
+        val info = ActivityManager.MemoryInfo().apply {
+            availMem = 1024L * 1024 * 1024
+            totalMem = 2048L * 1024 * 1024
+            threshold = 0L
+            lowMemory = false
+        }
+        Shadow.extract<ShadowActivityManager>(manager).setMemoryInfo(info)
     }
 }
