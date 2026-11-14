@@ -4,7 +4,13 @@ import com.kaiser.rivet.agent.AgentApprovalGate
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolDefinition
+import com.kaiser.rivet.agent.AgentToolEffect
+import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
+import com.kaiser.rivet.agent.AutonomyMode
+import com.kaiser.rivet.agent.PreparedAgentTool
 import com.kaiser.rivet.agent.RunPauseReason
 import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.chat.ProviderRuntimeResult
@@ -24,8 +30,12 @@ import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.int
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
+import kotlinx.serialization.json.put
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -111,6 +121,10 @@ class SubagentEngineTest {
         configs: List<ProviderConfig>,
         clientFactory: (ProviderConfig, String) -> ProviderClient = { _, _ -> ControllableClient() },
         onRecordSpend: (ProviderConfig, AgentUsage?, Boolean) -> Unit = { _, _, _ -> },
+        coordinatorConfig: ProviderConfig? = configs.firstOrNull(),
+        extraTools: List<AgentToolDefinition> = emptyList(),
+        customPrepareTool: (suspend (String, AgentToolCall) -> PreparedAgentTool?)? = null,
+        readAutonomyMode: suspend () -> AutonomyMode = { AutonomyMode.Ask },
     ): RunServices = RunServices(
         workspaceId = "test-workspace",
         runId = "test-run",
@@ -126,7 +140,10 @@ class SubagentEngineTest {
                 entries = configs.map { PoolEntry(it.id, it.model) },
             )
         },
-        coordinatorConfig = { configs.firstOrNull() },
+        coordinatorConfig = { coordinatorConfig },
+        extraTools = extraTools,
+        customPrepareTool = customPrepareTool,
+        readAutonomyMode = readAutonomyMode,
         recordSpend = onRecordSpend,
     )
 
@@ -154,8 +171,8 @@ class SubagentEngineTest {
             },
             onRecordSpend = { _, usage, _ ->
                 if (usage != null) {
-                    totalPromptTokens += usage.inputTokens
-                    totalCompletionTokens += usage.outputTokens
+                    totalPromptTokens += (usage.inputTokens ?: 0L)
+                    totalCompletionTokens += (usage.outputTokens ?: 0L)
                 }
             },
         )
@@ -402,5 +419,82 @@ class SubagentEngineTest {
 
         assertFalse(supervisor.hasLiveWorkers())
         assertFalse(supervisor.hasLiveCloudWorker())
+    }
+
+    @Test
+    fun runCommandWrapperRecordsObservedCommandInEnvelope() = runBlocking {
+        val config = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        var turn = 0
+        val client = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection(): TestResult = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                turn++
+                return if (turn == 1) {
+                    AgentResponse(
+                        text = "",
+                        toolCalls = listOf(
+                            AgentToolCall("tc-1", "run_command", """{"command":"pytest -q"}"""),
+                        ),
+                    )
+                } else {
+                    AgentResponse(
+                        text = "Summary: Tests passed.\nFindings:\n- pytest passed\nOpen questions: none",
+                        toolCalls = emptyList(),
+                    )
+                }
+            }
+        }
+        val runCommandDef = AgentToolDefinition(
+            name = "run_command",
+            description = "Run a shell command",
+            parameters = buildJsonObject { put("type", "object") },
+        )
+        val services = testServices(
+            workerStore = store,
+            configs = listOf(config),
+            clientFactory = { _, _ -> client },
+            extraTools = listOf(runCommandDef),
+            readAutonomyMode = { AutonomyMode.Yolo },
+            customPrepareTool = { _, call ->
+                if (call.name == "run_command") {
+                    PreparedAgentTool(
+                        call = call,
+                        approval = null,
+                        resultContentLimitBytes = 4096,
+                        effect = AgentToolEffect.ForegroundCommand,
+                    ) {
+                        AgentToolResult(
+                            callId = call.id,
+                            name = call.name,
+                            content = """{"exit_code":0,"sync":"synced"}""",
+                            error = false,
+                            summary = "Ran pytest -q",
+                        )
+                    }
+                } else null
+            },
+        )
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+        val v = supervisor.validateSpawn("""{"job":"run tests","brief":"run pytest","model":"m1"}""") as SpawnValidation.Valid
+        val spawned = supervisor.executeSpawn(v.brief, v.entry, v.skill)
+        val workerId = json.parseToJsonElement(spawned.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
+
+        supervisor.joinAll()
+
+        val worker = store.loadWorker(workerId)!!
+        assertEquals(RunPhase.Done, worker.state)
+        val envelope = ResultEnvelope.fromJson(worker.envelope!!).jsonObject
+        val commands = envelope["verified"]!!.jsonObject["commands"]!!.jsonArray
+        assertEquals(1, commands.size)
+        val cmd = commands[0].jsonObject
+        assertEquals("pytest -q", cmd["command"]?.jsonPrimitive?.content)
+        assertEquals(0, cmd["exit_code"]?.jsonPrimitive?.int)
+        assertEquals("synced", cmd["sync"]?.jsonPrimitive?.content)
     }
 }

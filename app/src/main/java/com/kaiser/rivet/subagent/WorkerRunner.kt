@@ -78,9 +78,7 @@ internal class RunServices(
     val projectInstructions: ProjectInstructions? = null,
     val skills: () -> SkillCatalog? = { null },
     val loadMemoryMarkdown: suspend () -> String = { "" },
-    val toolchainAvailability: () -> ToolchainAvailability = {
-        ToolchainAvailability(false, false, false, false)
-    },
+    val toolchainAvailability: () -> ToolchainAvailability = { ToolchainAvailability() },
     val terminalStateLine: () -> String? = { null },
     val browserContextLine: () -> String? = { null },
     val systemInstruction: (workspace: Boolean, terminalState: String?, browserState: String?) -> String = { _, _, _ -> "" },
@@ -179,7 +177,7 @@ internal class WorkerRunner(
 
         var activeSummary = loadedTranscript?.summary ?: currentWorker.summary
         val context = ContextPreparation(
-            sessions = services.workerStore,
+            store = services.workerStore,
             sessionId = currentWorker.id,
             client = client,
             config = config,
@@ -512,7 +510,16 @@ internal class WorkerRunner(
         } catch (_: Exception) {
             ""
         }
-        return base.copy(
+        return PreparedAgentTool(
+            call = base.call,
+            approval = base.approval,
+            resultContentLimitBytes = base.resultContentLimitBytes,
+            effect = base.effect,
+            basicAutonomyRisk = base.basicAutonomyRisk,
+            modelRequestsApproval = base.modelRequestsApproval,
+            blockedReason = base.blockedReason,
+            skillScript = base.skillScript,
+            skillScripts = base.skillScripts,
             execute = {
                 if (services.isProjectLockBusy()) {
                     onActivity("waiting for the project (another command is running)")

@@ -218,7 +218,7 @@ internal class SubagentTools(
             ),
             AgentToolDefinition(
                 name = AWAIT_TOOL,
-                description = "Wait for spawned subagents to finish and return their verified result envelopes. Omit ids (or pass []) to wait for all live and queued workers in this run.",
+                description = "Wait for spawned subagents to finish and return their verified result envelopes. Omit ids (or pass []) to wait for all live and queued workers in this run, or pass timeout_s = 0 to check status without waiting.",
                 parameters = objectSchema(
                     required = emptyList(),
                     "ids" to stringArraySchema,

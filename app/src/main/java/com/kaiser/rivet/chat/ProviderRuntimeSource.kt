@@ -94,7 +94,7 @@ internal class StoredProviderRuntimeSource(
 
     override suspend fun configs(): List<ProviderConfig> = providerStore.configSnapshot()
 
-    private fun resolveConfig(config: ProviderConfig): ProviderRuntimeResult {
+    private suspend fun resolveConfig(config: ProviderConfig): ProviderRuntimeResult {
         if (config.type == ProviderType.Local) {
             // Local GGUF models have no API key and never touch a remote endpoint.
             return ProviderRuntimeResult.Ready(config, "")

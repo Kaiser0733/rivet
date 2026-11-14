@@ -61,6 +61,21 @@ internal class SubagentSupervisor(
         val skill: Skill?,
     )
 
+    private fun findSkill(name: String): Skill? {
+        val catalog = services.skills() ?: return null
+        return catalog.skills.firstOrNull { it.name == name }
+            ?: catalog.skills.firstOrNull { it.name.equals(name, ignoreCase = true) }
+    }
+
+    private fun coordinatorOrFallback(): ProviderConfig =
+        services.coordinatorConfig() ?: ProviderConfig(
+            id = "coord",
+            type = ProviderType.OpenAiCompatible,
+            name = "Coordinator",
+            baseUrl = "",
+            model = "default",
+        )
+
     private fun updateWorker(worker: WorkerRecord) {
         workers[worker.id] = worker
         _state.value = workers.values.sortedBy { it.createdAt }
@@ -94,9 +109,7 @@ internal class SubagentSupervisor(
         }
 
         val skill = if (brief.skill != null) {
-            val catalog = services.skills()
-            val found = catalog?.byName(brief.skill)
-                ?: catalog?.all?.firstOrNull { it.name.equals(brief.skill, ignoreCase = true) }
+            val found = findSkill(brief.skill)
             if (found == null) {
                 return SpawnValidation.Rejected("invalid_skill", "Skill '${brief.skill}' does not exist.")
             }
@@ -149,14 +162,7 @@ internal class SubagentSupervisor(
                 running = (it.state == RunPhase.Running),
             )
         }
-        val coordinator = services.coordinatorConfig() ?: ProviderConfig(
-            id = "coord",
-            name = "Coordinator",
-            type = ProviderType.OpenAiCompat,
-            model = "default",
-            apiKey = "",
-            baseUrl = "",
-        )
+        val coordinator = coordinatorOrFallback()
 
         when (val admission = SubagentScheduler.admit(request, live, coordinator)) {
             is Admission.Refuse -> {
@@ -222,7 +228,7 @@ internal class SubagentSupervisor(
                 updateWorker(worker)
                 services.workerStore.saveWorker(worker)
                 services.checkpointGate.beginRunBoundary("Before subagent: ${worker.job}")
-                services.checkpointGate.scopeRegistry.registerScope(worker.id, worker.writeScope)
+                services.checkpointGate.scopeRegistry.register(worker.id, worker.job, worker.writeScope)
                 launchWorker(worker, brief, entry, skill)
                 return SpawnExecutionResult(
                     json = buildJsonObject {
@@ -310,7 +316,7 @@ internal class SubagentSupervisor(
             } finally {
                 withContext(NonCancellable) {
                     liveCloudWorkers.remove(worker.id)
-                    services.checkpointGate.scopeRegistry.releaseScope(worker.id)
+                    services.checkpointGate.scopeRegistry.release(worker.id)
                     activeJobs.remove(worker.id)
                     drainQueue()
                 }
@@ -338,14 +344,7 @@ internal class SubagentSupervisor(
                         running = (it.state == RunPhase.Running),
                     )
                 }
-                val coordinator = services.coordinatorConfig() ?: ProviderConfig(
-                    id = "coord",
-                    name = "Coordinator",
-                    type = ProviderType.OpenAiCompat,
-                    model = "default",
-                    apiKey = "",
-                    baseUrl = "",
-                )
+                val coordinator = coordinatorOrFallback()
                 when (val admission = SubagentScheduler.admit(request, live, coordinator)) {
                     is Admission.Start -> {
                         iterator.remove()
@@ -357,7 +356,7 @@ internal class SubagentSupervisor(
                         updateWorker(starting)
                         services.workerStore.saveWorker(starting)
                         services.checkpointGate.beginRunBoundary("Before subagent: ${starting.job}")
-                        services.checkpointGate.scopeRegistry.registerScope(starting.id, starting.writeScope)
+                        services.checkpointGate.scopeRegistry.register(starting.id, starting.job, starting.writeScope)
                         launchWorker(starting, queued.brief, queued.entry, queued.skill)
                     }
                     is Admission.Queue -> {
@@ -522,7 +521,7 @@ internal class SubagentSupervisor(
                 )
                 val config = services.providerSource.configs().firstOrNull { it.id == record.configId }
                     ?: continue
-                val skill = record.skill?.let { s -> services.skills()?.byName(s) }
+                val skill = record.skill?.let(::findSkill)
                 val entry = ResolvedPoolEntry(
                     alias = "resumed",
                     entry = PoolEntry(config.id, record.model),
@@ -540,7 +539,7 @@ internal class SubagentSupervisor(
                 )
                 updateWorker(resumedWorker)
                 services.workerStore.saveWorker(resumedWorker)
-                services.checkpointGate.scopeRegistry.registerScope(resumedWorker.id, resumedWorker.writeScope)
+                services.checkpointGate.scopeRegistry.register(resumedWorker.id, resumedWorker.job, resumedWorker.writeScope)
                 launchWorker(resumedWorker, brief, entry, skill, resuming = true)
             } else if (record.state == RunPhase.Queued) {
                 val brief = WorkerBrief(
@@ -552,7 +551,7 @@ internal class SubagentSupervisor(
                 )
                 val config = services.providerSource.configs().firstOrNull { it.id == record.configId }
                     ?: continue
-                val skill = record.skill?.let { s -> services.skills()?.byName(s) }
+                val skill = record.skill?.let(::findSkill)
                 val entry = ResolvedPoolEntry(
                     alias = "resumed",
                     entry = PoolEntry(config.id, record.model),

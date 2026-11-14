@@ -77,6 +77,7 @@ class SubagentSupervisorTest {
     private class ControllableClient(
         private val gate: CompletableDeferred<Unit>? = null,
         private val responseText: String = "Summary: Done.\nFindings:\n- fact\nOpen questions: none",
+        private val onRequest: ((AgentRequest) -> Unit)? = null,
     ) : ProviderClient {
         override suspend fun listModels(): List<ModelInfo> = emptyList()
         override suspend fun testConnection(): TestResult = TestResult(true, "ok")
@@ -85,6 +86,7 @@ class SubagentSupervisorTest {
             onReasoning: (String) -> Unit,
             onDelta: (String) -> Unit,
         ): AgentResponse {
+            onRequest?.invoke(request)
             gate?.await()
             onDelta(responseText)
             return AgentResponse(
@@ -402,6 +404,98 @@ class SubagentSupervisorTest {
         assertTrue((retry2 as SpawnValidation.Rejected).detail.contains("already been retried once"))
 
         supervisor.joinAll()
+    }
+
+    @Test
+    fun skillLookupMatchesExactCaseInsensitiveAndRejectsNonModelInvocable() = runBlocking {
+        val config = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        val capturedRequests = mutableListOf<AgentRequest>()
+        val auditSkill = Skill(
+            name = "CodeAudit",
+            description = "Audit code",
+            body = "Check every auth boundary carefully.",
+            disableModelInvocation = false,
+        )
+        val hiddenSkill = Skill(
+            name = "InternalOnly",
+            description = "User only",
+            body = "Manual only.",
+            disableModelInvocation = true,
+        )
+        val catalog = SkillCatalog(
+            skills = listOf(auditSkill, hiddenSkill),
+            errors = emptyList(),
+            digest = "digest-1",
+        )
+        val services = testServices(
+            workerStore = store,
+            configs = listOf(config),
+            clientFactory = { _, _ -> ControllableClient(onRequest = { capturedRequests += it }) },
+            skillsCatalog = catalog,
+        )
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+
+        val rejectedHidden = supervisor.validateSpawn(
+            """{"job":"secret","brief":"do it","model":"m1","skill":"InternalOnly"}"""
+        )
+        assertTrue(rejectedHidden is SpawnValidation.Rejected)
+        assertEquals("invalid_skill", (rejectedHidden as SpawnValidation.Rejected).code)
+
+        val validInsensitive = supervisor.validateSpawn(
+            """{"job":"audit","brief":"check auth","model":"m1","skill":"codeaudit"}"""
+        ) as SpawnValidation.Valid
+        assertEquals("CodeAudit", validInsensitive.skill?.name)
+
+        val spawned = supervisor.executeSpawn(validInsensitive.brief, validInsensitive.entry, validInsensitive.skill)
+        assertFalse(spawned.error)
+        supervisor.joinAll()
+
+        assertTrue(capturedRequests.isNotEmpty())
+        val promptTexts = capturedRequests.first().messages.joinToString("\n") { it.text }
+        assertTrue(promptTexts.contains("Check every auth boundary carefully."))
+    }
+
+    @Test
+    fun fileScopeIsRegisteredWithJobWhileRunningAndReleasedOnCompletion() = runBlocking {
+        val config = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        val gate = CompletableDeferred<Unit>()
+        val services = testServices(
+            workerStore = store,
+            configs = listOf(config),
+            clientFactory = { _, _ -> ControllableClient(gate) },
+        )
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+
+        val valid = supervisor.validateSpawn(
+            """{"job":"core refactor","brief":"update core","model":"m1","write_scope":["src/core"]}"""
+        ) as SpawnValidation.Valid
+        val spawned = supervisor.executeSpawn(valid.brief, valid.entry, valid.skill)
+        val workerId = json.parseToJsonElement(spawned.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
+
+        val activeScope = services.checkpointGate.scopeRegistry.scopeOf(workerId)
+        assertNotNull(activeScope)
+        assertEquals("core refactor", activeScope!!.job)
+        assertEquals(setOf(WorkspacePath.parse("src/core")), activeScope.paths)
+        assertEquals(
+            "${FileScopeRegistry.OWNED_BY_WORKER_PREFIX}core refactor",
+            services.checkpointGate.scopeRegistry.checkWrite(
+                FileScopeRegistry.COORDINATOR,
+                listOf(WorkspacePath.parse("src/core/Main.kt")),
+            ),
+        )
+
+        gate.complete(Unit)
+        supervisor.joinAll()
+
+        assertNull(services.checkpointGate.scopeRegistry.scopeOf(workerId))
+        assertNull(
+            services.checkpointGate.scopeRegistry.checkWrite(
+                FileScopeRegistry.COORDINATOR,
+                listOf(WorkspacePath.parse("src/core/Main.kt")),
+            ),
+        )
     }
 }
 
