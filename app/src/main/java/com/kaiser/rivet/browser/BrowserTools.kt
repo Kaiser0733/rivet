@@ -4,6 +4,7 @@ import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolDefinition
 import com.kaiser.rivet.agent.AgentToolEffect
+import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.BasicAutonomyRisk
 import com.kaiser.rivet.agent.PreparedAgentTool
@@ -20,6 +21,26 @@ import kotlinx.serialization.json.put
 /** Typed browser tools. There is deliberately no browser_eval. */
 class BrowserTools(private val session: BrowserSession) {
     private val json = Json { ignoreUnknownKeys = true }
+
+    suspend fun prepare(
+        call: AgentToolCall,
+        owner: String,
+        lease: BrowserDrivingLease?,
+    ): PreparedAgentTool? {
+        if (call.name !in NAMES) return null
+        if (lease != null && !lease.tryAcquire(owner, call)) {
+            return PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
+                AgentToolResult(
+                    call.id,
+                    call.name,
+                    AgentToolError.content("browser_busy"),
+                    error = true,
+                    summary = "Failed  ${call.name}",
+                )
+            }
+        }
+        return prepare(call)
+    }
 
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool? {
         if (call.name !in NAMES) return null
@@ -361,6 +382,68 @@ class BrowserTools(private val session: BrowserSession) {
                 "Swipe from x1,y1 to x2,y2 in 0..1000 coordinates with real touch events. Returns URL and a short change line.",
                 schema(listOf("x1", "y1", "x2", "y2"), "x1" to coordinate, "y1" to coordinate,
                     "x2" to coordinate, "y2" to coordinate)),
+        )
+    }
+}
+
+/**
+ * Run-level browser driving lease. The browser has one visual renderer, so the first
+ * agent to invoke a driving action holds the lease until its loop ends; other agents
+ * receive `browser_busy`. Reader-mode reads (`browser_read`, `browser_find`, and text
+ * `browser_open`) share without acquiring the driving lease.
+ */
+class BrowserDrivingLease {
+    private val lock = Any()
+    private var holder: String? = null
+
+    fun holder(): String? = synchronized(lock) { holder }
+
+    fun isDrivingCall(call: AgentToolCall): Boolean {
+        if (call.name in DRIVING_TOOLS) return true
+        if (call.name == "browser_open") {
+            val args = runCatching { Json.parseToJsonElement(call.arguments).jsonObject }.getOrNull()
+                ?: return false
+            val previewEntry = (args["preview_entry"] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
+            val url = (args["url"] as? JsonPrimitive)?.takeIf { it.isString }?.content.orEmpty()
+            return previewEntry.isNotBlank() || BrowserAuthGuard.isLoopback(url)
+        }
+        return false
+    }
+
+    fun tryAcquire(owner: String, call: AgentToolCall): Boolean {
+        if (!isDrivingCall(call)) return true
+        synchronized(lock) {
+            val current = holder
+            if (current == null || current == owner) {
+                holder = owner
+                return true
+            }
+            return false
+        }
+    }
+
+    fun release(owner: String) {
+        synchronized(lock) {
+            if (holder == owner) holder = null
+        }
+    }
+
+    fun clear() {
+        synchronized(lock) {
+            holder = null
+        }
+    }
+
+    companion object {
+        private val DRIVING_TOOLS = setOf(
+            "browser_click",
+            "browser_type",
+            "browser_scroll",
+            "browser_back",
+            "browser_tap",
+            "browser_swipe",
+            "browser_shot",
+            "browser_close",
         )
     }
 }
