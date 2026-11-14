@@ -133,7 +133,9 @@ class SubagentEngineTest {
         providerSource = FakeProviderSource(configs),
         clientFactory = clientFactory,
         approvals = AgentApprovalGate(),
-        checkpointGate = RunCheckpointGate(FakeCheckpointBackend()),
+        checkpointGate = RunCheckpointGate(FakeCheckpointBackend()).apply {
+            beginTurn("test-workspace", "test-run", "test-session")
+        },
         poolState = {
             SubagentPoolState(
                 allowAgentChoice = true,

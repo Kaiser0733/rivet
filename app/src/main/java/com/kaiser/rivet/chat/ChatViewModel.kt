@@ -1201,6 +1201,12 @@ class ChatViewModel private constructor(
             var turnToken: String? = null
             var acceptedPersisted = false
             var persistAcceptedOnExit = true
+            fun releaseTurn() {
+                turnToken?.let {
+                    runtimeController.finishTurn(it)
+                    turnToken = null
+                }
+            }
             try {
             previous?.join()
             turnToken = runtimeController.startTurn(::cancel)
@@ -1212,6 +1218,7 @@ class ChatViewModel private constructor(
                 val restored = try { sessionStore.load() }
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) {
+                        releaseTurn()
                         _uiState.update { it.copy(streaming = false, activity = null,
                             interruptedTurn = wasInterrupted,
                             error = "Could not recover the previous task. Check available storage and try again.") }
@@ -1220,6 +1227,7 @@ class ChatViewModel private constructor(
                 if (restored.messages.lastOrNull()?.let {
                         it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty()
                     } == true) {
+                    releaseTurn()
                     _uiState.update { it.copy(streaming = false, activity = null,
                         interruptedTurn = wasInterrupted,
                         error = "Could not recover the previous task. Restart Rivet before continuing.") }
@@ -1228,7 +1236,10 @@ class ChatViewModel private constructor(
                 activeMessages = restored.messages
                 activeSummary = restored.summary
             }
-            val snapshot = providerSnapshot(wasInterrupted) ?: return@launch
+            val snapshot = providerSnapshot(wasInterrupted) ?: run {
+                releaseTurn()
+                return@launch
+            }
             currentCloud = !SpendStore.isLocal(snapshot.config.baseUrl)
             val restoredWorkspace = try {
                 workspaceSelection.restore()
@@ -1257,6 +1268,7 @@ class ChatViewModel private constructor(
                 if (block != null) {
                     persistAcceptedOnExit = false
                     rollbackAcceptedUser(acceptedUser)
+                    releaseTurn()
                     failBeforeStart(block, wasInterrupted)
                     return@launch
                 }
@@ -1267,6 +1279,7 @@ class ChatViewModel private constructor(
             if (workspaceAccessFailed || binding == ProjectBindingState.AccessLost) {
                 persistAcceptedOnExit = false
                 rollbackAcceptedUser(acceptedUser)
+                releaseTurn()
                 _uiState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
                     projectError = if (current.currentSessionWorkspaceId != null) null
                     else "Rivet couldn't open this project. Choose the folder again.",
@@ -1278,6 +1291,7 @@ class ChatViewModel private constructor(
             if (sessions != null && binding == ProjectBindingState.Mismatch) {
                 persistAcceptedOnExit = false
                 rollbackAcceptedUser(acceptedUser)
+                releaseTurn()
                 _uiState.update { it.copy(streaming = false, activity = null,
                     interruptedTurn = wasInterrupted,
                     error = PROJECT_BINDING_MISMATCH_MESSAGE) }
@@ -1320,6 +1334,13 @@ class ChatViewModel private constructor(
                 if (workspaceId != null) addAll(SkillContext.updates(messages, workspaceId, skills))
                 if (workspaceId != null) addAll(ToolchainContext.updates(messages, workspaceId,
                     runtime.toolchainAvailability()))
+                if (workspaceId != null) addAll(SubagentContext.poolUpdates(
+                    messages,
+                    workspaceId,
+                    SubagentPoolState(),
+                    providerSource.configs(),
+                    snapshot.config,
+                ))
                 if (workspaceId != null && workspace != null) addAll(goalMemoryUpdates(
                     messages, workspaceId, workspace))
                 else if (workspaceId == null && sessionGoal != null) {
@@ -1453,6 +1474,7 @@ class ChatViewModel private constructor(
                 }
                 catch (e: CancellationException) { throw e
                 } catch (_: Exception) {
+                    releaseTurn()
                     _uiState.update { it.copy(streaming = false, activity = null,
                         interruptedTurn = wasInterrupted,
                         error = "Rivet could not shorten this session's context. The conversation was kept.") }
@@ -1466,6 +1488,7 @@ class ChatViewModel private constructor(
             } catch (_: AgentSessionLimitException) {
                 persistAcceptedOnExit = false
                 rollbackAcceptedUser(acceptedUser)
+                releaseTurn()
                 if (ticket == generation) {
                     _uiState.update {
                         it.copy(streaming = false, pendingApproval = null, activity = null,
@@ -1476,6 +1499,7 @@ class ChatViewModel private constructor(
                 return@launch
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
+                releaseTurn()
                 _uiState.update { it.copy(streaming = false, pendingApproval = null, activity = null,
                     interruptedTurn = wasInterrupted,
                     error = "Could not save the conversation. Check available storage and try again.") }
@@ -1764,6 +1788,7 @@ class ChatViewModel private constructor(
                     }
                 }
                 if (ticket == generation) {
+                    releaseTurn()
                     finish(result, durable, snapshot.config)
                     if (titleEligible && result.stopReason == AgentStopReason.Completed &&
                         _uiState.value.error == null) {
@@ -1787,6 +1812,7 @@ class ChatViewModel private constructor(
                 withContext(NonCancellable) {
                     if (ticket == generation) {
                         sessionStore.markInterrupted(false)
+                        releaseTurn()
                         _uiState.update {
                             it.copy(
                                 messages = durable.toList(),
@@ -1814,6 +1840,7 @@ class ChatViewModel private constructor(
                             catch (error: MirrorFailure) { error.code }
                             catch (_: Exception) { null }
                         val pendingProjectChanges = blocker != null && blocker in SYNC_RECOVERY_CODES
+                        releaseTurn()
                         _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                             pendingApproval = null, activity = null,
                             toolLifecycle = emptyList(), commandRunning = false,
@@ -1838,6 +1865,7 @@ class ChatViewModel private constructor(
                 if (recommended != null && isUnsupportedReasoningError(e, requested, effortSent)) {
                     // The model refused this effort. Offer the way down instead of a
                     // dead end, and keep the prompt so the user never retypes it.
+                    releaseTurn()
                     stableFailure(ticket, durable, UNSUPPORTED_REASONING_ERROR, null,
                         UnsupportedReasoningNotice(snapshot.config.id, requested, recommended,
                             ALL_REASONING_LEVELS.filter { it != requested && it != recommended }))
@@ -1856,9 +1884,11 @@ class ChatViewModel private constructor(
                     e is ProviderError.ModelNotFound) {
                     ChatErrorAction.OpenSettings
                 } else ChatErrorAction.RetryTurn
+                releaseTurn()
                 stableFailure(ticket, durable, message, action)
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent turn failed: ${e.javaClass.simpleName}")
+                releaseTurn()
                 stableFailure(ticket, durable,
                     "Rivet couldn't finish this request. Completed project changes remain safe.",
                     ChatErrorAction.RetryTurn)
@@ -1916,6 +1946,7 @@ class ChatViewModel private constructor(
                 throw e
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent setup failed: ${e.javaClass.simpleName}")
+                releaseTurn()
                 if (ticket == generation) _uiState.update { it.copy(streaming = false, streamingText = "",
                     streamingReasoning = "",
                     activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
@@ -1953,7 +1984,7 @@ class ChatViewModel private constructor(
                         } catch (_: Exception) { }
                     }
                     turnSessionId = null
-                    runtimeController.finishTurn(turnToken)
+                    releaseTurn()
                     if (ticket == generation && _uiState.value.streaming) {
                         _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                             activity = null, pendingApproval = null,

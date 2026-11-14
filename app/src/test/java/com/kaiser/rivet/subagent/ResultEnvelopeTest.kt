@@ -104,4 +104,24 @@ class ResultEnvelopeTest {
             assertTrue(verified["diff"]!!.jsonPrimitive.content.isNotEmpty())
         }
     }
+
+    @Test fun assembleAwaitResultCountsJsonEscapesWhenBudgetingMultiLineDiffs() {
+        val escapedBefore = (1..300).joinToString("\n") { "old \"$it\"\\path" }.toByteArray()
+        val escapedAfter = (1..300).joinToString("\n") { "new \"$it\"\\path" }.toByteArray()
+        val envelopes = (1..4).map { idx ->
+            val diff = WorkerDiff.diff("src/escaped$idx.kt", escapedBefore, escapedAfter)
+            ResultEnvelope.build(
+                workerId = "w-esc-$idx",
+                state = RunPhase.Done,
+                claim = WorkerClaim(summary = "Escaped diff $idx"),
+                diff = diff,
+            )
+        }
+        val assembled = ResultEnvelope.assembleAwaitResult(envelopes)
+        val assembledBytes = assembled.toByteArray(Charsets.UTF_8).size
+        assertTrue("Escaped multi-line diffs must stay <= 24 KiB (was $assembledBytes)", assembledBytes <= ResultEnvelope.MAX_AWAIT_BYTES)
+        val workers = Json.parseToJsonElement(assembled).jsonObject["workers"]!!.jsonArray
+        assertEquals(4, workers.size)
+        assertTrue(workers.all { it.jsonObject["verified"]!!.jsonObject["diff"]!!.jsonPrimitive.content.isNotEmpty() })
+    }
 }

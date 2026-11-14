@@ -176,13 +176,16 @@ class LocalOwnerStopTest {
         }
         delay(50)
         jobB.cancel()
-        runCatching { jobB.await() }
+        delay(50)
 
-        // ClientA's native generation must NOT have been stopped by clientB's cancellation.
+        // ClientA's native generation must NOT have been stopped while clientB was waiting,
+        // nor once clientA releases nativeLock and clientB unwinds from templateForPrompt.
         assertFalse(stopFlag.get())
 
         allowFirstToFinish.countDown()
         val responseA = jobA.await()
+        runCatching { jobB.await() }
+        assertFalse(stopFlag.get())
         assertEquals("Hello from active agent", responseA.text)
     }
 
