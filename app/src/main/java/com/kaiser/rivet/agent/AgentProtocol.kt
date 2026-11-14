@@ -86,6 +86,7 @@ data class AgentApprovalRequest(
     val destructivePath: String? = null,
     val dangerous: Boolean = false,
     val approvalToken: Long = 0L,
+    val requester: String? = null,
 )
 
 /** Execution effects drive integrity work independently from human confirmation. */
@@ -102,6 +103,7 @@ enum class AgentToolEffect(
     PersistentProcess,
     Preview(false, false, true),
     BrowserAction,
+    Delegation,
 }
 
 enum class BasicAutonomyRisk { Routine, Elevated }

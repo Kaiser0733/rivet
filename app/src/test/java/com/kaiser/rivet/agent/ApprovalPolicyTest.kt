@@ -78,4 +78,22 @@ class ApprovalPolicyTest {
         assertEquals(ApprovalDecision.Blocked("approval_unavailable"),
             ApprovalPolicy.decide(AutonomyMode.Ask, prepared))
     }
+
+    @Test fun delegationWithNullApprovalAutoAuthorizesInAsk() {
+        val call = AgentToolCall("id", "spawn_subagent", "{}")
+        val granted = PreparedAgentTool(call, null, effect = AgentToolEffect.Delegation) {
+            AgentToolResult("id", "spawn_subagent", "{}")
+        }
+        assertEquals(ApprovalDecision.AutoAuthorize, ApprovalPolicy.decide(AutonomyMode.Ask, granted))
+        assertEquals(ApprovalDecision.AutoAuthorize, ApprovalPolicy.decide(AutonomyMode.BasicYolo, granted))
+
+        val firstAsk = PreparedAgentTool(
+            call,
+            AgentApprovalRequest(call, "Allow subagents?", "Details"),
+            effect = AgentToolEffect.Delegation,
+        ) { AgentToolResult("id", "spawn_subagent", "{}") }
+        assertEquals(ApprovalDecision.AskUser, ApprovalPolicy.decide(AutonomyMode.Ask, firstAsk))
+        assertEquals(ApprovalDecision.AskUser, ApprovalPolicy.decide(AutonomyMode.BasicYolo, firstAsk))
+        assertEquals(ApprovalDecision.AutoAuthorize, ApprovalPolicy.decide(AutonomyMode.Yolo, firstAsk))
+    }
 }

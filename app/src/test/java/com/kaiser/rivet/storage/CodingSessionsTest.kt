@@ -80,6 +80,23 @@ class CodingSessionsTest {
         assertEquals(1, sessions.fullEventCount(id))
     }
 
+    @Test fun workerUsageCountsInTotalsButCannotHijackAnchorOrLatest() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.create(null).id!!
+        val messages = listOf(AgentMessage.user("Fix it"))
+        sessions.save(messages, false)
+        sessions.recordUsage(id, "turn", "p", "m", AgentUsage(4000, 4), messages, "system")
+        sessions.recordUsage(id, "worker-w1-1", "p", "m", AgentUsage(120, 15), messages, "system")
+
+        assertEquals(4000L, sessions.contextEstimate(id, "p", "m", messages, "system").tokens)
+        val usage = sessions.usage(id)
+        assertEquals(4000L, usage.latestInputTokens)
+        assertEquals(4000L, usage.latestUsage?.inputTokens)
+        assertEquals(4120L, usage.reportedInputTokens)
+        assertEquals(19L, usage.reportedOutputTokens)
+        assertEquals(2, usage.reportedRequests)
+    }
+
     @Test fun contextEventsSurviveReloadAndDoNotOccupyVisibleHistory() = runBlocking {
         val sessions = CodingSessions(app)
         val selected = sessions.create("tree")

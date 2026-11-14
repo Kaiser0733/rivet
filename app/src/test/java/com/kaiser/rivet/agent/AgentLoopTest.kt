@@ -1729,4 +1729,128 @@ class AgentLoopTest {
         assertEquals(truncatedCallIds, result.messages[2].toolResults.map { it.callId })
         assertTrue(approvalTitles.none { it == "Delete folder?" })
     }
+
+    @Test
+    fun afterMutationRunsOnSuccessFailureAndCancellationOnlyAfterNullBeforeMutation() = runTest {
+        val recorded = mutableListOf<Pair<String, AgentToolResult?>>()
+        var turn = 0
+        val loop = AgentLoop(
+            requestModel = { _, _, _ ->
+                when (++turn) {
+                    1 -> AgentResponse(toolCalls = listOf(
+                        AgentToolCall("r1", "read_file", "{}"),
+                        AgentToolCall("w1", "write_file", "{}"),
+                        AgentToolCall("w2", "write_file", "{}"),
+                        AgentToolCall("w3", "write_file", "{}"),
+                        AgentToolCall("w4", "write_file", "{}"),
+                    ))
+                    else -> AgentResponse(text = "Done")
+                }
+            },
+            prepareTool = { call ->
+                PreparedAgentTool(
+                    call,
+                    AgentApprovalRequest(call, "Act", call.id),
+                    effect = if (call.id == "r1") AgentToolEffect.ReadOnly else AgentToolEffect.WorkspaceMutation,
+                ) {
+                    when (call.id) {
+                        "w1" -> AgentToolResult(call.id, call.name, """{"ok":true}""")
+                        "w2" -> AgentToolResult(call.id, call.name, """{"error":"write_failed"}""", error = true)
+                        "w3" -> throw IllegalStateException("disk error")
+                        else -> AgentToolResult(call.id, call.name, """{"ok":true}""")
+                    }
+                }
+            },
+            requestApproval = { true },
+            beforeMutation = { call -> if (call.id == "w4") "outside_file_scope" else null },
+            afterMutation = { call, result -> recorded += call.id to result },
+        )
+
+        val completed = loop.run(listOf(AgentMessage.user("Run")), emptyList())
+        assertEquals(AgentStopReason.Completed, completed.stopReason)
+        assertEquals(listOf("w1", "w2", "w3"), recorded.map { it.first })
+        assertEquals(false, recorded[0].second?.error)
+        assertEquals(true, recorded[1].second?.error)
+        assertEquals(null, recorded[2].second)
+
+        val cancelRecorded = mutableListOf<Pair<String, AgentToolResult?>>()
+        val started = CompletableDeferred<Unit>()
+        val cancelling = async {
+            AgentLoop(
+                requestModel = { _, _, _ ->
+                    AgentResponse(toolCalls = listOf(AgentToolCall("wc", "write_file", "{}")))
+                },
+                prepareTool = { call ->
+                    PreparedAgentTool(
+                        call,
+                        AgentApprovalRequest(call, "Edit", "A.kt"),
+                        effect = AgentToolEffect.WorkspaceMutation,
+                    ) {
+                        started.complete(Unit)
+                        awaitCancellation()
+                    }
+                },
+                requestApproval = { true },
+                beforeMutation = { null },
+                afterMutation = { call, result -> cancelRecorded += call.id to result },
+            ).run(listOf(AgentMessage.user("Cancel me")), emptyList())
+        }
+        started.await()
+        cancelling.cancelAndJoin()
+        assertEquals(listOf("wc" to null), cancelRecorded)
+    }
+
+    @Test
+    fun beforeCompletionExtendsLoopWithContextEventsAndCountsTowardRunawayLimit() = runTest {
+        var requests = 0
+        var holds = 0
+        val event = InternalContext(
+            kind = "rollback",
+            workspaceId = "tree",
+            content = "Worker finished: A.kt",
+            digest = InternalContext.digest("Worker finished: A.kt"),
+        ).event()
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                requests++
+                if (requests == 1) AgentResponse(text = "Premature answer")
+                else AgentResponse(text = "Verified final answer")
+            },
+            prepareTool = { error("unused") },
+            requestApproval = { true },
+            beforeCompletion = { messages ->
+                assertEquals("Premature answer", messages.last().text)
+                if (holds++ == 0) listOf(event) else emptyList()
+            },
+        ).run(listOf(AgentMessage.user("Go")), emptyList())
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(2, result.modelIterations)
+        assertTrue(result.messages.contains(event))
+        assertEquals("Verified final answer", result.messages.last().text)
+
+        var runawayRequests = 0
+        val runaway = AgentLoop(
+            requestModel = { _, _, _ ->
+                runawayRequests++
+                AgentResponse(text = "Done $runawayRequests")
+            },
+            prepareTool = { error("unused") },
+            requestApproval = { true },
+            beforeCompletion = {
+                val content = "Hold $runawayRequests"
+                listOf(
+                    InternalContext(
+                        kind = "rollback",
+                        workspaceId = "tree",
+                        content = content,
+                        digest = InternalContext.digest(content),
+                    ).event(),
+                )
+            },
+        ).run(listOf(AgentMessage.user("Loop")), emptyList())
+
+        assertEquals(AgentStopReason.RunawayGuard, runaway.stopReason)
+        assertEquals(AgentLoop.RUNAWAY_MODEL_ITERATIONS, runaway.modelIterations)
+    }
 }

@@ -18,8 +18,10 @@ object ApprovalPolicy {
             AutonomyMode.Yolo -> false
         }
         if (!ask) return ApprovalDecision.AutoAuthorize
-        return if (tool.approval == null) ApprovalDecision.Blocked("approval_unavailable")
-        else ApprovalDecision.AskUser
+        return if (tool.approval == null) {
+            if (tool.effect == AgentToolEffect.Delegation) ApprovalDecision.AutoAuthorize
+            else ApprovalDecision.Blocked("approval_unavailable")
+        } else ApprovalDecision.AskUser
     }
 
     /** Obvious Android/app management attempts stay outside Rivet's command capability. */
