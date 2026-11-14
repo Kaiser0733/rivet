@@ -185,6 +185,9 @@ data class ChatUiState(
     // that prints it: a start held inside the live-status list item was lost whenever the list
     // relaid it out (a long thinking block folding does exactly that) and came back as 0s.
     val turnStartedAt: Long? = null,
+    // Wall-clock start of the live turn, persisted with a completed duration so a
+    // restored conversation can still compute a fallback for older rows.
+    val turnStartedWallClock: Long? = null,
     val turnDurationsMs: Map<Int, Long> = emptyMap(),
     val interruptedTurn: Boolean = false,
     // A shell command holds the project lock for as long as it runs, so Undo and
@@ -507,6 +510,7 @@ class ChatViewModel private constructor(
             if (ticket == generation) {
                 try {
                     val usage = restored.id?.let { sessions?.usage(it) }
+                    val restoredDurations = restored.id?.let { sessions?.turnDurations(it) }.orEmpty()
                     activeMessages = restored.messages
                     activeSummary = restored.summary
                     val visible = restored.id?.let { sessions?.recent(it) } ?: restored.messages
@@ -521,6 +525,7 @@ class ChatViewModel private constructor(
                             currentSessionTitle = restored.title,
                             currentSessionWorkspaceId = restored.workspaceId,
                             usage = usage,
+                            turnDurationsMs = restoredDurations,
                             interruptedTurn = interruptedTurn,
                         )
                     }
@@ -721,6 +726,7 @@ class ChatViewModel private constructor(
                 acceptedMessageCount = state.acceptedMessageCount + 1,
                 streaming = true,
                 turnStartedAt = SystemClock.elapsedRealtime(),
+                turnStartedWallClock = System.currentTimeMillis(),
                 streamingText = "", streamingReasoning = "",
                 messageReasoning = shiftedReasoning,
                 turnDurationsMs = shiftedDurations,
@@ -1223,6 +1229,7 @@ class ChatViewModel private constructor(
         val wasInterrupted = _uiState.value.interruptedTurn
         val ticket = ++generation
         _uiState.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
+            turnStartedWallClock = System.currentTimeMillis(),
             streamingText = "", streamingReasoning = "",
             activity = "Getting ready…",
             toolLifecycle = emptyList(), commandRunning = false, error = null, errorAction = null, notice = null,
@@ -2157,6 +2164,9 @@ class ChatViewModel private constructor(
             ) -> ChatErrorAction.RetryTurn
             else -> null
         }
+        val startedWallClock = _uiState.value.turnStartedWallClock
+        var completedDuration: Long? = null
+        var completedTurnIndex: Int? = null
         _uiState.update { state ->
             val rawReasoning = if (error == ProviderError.EmptyResponse.text() && state.messages.isNotEmpty()) {
                 state.messageReasoning - (state.messages.size - 1)
@@ -2176,11 +2186,14 @@ class ChatViewModel private constructor(
                 (SystemClock.elapsedRealtime() - start).coerceAtLeast(0)
             }
             val nextDurations = if (turnIndex >= 0 && elapsed != null && result.stopReason == AgentStopReason.Completed) {
+                completedDuration = elapsed
+                completedTurnIndex = turnIndex
                 remapped.durations + (turnIndex to elapsed)
             } else remapped.durations
             state.copy(messages = visible, streaming = false, streamingText = "", streamingReasoning = "",
                 messageReasoning = remapped.reasoning, pendingApproval = null,
                 turnDurationsMs = nextDurations,
+                turnStartedWallClock = null,
                 toolLifecycle = emptyList(), commandRunning = false,
                 sessions = if (unchanged && history != null) history else state.sessions,
                 currentSessionTitle = if (unchanged && history != null) history.firstOrNull {
@@ -2188,6 +2201,25 @@ class ChatViewModel private constructor(
                 else state.currentSessionTitle,
                 usage = usage, error = error,
                 errorAction = errorAction, activity = null)
+        }
+
+        val duration = completedDuration
+        val turn = completedTurnIndex
+        val session = turnSessionId
+        if (duration != null && turn != null && session != null) {
+            try {
+                sessions?.recordTurnMetric(
+                    sessionId = session,
+                    turnIndex = turn,
+                    durationMs = duration,
+                    startedAt = startedWallClock,
+                    endedAt = System.currentTimeMillis(),
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // The transcript is already durable; a missing metric must not fail the turn.
+            }
         }
     }
 
@@ -2649,11 +2681,12 @@ class ChatViewModel private constructor(
                 // The bar belongs to the session that made the change; rehydration below
                 // restores it only for that session (and only while it is not dismissed).
                 val keepUndo = undoSurvivesSwitch(project.currentSessionId, selected.id)
+                val durations = selected.id?.let { store.turnDurations(it) }.orEmpty()
                 if (ticket == generation) _uiState.value = ChatUiState(
                     messages = visible, ready = true, sessions = history,
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
                     currentSessionWorkspaceId = selected.workspaceId,
-                    usage = usage,
+                    usage = usage, turnDurationsMs = durations,
                     projectName = project.projectName, projectIdentity = project.projectIdentity,
                     projectLoading = project.projectLoading, projectError = project.projectError,
                     interruptedTurn = interruptedTurn,

@@ -31,6 +31,42 @@ class ChatTurnSegmentationTest {
         assertEquals(4200L, turns[1].spec.durationMs)
     }
 
+
+    @Test
+    fun storedCompletedTurnRendersCompactDurationAndStoppedTurnDoesNot() {
+        val stored = mapOf(0 to 65_000L)
+        val completedItems = listOf(
+            TurnItem("u", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem("a", isUser = false, isAnswer = true, isProcess = false),
+        )
+        val completed = segmentTurnItems(
+            items = completedItems,
+            isStreaming = false,
+            turnDurationsMs = stored,
+            isInterruptedTurn = false,
+            hasError = false,
+        ).single()
+        assertEquals("Completed in 1m5s", completed.spec.foldLabel())
+
+        val stopped = segmentTurnItems(
+            items = completedItems,
+            isStreaming = false,
+            turnDurationsMs = stored,
+            isInterruptedTurn = true,
+            hasError = false,
+        ).single()
+        assertEquals("Stopped", stopped.spec.foldLabel())
+    }
+
+    @Test
+    fun compactDurationFormatsMillisecondsSecondsAndMinutes() {
+        assertEquals("1s", formatRunDuration(1_500L))
+        assertEquals("2s", formatRunDuration(2_000L))
+        assertEquals("1m5s", formatRunDuration(65_000L))
+        assertEquals("1h1m1s", formatRunDuration(3_661_000L))
+        assertEquals("1s", formatRunDuration(0L))
+    }
+
     @Test
     fun remapsReasoningAndDurationsWhenContextStrippedAndPrefixTrimmed() {
         val oldMessages = listOf(
