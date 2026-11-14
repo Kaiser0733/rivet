@@ -103,6 +103,7 @@ enum class AgentToolEffect(
     PersistentProcess,
     Preview(false, false, true),
     BrowserAction,
+    Delegation,
 }
 
 enum class BasicAutonomyRisk { Routine, Elevated }
