@@ -1819,8 +1819,16 @@ class AgentLoopTest {
             prepareTool = { error("unused") },
             requestApproval = { true },
             beforeCompletion = { messages ->
-                assertEquals("Premature answer", messages.last().text)
-                if (holds++ == 0) listOf(event) else emptyList()
+                when (holds++) {
+                    0 -> {
+                        assertEquals("Premature answer", messages.last().text)
+                        listOf(event)
+                    }
+                    else -> {
+                        assertEquals("Verified final answer", messages.last().text)
+                        emptyList()
+                    }
+                }
             },
         ).run(listOf(AgentMessage.user("Go")), emptyList())
 

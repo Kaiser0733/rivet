@@ -206,4 +206,26 @@ class TurnCheckpointTest {
         val staged = store.stageUndo(store.latest()!!, root)
         assertEquals("before\n", File(staged, "foo.").readText())
     }
+
+    @Test fun appStateUnderRivetCreatedAfterRecordPostDoesNotConflictOnFinish() = runTest {
+        val root = temp.newFolder("worktree")
+        val store = TurnCheckpoint(temp.newFolder("private-checkpoints"), "workspace-A")
+
+        val id = store.begin(root)
+        File(root, "A.kt").writeText("class A\n")
+        store.recordPost(id, root)
+
+        // Persist run journal and run-checkpoint state after recordPost when .rivet did not yet exist.
+        File(root, ".rivet/runs/run-1").mkdirs()
+        File(root, ".rivet/runs/run-1/run.json").writeText("{}\n")
+        File(root, ".rivet/checkpoints/cp-1").mkdirs()
+        File(root, ".rivet/checkpoints/cp-1/meta.json").writeText("{}\n")
+
+        assertTrue(store.matchesPost(id, root))
+        assertTrue(store.finish(id, root))
+        val record = store.latest()!!
+        assertEquals(setOf("A.kt"), store.changes(record).map { it.path }.toSet())
+        val staged = store.stageUndo(record, root)
+        assertFalse(File(staged, "A.kt").exists())
+    }
 }
