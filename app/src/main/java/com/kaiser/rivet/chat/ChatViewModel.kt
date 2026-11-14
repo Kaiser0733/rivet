@@ -36,6 +36,7 @@ import com.kaiser.rivet.agent.RunMachine
 import com.kaiser.rivet.agent.RunPauseReason
 import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.agent.RunRecord
+import com.kaiser.rivet.agent.RunSpendLedger
 import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.browser.BrowserBookmarkPath
 import com.kaiser.rivet.browser.BrowserRuntime
@@ -495,15 +496,11 @@ class ChatViewModel private constructor(
     private var memoryMarkdown: String = ""
     private var currentRun: RunRecord? = null
     private var runResumeContext = false
-    private var runSpendUsd = 0.0
-    private var runSpendTokens = 0L
-    private var monthSpendUsd = 0.0
-    private var monthSpendTokens = 0L
-    private var runCapOverrideUsd: Double? = null
-    private var monthCapOverrideUsd: Double? = null
-    private var runTokenOverride: Long? = null
-    private var monthTokenOverride: Long? = null
-    private var budgetPaused = false
+    private val spendLedger = RunSpendLedger(
+        spendStore = spendStore,
+        readCaps = { _uiState.value.spendCaps },
+        readUserPricePerMillionUsd = { _uiState.value.userPricePerMillionUsd },
+    )
     private var runCheckpointId: String? = null
     private var runCheckpointSequence = 0
     private var mutationCount = 0
@@ -538,9 +535,7 @@ class ChatViewModel private constructor(
     init {
         val caps = spendStore.caps()
         val price = spendStore.userPricePerMillionUsd()
-        val month = spendStore.month()
-        monthSpendUsd = month.first
-        monthSpendTokens = month.second
+        spendLedger.syncMonth(spendStore.month())
         _uiState.update { it.copy(spendCaps = caps, userPricePerMillionUsd = price) }
         try { connectivity?.registerDefaultNetworkCallback(networkCallback) } catch (_: Exception) { }
         viewModelScope.launch { loadProject() }
@@ -1024,21 +1019,13 @@ class ChatViewModel private constructor(
             }
             mutationCount = 0
             runCheckpointSequence = 0
-            runSpendUsd = 0.0
-            runSpendTokens = 0L
-            runCapOverrideUsd = null
-            monthCapOverrideUsd = null
-            runTokenOverride = null
-            monthTokenOverride = null
-            budgetPaused = false
+            spendLedger.resetRun(spendStore.month())
             _uiState.update { it.copy(spendLabel = null, spendEstimate = null,
                 runSpendUsd = 0.0, budgetPaused = false) }
         } else {
             runCheckpointSequence += 1
+            spendLedger.syncMonth(spendStore.month())
         }
-        val month = spendStore.month()
-        monthSpendUsd = month.first
-        monthSpendTokens = month.second
         runCheckpointId = try {
             runtimeController.beginRunCheckpoint(workspaceId, next.id, runCheckpointSequence,
                 if (resumed == null) "Before: ${title.take(120)}" else "Resumed run")
@@ -1099,45 +1086,29 @@ class ChatViewModel private constructor(
     }
 
     private fun recordSpend(config: ProviderConfig, usage: AgentUsage, estimated: Boolean) {
-        if (SpendStore.isLocal(config.baseUrl)) {
-            _uiState.update { it.copy(spendLabel = null, spendFromEstimate = false) }
+        val result = spendLedger.record(config, usage, estimated)
+        if (result.local) {
+            if (result.label == null) {
+                _uiState.update { it.copy(spendLabel = null, spendFromEstimate = false) }
+            }
             return
         }
-        val tokens = SpendGuard.tokens(usage)
-        val cost = SpendGuard.cost(usage, PricingTable.price(config.model),
-            _uiState.value.userPricePerMillionUsd)
-        runSpendTokens += tokens
-        monthSpendTokens += tokens
-        if (cost != null) {
-            runSpendUsd += cost
-            monthSpendUsd += cost
-            spendStore.add(cost, tokens)
-        } else {
-            spendStore.add(0.0, tokens)
+        _uiState.update {
+            it.copy(
+                spendLabel = result.label,
+                spendFromEstimate = result.spendFromEstimate,
+                runSpendUsd = result.runSpendUsd,
+            )
         }
-        val decision = SpendGuard.evaluate(runSpendUsd, monthSpendUsd, runSpendTokens,
-            monthSpendTokens, effectiveSpendCaps())
-        val label = if (cost == null) "unknown pricing" else SpendGuard.liveLabel(runSpendUsd)
-        _uiState.update { it.copy(
-            spendLabel = label,
-            spendFromEstimate = estimated && cost != null,
-            runSpendUsd = runSpendUsd) }
-        if (decision.paused && !budgetPaused) {
-            budgetPaused = true
-            _uiState.update { it.copy(budgetPaused = true,
-                notice = "Budget reached — raise the cap or stop this run.") }
+        if (result.shouldPause) {
+            _uiState.update {
+                it.copy(
+                    budgetPaused = true,
+                    notice = "Budget reached — raise the cap or stop this run.",
+                )
+            }
             pauseCurrentRun(RunPauseReason.Budget)
         }
-    }
-
-    private fun effectiveSpendCaps(): SpendCaps {
-        val caps = _uiState.value.spendCaps
-        return caps.copy(
-            perRunUsd = runCapOverrideUsd ?: caps.perRunUsd,
-            monthlyUsd = monthCapOverrideUsd ?: caps.monthlyUsd,
-            perRunTokens = runTokenOverride ?: caps.perRunTokens,
-            monthlyTokens = monthTokenOverride ?: caps.monthlyTokens,
-        )
     }
 
     private fun updateSpendEstimate(config: ProviderConfig) {
@@ -1164,12 +1135,7 @@ class ChatViewModel private constructor(
 
     /** One tap raises the cap for this run only, then resumes the budget pause. */
     fun raiseBudgetCapForThisRun() {
-        if (!budgetPaused) return
-        runCapOverrideUsd = maxOf(runSpendUsd * 1.5, (effectiveSpendCaps().perRunUsd ?: 0.0) * 2, 1.0)
-        monthCapOverrideUsd = maxOf(monthSpendUsd * 1.5, (effectiveSpendCaps().monthlyUsd ?: 0.0) * 2, 1.0)
-        runTokenOverride = maxOf(runSpendTokens * 2, (effectiveSpendCaps().perRunTokens ?: 0L) * 2, 1L)
-        monthTokenOverride = maxOf(monthSpendTokens * 2, (effectiveSpendCaps().monthlyTokens ?: 0L) * 2, 1L)
-        budgetPaused = false
+        if (!spendLedger.raiseCapForCurrentRun()) return
         PersistentProcessService.cancelBudgetPause(getApplication<Application>())
         _uiState.update { it.copy(budgetPaused = false, notice = "Cap raised for this run.") }
         retryInterruptedTurn()
@@ -1938,7 +1904,7 @@ class ChatViewModel private constructor(
                             errorAction = if (pendingProjectChanges) ChatErrorAction.RetryProjectChanges else it.errorAction,
                             notice = when {
                                 pendingProjectChanges -> null
-                                budgetPaused -> it.notice
+                                spendLedger.budgetPaused -> it.notice
                                 else -> "Stopped. Any saved project changes remain."
                             }) }
                     }
@@ -2072,7 +2038,7 @@ class ChatViewModel private constructor(
                         _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                             activity = null, pendingApproval = null,
                             toolLifecycle = emptyList(), commandRunning = false,
-                            notice = if (budgetPaused) it.notice
+                            notice = if (spendLedger.budgetPaused) it.notice
                             else "Stopped. Any completed changes remain in the project.") }
                     }
                     // The conversation picked mid-reply opens now that the turn is over,
