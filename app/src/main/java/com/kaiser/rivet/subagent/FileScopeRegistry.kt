@@ -74,15 +74,39 @@ class FileScopeRegistry {
         private fun overlapsOne(a: WorkspacePath, b: WorkspacePath): Boolean =
             a.isWithin(b) || b.isWithin(a)
 
-        private fun mutationPaths(call: AgentToolCall): List<WorkspacePath> {
+        internal fun mutationPaths(call: AgentToolCall): List<WorkspacePath> {
             if (call.arguments.length > MAX_ARGUMENT_CHARS) return emptyList()
             val fields = try { Json.parseToJsonElement(call.arguments).jsonObject }
             catch (_: Exception) { return emptyList() }
             val result = linkedSetOf<WorkspacePath>()
-            for (key in listOf("path", "destination")) {
-                val raw = (fields[key] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: continue
-                val path = try { WorkspacePath.parse(raw) } catch (_: WorkspaceFailure) { continue }
-                result += path
+            var source: WorkspacePath? = null
+            val rawPath = (fields["path"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            if (rawPath != null) {
+                val parsed = try { WorkspacePath.parse(rawPath) } catch (_: WorkspaceFailure) { null }
+                if (parsed != null) {
+                    source = parsed
+                    result += parsed
+                }
+            }
+            val rawDest = (fields["destination"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+            if (rawDest != null) {
+                val parsed = try { WorkspacePath.parse(rawDest) } catch (_: WorkspaceFailure) { null }
+                if (parsed != null) {
+                    result += if (call.name == "move_path" && parsed.isRoot && source != null && !source.isRoot) {
+                        try { parsed.child(source.name) } catch (_: WorkspaceFailure) { parsed }
+                    } else {
+                        parsed
+                    }
+                }
+            }
+            if (call.name == "rename_path" && source != null && !source.isRoot) {
+                val newName = (fields["new_name"] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                if (!newName.isNullOrBlank()) {
+                    try {
+                        result += source.parent().child(newName)
+                    } catch (_: WorkspaceFailure) {
+                    }
+                }
             }
             return result.toList()
         }

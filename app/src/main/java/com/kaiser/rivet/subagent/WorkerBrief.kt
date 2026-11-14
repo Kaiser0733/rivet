@@ -15,8 +15,12 @@ data class WorkerBrief(
     val writeScope: List<WorkspacePath> = emptyList(),
     val skill: String? = null,
     val retryOf: String? = null,
+    val skillBody: String? = null,
 ) {
-    fun render(): String = buildString {
+    fun withSkillBody(body: String?): WorkerBrief =
+        copy(skillBody = body?.trim()?.takeIf { it.isNotEmpty() })
+
+    fun render(resolvedSkillBody: String? = skillBody): String = buildString {
         appendLine("You are a Rivet worker for one job.")
         appendLine()
         appendLine("Job: $job")
@@ -28,6 +32,12 @@ data class WorkerBrief(
             if (writeScope.isEmpty()) "read-only" else writeScope.joinToString(", ") { it.value })
         if (skill != null) appendLine("Skill: $skill")
         if (retryOf != null) appendLine("Retry of: $retryOf")
+        val body = resolvedSkillBody?.trim()?.takeIf { it.isNotEmpty() }
+        if (body != null) {
+            appendLine()
+            appendLine("Skill instructions${skill?.let { " ($it)" }.orEmpty()}:")
+            appendLine(body)
+        }
         appendLine()
         appendLine("Return format:")
         appendLine("Summary: what you did or found, in a short paragraph.")

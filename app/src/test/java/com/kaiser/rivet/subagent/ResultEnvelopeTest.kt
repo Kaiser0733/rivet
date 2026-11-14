@@ -70,4 +70,38 @@ class ResultEnvelopeTest {
         assertTrue(json["verified"]!!.jsonObject["truncated"]!!.jsonPrimitive.content.toBoolean())
         assertEquals("null", command["exit_code"].toString())
     }
+
+    @Test fun assembleAwaitResultCapsAggregatePayloadAt24KiBByTruncatingDiffsProportionally() {
+        val bigBefore = (1..400).joinToString("\n") { "old line $it with padding text" }.toByteArray()
+        val bigAfter = (1..400).joinToString("\n") { "new line $it with padding text" }.toByteArray()
+        val envelopes = (1..3).map { idx ->
+            val diff = WorkerDiff.diff("src/file$idx.kt", bigBefore, bigAfter)
+            ResultEnvelope.build(
+                workerId = "worker-$idx",
+                state = RunPhase.Done,
+                claim = WorkerClaim(
+                    summary = "Updated file $idx",
+                    findings = listOf("finding $idx"),
+                    openQuestions = emptyList(),
+                ),
+                files = listOf(ChangedFile("src/file$idx.kt", FileChangeKind.Modified, diff.additions, diff.deletions)),
+                diff = diff,
+            )
+        }
+        val rawSum = envelopes.sumOf { it.toByteArray(Charsets.UTF_8).size }
+        assertTrue("Individual envelopes should exceed 24 KiB in total (was $rawSum)", rawSum > ResultEnvelope.MAX_AWAIT_BYTES)
+
+        val assembled = ResultEnvelope.assembleAwaitResult(envelopes)
+        val assembledBytes = assembled.toByteArray(Charsets.UTF_8).size
+        assertTrue("Assembled await result must be <= 24 KiB (was $assembledBytes)", assembledBytes <= ResultEnvelope.MAX_AWAIT_BYTES)
+
+        val parsed = Json.parseToJsonElement(assembled).jsonObject
+        val workers = parsed["workers"]!!.jsonArray
+        assertEquals(3, workers.size)
+        for (worker in workers) {
+            val verified = worker.jsonObject["verified"]!!.jsonObject
+            assertTrue(verified["truncated"]!!.jsonPrimitive.content.toBoolean())
+            assertTrue(verified["diff"]!!.jsonPrimitive.content.isNotEmpty())
+        }
+    }
 }

@@ -48,6 +48,13 @@ import com.kaiser.rivet.agent.SpendGuard
 import com.kaiser.rivet.agent.parseGoalCommand
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.InternalContext
+import com.kaiser.rivet.browser.BrowserDrivingLease
+import com.kaiser.rivet.subagent.SubagentContext
+import com.kaiser.rivet.subagent.SubagentPoolState
+import com.kaiser.rivet.subagent.SubagentSupervisor
+import com.kaiser.rivet.subagent.SubagentTools
+import com.kaiser.rivet.subagent.WorkerRecord
+import com.kaiser.rivet.subagent.WorkerSessionStore
 import com.kaiser.rivet.agent.ProjectContext
 import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.ProjectInstructions
@@ -201,133 +208,39 @@ data class ChatUiState(
 
 enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn }
 
-internal fun undoFailureMessage(error: Throwable?): String = when {
-    error is CheckpointFailure && error.code == "undo_desync" ->
-        "Rivet restored its copy but could not write it back to the project, so the two may differ. Check the files before continuing."
-    error is CheckpointFailure && error.code == "undo_conflict" ||
-        error is MirrorFailure && error.code == "conflict" ->
-        "The project changed after Rivet's edits, so Undo stopped before overwriting newer work."
-    error is MirrorFailure && error.code in setOf("sync_required", "mirror_dirty", "previous_dirty") ->
-        "Rivet found unfinished project changes and stopped Undo to avoid overwriting them."
-    error is MirrorFailure && error.code in setOf("workspace_changed", "workspace_unavailable") ->
-        "This project is no longer selected. Choose it again before undoing."
-    else -> "Rivet couldn't finish Undo. Check the project before trying again."
-}
-
-internal fun runtimeFailureMessage(code: String?): String = when (code) {
-    "process_limit" -> "Rivet already has several project operations running. Stop one in Processes, then try again."
-    "foreground_service_unavailable" -> "Rivet couldn't keep the local preview running. Try again while Rivet is open."
-    "preview_unavailable" -> "Rivet couldn't start a local preview for this project. Check the selected files and try again."
-    "workspace_unavailable", "runtime_unavailable" ->
-        "Rivet couldn't prepare command access for this project. Choose the project again and retry."
-    "workspace_changed" ->
-        "The project changed while Rivet was working, so it stopped before running the command."
-    "sync_required", "mirror_dirty" ->
-        "Rivet found pending project changes it couldn't safely reconcile. It kept the pending copy and did not overwrite newer project files."
-    "sync_conflict", "conflict" ->
-        "The project changed outside Rivet. Rivet kept its pending changes and stopped before overwriting newer work."
-    "sync_failed" ->
-        "Rivet couldn't finish saving the command's project changes. Some files may already be saved; Rivet kept the pending changes."
-    "sync_interrupted", "interrupted" ->
-        "The command ran, but Rivet couldn't confirm its project changes. Check the project before retrying."
-    "checkpoint_unavailable" ->
-        "Rivet couldn't prepare a safe Undo, so it stopped before running the command. Try again."
-    "unsafe_entry" ->
-        "Rivet found a project item it couldn't safely access, so it stopped. Remove or rename that item before trying again."
-    else -> "Rivet couldn't start the project command. Check the project and try again."
-}
-
-// Kaiser's ruling on the device, 2026-11-02: the old refusal was incomprehensible to a
-// non-technical user, quoted a number nothing compared against, and told someone who had worked
-// for hours to start over. No numbers, no "budget", no "token", no "context window", and no
-// "start a new conversation" anywhere in this family. What is left is what happened, that nothing
-// was lost, and one thing to try.
-internal fun contextUnavailableMessage(): String =
-    "This chat is too long for the model to read all at once, even after Rivet shortened it. " +
-        "Your messages are safe. Try again, and if it keeps stopping here, remove the longest message."
-
-internal fun contextTooSmallMessage(): String =
-    "The newest message is too big for this model to read. Your earlier messages are safe. " +
-        "Shorten it and send it again."
-
-internal sealed interface ProviderRuntimeResult {
-    data class Ready(val config: ProviderConfig, val apiKey: String) : ProviderRuntimeResult
-    data class Failure(val message: String) : ProviderRuntimeResult
-}
-
-internal fun interface ProviderRuntimeSource {
-    suspend fun load(): ProviderRuntimeResult
-    suspend fun updateReasoning(providerId: String, level: ReasoningLevel) {}
-}
-
-private class StoredProviderRuntimeSource(app: Application) : ProviderRuntimeSource {
-    private val providerStore = ProviderStore(app)
-    private val secrets = SecretStore(app)
-
-    override suspend fun load(): ProviderRuntimeResult {
-        val activeId = providerStore.activeIdSnapshot()
-            ?: return ProviderRuntimeResult.Failure("Choose a model first. Add one in Settings.")
-        val config = providerStore.configSnapshot().firstOrNull { it.id == activeId }
-            ?: return ProviderRuntimeResult.Failure("The selected provider no longer exists.")
-        if (config.type == ProviderType.Local) {
-            // Local GGUF models have no API key and never touch a remote endpoint.
-            return ProviderRuntimeResult.Ready(config, "")
-        }
-        if (config.type == ProviderType.ChatGptPlan) {
-            // OAuth access token (refreshed if expired); transient refresh errors stay retryable.
-            return when (val token = com.kaiser.rivet.provider.resolveChatGptToken(secrets, config)) {
-                is com.kaiser.rivet.provider.ChatGptTokenResult.Ready ->
-                    ProviderRuntimeResult.Ready(config, token.accessToken)
-                com.kaiser.rivet.provider.ChatGptTokenResult.NetworkFailed ->
-                    ProviderRuntimeResult.Failure("Could not reach ChatGPT to refresh your session. Check your connection and try again.")
-                com.kaiser.rivet.provider.ChatGptTokenResult.ReauthRequired ->
-                    ProviderRuntimeResult.Failure("ChatGPT sign-in expired. Sign in again in Settings.")
-            }
-        }
-        val apiKey = secrets.apiKey(config.id)
-            ?: return ProviderRuntimeResult.Failure("No API key stored for \"${config.name}\".")
-        return ProviderRuntimeResult.Ready(config, apiKey)
-    }
-
-    override suspend fun updateReasoning(providerId: String, level: ReasoningLevel) {
-        val current = providerStore.configSnapshot().firstOrNull { it.id == providerId } ?: return
-        if (current.reasoning != level) {
-            providerStore.save(current.copy(reasoning = level))
-        }
-    }
-}
-
 class ChatViewModel private constructor(
     app: Application,
     private val sessionStore: AgentSessionPersistence,
     private val providerSource: ProviderRuntimeSource,
     private val workspaceSelection: WorkspaceSelection,
     private val clientFactory: (ProviderConfig, String) -> com.kaiser.rivet.provider.ProviderClient,
+    private val workerStore: WorkerSessionStore,
 ) : AndroidViewModel(app) {
     constructor(app: Application) : this(
-        app,
-        CodingSessions(app),
-        StoredProviderRuntimeSource(app),
-        WorkspaceSelection(app),
-        ::providerClient,
+        app, CodingSessions(app), StoredProviderRuntimeSource(app), WorkspaceSelection(app),
+        ::providerClient, WorkerSessionStore(app),
     )
 
     internal constructor(
-        app: Application,
-        sessionPersistence: AgentSessionPersistence,
-        providerSource: ProviderRuntimeSource,
+        app: Application, sessionPersistence: AgentSessionPersistence, providerSource: ProviderRuntimeSource,
         clientFactory: (ProviderConfig, String) -> com.kaiser.rivet.provider.ProviderClient,
-    ) : this(app, sessionPersistence, providerSource, WorkspaceSelection(app), clientFactory)
+        workerStore: WorkerSessionStore = WorkerSessionStore(app),
+    ) : this(app, sessionPersistence, providerSource, WorkspaceSelection(app), clientFactory, workerStore)
 
     private val approvals = AgentApprovalGate()
     private val autonomyStore = AutonomyStore(app)
     val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
     val browser: BrowserSession = BrowserRuntime.forApp(app, com.kaiser.rivet.local.LocalRuntime.models())
     private val browserTools = BrowserTools(browser)
+    val browserLease = BrowserDrivingLease()
     private val projectDownloader = ProjectDownloader(app.cacheDir)
     private val skillDiscovery = SkillDiscovery(globalSkillsRoot(app.filesDir))
     private val skillScriptApprovals = SkillScriptApprovalStore(app)
     private val sessions get() = sessionStore as? CodingSessions
+
+    private val _subagents = MutableStateFlow<List<WorkerRecord>>(emptyList())
+    val subagents: StateFlow<List<WorkerRecord>> = _subagents.asStateFlow()
+    private var activeSupervisor: SubagentSupervisor? = null
 
     init {
         browser.bookmarkWriter = bookmark@{ title, url ->
@@ -529,7 +442,8 @@ class ChatViewModel private constructor(
 
     internal fun onConnectivityLost() {
         viewModelScope.launch {
-            if (currentCloud && _uiState.value.streaming && currentRun?.phase == RunPhase.Running) {
+            val hasCloud = currentCloud || activeSupervisor?.hasLiveCloudWorker() == true
+            if (hasCloud && _uiState.value.streaming && currentRun?.phase == RunPhase.Running) {
                 pauseCurrentRun(RunPauseReason.NetworkLost)
             }
         }
@@ -1132,6 +1046,11 @@ class ChatViewModel private constructor(
     }
 
     fun restoreRunCheckpoint(id: String, undoRun: Boolean = false) {
+        if (_uiState.value.streaming || activeSupervisor?.hasLiveWorkers() == true) {
+            _uiState.update { it.copy(runCheckpointNotice = "Not restored. Cannot restore while a run or subagent is active.",
+                error = "Cannot restore while a run or subagent is active.") }
+            return
+        }
         val record = _uiState.value.runCheckpoints.firstOrNull { it.id == id }
         if (record == null) {
             _uiState.update {
@@ -1254,6 +1173,9 @@ class ChatViewModel private constructor(
         }
         viewModelScope.launch {
             try {
+                currentRun?.id?.let { runId ->
+                    ChatSupervisorServices.dismissInterruptedWorkers(workerStore, runId)
+                }
                 if (currentRun?.resumable == true) finishRun(RunPhase.Stopped)
                 sessionStore.markInterrupted(false)
                 val history = sessions?.list()
@@ -1405,7 +1327,7 @@ class ChatViewModel private constructor(
                     add(SkillContext.invocation(gesture.skill, workspaceId))
                 }
             }
-            val executor = workspace?.let { selectedWorkspace ->
+            fun createExecutor(loadedSkills: Set<String>): AgentToolExecutor? = workspace?.let { selectedWorkspace ->
                 val boundWorkspaceId = workspaceId ?: selectedWorkspace.tree.toString()
                 AgentToolExecutor(
                     SafAgentWorkspace(selectedWorkspace),
@@ -1421,7 +1343,7 @@ class ChatViewModel private constructor(
                     downloader = projectDownloader,
                     currentWorkspaceIdentity = workspaceSelection::currentIdentity,
                     skills = skills,
-                    loadedSkills = gesture?.let { setOf(it.skill.name) }.orEmpty(),
+                    loadedSkills = loadedSkills,
                     rememberMemory = { fact ->
                         val files = ProjectStateFiles(selectedWorkspace)
                         val result = MemoryFormat.append(files.loadMemory(), fact)
@@ -1441,6 +1363,37 @@ class ChatViewModel private constructor(
                     },
                 )
             }
+            val executor = createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty())
+            val subagentTools: SubagentTools?
+            if (workspaceId != null && workspace != null) {
+                val boundWorkspaceId = workspaceId ?: workspace.tree.toString()
+                val supervisorServices = ChatSupervisorServices.createServices(
+                    workspaceId = boundWorkspaceId, runId = currentRun?.id ?: UUID.randomUUID().toString(),
+                    parentSessionId = _uiState.value.currentSessionId, workerStore = workerStore,
+                    providerSource = providerSource, clientFactory = clientFactory, approvals = approvals,
+                    checkpointGate = checkpointGate, coordinatorConfig = { snapshot.config },
+                    browserTools = browserTools, browserLease = browserLease, createExecutor = ::createExecutor,
+                    skills = { skills }, workspace = workspace, runtime = runtime,
+                    managedProcesses = managedProcesses, browser = browser, workspaceSelection = workspaceSelection,
+                    approvedSkillScripts = { approvedSkillScripts }, skillScriptApprovals = skillScriptApprovals,
+                    turnSessionId = { turnSessionId }, sessions = { sessions }, recordSpend = ::recordSpend,
+                    readAutonomyMode = ::readAutonomyMode, systemInstruction = ::systemInstruction,
+                    activityFor = ::activityFor,
+                )
+                val (supervisor, tools) = ChatSupervisorServices.initSupervisor(
+                    services = supervisorServices,
+                    parentScope = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job])),
+                    retryingInterrupted = retryingInterrupted,
+                    currentRunId = currentRun?.id,
+                    onStateUpdate = { _subagents.value = it },
+                    sessionId = { _uiState.value.currentSessionId },
+                )
+                activeSupervisor = supervisor
+                subagentTools = tools
+            } else {
+                activeSupervisor = null
+                subagentTools = null
+            }
             browser.previewStarter = { root, entry ->
                 val selected = workspace
                     ?: throw com.kaiser.rivet.agent.AgentWorkspaceFailure("workspace_unavailable")
@@ -1448,7 +1401,8 @@ class ChatViewModel private constructor(
                 runtime.startPreview(selected, identity, _uiState.value.projectName, root, entry).url
             }
             val tools = BrowserTools.definitions +
-                (if (executor == null) emptyList() else AgentToolExecutor.definitions)
+                (if (executor == null) emptyList() else AgentToolExecutor.definitions) +
+                (subagentTools?.let { SubagentTools.definitions }.orEmpty())
             val client = clientFactory(snapshot.config, snapshot.apiKey)
             val sessionId = _uiState.value.currentSessionId
             turnSessionId = sessionId
@@ -1600,7 +1554,8 @@ class ChatViewModel private constructor(
                 },
                 prepareTool = { call ->
                     if (call.name == "delete_path") checkpointGate.beginRunBoundary("Before deleting a file")
-                    val prepared = browserTools.prepare(call)
+                    val prepared = subagentTools?.prepare(call)
+                        ?: browserTools.prepare(call, RunCheckpointGate.COORDINATOR, browserLease)
                         ?: executor?.prepare(call) ?: PreparedAgentTool(
                         call,
                         null,
@@ -1661,6 +1616,11 @@ class ChatViewModel private constructor(
                 afterMutation = { call, result ->
                     checkpointGate.afterMutation(RunCheckpointGate.COORDINATOR, call, result)
                 },
+                beforeCompletion = {
+                    if (workspaceId != null) {
+                        activeSupervisor?.beforeCompletionHold(workspaceId).orEmpty()
+                    } else emptyList()
+                },
                 failureState = runtime::agentFailureState,
                 compactContext = { candidate, force ->
                     val compacted = context.prepare(candidate, force)
@@ -1676,12 +1636,20 @@ class ChatViewModel private constructor(
                 contextUpdates = { candidate ->
                     if (project == null || workspaceId == null) emptyList() else {
                         instructions = project.load(observedPaths)
-                        ProjectContext.updates(candidate, workspaceId, requireNotNull(instructions)) +
+                        val baseEvents = ProjectContext.updates(candidate, workspaceId, requireNotNull(instructions)) +
                             SkillContext.updates(candidate, workspaceId, skills) +
                             ToolchainContext.updates(candidate, workspaceId,
                                 runtime.toolchainAvailability()) +
                             (workspace?.let { goalMemoryUpdates(candidate, workspaceId, it) }
                                 ?: emptyList())
+                        val subagentEvents = SubagentContext.poolUpdates(
+                            candidate,
+                            workspaceId,
+                            SubagentPoolState(),
+                            providerSource.configs(),
+                            snapshot.config,
+                        ) + activeSupervisor?.drainUndeliveredResults(workspaceId).orEmpty()
+                        baseEvents + subagentEvents
                     }
                 },
                 approvedSkillScripts = approvedSkillScripts,
@@ -1889,8 +1857,10 @@ class ChatViewModel private constructor(
                     ChatErrorAction.RetryTurn)
             } finally {
                 browser.endAgentRun()
+                browserLease.clear()
                 approvals.cancel()
                 withContext(NonCancellable) {
+                    activeSupervisor?.joinAll()
                     try {
                         when (val outcome = checkpointGate.finishTurnCheckpoint()) {
                             is TurnCheckpointOutcome.Finished -> {
@@ -2308,8 +2278,15 @@ class ChatViewModel private constructor(
         if (!_uiState.value.streaming) return
         pauseRequestedTicket = generation
         pauseReason = reason
+        activeSupervisor?.pauseAll(reason)
         approvals.cancel()
         sendJob?.cancel()
+    }
+
+    fun stopSubagent(workerId: String) {
+        viewModelScope.launch {
+            activeSupervisor?.stop(workerId)
+        }
     }
 
     fun dismissBatteryAsk() {
@@ -2374,7 +2351,10 @@ class ChatViewModel private constructor(
     fun undoLastTurn() {
         val id = _uiState.value.undoCheckpointId ?: return
         val controller = runtimeController
-        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
+        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges || activeSupervisor?.hasLiveWorkers() == true) {
+            _uiState.update { it.copy(error = "Cannot undo while a run or subagent is active.") }
+            return
+        }
         _uiState.update { it.copy(undoing = true, error = null, notice = null) }
         viewModelScope.launch {
             try {
@@ -2452,7 +2432,16 @@ class ChatViewModel private constructor(
         }
     }
 
-    fun deleteSession(id: String) = changeSession { store -> store.delete(id) }
+    fun deleteSession(id: String) {
+        changeSession { store -> store.delete(id) }
+        viewModelScope.launch {
+            try {
+                workerStore.deleteForSession(id)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) { }
+        }
+    }
 
     fun renameSession(id: String, title: String) {
         val store = sessions ?: return

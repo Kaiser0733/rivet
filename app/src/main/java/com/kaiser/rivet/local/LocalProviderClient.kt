@@ -63,9 +63,10 @@ class LocalProviderClient(
         val maxTokens = config.resolvedManualMaxOutputTokens() ?: 512
 
         return withContext(Dispatchers.IO) {
+            val owner = Any()
             val job = coroutineContext[Job]
             val cancelHook = job?.invokeOnCompletion { cause ->
-                if (cause is CancellationException) manager.stopGeneration()
+                if (cause is CancellationException) manager.stopGeneration(owner)
             }
             try {
                 val prompt = buildPrompt(entry, system, request.messages)
@@ -79,9 +80,10 @@ class LocalProviderClient(
                     temperature = 0.7f,
                     topP = 0.95f,
                     grammar = null,
+                    owner = owner,
                     onToken = { delta ->
                         if (job?.isCancelled == true) {
-                            manager.stopGeneration()
+                            manager.stopGeneration(owner)
                         } else {
                             visible.feed(delta).takeIf { it.isNotEmpty() }?.let(onDelta)
                             emitted++
@@ -116,8 +118,9 @@ class LocalProviderClient(
                         temperature = 0.2f,
                         topP = 0.95f,
                         grammar = LocalToolProtocol.grammar(tools),
+                        owner = owner,
                         onToken = {
-                            if (job?.isCancelled == true) manager.stopGeneration()
+                            if (job?.isCancelled == true) manager.stopGeneration(owner)
                         },
                     )
                     coroutineContext.ensureActive()
@@ -134,7 +137,7 @@ class LocalProviderClient(
                     transportState = "local:${entry.toolCalling.name.lowercase()}",
                 )
             } catch (e: CancellationException) {
-                manager.stopGeneration()
+                manager.stopGeneration(owner)
                 throw e
             } catch (e: LocalFailure) {
                 throw ProviderError.ProviderMessage(e.message ?: "The local model could not run.")

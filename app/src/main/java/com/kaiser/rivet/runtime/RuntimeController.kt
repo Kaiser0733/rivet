@@ -61,6 +61,8 @@ class RuntimeController(
     private var mirrorIdentity: String? = null
     private var mirror: WorkspaceMirror? = null
 
+    internal fun isOperationsLocked(): Boolean = operations.isLocked
+
     suspend fun runCommand(command: String, cwd: String, timeoutMs: Long): RuntimeCommandResult =
         runCommand(command, cwd, timeoutMs, null)
 
@@ -293,6 +295,61 @@ class RuntimeController(
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
         checkpoints(workspaceId).matchesPost(id, ready.worktree)
+    }
+
+    internal suspend fun checkpointManifest(
+        workspaceId: String,
+        id: String,
+        scanLive: Boolean = false,
+    ): Map<String, CheckpointEntry>? {
+        val store = checkpoints(workspaceId)
+        if (scanLive) {
+            val worktree = currentMirror()?.worktree?.takeIf { it.isDirectory }
+            if (worktree != null) {
+                try {
+                    return store.scanManifest(worktree)
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                }
+            }
+        }
+        val record = store.record(id) ?: return null
+        return record.after ?: record.before
+    }
+
+    internal suspend fun readWorktreeFileBytes(
+        workspaceId: String,
+        relativePath: String,
+        maxBytes: Int = 1024 * 1024,
+    ): ByteArray? = withContext(Dispatchers.IO) {
+        if (selection.currentIdentity() != workspaceId) return@withContext null
+        val parsed = try {
+            WorkspacePath.parse(relativePath)
+        } catch (_: WorkspaceFailure) {
+            return@withContext null
+        }
+        if (parsed.isRoot) return@withContext null
+        val root = currentMirror()?.worktree?.takeIf { it.isDirectory } ?: return@withContext null
+        val rootCanonical = try {
+            root.canonicalFile
+        } catch (_: Exception) {
+            return@withContext null
+        }
+        val file = try {
+            File(rootCanonical, parsed.value).canonicalFile
+        } catch (_: Exception) {
+            return@withContext null
+        }
+        if (!file.toPath().startsWith(rootCanonical.toPath()) || file == rootCanonical) {
+            return@withContext null
+        }
+        if (!file.isFile || file.length() > maxBytes.toLong()) return@withContext null
+        try {
+            file.readBytes()
+        } catch (_: Exception) {
+            null
+        }
     }
 
     suspend fun beginRunCheckpoint(workspaceId: String, runId: String, sequence: Int,

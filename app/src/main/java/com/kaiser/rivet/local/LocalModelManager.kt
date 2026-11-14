@@ -50,6 +50,32 @@ class LocalModelManager(val app: Application) {
     private val _modelFootprintBytes = MutableStateFlow(0L)
     val modelFootprintBytes: StateFlow<Long> = _modelFootprintBytes.asStateFlow()
     @Volatile private var active: LoadedLocal? = null
+    @Volatile private var generatingOwner: Any? = null
+
+    internal interface NativeRunner {
+        fun isAvailable(): Boolean = LlamaBridge.isAvailable()
+        fun load(path: String, contextTokens: Int, threads: Int): LlamaModel? =
+            LlamaBridge.load(path, contextTokens, threads)
+        fun free(model: LlamaModel) = LlamaBridge.free(model)
+        fun stop(model: LlamaModel) = LlamaBridge.stop(model)
+        fun applyTemplate(
+            model: LlamaModel,
+            roles: List<String>,
+            contents: List<String>,
+            addAssistant: Boolean,
+        ): String = LlamaBridge.applyTemplate(model, roles, contents, addAssistant)
+        fun generate(
+            model: LlamaModel,
+            prompt: String,
+            maxTokens: Int,
+            temperature: Float,
+            topP: Float,
+            grammar: String?,
+            onToken: (String) -> Unit,
+        ): String = LlamaBridge.generate(model, prompt, maxTokens, temperature, topP, grammar, onToken)
+    }
+
+    internal var runner: NativeRunner = object : NativeRunner {}
 
     private data class LoadedLocal(val entry: LocalModelEntry, val model: LlamaModel)
 
@@ -145,21 +171,40 @@ class LocalModelManager(val app: Application) {
         temperature: Float,
         topP: Float,
         grammar: String?,
+        owner: Any? = null,
         onToken: (String) -> Unit,
     ): String = synchronized(nativeLock) {
         val model = ensureLoadedLocked(entry)
-        LlamaBridge.generate(model, prompt, maxTokens, temperature, topP, grammar, onToken)
+        generatingOwner = owner
+        try {
+            runner.generate(model, prompt, maxTokens, temperature, topP, grammar, onToken)
+        } finally {
+            if (generatingOwner === owner) {
+                generatingOwner = null
+            }
+        }
+    }
+
+    /**
+     * Stops the native generation loop only when [owner] is the caller currently holding
+     * [nativeLock]. Cancelling a waiting or already-finished caller never stops another
+     * agent's active generation.
+     */
+    fun stopGeneration(owner: Any) {
+        if (generatingOwner === owner) {
+            active?.let { runner.stop(it.model) }
+        }
     }
 
     fun stopGeneration() {
         // Do not take nativeLock here: the generation thread holds it while
         // nativeGenerate runs. The atomic stop flag is the only safe crossing.
-        active?.let { LlamaBridge.stop(it.model) }
+        active?.let { runner.stop(it.model) }
     }
 
     fun templateForPrompt(entry: LocalModelEntry, roles: List<String>, contents: List<String>): String =
         synchronized(nativeLock) {
-            LlamaBridge.applyTemplate(ensureLoadedLocked(entry), roles, contents, true)
+            runner.applyTemplate(ensureLoadedLocked(entry), roles, contents, true)
         }
 
     private fun ensureLoadedLocked(entry: LocalModelEntry): LlamaModel {
@@ -170,12 +215,12 @@ class LocalModelManager(val app: Application) {
         if (!file.isFile || file.length() != entry.size) {
             throw LocalFailure("This model's file is missing. Download it again from Models.")
         }
-        if (!LlamaBridge.isAvailable()) {
+        if (!runner.isAvailable()) {
             throw LocalFailure("Local inference isn't available in this build of Rivet.")
         }
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
         val before = ownPssBytes()
-        val loaded = LlamaBridge.load(file.absolutePath, entry.contextMax, threads)
+        val loaded = runner.load(file.absolutePath, entry.contextMax, threads)
             ?: throw LocalFailure("Rivet couldn't load this model. The file may be damaged.")
         active = LoadedLocal(entry, loaded)
         _loadedId.value = entry.id
@@ -187,8 +232,9 @@ class LocalModelManager(val app: Application) {
     }
 
     private fun closeLocked() {
-        active?.let { LlamaBridge.free(it.model) }
+        active?.let { runner.free(it.model) }
         active = null
+        generatingOwner = null
         _loadedId.value = null
         _modelFootprintBytes.value = 0L
     }

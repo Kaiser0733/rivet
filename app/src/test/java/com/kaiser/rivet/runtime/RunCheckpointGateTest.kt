@@ -2,6 +2,10 @@ package com.kaiser.rivet.runtime
 
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
+import com.kaiser.rivet.subagent.ChangedFile
+import com.kaiser.rivet.subagent.FileChangeKind
+import com.kaiser.rivet.subagent.FileScopeRegistry
+import com.kaiser.rivet.workspace.WorkspacePath
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
@@ -207,5 +211,80 @@ class RunCheckpointGateTest {
         gate.finishRunCheckpoint()
         assertTrue(backend.runCheckpoints[2].finished)
         assertEquals(4, boundaryNotifications)
+    }
+
+    @Test
+    fun enforcesFileScopeAndAttributesPerWriterByteDiffsAndOutOfScopeShellChanges() = runTest {
+        val files = linkedMapOf(
+            "src/auth/login.kt" to "fun login() = false\n".toByteArray(),
+            "src/ui/home.kt" to "fun home() = 1\n".toByteArray(),
+        )
+        fun currentManifest(): Map<String, CheckpointEntry> = files.mapValues { (_, bytes) ->
+            CheckpointEntry(directory = false, size = bytes.size.toLong(), sha256 = bytes.contentHashCode().toString())
+        }
+        var recordedManifest: Map<String, CheckpointEntry> = emptyMap()
+        val backend = object : CheckpointBackend {
+            override suspend fun beginCheckpoint(workspaceId: String, runId: String?, sessionId: String?): String {
+                recordedManifest = currentManifest()
+                return "cp-1"
+            }
+            override suspend fun finishCheckpoint(workspaceId: String, id: String): Boolean = true
+            override suspend fun recordCheckpointPost(workspaceId: String, id: String) {
+                recordedManifest = currentManifest()
+            }
+            override suspend fun checkpointMatchesPost(workspaceId: String, id: String): Boolean =
+                recordedManifest == currentManifest()
+            override suspend fun beginRunCheckpoint(
+                workspaceId: String,
+                runId: String,
+                sequence: Int,
+                summary: String,
+                allowDirty: Boolean,
+            ): String = "rcp-$sequence"
+            override suspend fun finishRunCheckpoint(workspaceId: String, id: String) {}
+            override suspend fun readManifest(
+                workspaceId: String,
+                id: String,
+                scanLive: Boolean,
+            ): Map<String, CheckpointEntry> = if (scanLive) currentManifest() else recordedManifest
+            override suspend fun readFileBytes(workspaceId: String, path: String, maxBytes: Int): ByteArray? =
+                files[path]?.takeIf { it.size <= maxBytes }
+        }
+
+        val gate = RunCheckpointGate(backend)
+        gate.startRun("ws-1", "run-1", "Delegate auth", resuming = false)
+        gate.beginTurn("ws-1", "run-1", "sess-1")
+        gate.scopeRegistry.register("worker-1", "Fix login", listOf(WorkspacePath.parse("src/auth")))
+
+        // Worker blocked outside its write_scope; coordinator blocked inside worker's write_scope.
+        val outOfScopeCall = AgentToolCall("1", "write_file", """{"path":"src/ui/home.kt"}""")
+        assertEquals(FileScopeRegistry.OUTSIDE_FILE_SCOPE, gate.beforeMutation("worker-1", outOfScopeCall))
+
+        val ownedByWorkerCall = AgentToolCall("2", "write_file", """{"path":"src/auth/login.kt"}""")
+        assertEquals("owned_by_worker:Fix login", gate.beforeMutation(RunCheckpointGate.COORDINATOR, ownedByWorkerCall))
+
+        // Worker edits in-scope file: before bytes captured on first touch, after bytes captured after mutation.
+        assertNull(gate.beforeMutation("worker-1", ownedByWorkerCall))
+        files["src/auth/login.kt"] = "fun login() = true\nfun logout() = Unit\n".toByteArray()
+        gate.afterMutation("worker-1", ownedByWorkerCall, ok("2"))
+
+        // Worker runs a shell command that modifies an out-of-scope file.
+        val shellCall = AgentToolCall("3", "run_command", """{"command":"sed -i ..."}""")
+        assertNull(gate.beforeMutation("worker-1", shellCall))
+        files["src/ui/home.kt"] = "fun home() = 2\n".toByteArray()
+        gate.afterMutation("worker-1", shellCall, ok("3"))
+
+        val attribution = gate.writerAttribution("worker-1")
+        assertEquals(
+            listOf(
+                ChangedFile("src/auth/login.kt", FileChangeKind.Modified, additions = 2, deletions = 1),
+                ChangedFile("src/ui/home.kt", FileChangeKind.Modified, additions = 0, deletions = 0),
+            ),
+            attribution.files,
+        )
+        assertEquals(listOf("src/ui/home.kt"), attribution.outOfScopeChanges)
+        assertTrue(attribution.diff != null)
+        assertTrue(attribution.diff!!.text.contains("-fun login() = false"))
+        assertTrue(attribution.diff!!.text.contains("+fun login() = true"))
     }
 }

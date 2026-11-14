@@ -573,13 +573,10 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         }
 
     private fun hasPendingToolCall(last: AgentMessage?): Boolean =
-        last?.role == AgentRole.Assistant && last.toolCalls.isNotEmpty()
+        InterruptedTurnRecovery.hasPendingToolCall(last)
 
-    private fun hasUnfinishedTurn(messages: List<AgentMessage>): Boolean {
-        val last = messages.lastOrNull { it.role != AgentRole.Context && it.internalContext == null }
-            ?: return false
-        return last.role != AgentRole.Assistant || last.toolCalls.isNotEmpty() || last.text.isBlank()
-    }
+    private fun hasUnfinishedTurn(messages: List<AgentMessage>): Boolean =
+        InterruptedTurnRecovery.hasUnfinishedTurn(messages)
 
     private fun recoverInterrupted(db: SQLiteDatabase, id: String, interrupted: Boolean,
                                    active: List<AgentMessage>, summaryBytes: Int): List<AgentMessage> {
@@ -587,15 +584,12 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             db.execSQL("UPDATE sessions SET interrupted=0 WHERE id=? AND interrupted!=0", arrayOf(id))
             return active
         }
-        val pending = active.lastOrNull()?.takeIf { hasPendingToolCall(it) } ?: run {
+        val plan = InterruptedTurnRecovery.plan(active, summaryBytes) ?: run {
             db.execSQL("UPDATE sessions SET interrupted=1 WHERE id=? AND interrupted!=1", arrayOf(id))
             return active
         }
-        val result = AgentMessage.tools(pending.toolCalls.map { call ->
-            AgentToolResult(call.id, call.name, AgentToolError.content("interrupted"), true,
-                "Interrupted  ${call.name}".take(256))
-        })
-        val fits = AgentSessionCodec.fits(active + result, summaryBytes)
+        val result = plan.pendingToolResult
+        val fits = plan.fitsInActive
         val payload = json.encodeToString(AgentMessage.serializer(), result)
         db.beginTransaction()
         try {
@@ -607,7 +601,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             }) else {
                 db.execSQL("DELETE FROM active_events WHERE id=(SELECT MAX(id) FROM active_events WHERE session_id=?)",
                     arrayOf(id))
-                val retained = active.dropLast(1)
+                val retained = plan.activeAfterRecovery
                 val currentSummary = summary(db, id)
                 db.insertOrThrow("compactions", null, ContentValues().apply {
                     put("session_id", id); put("through_event_id", through)
@@ -622,7 +616,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 arrayOf(System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        return if (fits) active + result else active.dropLast(1)
+        return plan.activeAfterRecovery
     }
 
     private fun summary(db: SQLiteDatabase, id: String): String =
@@ -814,59 +808,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     private fun hash(value: String): String = MessageDigest.getInstance("SHA-256")
         .digest(value.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it.toInt() and 255) }
 
-    private fun validProjection(expected: List<AgentMessage>, retained: List<AgentMessage>): Boolean {
-        var original = 0
-        for (message in retained) {
-            while (original < expected.size && !sameOrPruned(expected[original], message)) original++
-            if (original == expected.size) return false
-            original++
-        }
-        for (index in retained.indices) {
-            val message = retained[index]
-            if (message.role == AgentRole.Assistant && message.toolCalls.isNotEmpty()) {
-                val results = retained.getOrNull(index + 1)?.takeIf { it.role == AgentRole.Tool }?.toolResults
-                    ?: return false
-                if (results.map { it.callId } != message.toolCalls.map { it.id }) return false
-            }
-            if (message.role == AgentRole.Tool) {
-                val calls = retained.getOrNull(index - 1)?.takeIf { it.role == AgentRole.Assistant }?.toolCalls
-                    ?: return false
-                if (calls.map { it.id } != message.toolResults.map { it.callId }) return false
-            }
-        }
-        return true
-    }
-
-    private fun sameOrPruned(original: AgentMessage, projected: AgentMessage): Boolean {
-        if (original == projected) return true
-        if (original.role == AgentRole.Assistant && projected.role == AgentRole.Assistant) {
-            if (original.toolCalls.size != projected.toolCalls.size ||
-                original.copy(toolCalls = projected.toolCalls) != projected) return false
-            return original.toolCalls.zip(projected.toolCalls).all { (before, after) ->
-                if (before == after) true else {
-                    val marker = try { json.parseToJsonElement(after.arguments).jsonObject["arguments_pruned"]
-                        ?.jsonPrimitive?.booleanOrNull == true }
-                        catch (_: IllegalArgumentException) { false }
-                    marker && after.arguments.toByteArray(Charsets.UTF_8).size <
-                        before.arguments.toByteArray(Charsets.UTF_8).size &&
-                        before.copy(arguments = after.arguments) == after
-                }
-            }
-        }
-        if (original.role != AgentRole.Tool || projected.role != AgentRole.Tool ||
-            original.toolResults.size != projected.toolResults.size ||
-            original.copy(toolResults = projected.toolResults) != projected) return false
-        return original.toolResults.zip(projected.toolResults).all { (before, after) ->
-            if (before == after) true else {
-                val marker = try { json.parseToJsonElement(after.content).jsonObject["output_pruned"]
-                    ?.jsonPrimitive?.booleanOrNull == true }
-                    catch (_: IllegalArgumentException) { false }
-                !before.error && marker && after.content.toByteArray(Charsets.UTF_8).size <
-                    before.content.toByteArray(Charsets.UTF_8).size &&
-                    before.copy(content = after.content) == after
-            }
-        }
-    }
+    private fun validProjection(expected: List<AgentMessage>, retained: List<AgentMessage>): Boolean =
+        InterruptedTurnRecovery.validProjection(expected, retained)
 
     private fun header(db: SQLiteDatabase, id: String): CodingSessionHeader =
         db.rawQuery("SELECT id,title,workspace_id,created_at,updated_at,interrupted,pinned " +
@@ -900,6 +843,105 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.insertWithOnConflict("metadata", null, ContentValues().apply {
             put("key", key); put("value", value)
         }, SQLiteDatabase.CONFLICT_REPLACE)
+    }
+}
+
+internal object InterruptedTurnRecovery {
+    private val json = Json { ignoreUnknownKeys = true }
+
+    data class RecoveryPlan(
+        val pendingToolResult: AgentMessage,
+        val fitsInActive: Boolean,
+        val activeAfterRecovery: List<AgentMessage>,
+    )
+
+    fun hasPendingToolCall(last: AgentMessage?): Boolean =
+        last?.role == AgentRole.Assistant && last.toolCalls.isNotEmpty()
+
+    fun hasUnfinishedTurn(messages: List<AgentMessage>): Boolean {
+        val last = messages.lastOrNull { it.role != AgentRole.Context && it.internalContext == null }
+            ?: return false
+        return last.role != AgentRole.Assistant || last.toolCalls.isNotEmpty() || last.text.isBlank()
+    }
+
+    fun plan(active: List<AgentMessage>, summaryBytes: Int): RecoveryPlan? {
+        val pending = active.lastOrNull()?.takeIf(::hasPendingToolCall) ?: return null
+        val result = AgentMessage.tools(pending.toolCalls.map { call ->
+            AgentToolResult(
+                call.id,
+                call.name,
+                AgentToolError.content("interrupted"),
+                true,
+                "Interrupted  ${call.name}".take(256),
+            )
+        })
+        val fits = AgentSessionCodec.fits(active + result, summaryBytes)
+        val nextActive = if (fits) active + result else active.dropLast(1)
+        return RecoveryPlan(
+            pendingToolResult = result,
+            fitsInActive = fits,
+            activeAfterRecovery = nextActive,
+        )
+    }
+
+    fun validProjection(expected: List<AgentMessage>, retained: List<AgentMessage>): Boolean {
+        var original = 0
+        for (message in retained) {
+            while (original < expected.size && !sameOrPruned(expected[original], message)) original++
+            if (original == expected.size) return false
+            original++
+        }
+        for (index in retained.indices) {
+            val message = retained[index]
+            if (message.role == AgentRole.Assistant && message.toolCalls.isNotEmpty()) {
+                val results = retained.getOrNull(index + 1)?.takeIf { it.role == AgentRole.Tool }?.toolResults
+                    ?: return false
+                if (results.map { it.callId } != message.toolCalls.map { it.id }) return false
+            }
+            if (message.role == AgentRole.Tool) {
+                val calls = retained.getOrNull(index - 1)?.takeIf { it.role == AgentRole.Assistant }?.toolCalls
+                    ?: return false
+                if (calls.map { it.id } != message.toolResults.map { it.callId }) return false
+            }
+        }
+        return true
+    }
+
+    private fun sameOrPruned(original: AgentMessage, projected: AgentMessage): Boolean {
+        if (original == projected) return true
+        if (original.role == AgentRole.Assistant && projected.role == AgentRole.Assistant) {
+            if (original.toolCalls.size != projected.toolCalls.size ||
+                original.copy(toolCalls = projected.toolCalls) != projected) return false
+            return original.toolCalls.zip(projected.toolCalls).all { (before, after) ->
+                if (before == after) true else {
+                    val marker = try {
+                        json.parseToJsonElement(after.arguments).jsonObject["arguments_pruned"]
+                            ?.jsonPrimitive?.booleanOrNull == true
+                    } catch (_: IllegalArgumentException) {
+                        false
+                    }
+                    marker && after.arguments.toByteArray(Charsets.UTF_8).size <
+                        before.arguments.toByteArray(Charsets.UTF_8).size &&
+                        before.copy(arguments = after.arguments) == after
+                }
+            }
+        }
+        if (original.role != AgentRole.Tool || projected.role != AgentRole.Tool ||
+            original.toolResults.size != projected.toolResults.size ||
+            original.copy(toolResults = projected.toolResults) != projected) return false
+        return original.toolResults.zip(projected.toolResults).all { (before, after) ->
+            if (before == after) true else {
+                val marker = try {
+                    json.parseToJsonElement(after.content).jsonObject["output_pruned"]
+                        ?.jsonPrimitive?.booleanOrNull == true
+                } catch (_: IllegalArgumentException) {
+                    false
+                }
+                !before.error && marker && after.content.toByteArray(Charsets.UTF_8).size <
+                    before.content.toByteArray(Charsets.UTF_8).size &&
+                    before.copy(content = after.content) == after
+            }
+        }
     }
 }
 

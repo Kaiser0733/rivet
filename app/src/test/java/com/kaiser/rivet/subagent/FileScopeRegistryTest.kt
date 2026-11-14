@@ -70,4 +70,16 @@ class FileScopeRegistryTest {
         assertNull(registry.checkWrite(FileScopeRegistry.COORDINATOR, listOf(path("src/one/a.kt"))))
         assertTrue(registry.liveScopes().none { it.writer == "w1" })
     }
+
+    @Test fun moveToRootAndRenameCheckDestinationPath() {
+        val registry = FileScopeRegistry()
+        registry.register("w1", "edit single file", listOf(path("src/auth/a.kt")))
+        val moveToRoot = AgentToolCall("1", "move_path",
+            "{\"path\":\"src/auth/a.kt\",\"destination\":\"\"}")
+        assertEquals(FileScopeRegistry.OUTSIDE_FILE_SCOPE, registry.checkWrite("w1", moveToRoot))
+
+        val renameSibling = AgentToolCall("2", "rename_path",
+            "{\"path\":\"src/auth/a.kt\",\"new_name\":\"b.kt\"}")
+        assertEquals(FileScopeRegistry.OUTSIDE_FILE_SCOPE, registry.checkWrite("w1", renameSibling))
+    }
 }
