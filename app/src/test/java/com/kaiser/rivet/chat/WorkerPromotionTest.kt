@@ -90,7 +90,10 @@ class WorkerPromotionTest {
     @Test fun openingAWorkerDoesNotChangeTheSessionAndContinueImportsOnce() = runBlocking {
         val original = vm.uiState.value.currentSessionId
         vm.openWorker(worker.id)
-        await { it.workerSheet.worker?.id == worker.id && !it.workerSheet.loading }
+        awaitValue {
+            val sheet = vm.workerSheet.value
+            if (sheet.worker?.id == worker.id && !sheet.loading) Unit else null
+        }
         assertEquals(original, vm.uiState.value.currentSessionId)
         assertEquals(2, vm.workerSheet.value.messages.size)
 
