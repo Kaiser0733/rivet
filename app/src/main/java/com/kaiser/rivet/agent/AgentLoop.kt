@@ -59,6 +59,8 @@ class AgentLoop(
     private val contextUpdates: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
     private val approvedSkillScripts: Set<String> = emptySet(),
     private val recordSkillScriptApproval: suspend (String) -> Unit = {},
+    private val afterMutation: suspend (AgentToolCall, AgentToolResult?) -> Unit = { _, _ -> },
+    private val beforeCompletion: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
 ) {
     suspend fun run(
         initial: List<AgentMessage>,
@@ -93,20 +95,28 @@ class AgentLoop(
         var toolCalls = 0
         var mutationsAttempted = 0
         var mutationsCompleted = 0
+        suspend fun appendContextEvents(events: List<AgentMessage>): AgentRunResult? {
+            if (events.isEmpty()) return null
+            require(events.all {
+                it.role == AgentRole.Context && it.internalContext?.valid() == true &&
+                    it.text.isEmpty() && it.toolCalls.isEmpty() && it.toolResults.isEmpty() && it.transportState == null
+            })
+            if (!AgentContext.validGroups(messages)) return AgentRunResult(
+                messages, AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
+                mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted,
+            )
+            if (!canPersistToolOutput(messages + events, 0)) return AgentRunResult(
+                messages, AgentStopReason.SessionLimit, modelIterations, toolCalls,
+                mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted,
+            )
+            for (event in events) append(event)
+            return null
+        }
         while (modelIterations < RUNAWAY_MODEL_ITERATIONS) {
             currentCoroutineContext().ensureActive()
             if (!workspaceIsCurrent()) return AgentRunResult(messages, AgentStopReason.WorkspaceChanged,
                 modelIterations, toolCalls, mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
-            val updates = contextUpdates(messages.toList())
-            require(updates.all { it.role == AgentRole.Context && it.internalContext?.valid() == true &&
-                it.text.isEmpty() && it.toolCalls.isEmpty() && it.toolResults.isEmpty() && it.transportState == null })
-            if (updates.isNotEmpty() && !AgentContext.validGroups(messages)) return AgentRunResult(messages,
-                AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
-                mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
-            if (updates.isNotEmpty() && !canPersistToolOutput(messages + updates, 0)) return AgentRunResult(messages,
-                AgentStopReason.SessionLimit, modelIterations, toolCalls,
-                mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
-            for (update in updates) append(update)
+            appendContextEvents(contextUpdates(messages.toList()))?.let { return it }
             val active = try { compactContext(messages.toList(), false) }
                 catch (e: CancellationException) { throw e
                 } catch (e: ProviderError) { throw e
@@ -229,6 +239,11 @@ class AgentLoop(
             }
             append(assistant)
             if (response.toolCalls.isEmpty()) {
+                val holdEvents = beforeCompletion(messages.toList())
+                if (holdEvents.isNotEmpty()) {
+                    appendContextEvents(holdEvents)?.let { return it }
+                    continue
+                }
                 return AgentRunResult(
                     messages = messages,
                     stopReason = AgentStopReason.Completed,
@@ -414,6 +429,8 @@ class AgentLoop(
                         stopReason = AgentStopReason.CheckpointUnavailable
                         break
                     }
+                    val acquiredMutation = prepared.effect.requiresCheckpoint && mutationBlocker == null
+                    var executedResult: AgentToolResult? = null
                     val result = if (mutationBlocker != null) {
                         lifecycle(call, AgentToolLifecycleStage.Blocked)
                         stopped(call, mutationBlocker)
@@ -435,13 +452,19 @@ class AgentLoop(
                         }
                         lifecycle(call, AgentToolLifecycleStage.Started)
                         try {
-                            prepared.execute()
+                            prepared.execute().also { executedResult = it }
                         } catch (e: CancellationException) {
                             lifecycle(call, AgentToolLifecycleStage.Cancelled)
                             if (prepared.effect != AgentToolEffect.ReadOnly) results += stopped(call, "interrupted")
                             throw e
                         } catch (_: Exception) {
                             failed(call)
+                        } finally {
+                            if (acquiredMutation) {
+                                withContext(NonCancellable) {
+                                    afterMutation(call, executedResult)
+                                }
+                            }
                         }
                     }
                     if (mutationBlocker == null) lifecycle(call,
