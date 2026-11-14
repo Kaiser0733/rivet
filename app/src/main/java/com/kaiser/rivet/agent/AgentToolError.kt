@@ -53,6 +53,9 @@ internal object AgentToolError {
         "invalid_arguments" to "The tool arguments did not match this tool's JSON contract. Re-read the argument names and send one complete JSON object.",
         "invalid_offset" to "Read the file from a different offset. This one is past the end or splits a character.",
         "output_limit" to "Ask for a smaller part of this file. The requested range is too large for one result.",
+        "outside_file_scope" to "That path is outside this worker's write_scope. Only edit paths declared in your write_scope.",
+        "owned_by_worker" to "Await that worker or ask the user to stop it before editing its files.",
+        "browser_busy" to "Another agent in this run is already driving the browser. Wait for it to finish or use other tools.",
     )
     private val deterministic = (workspaceActions.keys - transientWorkspaceCodes) + setOf(
         "sync_required", "workspace_unavailable",
@@ -63,22 +66,30 @@ internal object AgentToolError {
         "foreground_service_unavailable", "preview_unavailable", "process_unavailable",
         "invalid_url", "redirect_blocked", "download_too_large", "download_sha_mismatch",
         "destination_exists", "invalid_checksum", "skill_not_found", "skill_manual_only",
-        "secret", "garden_first", "empty", "too_long", "reserved_goal")
+        "secret", "garden_first", "empty", "too_long", "reserved_goal",
+        "outside_file_scope", "owned_by_worker", "browser_busy")
     private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",
         "foreground_service_unavailable", "preview_unavailable")
 
-    fun content(code: String, statusCode: Int? = null, subject: String? = null): String = buildJsonObject {
-        put("error", code)
-        actions[code]?.let {
-            put("retryable", false)
-            put("required_action", it)
-        }
-        statusCode?.let { put("status_code", it) }
-        // The path that blocked the call, when the failure has one.
-        subject?.let { put("path", it) }
-    }.toString()
+    fun content(code: String, statusCode: Int? = null, subject: String? = null): String {
+        val baseCode = if (code.startsWith("owned_by_worker:")) "owned_by_worker" else code
+        val workerJob = if (code.startsWith("owned_by_worker:")) {
+            code.removePrefix("owned_by_worker:").takeIf { it.isNotEmpty() }
+        } else null
+        return buildJsonObject {
+            put("error", baseCode)
+            workerJob?.let { put("worker", it) }
+            actions[baseCode]?.let {
+                put("retryable", false)
+                put("required_action", it)
+            }
+            statusCode?.let { put("status_code", it) }
+            // The path that blocked the call, when the failure has one.
+            subject?.let { put("path", it) }
+        }.toString()
+    }
 
     fun noProgress(code: String): String = buildJsonObject {
         put("error", "no_progress")
@@ -111,5 +122,6 @@ internal object AgentToolError {
         Json.parseToJsonElement(result.content).jsonObject["error"]?.jsonPrimitive?.content
     }.getOrNull()
 
-    fun action(code: String): String? = actions[code]
+    fun action(code: String): String? =
+        actions[if (code.startsWith("owned_by_worker:")) "owned_by_worker" else code]
 }

@@ -111,6 +111,18 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         post == null || scan(worktree) == post
     }
 
+    suspend fun record(id: String): CheckpointRecord? = withContext(Dispatchers.IO) {
+        try {
+            readRecord(folder(id))
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    suspend fun scanManifest(worktree: File): Map<String, CheckpointEntry> = withContext(Dispatchers.IO) {
+        scan(worktree)
+    }
+
     suspend fun history(limit: Int = 50): List<CheckpointRecord> = withContext(Dispatchers.IO) {
         directory.listFiles()?.filter { it.isDirectory && !it.name.startsWith(".") }
             ?.mapNotNull { folder -> try { readRecord(folder) } catch (_: Exception) { null } }

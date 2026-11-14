@@ -72,4 +72,14 @@ class WorkerBriefTest {
         assertTrue(parsed is BriefParse.Valid)
         assertEquals(2, (parsed as BriefParse.Valid).brief.writeScope.size)
     }
+
+    @Test fun rendersLoadedSkillBodyIntoInitialWorkerMessage() {
+        val parsed = WorkerBrief.parse(
+            """{"job":"Audit auth","brief":"Inspect login flow.","skill":"security-audit"}"""
+        ) as BriefParse.Valid
+        val rendered = parsed.brief.withSkillBody("1. Check token expiry.\n2. Check CSRF.").render()
+        assertTrue(rendered.contains("Skill: security-audit"))
+        assertTrue(rendered.contains("Skill instructions (security-audit):"))
+        assertTrue(rendered.contains("1. Check token expiry.\n2. Check CSRF."))
+    }
 }
