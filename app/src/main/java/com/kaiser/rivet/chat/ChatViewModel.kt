@@ -108,6 +108,7 @@ import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import com.kaiser.rivet.storage.SessionGoalStore
 import com.kaiser.rivet.storage.SpendStore
+import com.kaiser.rivet.storage.SubagentPoolStore
 import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.workspace.WorkspacePath
@@ -210,6 +211,13 @@ data class ChatUiState(
 
 enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn }
 
+data class WorkerSheetState(
+    val worker: WorkerRecord? = null,
+    val messages: List<AgentMessage> = emptyList(),
+    val loading: Boolean = false,
+    val error: String? = null,
+)
+
 class ChatViewModel private constructor(
     app: Application,
     private val sessionStore: AgentSessionPersistence,
@@ -240,8 +248,12 @@ class ChatViewModel private constructor(
     private val skillScriptApprovals = SkillScriptApprovalStore(app)
     private val sessions get() = sessionStore as? CodingSessions
 
+    private val subagentPoolStore = SubagentPoolStore(app)
+    private val _subagentPool = MutableStateFlow(SubagentPoolState())
     private val _subagents = MutableStateFlow<List<WorkerRecord>>(emptyList())
     val subagents: StateFlow<List<WorkerRecord>> = _subagents.asStateFlow()
+    private val _workerSheet = MutableStateFlow(WorkerSheetState())
+    val workerSheet: StateFlow<WorkerSheetState> = _workerSheet.asStateFlow()
     private var activeSupervisor: SubagentSupervisor? = null
 
     init {
@@ -458,6 +470,24 @@ class ChatViewModel private constructor(
         _uiState.update { it.copy(spendCaps = caps, userPricePerMillionUsd = price) }
         try { connectivity?.registerDefaultNetworkCallback(networkCallback) } catch (_: Exception) { }
         viewModelScope.launch { loadProject() }
+        viewModelScope.launch {
+            try {
+                workerStore.prune()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // Retention is housekeeping; a failed prune must not block chat.
+            }
+        }
+        viewModelScope.launch {
+            try {
+                subagentPoolStore.state.collect { _subagentPool.value = it }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                // A settings-store failure leaves the conservative empty pool.
+            }
+        }
         viewModelScope.launch {
             val ticket = generation
             val (restored, history) = try {
@@ -701,6 +731,7 @@ class ChatViewModel private constructor(
                 lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
             )
         }
+        _subagents.value = emptyList()
         startTurn(trimmed, retryingInterrupted = false, acceptedUser = accepted)
     }
 
@@ -1209,6 +1240,14 @@ class ChatViewModel private constructor(
             }
             try {
             previous?.join()
+            val runPool = try {
+                subagentPoolStore.state.first()
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                SubagentPoolState()
+            }
+            _subagentPool.value = runPool
             turnToken = runtimeController.startTurn(::cancel)
             // A failed result write can leave a committed mutation without durable
             // outcome evidence. Recover it before a new user event can bury the call.
@@ -1337,7 +1376,7 @@ class ChatViewModel private constructor(
                 if (workspaceId != null) addAll(SubagentContext.poolUpdates(
                     messages,
                     workspaceId,
-                    SubagentPoolState(),
+                    runPool,
                     providerSource.configs(),
                     snapshot.config,
                 ))
@@ -1404,6 +1443,7 @@ class ChatViewModel private constructor(
                     turnSessionId = { turnSessionId }, sessions = { sessions }, recordSpend = ::recordSpend,
                     readAutonomyMode = ::readAutonomyMode, systemInstruction = ::systemInstruction,
                     activityFor = ::activityFor,
+                    poolState = { _subagentPool.value },
                 )
                 val scopeJob = SupervisorJob(coroutineContext[Job])
                 val (supervisor, tools, collectorJob) = ChatSupervisorServices.initSupervisor(
@@ -1676,7 +1716,7 @@ class ChatViewModel private constructor(
                         val subagentEvents = SubagentContext.poolUpdates(
                             candidate,
                             workspaceId,
-                            SubagentPoolState(),
+                            _subagentPool.value,
                             providerSource.configs(),
                             snapshot.config,
                         ) + activeSupervisor?.drainUndeliveredResults(workspaceId).orEmpty()
@@ -2322,6 +2362,78 @@ class ChatViewModel private constructor(
         activeSupervisor?.pauseAll(reason)
         approvals.cancel()
         sendJob?.cancel()
+    }
+
+    /** Opening a worker only reads its transcript; the active session is untouched. */
+    fun openWorker(workerId: String) {
+        if (_workerSheet.value.worker?.id == workerId && !_workerSheet.value.loading) return
+        _workerSheet.value = WorkerSheetState(
+            worker = _subagents.value.firstOrNull { it.id == workerId },
+            loading = true,
+        )
+        viewModelScope.launch {
+            try {
+                val transcript = workerStore.loadTranscript(workerId)
+                _workerSheet.value = WorkerSheetState(
+                    worker = transcript.worker,
+                    messages = transcript.messages,
+                )
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _workerSheet.update { it.copy(loading = false, error = "Could not open this subagent.") }
+            }
+        }
+    }
+
+    fun closeWorker() {
+        _workerSheet.value = WorkerSheetState()
+    }
+
+    /**
+     * Continue is the only action that changes the active session. A terminal worker
+     * transcript is copied once into CodingSessions and selected through changeSession;
+     * during a live coordinator turn the existing queued-session path handles the switch.
+     */
+    fun continueWorker(workerId: String) {
+        viewModelScope.launch {
+            try {
+                val transcript = workerStore.loadTranscript(workerId)
+                if (!transcript.worker.isTerminal) return@launch
+                val existing = transcript.worker.promotedSessionId
+                val promotedId = existing ?: run {
+                    val store = sessions ?: return@launch
+                    val id = store.importSession(
+                        workspaceId = transcript.worker.workspaceId
+                            ?: _uiState.value.currentSessionWorkspaceId,
+                        title = "Subagent · ${transcript.worker.job}",
+                        events = transcript.messages,
+                        active = transcript.messages,
+                        summary = transcript.summary,
+                    )
+                    workerStore.saveWorker(transcript.worker.copy(
+                        promotedSessionId = id,
+                        updatedAt = System.currentTimeMillis(),
+                    ))
+                    _subagents.value = _subagents.value.map {
+                        if (it.id == workerId) it.copy(promotedSessionId = id) else it
+                    }
+                    id
+                }
+                if (_uiState.value.streaming) {
+                    _uiState.update {
+                        it.copy(queuedSessionId = promotedId,
+                            notice = "Rivet will open that conversation when this reply finishes.")
+                    }
+                } else {
+                    changeSession { store -> store.select(promotedId) }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (_: Exception) {
+                _uiState.update { it.copy(error = "Could not open that subagent conversation.") }
+            }
+        }
     }
 
     fun stopSubagent(workerId: String) {

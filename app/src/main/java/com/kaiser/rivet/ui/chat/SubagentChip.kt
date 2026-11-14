@@ -1,0 +1,103 @@
+package com.kaiser.rivet.ui.chat
+
+import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
+import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.padding
+import androidx.compose.foundation.layout.size
+import androidx.compose.foundation.layout.widthIn
+import androidx.compose.material3.DropdownMenu
+import androidx.compose.material3.DropdownMenuItem
+import androidx.compose.material3.MaterialTheme
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
+import androidx.compose.runtime.Composable
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.remember
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.Alignment
+import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
+import com.kaiser.rivet.agent.RunPhase
+import com.kaiser.rivet.subagent.WorkerRecord
+
+internal fun subagentChipText(count: Int): String? {
+    if (count <= 0) return null
+    return if (count == 1) "1 subagent ⌄" else "$count subagents ⌄"
+}
+
+internal fun workerStateLabel(worker: WorkerRecord): String = when (worker.state) {
+    RunPhase.Queued -> "waiting"
+    RunPhase.Running -> "running"
+    RunPhase.Paused -> "paused"
+    RunPhase.Done -> "done"
+    RunPhase.Failed -> "failed"
+    RunPhase.Stopped -> "stopped"
+}
+
+internal fun workerActivityLine(worker: WorkerRecord): String? {
+    val activity = worker.activity?.trim()?.takeIf { it.isNotEmpty() }
+    return when {
+        activity != null -> activity
+        worker.waitingReason?.isNotBlank() == true -> worker.waitingReason
+        worker.pauseReason != null -> worker.pauseReason.plain
+        worker.state == RunPhase.Queued -> "waiting for a slot"
+        else -> null
+    }
+}
+
+/**
+ * The header chip is deliberately quiet: a wrap-content button at least 48dp tall
+ * while workers exist, and the same 48dp spacer before the first one so the row
+ * never reflows when a worker starts.
+ */
+@Composable
+internal fun SubagentChip(
+    workers: List<WorkerRecord>,
+    onWorkerClick: (WorkerRecord) -> Unit,
+) {
+    if (workers.isEmpty()) {
+        Spacer(Modifier.size(48.dp))
+        return
+    }
+    var open by remember { mutableStateOf(false) }
+    Box {
+        TextButton(
+            onClick = { open = true },
+            modifier = Modifier.heightIn(min = 48.dp).widthIn(min = 48.dp),
+        ) {
+            Text(subagentChipText(workers.size) ?: "",
+                style = MaterialTheme.typography.labelLarge)
+        }
+        DropdownMenu(expanded = open, onDismissRequest = { open = false }) {
+            workers.forEach { worker ->
+                DropdownMenuItem(
+                    text = {
+                        Column(Modifier.padding(vertical = 2.dp),
+                            verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                            Text(worker.job, style = MaterialTheme.typography.bodyMedium)
+                            Row(verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                                Text("${worker.modelLabel} · ${workerStateLabel(worker)}",
+                                    style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            workerActivityLine(worker)?.let {
+                                Text(it, style = MaterialTheme.typography.labelSmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                        }
+                    },
+                    onClick = {
+                        open = false
+                        onWorkerClick(worker)
+                    },
+                )
+            }
+        }
+    }
+}

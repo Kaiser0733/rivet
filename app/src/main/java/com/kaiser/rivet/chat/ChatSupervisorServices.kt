@@ -63,6 +63,7 @@ internal object ChatSupervisorServices {
         readAutonomyMode: suspend () -> AutonomyMode,
         systemInstruction: (Boolean, String?, String?) -> String,
         activityFor: (String) -> String,
+        poolState: () -> SubagentPoolState,
     ): RunServices = RunServices(
         workspaceId = workspaceId,
         runId = runId,
@@ -72,7 +73,7 @@ internal object ChatSupervisorServices {
         clientFactory = clientFactory,
         approvals = approvals,
         checkpointGate = checkpointGate,
-        poolState = { SubagentPoolState() },
+        poolState = poolState,
         coordinatorConfig = coordinatorConfig,
         browserTools = browserTools,
         browserLease = browserLease,

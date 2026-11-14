@@ -29,6 +29,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.booleanOrNull
@@ -192,11 +193,41 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             db.delete("compactions", "session_id=?", arrayOf(id))
             db.delete("context_attempts", "session_id=?", arrayOf(id))
             db.delete("usage", "session_id=?", arrayOf(id))
+            db.delete("metadata", "key=?", arrayOf(turnMetricsKey(id)))
             db.execSQL("UPDATE sessions SET interrupted=0, summary='', active_generation=active_generation+1, updated_at=? WHERE id=?",
                 arrayOf(System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         summaryBytes = 0
+    }
+
+    /**
+     * Completed-turn durations live in the session metadata so reopening a stored
+     * conversation keeps the row's "Completed in ..." label. Older entries without a
+     * duration fall back to their recorded wall-clock start/end; absent both, the
+     * row stays "Completed" rather than inventing a number.
+     */
+    suspend fun recordTurnMetric(
+        sessionId: String,
+        turnIndex: Int,
+        durationMs: Long?,
+        startedAt: Long?,
+        endedAt: Long?,
+    ) = onDatabase { db ->
+        val key = turnMetricsKey(sessionId)
+        val current = decodeTurnMetrics(meta(db, key))
+        val next = (current + (turnIndex to StoredTurnMetric(durationMs, startedAt, endedAt)))
+            .entries.associate { it.key.toString() to it.value }
+        putMeta(db, key, json.encodeToString(TurnMetrics.serializer(), TurnMetrics(next)))
+    }
+
+    suspend fun turnDurations(sessionId: String): Map<Int, Long> = onDatabase { db ->
+        decodeTurnMetrics(meta(db, turnMetricsKey(sessionId))).mapNotNull { (index, metric) ->
+            val duration = metric.durationMs?.takeIf { it > 0 } ?: metric.startedAt?.let { start ->
+                metric.endedAt?.let { end -> (end - start).takeIf { it > 0 } }
+            }
+            duration?.let { index to it }
+        }.toMap()
     }
 
     suspend fun list(): List<CodingSessionHeader> = onDatabase { db ->
@@ -216,6 +247,47 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         } finally { db.endTransaction() }
         summaryBytes = 0
         AgentSession(id = id, title = "New session", workspaceId = workspaceId)
+    }
+
+    /**
+     * Promotes a worker transcript into a normal conversation without selecting it.
+     * Callers must switch through `changeSession` themselves, so opening a worker
+     * sheet never moves the active session.
+     */
+    suspend fun importSession(
+        workspaceId: String?,
+        title: String,
+        events: List<AgentMessage>,
+        active: List<AgentMessage>,
+        summary: String = "",
+    ): String = onDatabase { db ->
+        require(title.isNotBlank())
+        require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
+        require(active.isEmpty() || AgentContext.validGroups(active))
+        require(AgentSessionCodec.fits(active, summary.toByteArray(Charsets.UTF_8).size))
+        val id = UUID.randomUUID().toString()
+        val cleanTitle = title.trim().take(80)
+        db.beginTransaction()
+        try {
+            insertSession(db, id, cleanTitle, workspaceId, false)
+            events.forEach { message ->
+                db.insertOrThrow("events", null, ContentValues().apply {
+                    put("session_id", id)
+                    put("payload", json.encodeToString(AgentMessage.serializer(), message))
+                })
+            }
+            active.forEach { message ->
+                db.insertOrThrow("active_events", null, ContentValues().apply {
+                    put("session_id", id)
+                    put("payload", json.encodeToString(AgentMessage.serializer(), message))
+                })
+            }
+            db.execSQL("UPDATE sessions SET summary=? WHERE id=?", arrayOf(summary, id))
+            db.setTransactionSuccessful()
+        } finally {
+            db.endTransaction()
+        }
+        id
     }
 
     suspend fun select(id: String): AgentSession = onDatabase { db ->
@@ -289,6 +361,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.beginTransaction()
         try {
             db.delete("metadata", "key=?", arrayOf("auto_title-$id"))
+            db.delete("metadata", "key=?", arrayOf(turnMetricsKey(id)))
             if (db.delete("sessions", "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
             val next = db.rawQuery("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1", null).use {
                 if (it.moveToFirst()) it.getString(0) else null
@@ -829,6 +902,26 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             put("created_at", now); put("updated_at", now); put("interrupted", if (interrupted) 1 else 0)
         })
     }
+
+    private fun turnMetricsKey(sessionId: String) = "turn-metrics-$sessionId"
+
+    private fun decodeTurnMetrics(raw: String?): Map<Int, StoredTurnMetric> = try {
+        raw?.let { json.decodeFromString(TurnMetrics.serializer(), it).entries }
+            ?.mapKeys { it.key.toInt() }
+            ?: emptyMap()
+    } catch (_: Exception) {
+        emptyMap()
+    }
+
+    @Serializable
+    private data class StoredTurnMetric(
+        val durationMs: Long? = null,
+        val startedAt: Long? = null,
+        val endedAt: Long? = null,
+    )
+
+    @Serializable
+    private data class TurnMetrics(val entries: Map<String, StoredTurnMetric> = emptyMap())
 
     companion object { const val MAX_SUMMARY_BYTES = 16 * 1024 }
 

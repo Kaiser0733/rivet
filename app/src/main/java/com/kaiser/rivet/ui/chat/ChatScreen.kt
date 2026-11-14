@@ -177,6 +177,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val state by chatViewModel.uiState.collectAsState()
     val browserState by chatViewModel.browser.state.collectAsState()
     val userSkills by chatViewModel.userSkills.collectAsState()
+    val subagents by chatViewModel.subagents.collectAsState()
+    val workerSheet by chatViewModel.workerSheet.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
     val processItems by chatViewModel.managedProcesses.processes.collectAsState()
     val hasActiveProcesses = processItems.any { it.status in setOf(
@@ -216,6 +218,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     var usageLimitShownFor by remember { mutableStateOf<String?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf<String?>(null) }
+    var selectedWorkerId by remember { mutableStateOf<String?>(null) }
+    val selectedWorker = subagents.firstOrNull { it.id == selectedWorkerId } ?: workerSheet.worker
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
         if (result.resultCode == Activity.RESULT_OK && uri != null) {
@@ -477,9 +481,15 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                             tint = if (canChooseProject) MaterialTheme.colorScheme.onBackground
                                 else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f))
                     }
-                    // Subagent chip slot (empty for now, filled by subagents feature later)
-                    // Reserved space, renders nothing until subagents exist
-                    Box(Modifier.size(48.dp)) { }
+                    // Subagent chip slot; the empty state is the same 48dp spacer so the
+                    // header does not jump when the first worker appears.
+                    SubagentChip(
+                        workers = subagents,
+                        onWorkerClick = { worker ->
+                            selectedWorkerId = worker.id
+                            chatViewModel.openWorker(worker.id)
+                        },
+                    )
                     // Browser action
                     IconButton(onClick = onOpenBrowser, modifier = Modifier.size(48.dp)) {
                         Icon(painterResource(R.drawable.ic_browser), "Browser",
@@ -708,6 +718,25 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 StatusFooter(state, providers)
             }
         }
+    }
+    val openWorker = selectedWorker
+    if (selectedWorkerId != null && openWorker != null) {
+        WorkerSheet(
+            worker = openWorker,
+            messages = workerSheet.messages,
+            loading = workerSheet.loading,
+            onDismiss = {
+                selectedWorkerId = null
+                chatViewModel.closeWorker()
+            },
+            onStop = { chatViewModel.stopSubagent(openWorker.id) },
+            onContinue = {
+                val id = openWorker.id
+                selectedWorkerId = null
+                chatViewModel.closeWorker()
+                chatViewModel.continueWorker(id)
+            },
+        )
     }
 }
 
@@ -1430,7 +1459,7 @@ private suspend fun scrollToConversationBottom(state: androidx.compose.foundatio
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
-private fun MessageRow(message: AgentMessage, reasoning: String? = null, messageKey: Int = 0) {
+internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messageKey: Int = 0) {
     val context = LocalContext.current
     val copyText = if (message.role == AgentRole.User) message.text else displaySafeText(message.text)
     // Long-press opens a visible menu. Copying used to happen with nothing on screen,

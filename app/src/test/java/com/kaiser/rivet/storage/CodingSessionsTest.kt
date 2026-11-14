@@ -65,6 +65,41 @@ class CodingSessionsTest {
         assertFalse(sessions.claimAutoTitle(existing))
     }
 
+
+    @Test fun promotedWorkerTranscriptAppearsExactlyOnceAndKeepsItsSummary() = runBlocking {
+        val sessions = CodingSessions(app)
+        val workspace = "tree"
+        val events = listOf(
+            AgentMessage.user("Inspect the parser"),
+            AgentMessage.assistant("I found the null branch."),
+        )
+        val id = sessions.importSession(
+            workspaceId = workspace,
+            title = "Subagent · Inspect the parser",
+            events = events,
+            active = events,
+            summary = "Worker compacted notes",
+        )
+        assertEquals(1, sessions.list().count { it.id == id })
+        val promoted = sessions.select(id)
+        assertEquals("Subagent · Inspect the parser", promoted.title)
+        assertEquals(events, promoted.messages)
+        assertEquals("Worker compacted notes", promoted.summary)
+        assertEquals(events.size, sessions.fullEventCount(id))
+        assertFalse(sessions.claimAutoTitle(id))
+    }
+
+    @Test fun turnDurationsSurviveReloadAndFallBackToStoredTimestamps() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.create("tree").id!!
+        sessions.recordTurnMetric(id, turnIndex = 0, durationMs = 4200L, startedAt = null, endedAt = null)
+        sessions.recordTurnMetric(id, turnIndex = 1, durationMs = null,
+            startedAt = 10_000L, endedAt = 16_500L)
+        sessions.recordTurnMetric(id, turnIndex = 2, durationMs = null,
+            startedAt = 20_000L, endedAt = 20_500L)
+        assertEquals(mapOf(0 to 4200L, 1 to 6500L, 2 to 500L), CodingSessions(app).turnDurations(id))
+    }
+
     @Test fun titleUsageCountsButCannotReplaceCodingContextAnchor() = runBlocking {
         val sessions = CodingSessions(app)
         val id = sessions.create(null).id!!
