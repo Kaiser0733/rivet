@@ -665,6 +665,7 @@ class ChatViewModel private constructor(
                             sessions = store.list(),
                             currentSessionId = selected.id, currentSessionTitle = selected.title,
                             currentSessionWorkspaceId = identity, usage = null, contextEstimate = null,
+                            turnDurationsMs = emptyMap(),
                             lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
                             interruptedTurn = false) }
                     }
