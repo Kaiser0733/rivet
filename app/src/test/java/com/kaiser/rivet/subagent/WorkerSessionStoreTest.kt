@@ -23,7 +23,7 @@ class WorkerSessionStoreTest {
         id: String = "w-1",
         runId: String = "run-1",
         sessionId: String = "sess-1",
-        state: RunPhase = RunPhase.Executing,
+        state: RunPhase = RunPhase.Running,
         updatedAt: Long = 1_000L,
     ) = WorkerRecord(
         id = id,
@@ -156,7 +156,7 @@ class WorkerSessionStoreTest {
             tools = emptyList(),
             endpoint = "https://api.anthropic.com",
             providerType = ProviderType.Anthropic,
-            reasoning = ReasoningLevel.Off,
+            reasoning = ReasoningLevel.Default,
         )
         val estimate = store.contextEstimate(
             sessionId = "w-1",
@@ -166,7 +166,7 @@ class WorkerSessionStoreTest {
             system = "sys",
             tools = emptyList(),
             endpoint = "https://api.anthropic.com",
-            reasoning = ReasoningLevel.Off,
+            reasoning = ReasoningLevel.Default,
         )
         assertEquals("reported", estimate.source)
         assertEquals(321L, estimate.tokens)

@@ -24,22 +24,21 @@ object SubagentContext {
         coordinatorConfig: ProviderConfig? = null,
     ): String {
         val resolved = SubagentPool.resolve(state, configs)
-        if (resolved.isEmpty) return OFF_LINE
+        if (!resolved.canSpawn) return resolved.offLine ?: OFF_LINE
         return buildString {
             appendLine("Subagent pool:")
-            val fixedLabel = resolved.defaultEntry?.label ?: resolved.entries.first().label
-            if (state.allowModelChoice) {
-                appendLine("Mode: agent may choose (pass model alias to spawn_subagent, or omit for default: $fixedLabel)")
+            val activeEntries = if (state.allowAgentChoice) resolved.entries else listOfNotNull(resolved.fixed)
+            if (state.allowAgentChoice) {
+                appendLine("Mode: agent may choose (pass model alias below to spawn_subagent)")
             } else {
-                appendLine("Mode: fixed: $fixedLabel")
+                appendLine("Mode: fixed: ${resolved.fixed?.label ?: activeEntries.first().label}")
             }
             appendLine("Models:")
-            for (entry in resolved.entries) {
-                val defaultTag = if (entry.alias == resolved.defaultEntry?.alias) " (default)" else ""
-                appendLine("- ${entry.alias}: ${entry.label}$defaultTag")
+            for (entry in activeEntries) {
+                appendLine("- ${entry.alias}: ${entry.label}")
             }
             appendLine("Caps: max ${SubagentScheduler.MAX_RUNNING} running, at most ${SubagentScheduler.MAX_LOCAL} local")
-            if (resolved.entries.any { it.config.type == ProviderType.Local }) {
+            if (activeEntries.any { it.local }) {
                 if (coordinatorConfig?.type == ProviderType.Local) {
                     appendLine("Local note: local inference time-shares one slot with this local coordinator.")
                 } else {

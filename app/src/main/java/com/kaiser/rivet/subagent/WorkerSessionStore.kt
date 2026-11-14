@@ -52,7 +52,7 @@ data class WorkerRecord(
     val model: String,
     val modelLabel: String = model,
     val writeScope: List<WorkspacePath> = emptyList(),
-    val state: RunPhase = RunPhase.Planning,
+    val state: RunPhase = RunPhase.Queued,
     val pauseReason: RunPauseReason? = null,
     val waitingReason: String? = null,
     val activity: String? = null,
@@ -72,13 +72,14 @@ data class WorkerRecord(
     fun toWorkerRun(): WorkerRun = WorkerRun(
         record = RunRecord(
             id = id,
+            workspaceId = workspaceId,
             title = job,
             phase = state,
             pause = pauseReason,
             startedAt = createdAt,
             updatedAt = updatedAt,
             steps = steps,
-            lastError = error,
+            failure = error,
         ),
         waitingReason = waitingReason,
     )
@@ -88,7 +89,7 @@ data class WorkerRecord(
         pauseReason = workerRun.record.pause,
         waitingReason = workerRun.waitingReason,
         steps = workerRun.record.steps,
-        error = workerRun.record.lastError,
+        error = workerRun.record.failure,
         updatedAt = workerRun.record.updatedAt,
     )
 }

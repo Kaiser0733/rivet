@@ -1,32 +1,38 @@
 package com.kaiser.rivet.chat
 
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.launch
 
 import com.kaiser.rivet.agent.AgentApprovalGate
 import com.kaiser.rivet.agent.AgentToolExecutor
+import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.AutonomyMode
+import com.kaiser.rivet.agent.ProjectInstructions
 import com.kaiser.rivet.agent.ProjectStateFiles
+import com.kaiser.rivet.runtime.ManagedProcesses
+import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.RunCheckpointGate
+import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.agent.SkillCatalog
-import com.kaiser.rivet.agent.Usage
-import com.kaiser.rivet.agent.WorkspaceRoot
 import com.kaiser.rivet.browser.BrowserDrivingLease
 import com.kaiser.rivet.browser.BrowserSession
 import com.kaiser.rivet.browser.BrowserTools
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
-import com.kaiser.rivet.service.ManagedProcesses
-import com.kaiser.rivet.service.RuntimeController
-import com.kaiser.rivet.service.SkillScriptApprovalStore
-import com.kaiser.rivet.service.WorkspaceSelection
 import com.kaiser.rivet.storage.CodingSessions
+import com.kaiser.rivet.storage.SkillScriptApprovalStore
 import com.kaiser.rivet.subagent.ResultEnvelope
 import com.kaiser.rivet.subagent.RunServices
 import com.kaiser.rivet.subagent.SubagentPoolState
+import com.kaiser.rivet.subagent.SubagentSupervisor
+import com.kaiser.rivet.subagent.SubagentTools
 import com.kaiser.rivet.subagent.WorkerClaim
+import com.kaiser.rivet.subagent.WorkerRecord
 import com.kaiser.rivet.subagent.WorkerSessionStore
+import com.kaiser.rivet.workspace.SafWorkspace
+import com.kaiser.rivet.workspace.WorkspaceSelection
 
 internal object ChatSupervisorServices {
     fun createServices(
@@ -42,8 +48,9 @@ internal object ChatSupervisorServices {
         browserTools: BrowserTools,
         browserLease: BrowserDrivingLease,
         createExecutor: (Set<String>) -> AgentToolExecutor?,
+        projectInstructions: ProjectInstructions?,
         skills: () -> SkillCatalog?,
-        workspace: WorkspaceRoot,
+        workspace: SafWorkspace,
         runtime: RuntimeController,
         managedProcesses: ManagedProcesses,
         browser: BrowserSession,
@@ -52,8 +59,8 @@ internal object ChatSupervisorServices {
         skillScriptApprovals: SkillScriptApprovalStore,
         turnSessionId: () -> String?,
         sessions: () -> CodingSessions?,
-        recordSpend: (ProviderConfig, Usage, Double?) -> Unit,
-        readAutonomyMode: () -> AutonomyMode,
+        recordSpend: (ProviderConfig, AgentUsage, Boolean) -> Unit,
+        readAutonomyMode: suspend () -> AutonomyMode,
         systemInstruction: (Boolean, String?, String?) -> String,
         activityFor: (String) -> String,
     ): RunServices = RunServices(
@@ -70,6 +77,7 @@ internal object ChatSupervisorServices {
         browserTools = browserTools,
         browserLease = browserLease,
         createExecutor = createExecutor,
+        projectInstructions = projectInstructions,
         skills = skills,
         loadMemoryMarkdown = {
             val files = ProjectStateFiles(workspace)
@@ -82,7 +90,13 @@ internal object ChatSupervisorServices {
         activityFor = activityFor,
         readAutonomyMode = readAutonomyMode,
         workspaceIsCurrent = { workspaceSelection.currentIdentity() == workspaceId },
-        commandBlocker = { runtime.commandBlocker() },
+        commandBlocker = {
+            try {
+                runtime.commandBlocker()
+            } catch (e: MirrorFailure) {
+                e.code
+            }
+        },
         canStartPreview = { managedProcesses.canStartPreview() },
         failureState = { runtime.agentFailureState() },
         isProjectLockBusy = { runtime.isOperationsLocked() },
@@ -105,26 +119,28 @@ internal object ChatSupervisorServices {
                 )
             }
         },
-        recordSpend = recordSpend,
+        recordSpend = { config, usage, estimated ->
+            if (usage != null) recordSpend(config, usage, estimated)
+        },
     )
 
-    fun initSupervisor(
+    suspend fun initSupervisor(
         services: RunServices,
-        parentScope: kotlinx.coroutines.CoroutineScope,
+        parentScope: CoroutineScope,
         retryingInterrupted: Boolean,
         currentRunId: String?,
-        onStateUpdate: (List<com.kaiser.rivet.subagent.WorkerRecord>) -> Unit,
+        onStateUpdate: (List<WorkerRecord>) -> Unit,
         sessionId: () -> String?,
-    ): Pair<com.kaiser.rivet.subagent.SubagentSupervisor, com.kaiser.rivet.subagent.SubagentTools> {
-        val supervisor = com.kaiser.rivet.subagent.SubagentSupervisor(services, parentScope)
-        kotlinx.coroutines.CoroutineScope(parentScope.coroutineContext).launch {
+    ): Triple<SubagentSupervisor, SubagentTools, Job> {
+        val supervisor = SubagentSupervisor(services, parentScope)
+        val collectorJob = parentScope.launch {
             supervisor.state.collect { list -> onStateUpdate(list) }
         }
         if (retryingInterrupted) {
             currentRunId?.let { supervisor.relaunchPaused(it) }
         }
-        val tools = com.kaiser.rivet.subagent.SubagentTools(supervisor, services.workerStore, sessionId)
-        return supervisor to tools
+        val tools = SubagentTools(supervisor, services.workerStore, sessionId)
+        return Triple(supervisor, tools, collectorJob)
     }
 
     suspend fun dismissInterruptedWorkers(workerStore: WorkerSessionStore, runId: String) {

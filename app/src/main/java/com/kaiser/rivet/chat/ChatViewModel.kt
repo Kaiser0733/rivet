@@ -113,8 +113,10 @@ import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
@@ -1365,6 +1367,8 @@ class ChatViewModel private constructor(
             }
             val executor = createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty())
             val subagentTools: SubagentTools?
+            var supervisorScopeJob: Job? = null
+            var supervisorCollector: Job? = null
             if (workspaceId != null && workspace != null) {
                 val boundWorkspaceId = workspaceId ?: workspace.tree.toString()
                 val supervisorServices = ChatSupervisorServices.createServices(
@@ -1373,21 +1377,24 @@ class ChatViewModel private constructor(
                     providerSource = providerSource, clientFactory = clientFactory, approvals = approvals,
                     checkpointGate = checkpointGate, coordinatorConfig = { snapshot.config },
                     browserTools = browserTools, browserLease = browserLease, createExecutor = ::createExecutor,
-                    skills = { skills }, workspace = workspace, runtime = runtime,
+                    projectInstructions = project, skills = { skills }, workspace = workspace, runtime = runtime,
                     managedProcesses = managedProcesses, browser = browser, workspaceSelection = workspaceSelection,
                     approvedSkillScripts = { approvedSkillScripts }, skillScriptApprovals = skillScriptApprovals,
                     turnSessionId = { turnSessionId }, sessions = { sessions }, recordSpend = ::recordSpend,
                     readAutonomyMode = ::readAutonomyMode, systemInstruction = ::systemInstruction,
                     activityFor = ::activityFor,
                 )
-                val (supervisor, tools) = ChatSupervisorServices.initSupervisor(
+                val scopeJob = SupervisorJob(coroutineContext[Job])
+                val (supervisor, tools, collectorJob) = ChatSupervisorServices.initSupervisor(
                     services = supervisorServices,
-                    parentScope = CoroutineScope(coroutineContext + SupervisorJob(coroutineContext[Job])),
+                    parentScope = CoroutineScope(coroutineContext + scopeJob),
                     retryingInterrupted = retryingInterrupted,
                     currentRunId = currentRun?.id,
                     onStateUpdate = { _subagents.value = it },
                     sessionId = { _uiState.value.currentSessionId },
                 )
+                supervisorScopeJob = scopeJob
+                supervisorCollector = collectorJob
                 activeSupervisor = supervisor
                 subagentTools = tools
             } else {
@@ -1861,6 +1868,9 @@ class ChatViewModel private constructor(
                 approvals.cancel()
                 withContext(NonCancellable) {
                     activeSupervisor?.joinAll()
+                    supervisorCollector?.cancel()
+                    supervisorScopeJob?.cancel()
+                    activeSupervisor = null
                     try {
                         when (val outcome = checkpointGate.finishTurnCheckpoint()) {
                             is TurnCheckpointOutcome.Finished -> {

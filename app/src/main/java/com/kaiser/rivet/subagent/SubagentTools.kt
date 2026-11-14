@@ -111,15 +111,15 @@ internal class SubagentTools(
             return invalidAwait(call, "await_subagents arguments must be a JSON object.")
         }
 
-        val rawIds = fields["worker_ids"]
+        val rawIds = fields["ids"] ?: fields["worker_ids"]
         val workerIds = when {
             rawIds == null || rawIds is JsonNull -> emptyList()
-            rawIds !is JsonArray -> return invalidAwait(call, "worker_ids must be an array of worker id strings.")
+            rawIds !is JsonArray -> return invalidAwait(call, "ids must be an array of worker id strings.")
             else -> {
                 val parsed = mutableListOf<String>()
                 for (elem in rawIds) {
                     val id = (elem as? JsonPrimitive)?.takeIf { it.isString }?.content?.trim()
-                        ?: return invalidAwait(call, "worker_ids entries must be strings.")
+                        ?: return invalidAwait(call, "ids entries must be strings.")
                     if (id.isNotEmpty() && id !in parsed) parsed += id
                 }
                 parsed
@@ -218,10 +218,10 @@ internal class SubagentTools(
             ),
             AgentToolDefinition(
                 name = AWAIT_TOOL,
-                description = "Wait for spawned subagents to finish and return their verified result envelopes. Omit worker_ids (or pass []) to wait for all live and queued workers in this run.",
+                description = "Wait for spawned subagents to finish and return their verified result envelopes. Omit ids (or pass []) to wait for all live and queued workers in this run, or pass timeout_s = 0 to check status without waiting.",
                 parameters = objectSchema(
                     required = emptyList(),
-                    "worker_ids" to stringArraySchema,
+                    "ids" to stringArraySchema,
                     "timeout_s" to timeoutSchema,
                 ),
             ),
