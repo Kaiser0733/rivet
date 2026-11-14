@@ -463,6 +463,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val anchor = db.rawQuery("SELECT context_input_tokens,base_count,base_prefix_hash,system_hash,active_generation " +
             "FROM usage WHERE session_id=? AND provider_id=? AND model=? AND source='reported' " +
             "AND context_input_tokens > 0 AND turn_id NOT LIKE 'compaction-%' AND turn_id NOT LIKE 'title-%' " +
+            "AND turn_id NOT LIKE 'worker-%' " +
             "ORDER BY id DESC LIMIT 1", arrayOf(sessionId, providerId, model)).use { cursor ->
             if (!cursor.moveToFirst()) null else UsageAnchor(cursor.getLong(0), cursor.getInt(1),
                 if (cursor.isNull(2)) null else cursor.getString(2), cursor.getString(3), cursor.getInt(4))
@@ -505,7 +506,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             (0..4).map { if (cursor.isNull(it)) null else cursor.getLong(it) }
         }
         val latest = db.rawQuery("SELECT input_tokens,output_tokens,cache_read_tokens,cache_creation_tokens," +
-            "reasoning_tokens,total_tokens,source,turn_id FROM usage WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            "reasoning_tokens,total_tokens,source,turn_id FROM usage WHERE session_id=? " +
+            "AND turn_id NOT LIKE 'worker-%' ORDER BY id DESC LIMIT 1",
             arrayOf(sessionId)).use { cursor ->
             if (cursor.moveToFirst()) Triple(usageFields(cursor), cursor.getString(6), cursor.getString(7))
             else Triple(null, null, null)
