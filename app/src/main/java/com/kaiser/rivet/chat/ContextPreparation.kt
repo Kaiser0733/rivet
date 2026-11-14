@@ -11,9 +11,9 @@ import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.storage.AgentSessionCodec
-import com.kaiser.rivet.storage.CodingSessions
-import com.kaiser.rivet.storage.ContextEstimate
 import com.kaiser.rivet.storage.ContextAttempt
+import com.kaiser.rivet.storage.ContextEstimate
+import com.kaiser.rivet.storage.ContextStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -32,7 +32,7 @@ internal fun projectionCanBeSent(after: Long, baseline: Long, ceiling: Long): Bo
 
 /** Builds the request that is actually sent, then changes only its durable active projection. */
 internal class ContextPreparation(
-    private val store: CodingSessions?,
+    private val store: ContextStore?,
     private val sessionId: String?,
     private val client: ProviderClient,
     private val config: ProviderConfig,
@@ -80,7 +80,7 @@ internal class ContextPreparation(
         }
     }
 
-    private suspend fun prepareChecked(durableStore: CodingSessions, id: String,
+    private suspend fun prepareChecked(durableStore: ContextStore, id: String,
                                        messages: List<AgentMessage>, force: Boolean,
                                        attempt: ContextAttempt): List<AgentMessage> {
         val source = when (attempt.estimateSource) {
@@ -220,7 +220,7 @@ internal class ContextPreparation(
         return after < target && (!force || after < baseline * 9 / 10)
     }
 
-    private suspend fun noHeadroom(store: CodingSessions, id: String, attempt: ContextAttempt,
+    private suspend fun noHeadroom(store: ContextStore, id: String, attempt: ContextAttempt,
                                    messages: List<AgentMessage>, force: Boolean,
                                    ceilingTokens: Long): List<AgentMessage> {
         // Nothing worth compacting was found. If the request still fits the ceiling, send
@@ -232,14 +232,14 @@ internal class ContextPreparation(
         return messages
     }
 
-    private suspend fun recordFailure(store: CodingSessions, id: String,
+    private suspend fun recordFailure(store: ContextStore, id: String,
                                       attempt: ContextAttempt, code: String) {
         try { store.recordContextFailure(id, attempt.copy(failure = code)) }
         catch (e: CancellationException) { throw e
         } catch (_: Exception) { /* Diagnostics must not replace the original failure. */ }
     }
 
-    private suspend fun commit(store: CodingSessions, expected: List<AgentMessage>,
+    private suspend fun commit(store: ContextStore, expected: List<AgentMessage>,
                                retained: List<AgentMessage>, nextSummary: String,
                                attempt: ContextAttempt): List<AgentMessage> = withContext(NonCancellable) {
         val projected = store.compact(expected, retained, nextSummary, attempt, sessionId)

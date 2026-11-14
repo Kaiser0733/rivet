@@ -79,7 +79,7 @@ data class ContextAttempt(
 )
 
 /** Provider-neutral event rows. The old DataStore value is retained after migration. */
-internal class CodingSessions(private val context: Context) : AgentSessionPersistence {
+internal class CodingSessions(private val context: Context) : AgentSessionPersistence, ContextStore {
     private val database = SessionDatabase(context)
     private val lock = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
@@ -331,9 +331,9 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         visible.asReversed()
     }
 
-    suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String,
-                        attempt: ContextAttempt? = null,
-                        expectedSessionId: String? = null): List<AgentMessage> = onDatabase { db ->
+    override suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String,
+                        attempt: ContextAttempt?,
+                        expectedSessionId: String?): List<AgentMessage> = onDatabase { db ->
         require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
         require(retained != expected || summary != this.summary(db, activeId(db)))
         require(validProjection(expected, retained))
@@ -377,16 +377,18 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         projected
     }
 
-    suspend fun recordContextFailure(sessionId: String, attempt: ContextAttempt) = onDatabase { db ->
-        require(attempt.failure != null)
-        val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(sessionId)).use {
-            it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
+    override suspend fun recordContextFailure(sessionId: String, attempt: ContextAttempt) {
+        onDatabase { db ->
+            require(attempt.failure != null)
+            val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(sessionId)).use {
+                it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
+            }
+            db.beginTransaction()
+            try {
+                insertContextAttempt(db, sessionId, through, null, attempt, null, null, null)
+                db.setTransactionSuccessful()
+            } finally { db.endTransaction() }
         }
-        db.beginTransaction()
-        try {
-            insertContextAttempt(db, sessionId, through, null, attempt, null, null, null)
-            db.setTransactionSuccessful()
-        } finally { db.endTransaction() }
     }
 
     private fun insertContextAttempt(db: SQLiteDatabase, sessionId: String, through: Long,
@@ -415,41 +417,43 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         }
     }
 
-    suspend fun recordUsage(sessionId: String, turnId: String, providerId: String, model: String,
-                            usage: AgentUsage?, requestMessages: List<AgentMessage> = emptyList(),
-                            system: String = "", tools: List<AgentToolDefinition> = emptyList(),
-                            endpoint: String = "", providerType: ProviderType? = null,
-                            reasoning: ReasoningLevel = ReasoningLevel.Default) = onDatabase { db ->
-        val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
-            if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
-            it.getInt(0)
+    override suspend fun recordUsage(sessionId: String, turnId: String, providerId: String, model: String,
+                            usage: AgentUsage?, requestMessages: List<AgentMessage>,
+                            system: String, tools: List<AgentToolDefinition>,
+                            endpoint: String, providerType: ProviderType?,
+                            reasoning: ReasoningLevel) {
+        onDatabase { db ->
+            val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
+                if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
+                it.getInt(0)
+            }
+            val contextInput = usage?.let { if (providerType == null) it.inputTokens else it.contextInputTokens(providerType) }
+            db.insertOrThrow("usage", null, ContentValues().apply {
+                put("session_id", sessionId); put("turn_id", turnId)
+                put("provider_id", providerId); put("model", model)
+                put("source", if (contextInput != null) "reported" else "unknown")
+                put("input_tokens", usage?.inputTokens); put("output_tokens", usage?.outputTokens)
+                put("cache_read_tokens", usage?.cacheReadTokens)
+                put("cache_creation_tokens", usage?.cacheCreationTokens)
+                put("context_input_tokens", contextInput)
+                put("reasoning_tokens", usage?.reasoningTokens)
+                put("total_tokens", usage?.totalTokens)
+                put("base_count", requestMessages.size)
+                put("base_prefix_hash", hashMessages(requestMessages))
+                put("system_hash", requestEnvironmentHash(endpoint, system, tools, reasoning))
+                put("active_generation", generation)
+                put("created_at", System.currentTimeMillis())
+            })
         }
-        val contextInput = usage?.let { if (providerType == null) it.inputTokens else it.contextInputTokens(providerType) }
-        db.insertOrThrow("usage", null, ContentValues().apply {
-            put("session_id", sessionId); put("turn_id", turnId)
-            put("provider_id", providerId); put("model", model)
-            put("source", if (contextInput != null) "reported" else "unknown")
-            put("input_tokens", usage?.inputTokens); put("output_tokens", usage?.outputTokens)
-            put("cache_read_tokens", usage?.cacheReadTokens)
-            put("cache_creation_tokens", usage?.cacheCreationTokens)
-            put("context_input_tokens", contextInput)
-            put("reasoning_tokens", usage?.reasoningTokens)
-            put("total_tokens", usage?.totalTokens)
-            put("base_count", requestMessages.size)
-            put("base_prefix_hash", hashMessages(requestMessages))
-            put("system_hash", requestEnvironmentHash(endpoint, system, tools, reasoning))
-            put("active_generation", generation)
-            put("created_at", System.currentTimeMillis())
-        })
     }
 
     private data class UsageAnchor(val input: Long, val count: Int, val prefixHash: String?,
                                    val environmentHash: String, val generation: Int)
 
-    suspend fun contextEstimate(sessionId: String, providerId: String, model: String,
+    override suspend fun contextEstimate(sessionId: String, providerId: String, model: String,
                                 messages: List<AgentMessage>, system: String,
-                                tools: List<AgentToolDefinition> = emptyList(),
-                                endpoint: String = "", reasoning: ReasoningLevel = ReasoningLevel.Default): ContextEstimate = onDatabase { db ->
+                                tools: List<AgentToolDefinition>,
+                                endpoint: String, reasoning: ReasoningLevel): ContextEstimate = onDatabase { db ->
         val generation = db.rawQuery("SELECT active_generation FROM sessions WHERE id=?", arrayOf(sessionId)).use {
             if (!it.moveToFirst()) throw IllegalArgumentException("Unknown session")
             it.getInt(0)

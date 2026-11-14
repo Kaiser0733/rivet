@@ -16,6 +16,9 @@ import com.kaiser.rivet.provider.TestResult
 import com.kaiser.rivet.provider.withManualContextWindow
 import com.kaiser.rivet.storage.AgentSessionStore
 import com.kaiser.rivet.storage.CodingSessions
+import com.kaiser.rivet.storage.ContextAttempt
+import com.kaiser.rivet.storage.ContextEstimate
+import com.kaiser.rivet.storage.ContextStore
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -336,6 +339,63 @@ class ContextPreparationTest {
             projectionCanBeSent(ceiling, baseline = ceiling + 40_000, ceiling = ceiling))
         assertFalse("no smaller than the request it replaces is not progress",
             projectionCanBeSent(ceiling - 1, baseline = ceiling - 1, ceiling = ceiling))
+    }
+
+    @Test fun contextPreparationUsesContextStoreSeamWithoutCodingSessions() = runBlocking {
+        var estimates = 0
+        var compactions = 0
+        val fakeStore = object : ContextStore {
+            override suspend fun compact(
+                expected: List<AgentMessage>,
+                retained: List<AgentMessage>,
+                summary: String,
+                attempt: ContextAttempt?,
+                expectedSessionId: String?,
+            ): List<AgentMessage> {
+                compactions++
+                return retained
+            }
+
+            override suspend fun recordContextFailure(sessionId: String, attempt: ContextAttempt) = Unit
+
+            override suspend fun recordUsage(
+                sessionId: String,
+                turnId: String,
+                providerId: String,
+                model: String,
+                usage: com.kaiser.rivet.agent.AgentUsage?,
+                requestMessages: List<AgentMessage>,
+                system: String,
+                tools: List<com.kaiser.rivet.agent.AgentToolDefinition>,
+                endpoint: String,
+                providerType: ProviderType?,
+                reasoning: ReasoningLevel,
+            ) = Unit
+
+            override suspend fun contextEstimate(
+                sessionId: String,
+                providerId: String,
+                model: String,
+                messages: List<AgentMessage>,
+                system: String,
+                tools: List<com.kaiser.rivet.agent.AgentToolDefinition>,
+                endpoint: String,
+                reasoning: ReasoningLevel,
+            ): ContextEstimate {
+                estimates++
+                return ContextEstimate(128L, "estimated")
+            }
+        }
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 32_768))
+        val preparation = ContextPreparation(fakeStore, "worker-1", SummaryProvider(), config, "turn-1", "") { messages, _ ->
+            AgentRequest("small", com.kaiser.rivet.agent.modelMessages(messages),
+                "System", ReasoningLevel.Default, emptyList())
+        }
+        val messages = listOf(AgentMessage.user("Inspect"))
+        assertEquals(messages, preparation.prepare(messages))
+        assertEquals(1, estimates)
+        assertEquals(0, compactions)
     }
 
     private fun preparation(sessions: CodingSessions, id: String, limit: Int,
