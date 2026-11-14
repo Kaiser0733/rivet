@@ -1,5 +1,6 @@
 package com.kaiser.rivet.browser
 
+import android.app.Activity
 import android.app.Application
 import android.os.Looper
 import android.view.View
@@ -21,6 +22,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
+import org.robolectric.Robolectric
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
@@ -74,6 +76,10 @@ class BrowserSessionReaderCloseTest {
                 }
             }
         }
+        // loadSnapshotState posts the restore onto the WebView. An unattached View
+        // queues that post until attach, so mount it in an Activity as BrowserHost does.
+        val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
+        activity.setContentView(webView)
         session.userOpen()
         session.attach(webView)
         session.newWindow()
