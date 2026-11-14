@@ -80,5 +80,7 @@ class ProjectInstructionsTest {
             """{"url":"https://example.test/file","path":"assets/file.bin"}"""))
             .keys.map { it.value } == listOf("assets/file.bin"))
         assertTrue(loader.targets(AgentToolCall("2", "read_file", """{"path":"../outside"}""")).isEmpty())
+        assertTrue(ProjectInstructions.targets(AgentToolCall("4", "write_file",
+            """{"path":"src/Main.kt"}""")) == mapOf(WorkspacePath.parse("src/Main.kt") to false))
     }
 }

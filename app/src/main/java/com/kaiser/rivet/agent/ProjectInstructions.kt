@@ -67,18 +67,7 @@ class ProjectInstructions(private val workspace: SafWorkspace) {
         return ProjectInstructionSet(sections.joinToString("\n\n"), files, limited, entries, notices)
     }
 
-    fun targets(call: AgentToolCall): Map<WorkspacePath, Boolean> {
-        if (call.name !in PATH_TOOLS || call.arguments.length > MAX_ARGUMENT_CHARS) return emptyMap()
-        val fields = try { Json.parseToJsonElement(call.arguments).jsonObject }
-            catch (_: Exception) { return emptyMap() }
-        val paths = linkedMapOf<WorkspacePath, Boolean>()
-        for (key in listOf("path", "destination", "cwd")) {
-            val raw = (fields[key] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: continue
-            val path = try { WorkspacePath.parse(raw) } catch (_: WorkspaceFailure) { continue }
-            paths[path] = key != "path" || call.name in DIRECTORY_TOOLS
-        }
-        return paths
-    }
+    fun targets(call: AgentToolCall): Map<WorkspacePath, Boolean> = Companion.targets(call)
 
     companion object {
         const val PER_FILE_BYTES = 8 * 1024
@@ -91,5 +80,18 @@ class ProjectInstructions(private val workspace: SafWorkspace) {
             "apply_patch", "create_file", "create_directory", "rename_path", "move_path",
             "delete_path", "run_command", "download_file", "git_diff")
         private val DIRECTORY_TOOLS = setOf("list_directory", "search_files", "create_directory")
+
+        fun targets(call: AgentToolCall): Map<WorkspacePath, Boolean> {
+            if (call.name !in PATH_TOOLS || call.arguments.length > MAX_ARGUMENT_CHARS) return emptyMap()
+            val fields = try { Json.parseToJsonElement(call.arguments).jsonObject }
+                catch (_: Exception) { return emptyMap() }
+            val paths = linkedMapOf<WorkspacePath, Boolean>()
+            for (key in listOf("path", "destination", "cwd")) {
+                val raw = (fields[key] as? JsonPrimitive)?.takeIf { it.isString }?.content ?: continue
+                val path = try { WorkspacePath.parse(raw) } catch (_: WorkspaceFailure) { continue }
+                paths[path] = key != "path" || call.name in DIRECTORY_TOOLS
+            }
+            return paths
+        }
     }
 }
