@@ -1,5 +1,6 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.subagent.SubagentContext
 import com.kaiser.rivet.workspace.WorkspacePath
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.builtins.ListSerializer
@@ -28,7 +29,8 @@ data class InternalContext(
     fun valid(): Boolean {
         if (version != 1 || kind !in setOf("project", "project_notice", "project_snapshot", "summary",
                 SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND, ToolchainContext.KIND,
-                GoalMemoryContext.KIND, RunContext.KIND, "rollback") ||
+                GoalMemoryContext.KIND, RunContext.KIND, "rollback",
+                SubagentContext.POOL_KIND, SubagentContext.RESULT_KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
@@ -78,6 +80,8 @@ data class InternalContext(
             GoalMemoryContext.KIND -> append(content)
             RunContext.KIND -> append(content)
             "rollback" -> append(content)
+            SubagentContext.POOL_KIND -> append(content)
+            SubagentContext.RESULT_KIND -> append(content)
             SKILL_INVOCATION_KIND -> {
                 append("The user loaded this skill for the current request. Follow its instructions ")
                 append("while answering the task that follows them.\n")
@@ -165,6 +169,11 @@ fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
             it.kind == "rollback" && (!enforceWorkspace || it.workspaceId == workspace)
         } == true
     }
+    val lastSubagentPool = messages.lastOrNull { message ->
+        message.validatedContext()?.let {
+            it.kind == SubagentContext.POOL_KIND && (!enforceWorkspace || it.workspaceId == workspace)
+        } == true
+    }
     return messages.mapNotNull { message ->
         if (message.role != AgentRole.Context) message.takeIf { it.internalContext == null }
         else message.validatedContext()?.takeIf { !enforceWorkspace || it.workspaceId == workspace }
@@ -172,7 +181,8 @@ fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
                 (it.kind != ToolchainContext.KIND || message === lastToolchain) &&
                 (it.kind != GoalMemoryContext.KIND || message === lastGoalMemory) &&
                 (it.kind != RunContext.KIND || message === lastRun) &&
-                (it.kind != "rollback" || message === lastRollback) }
+                (it.kind != "rollback" || message === lastRollback) &&
+                (it.kind != SubagentContext.POOL_KIND || message === lastSubagentPool) }
             ?.let { AgentMessage.user(it.modelText()) }
     }
 }
@@ -203,7 +213,7 @@ internal object ProjectContext {
         val latestRetained = source.lastOrNull { message ->
             val data = message.validatedContext()
             data != null && data.kind in setOf(SKILL_CATALOG_KIND, ToolchainContext.KIND,
-                GoalMemoryContext.KIND, RunContext.KIND, "rollback")
+                GoalMemoryContext.KIND, RunContext.KIND, "rollback", SubagentContext.POOL_KIND)
         }?.validatedContext()
         val prefix = mutableListOf<AgentMessage>()
         val workspace = workspaceOverride ?: latestProject?.workspaceId ?: priorSummary?.workspaceId
@@ -217,9 +227,9 @@ internal object ProjectContext {
                 data.workspaceId == workspace && data.kind == "project_notice" } == true }
                 ?.takeIf { it.internalContext!!.content.isNotBlank() }?.let { prefix += it }
         }
-        // Skills, goal, memory, run journal and availability are snapshots, not deltas; keep
+        // Skills, goal, memory, run journal, subagent pool and availability are snapshots, not deltas; keep
         // the newest of each through compaction even when a project has no AGENTS.md file.
-        for (kind in listOf(SKILL_CATALOG_KIND, GoalMemoryContext.KIND, RunContext.KIND, "rollback", ToolchainContext.KIND)) {
+        for (kind in listOf(SKILL_CATALOG_KIND, GoalMemoryContext.KIND, RunContext.KIND, "rollback", ToolchainContext.KIND, SubagentContext.POOL_KIND)) {
             source.lastOrNull { it.validatedContext()?.let { data ->
                 data.workspaceId == workspace && data.kind == kind } == true }
                 ?.let { prefix += it }
