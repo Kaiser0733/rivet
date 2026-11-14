@@ -1,5 +1,6 @@
 package com.kaiser.rivet.browser
 
+import android.app.ActivityManager
 import android.app.Application
 import android.webkit.WebView
 import java.util.concurrent.atomic.AtomicInteger
@@ -22,6 +23,8 @@ import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.annotation.Config
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowActivityManager
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -37,6 +40,7 @@ class BrowserSessionBudgetSamplingTest {
 
     @Test fun onPageFinishedSamplesMemoryAndRaisesNoticeWithoutWaitingFiveSeconds() = runBlocking {
         val app: Application = RuntimeEnvironment.getApplication()
+        setAvailableMemory(app)
         val session = BrowserSession(app, models = null)
         val pssBytes = AtomicLong(40L * 1024 * 1024)
         val samples = AtomicInteger(0)
@@ -70,6 +74,7 @@ class BrowserSessionBudgetSamplingTest {
 
     @Test fun postLoadSpikeSurfacesWithinPostLoadFollowUpWindow() = runBlocking {
         val app: Application = RuntimeEnvironment.getApplication()
+        setAvailableMemory(app)
         val session = BrowserSession(app, models = null)
         val pssBytes = AtomicLong(40L * 1024 * 1024)
         val samples = AtomicInteger(0)
@@ -100,5 +105,16 @@ class BrowserSessionBudgetSamplingTest {
         }
         assertEquals(BrowserTier.StrictDiet, tightened.tier)
         session.endSession()
+    }
+
+    private fun setAvailableMemory(app: Application) {
+        val manager = requireNotNull(app.getSystemService(ActivityManager::class.java))
+        val info = ActivityManager.MemoryInfo().apply {
+            availMem = 1024L * 1024 * 1024
+            totalMem = 2048L * 1024 * 1024
+            threshold = 0L
+            lowMemory = false
+        }
+        Shadow.extract<ShadowActivityManager>(manager).setMemoryInfo(info)
     }
 }
