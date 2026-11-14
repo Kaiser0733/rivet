@@ -2055,6 +2055,14 @@ class ChatViewModelTest {
         val t = Thread { viewModel.onConnectivityLost() }
         t.start()
         t.join()
+        // The pause is applied asynchronously when the cancelled send job reaches its
+        // finally block. Wait for the observable paused state instead of firing the
+        // available callback into that window and losing the resume.
+        val paused = await(viewModel) {
+            it.run?.pause == RunPauseReason.NetworkLost && !it.streaming
+        }
+        assertTrue(paused.interruptedTurn)
+
         val t2 = Thread { viewModel.onConnectivityAvailable() }
         t2.start()
         t2.join()
