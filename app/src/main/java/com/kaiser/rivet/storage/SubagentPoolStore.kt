@@ -15,6 +15,7 @@ import kotlinx.coroutines.flow.Flow
 import kotlinx.coroutines.flow.catch
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
+import kotlinx.coroutines.flow.first
 import kotlinx.serialization.json.Json
 
 private val Context.subagentPoolData: DataStore<Preferences> by preferencesDataStore("subagents")
@@ -41,6 +42,9 @@ class SubagentPoolStore internal constructor(
     suspend fun save(state: SubagentPoolState) {
         dataStore.edit { it[stateKey] = json.encodeToString(SubagentPoolState.serializer(), state) }
     }
+
+    /** One-shot read for spawn-time validation and tests. */
+    suspend fun load(): SubagentPoolState = state.first()
 
     private fun decode(raw: String?): SubagentPoolState = if (raw == null) {
         SubagentPoolState()
