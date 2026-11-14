@@ -74,7 +74,9 @@ import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.provider.recommendedFallbackReasoning
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
+import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.runtime.RuntimeController
+import com.kaiser.rivet.runtime.TurnCheckpointOutcome
 import com.kaiser.rivet.runtime.ManagedProcesses
 import com.kaiser.rivet.runtime.PersistentProcessService
 import com.kaiser.rivet.runtime.ManagedProcessStatus
@@ -501,9 +503,10 @@ class ChatViewModel private constructor(
         readCaps = { _uiState.value.spendCaps },
         readUserPricePerMillionUsd = { _uiState.value.userPricePerMillionUsd },
     )
-    private var runCheckpointId: String? = null
-    private var runCheckpointSequence = 0
-    private var mutationCount = 0
+    private val checkpointGate = RunCheckpointGate(
+        runtime = runtimeController,
+        onBoundaryChanged = { refreshRunCheckpoints() },
+    )
     private var lastPruneSeen = 0
     private var currentCloud = true
     private var knownGoalMarkdown: String? = null
@@ -1017,41 +1020,18 @@ class ChatViewModel private constructor(
                 batteryAskStore.markAsked()
                 _uiState.update { it.copy(batteryAsk = true) }
             }
-            mutationCount = 0
-            runCheckpointSequence = 0
             spendLedger.resetRun(spendStore.month())
             _uiState.update { it.copy(spendLabel = null, spendEstimate = null,
                 runSpendUsd = 0.0, budgetPaused = false) }
         } else {
-            runCheckpointSequence += 1
             spendLedger.syncMonth(spendStore.month())
         }
-        runCheckpointId = try {
-            runtimeController.beginRunCheckpoint(workspaceId, next.id, runCheckpointSequence,
-                if (resumed == null) "Before: ${title.take(120)}" else "Resumed run")
-        } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
-        refreshRunCheckpoints()
+        checkpointGate.startRun(workspaceId, next.id, title, resuming = resumed != null)
         // Save on the first completed step, not at start: a run that never gets a
         // step must not create project files or a checkpoint-sized journal.
         managedProcesses.updateRunStatus(next.title, "Getting ready…", next.startedAt)
         _uiState.update { it.copy(run = next, runRecovery = null) }
         return next
-    }
-
-    private suspend fun beginRunBoundary(summary: String) {
-        val run = currentRun ?: return
-        val workspaceId = run.workspaceId ?: return
-        val old = runCheckpointId
-        if (old != null) {
-            try { runtimeController.finishRunCheckpoint(workspaceId, old) }
-            catch (e: CancellationException) { throw e } catch (_: Exception) { }
-        }
-        runCheckpointSequence += 1
-        runCheckpointId = try {
-            runtimeController.beginRunCheckpoint(workspaceId, run.id, runCheckpointSequence, summary,
-                allowDirty = true)
-        } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
-        refreshRunCheckpoints()
     }
 
     private suspend fun persistRunStep(summary: String) {
@@ -1072,12 +1052,7 @@ class ChatViewModel private constructor(
             catch (_: IllegalStateException) { return }
         currentRun = next
         runResumeContext = false
-        runCheckpointId?.let { id ->
-            try { runtimeController.finishRunCheckpoint(next.workspaceId ?: return@let, id) }
-            catch (e: CancellationException) { throw e } catch (_: Exception) { }
-            runCheckpointId = null
-            refreshRunCheckpoints()
-        }
+        checkpointGate.finishRunCheckpoint(next.workspaceId)
         if (next.lastCompletedStep > 0 || next.phase == RunPhase.Paused) {
             try { runJournal?.save(next) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
         }
@@ -1565,10 +1540,7 @@ class ChatViewModel private constructor(
             // a few tens of milliseconds is invisible while text keeps arriving. Reasoning
             // cannot be held back that way, see its handler below.
             val textWindow = PreviewWindow()
-            var checkpointId: String? = null
-            var checkpointBroken = false
-            var needsPostCheck = false
-            var mutationStartedSincePost = false
+            checkpointGate.beginTurn(workspaceId, currentRun?.takeIf { workspaceId != null }?.id, turnSessionId)
 
             val loop = AgentLoop(
                 requestModel = { messages, _, onText ->
@@ -1627,7 +1599,7 @@ class ChatViewModel private constructor(
                     response
                 },
                 prepareTool = { call ->
-                    if (call.name == "delete_path") beginRunBoundary("Before deleting a file")
+                    if (call.name == "delete_path") checkpointGate.beginRunBoundary("Before deleting a file")
                     val prepared = browserTools.prepare(call)
                         ?: executor?.prepare(call) ?: PreparedAgentTool(
                         call,
@@ -1683,31 +1655,11 @@ class ChatViewModel private constructor(
                         else -> null
                     }
                 },
-                beforeMutation = {
-                    mutationCount += 1
-                    if (mutationCount > 0 && mutationCount % 10 == 0 &&
-                        workspaceId != null && currentRun != null) {
-                        beginRunBoundary("Every 10 file edits")
-                    }
-                    if (workspaceId == null || checkpointBroken) "checkpoint_unavailable"
-                    else {
-                        try {
-                            val id = checkpointId
-                            if (id == null) checkpointId = runtime.beginCheckpoint(
-                                workspaceId, currentRun?.id, turnSessionId)
-                            else if (needsPostCheck) {
-                                if (!runtime.checkpointMatchesPost(workspaceId, id)) checkpointBroken = true
-                                else needsPostCheck = false
-                            }
-                            if (!checkpointBroken) mutationStartedSincePost = true
-                            if (checkpointBroken) "checkpoint_unavailable" else null
-                        } catch (e: CancellationException) { throw e
-                        } catch (e: MirrorFailure) {
-                            e.code.takeIf { it == "sync_required" ||
-                                it == "workspace_unavailable" || it == "workspace_changed" }
-                                ?: "checkpoint_unavailable"
-                        }
-                    }
+                beforeMutation = { call ->
+                    checkpointGate.beforeMutation(RunCheckpointGate.COORDINATOR, call)
+                },
+                afterMutation = { call, result ->
+                    checkpointGate.afterMutation(RunCheckpointGate.COORDINATOR, call, result)
                 },
                 failureState = runtime::agentFailureState,
                 compactContext = { candidate, force ->
@@ -1816,15 +1768,6 @@ class ChatViewModel private constructor(
                                             "${it.name}: ${it.summary.ifBlank { "done" }}"
                                         }
                                     persistRunStep(summary)
-                                }
-                                val id = checkpointId
-                                if (message.role == AgentRole.Tool && mutationStartedSincePost && id != null && workspaceId != null && !checkpointBroken) {
-                                    try {
-                                        runtime.recordCheckpointPost(workspaceId, id)
-                                        needsPostCheck = true
-                                        mutationStartedSincePost = false
-                                    } catch (e: CancellationException) { throw e
-                                    } catch (_: Exception) { checkpointBroken = true }
                                 }
                             }
                         },
@@ -1947,33 +1890,35 @@ class ChatViewModel private constructor(
             } finally {
                 browser.endAgentRun()
                 approvals.cancel()
-                val id = checkpointId
-                if (id != null && workspaceId != null && !checkpointBroken) {
-                    withContext(NonCancellable) {
-                        try {
-                            if (runtime.finishCheckpoint(workspaceId, id) && ticket == generation) {
-                                val record = runtime.latestCheckpoint()
-                                if (record?.id == id && undoBarOwned(record)) {
-                                    val row = undoRowFor(record)
-                                    _uiState.update { state ->
-                                        if (state.currentSessionId != record.sessionId) state
-                                        else state.copy(lastTurnFiles = row.files,
-                                            lastTurnFileCount = row.fileCount,
-                                            undoCheckpointId = row.checkpointId)
+                withContext(NonCancellable) {
+                    try {
+                        when (val outcome = checkpointGate.finishTurnCheckpoint()) {
+                            is TurnCheckpointOutcome.Finished -> {
+                                if (outcome.hasChanges && ticket == generation) {
+                                    val record = runtime.latestCheckpoint()
+                                    if (record?.id == outcome.id && undoBarOwned(record)) {
+                                        val row = undoRowFor(record)
+                                        _uiState.update { state ->
+                                            if (state.currentSessionId != record.sessionId) state
+                                            else state.copy(lastTurnFiles = row.files,
+                                                lastTurnFileCount = row.fileCount,
+                                                undoCheckpointId = row.checkpointId)
+                                        }
                                     }
                                 }
                             }
-                        }
-                        catch (e: CancellationException) { throw e }
-                        catch (_: Exception) {
-                            if (ticket == generation) _uiState.update {
-                                if (it.error == null) it.copy(error = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
+                            TurnCheckpointOutcome.Broken -> {
+                                if (ticket == generation) _uiState.update {
+                                    if (it.error == null) it.copy(error = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
+                                }
                             }
+                            TurnCheckpointOutcome.None -> Unit
                         }
-                    }
-                } else if (checkpointBroken && ticket == generation) {
-                    _uiState.update {
-                        if (it.error == null) it.copy(error = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
+                    } catch (e: CancellationException) { throw e
+                    } catch (_: Exception) {
+                        if (ticket == generation) _uiState.update {
+                            if (it.error == null) it.copy(error = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
+                        }
                     }
                 }
             }
@@ -2013,12 +1958,7 @@ class ChatViewModel private constructor(
                                 } else if (pauseReason == RunPauseReason.NetworkLost) {
                                     PersistentProcessService.showNetworkPause(getApplication<Application>(), paused.title)
                                 }
-                                runCheckpointId?.let { id ->
-                                    try { runtimeController.finishRunCheckpoint(live.workspaceId ?: return@let, id) }
-                                    catch (_: Exception) { }
-                                    runCheckpointId = null
-                                    refreshRunCheckpoints()
-                                }
+                                checkpointGate.finishRunCheckpoint(live.workspaceId)
                                 try { runJournal?.save(paused) } catch (_: Exception) { }
                                 try { sessionStore.markInterrupted(true) } catch (_: Exception) { }
                                 managedProcesses.updateRunStatus(null, null, 0)
