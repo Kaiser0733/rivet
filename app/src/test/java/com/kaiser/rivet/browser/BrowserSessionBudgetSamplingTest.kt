@@ -10,6 +10,7 @@ import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.test.TestCoroutineScheduler
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
@@ -30,8 +31,12 @@ import org.robolectric.shadows.ShadowActivityManager
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class BrowserSessionBudgetSamplingTest {
+    private lateinit var scheduler: TestCoroutineScheduler
+
     @Before fun setUp() {
-        Dispatchers.setMain(UnconfinedTestDispatcher())
+        val dispatcher = UnconfinedTestDispatcher()
+        scheduler = dispatcher.scheduler
+        Dispatchers.setMain(dispatcher)
     }
 
     @After fun tearDown() {
@@ -85,7 +90,8 @@ class BrowserSessionBudgetSamplingTest {
             },
             rendererPss = { null },
         )
-        session.userOpen()
+        // Leave the session not-visible: the 5 s periodic fallback must not be able to
+        // satisfy this assertion. Only the +1.5/+3.0 s post-load follow-up should.
         val webView = WebView(app)
         session.attach(webView)
         withTimeout(2_000) {
@@ -97,6 +103,15 @@ class BrowserSessionBudgetSamplingTest {
             while (samples.get() < 2) delay(20)
         }
         pssBytes.set(40L * 1024 * 1024 + 150L * 1024 * 1024)
+        // The follow-up samples are delayed on the test dispatcher's virtual clock.
+        // Advance through the production follow-up points (+1.5 s and +3.0 s), with
+        // an extra step so a first delay registered late still runs. The 5 s periodic
+        // fallback is deliberately beyond this window.
+        repeat(3) {
+            scheduler.runCurrent()
+            scheduler.advanceTimeBy(1_500L)
+            scheduler.runCurrent()
+        }
 
         val tightened = withTimeout(3_500) {
             session.state.first {
