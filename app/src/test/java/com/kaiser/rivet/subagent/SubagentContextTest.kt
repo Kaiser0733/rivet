@@ -32,12 +32,14 @@ class SubagentContextTest {
     @Test
     fun emptyPoolRendersOffLineAndNonEmptyPoolRendersAliasesRulesAndLocalNote() {
         val emptyText = SubagentContext.poolContent(SubagentPoolState(), listOf(cloudConfig))
-        assertEquals(SubagentContext.OFF_LINE, emptyText)
+        assertEquals(SubagentPool.OFF_LINE, emptyText)
 
         val activeState = SubagentPoolState(
-            allowModelChoice = true,
-            defaultConfigId = cloudConfig.id,
-            enabledConfigIds = setOf(cloudConfig.id, localConfig.id),
+            allowAgentChoice = true,
+            entries = listOf(
+                PoolEntry(cloudConfig.id, cloudConfig.model),
+                PoolEntry(localConfig.id, localConfig.model),
+            ),
         )
         val activeText = SubagentContext.poolContent(
             state = activeState,
@@ -64,8 +66,8 @@ class SubagentContextTest {
 
         // Changing pool state emits a new snapshot; modelMessages keeps only the newest pool snapshot.
         val nextState = SubagentPoolState(
-            allowModelChoice = false,
-            defaultConfigId = cloudConfig.id,
+            allowAgentChoice = false,
+            fixed = PoolEntry(cloudConfig.id, cloudConfig.model),
         )
         val updated = SubagentContext.poolUpdates(initial, workspace, nextState, listOf(cloudConfig))
         assertEquals(1, updated.size)
@@ -82,7 +84,7 @@ class SubagentContextTest {
 
         // 1 newest pool snapshot + 2 result events = 3 model messages.
         assertEquals(3, wire.size)
-        assertFalse(wire[0].text.contains(SubagentContext.OFF_LINE))
+        assertFalse(wire[0].text.contains(SubagentPool.OFF_LINE))
         assertTrue(wire[0].text.contains("Mode: fixed:"))
         assertTrue(wire[1].text.contains("Subagent finished (w-1 · Check auth)"))
         assertTrue(wire[2].text.contains("Subagent finished (w-2 · Check api)"))

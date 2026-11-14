@@ -4,9 +4,9 @@ import com.kaiser.rivet.agent.AgentApprovalGate
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.RunPauseReason
 import com.kaiser.rivet.agent.RunPhase
-import com.kaiser.rivet.agent.Usage
 import com.kaiser.rivet.chat.ProviderRuntimeResult
 import com.kaiser.rivet.chat.ProviderRuntimeSource
 import com.kaiser.rivet.provider.AgentRequest
@@ -85,7 +85,7 @@ class SubagentEngineTest {
             return AgentResponse(
                 text = responseText,
                 toolCalls = emptyList(),
-                usage = Usage(promptTokens, completionTokens),
+                usage = AgentUsage(inputTokens = promptTokens, outputTokens = completionTokens),
             )
         }
     }
@@ -110,7 +110,7 @@ class SubagentEngineTest {
         workerStore: WorkerSessionStore,
         configs: List<ProviderConfig>,
         clientFactory: (ProviderConfig, String) -> ProviderClient = { _, _ -> ControllableClient() },
-        onRecordSpend: (ProviderConfig, Usage, Double?) -> Unit = { _, _, _ -> },
+        onRecordSpend: (ProviderConfig, AgentUsage?, Boolean) -> Unit = { _, _, _ -> },
     ): RunServices = RunServices(
         workspaceId = "test-workspace",
         runId = "test-run",
@@ -153,8 +153,10 @@ class SubagentEngineTest {
                 }
             },
             onRecordSpend = { _, usage, _ ->
-                totalPromptTokens += usage.promptTokens
-                totalCompletionTokens += usage.completionTokens
+                if (usage != null) {
+                    totalPromptTokens += usage.inputTokens
+                    totalCompletionTokens += usage.outputTokens
+                }
             },
         )
         val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
@@ -298,8 +300,11 @@ class SubagentEngineTest {
 
         // Pause all workers
         supervisor.pauseAll(RunPauseReason.NetworkLost)
-        val wPaused = supervisor.state.value.first { it.id == id1 }
-        assertEquals(RunPhase.Paused, wPaused.state)
+        withTimeout(3_000) {
+            supervisor.state.first { list ->
+                list.firstOrNull { it.id == id1 }?.state == RunPhase.Paused
+            }
+        }
 
         gate1.complete(Unit)
 

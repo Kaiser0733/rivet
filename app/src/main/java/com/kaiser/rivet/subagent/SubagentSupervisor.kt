@@ -13,6 +13,8 @@ import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -21,6 +23,7 @@ import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -247,7 +250,7 @@ internal class SubagentSupervisor(
             try {
                 val loaded = services.providerSource.loadFor(entry.config.id)
                 if (loaded is ProviderRuntimeResult.Failure) {
-                    val failedRun = worker.toWorkerRun().finish(RunPhase.Failed, error = loaded.message)
+                    val failedRun = worker.toWorkerRun().finish(RunPhase.Failed, failure = loaded.message)
                     val failedRecord = worker.withWorkerRun(failedRun).copy(
                         activity = null,
                         waitingReason = null,
@@ -286,7 +289,7 @@ internal class SubagentSupervisor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: Throwable) {
-                val failedRun = worker.toWorkerRun().finish(RunPhase.Failed, error = e.message)
+                val failedRun = worker.toWorkerRun().finish(RunPhase.Failed, failure = e.message)
                 val failedRecord = worker.withWorkerRun(failedRun).copy(
                     activity = null,
                     waitingReason = null,
@@ -305,10 +308,12 @@ internal class SubagentSupervisor(
                 updateWorker(failedRecord)
                 services.workerStore.saveWorker(failedRecord)
             } finally {
-                liveCloudWorkers.remove(worker.id)
-                services.checkpointGate.scopeRegistry.releaseScope(worker.id)
-                activeJobs.remove(worker.id)
-                drainQueue()
+                withContext(NonCancellable) {
+                    liveCloudWorkers.remove(worker.id)
+                    services.checkpointGate.scopeRegistry.releaseScope(worker.id)
+                    activeJobs.remove(worker.id)
+                    drainQueue()
+                }
             }
         }
         activeJobs[worker.id] = job
@@ -490,8 +495,10 @@ internal class SubagentSupervisor(
         if (runningJob != null) {
             val worker = workers[workerId]
             services.approvals.cancel(workerId)
-            services.checkpointGate.beginRunBoundary("Stopped subagent: ${worker?.job ?: workerId} — partial")
-            runningJob.cancel()
+            withContext(NonCancellable) {
+                runningJob.cancelAndJoin()
+                services.checkpointGate.beginRunBoundary("Stopped subagent: ${worker?.job ?: workerId} — partial")
+            }
         }
     }
 

@@ -39,12 +39,13 @@ import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
-import com.kaiser.rivet.provider.SpendGuard
+import com.kaiser.rivet.agent.SpendGuard
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
 import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.runtime.ToolchainAvailability
 import com.kaiser.rivet.workspace.WorkspacePath
 import java.util.Collections
+import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
@@ -90,8 +91,8 @@ internal class RunServices(
             else -> "Updating the project…"
         }
     },
-    val readAutonomyMode: () -> AutonomyMode = { AutonomyMode.Ask },
-    val workspaceIsCurrent: () -> Boolean = { true },
+    val readAutonomyMode: suspend () -> AutonomyMode = { AutonomyMode.Ask },
+    val workspaceIsCurrent: suspend () -> Boolean = { true },
     val commandBlocker: suspend () -> String? = { null },
     val canStartPreview: () -> Boolean = { true },
     val failureState: suspend () -> String = { "ready" },
@@ -445,16 +446,6 @@ internal class WorkerRunner(
                     services.workerStore.saveMessages(currentWorker.id, candidate, interrupted = true)
                     durable += message
                     val nextActivity = message.toolCalls.firstOrNull()?.let { call ->
-                        if (call.name == "run_command") {
-                            publishUpdate {
-                                it.withWorkerRun(
-                                    WorkerRun(
-                                        RunMachine.verifying(it.toWorkerRun().record),
-                                        it.waitingReason,
-                                    ),
-                                )
-                            }
-                        }
                         services.activityFor(call.name)
                     } ?: if (message.role == AgentRole.Tool) "Working on it…" else currentWorker.activity
 
@@ -462,7 +453,7 @@ internal class WorkerRunner(
                     if (message.role == AgentRole.Tool && message.toolResults.any { !it.error }) {
                         val stepSummary = message.toolResults.filterNot { it.error }
                             .joinToString("; ") { "${it.name}: ${it.summary.ifBlank { "done" }}" }
-                        updatedRun = RunMachine.addStep(updatedRun, stepSummary)
+                        updatedRun = RunMachine.step(updatedRun, stepSummary)
                     }
                     publishUpdate {
                         it.withWorkerRun(WorkerRun(updatedRun, it.waitingReason))
@@ -562,9 +553,9 @@ internal class WorkerRunner(
             worker.toWorkerRun().finish(RunPhase.Done)
         } else {
             val err = result.failureCode ?: result.stopReason.name.lowercase()
-            worker.toWorkerRun().finish(RunPhase.Failed, error = err)
+            worker.toWorkerRun().finish(RunPhase.Failed, failure = err)
         }
-        val errorLine = finalRun.record.lastError
+        val errorLine = finalRun.record.failure
         val envelope = ResultEnvelope.build(
             workerId = worker.id,
             state = finalRun.record.phase,
@@ -616,7 +607,7 @@ internal class WorkerRunner(
         }
         val phase = nextWorkerRun.record.phase
         val stopReasonWire = if (phase == RunPhase.Paused) {
-            pauseReason?.wire ?: "paused"
+            pauseReason?.name?.lowercase(Locale.ROOT) ?: "paused"
         } else {
             "stopped"
         }
@@ -632,12 +623,12 @@ internal class WorkerRunner(
             diff = attribution.diff,
         )
         val summaryLine = claim.summary.ifBlank {
-            if (phase == RunPhase.Paused) "Paused (${pauseReason?.label ?: "paused"})"
+            if (phase == RunPhase.Paused) "Paused (${pauseReason?.plain ?: "paused"})"
             else "Stopped"
         }
         val updated = worker.withWorkerRun(nextWorkerRun).copy(
             activity = null,
-            waitingReason = if (phase == RunPhase.Paused) pauseReason?.label else null,
+            waitingReason = if (phase == RunPhase.Paused) pauseReason?.plain else null,
             summary = summaryLine,
             envelope = envelope,
             interrupted = true,
@@ -661,7 +652,7 @@ internal class WorkerRunner(
         }?.text.orEmpty()
         val claim = WorkerResultParser.parse(finalText)
         val attribution = services.checkpointGate.writerAttribution(worker.id)
-        val failedRun = worker.toWorkerRun().finish(RunPhase.Failed, error = error)
+        val failedRun = worker.toWorkerRun().finish(RunPhase.Failed, failure = error)
         val envelope = ResultEnvelope.build(
             workerId = worker.id,
             state = RunPhase.Failed,
