@@ -661,6 +661,8 @@ class ChatViewModel private constructor(
                         val selected = store.create(identity)
                         activeMessages = selected.messages
                         activeSummary = selected.summary
+                        _subagents.value = emptyList()
+                        closeWorker()
                         _uiState.update { it.copy(messages = emptyList(), messageReasoning = emptyMap(),
                             sessions = store.list(),
                             currentSessionId = selected.id, currentSessionTitle = selected.title,
@@ -2569,6 +2571,8 @@ class ChatViewModel private constructor(
 
     fun clearChat() {
         val ticket = ++generation
+        closeWorker()
+        _subagents.value = emptyList()
         approvals.cancel()
         viewModelScope.launch {
             sendJob?.cancelAndJoin()
@@ -2664,6 +2668,8 @@ class ChatViewModel private constructor(
     private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
         val store = sessions ?: return
         if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
+        closeWorker()
+        _subagents.value = emptyList()
         val ticket = ++generation
         approvals.cancel()
         viewModelScope.launch {
