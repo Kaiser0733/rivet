@@ -1,7 +1,6 @@
 package com.kaiser.rivet.local
 
 import android.app.Application
-import androidx.test.core.app.ApplicationProvider
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.chat.ProviderRuntimeResult
@@ -10,6 +9,7 @@ import com.kaiser.rivet.chat.StoredProviderRuntimeSource
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import java.util.concurrent.CountDownLatch
@@ -26,6 +26,7 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 import org.robolectric.RobolectricTestRunner
+import org.robolectric.RuntimeEnvironment
 
 @RunWith(RobolectricTestRunner::class)
 class LocalOwnerStopTest {
@@ -52,7 +53,7 @@ class LocalOwnerStopTest {
 
     @Test
     fun stopGenerationIgnoresNonOwnerAndStopsMatchingOwnerOrThermal() {
-        val app = ApplicationProvider.getApplicationContext<Application>()
+        val app: Application = RuntimeEnvironment.getApplication()
         val manager = prepareManager(app)
         val stopCalls = AtomicInteger(0)
         val enteredGenerate = CountDownLatch(1)
@@ -116,7 +117,7 @@ class LocalOwnerStopTest {
 
     @Test
     fun cancellingWaitingLocalClientDoesNotStopActiveClientGeneration() = runBlocking {
-        val app = ApplicationProvider.getApplicationContext<Application>()
+        val app: Application = RuntimeEnvironment.getApplication()
         val manager = prepareManager(app)
         manager.install(entry, byo = false, checksumVerified = true)
         val config = manager.providerConfig(entry)
@@ -157,8 +158,11 @@ class LocalOwnerStopTest {
         val clientA = LocalProviderClient(config, manager, app)
         val clientB = LocalProviderClient(config, manager, app)
         val request = AgentRequest(
-            system = "You are a test agent.",
+            model = config.model,
             messages = listOf(AgentMessage(AgentRole.User, text = "ping")),
+            system = "You are a test agent.",
+            reasoning = ReasoningLevel.Default,
+            tools = emptyList(),
         )
 
         val jobA = async(Dispatchers.IO) {
@@ -192,7 +196,7 @@ class LocalOwnerStopTest {
         }
         assertTrue(defaultSource.loadFor("other") is ProviderRuntimeResult.Failure)
 
-        val app = ApplicationProvider.getApplicationContext<Application>()
+        val app: Application = RuntimeEnvironment.getApplication()
         val providerStore = ProviderStore(app)
         val secrets = SecretStore(app)
         val localConfig = ProviderConfig(
