@@ -81,6 +81,12 @@ class WorkerPromotionTest {
         Dispatchers.resetMain()
     }
 
+    @Test fun workerTranscriptsNeverBecomeSessionListRowsUntilPromoted() = runBlocking {
+        val idsBefore = sessions.list().map { it.id }.toSet()
+        assertTrue(sessions.list().none { it.id == worker.id })
+        assertTrue(idsBefore.isNotEmpty())
+    }
+
     @Test fun openingAWorkerDoesNotChangeTheSessionAndContinueImportsOnce() = runBlocking {
         val original = vm.uiState.value.currentSessionId
         vm.openWorker(worker.id)
