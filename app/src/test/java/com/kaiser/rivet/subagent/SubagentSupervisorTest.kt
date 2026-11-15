@@ -899,5 +899,60 @@ class SubagentSupervisorTest {
         assertEquals(3, boundaryCalls.get())
         assertTrue(supervisor.state.value.all { it.state == RunPhase.Done })
     }
+
+    @Test
+    fun retryOfRejectsSecondRetryAcrossSeparateTurnSupervisors() = runBlocking {
+        val cloud = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        val failedId = "failed-worker-cross-turn"
+        store.saveWorker(
+            WorkerRecord(
+                id = failedId,
+                runId = "test-run",
+                parentSessionId = "test-session",
+                workspaceId = "test-workspace",
+                job = "flaky task",
+                brief = "do task",
+                configId = cloud.id,
+                model = cloud.model,
+                state = RunPhase.Failed,
+                error = "network timeout",
+            ),
+        )
+
+        val turn1Services = testServices(
+            workerStore = store,
+            configs = listOf(cloud),
+        )
+        val turn1Supervisor = SubagentSupervisor(turn1Services, CoroutineScope(SupervisorJob()))
+
+        val retry1 = turn1Supervisor.validateSpawn(
+            """{"job":"retry 1","brief":"retry first","model":"m1","retry_of":"$failedId"}"""
+        ) as SpawnValidation.Valid
+        turn1Supervisor.executeSpawn(retry1.brief, retry1.entry, retry1.skill)
+        turn1Supervisor.joinAll()
+
+        // New turn (new supervisor instance on same session & WorkerSessionStore)
+        val turn2Services = RunServices(
+            workspaceId = "test-workspace",
+            runId = "test-run-2",
+            parentSessionId = "test-session",
+            workerStore = store,
+            providerSource = FakeProviderSource(listOf(cloud)),
+            clientFactory = { _, _ -> ControllableClient() },
+            approvals = AgentApprovalGate(),
+            checkpointGate = RunCheckpointGate(FakeCheckpointBackend()),
+            poolState = { SubagentPoolState(allowAgentChoice = true, entries = listOf(PoolEntry(cloud.id, cloud.model))) },
+            coordinatorConfig = { cloud },
+        )
+        val turn2Supervisor = SubagentSupervisor(turn2Services, CoroutineScope(SupervisorJob()))
+
+        val secondRetry = turn2Supervisor.validateSpawn(
+            """{"job":"retry 2","brief":"second retry","model":"m1","retry_of":"$failedId"}"""
+        )
+        assertTrue(secondRetry is SpawnValidation.Rejected)
+        assertEquals("invalid_retry", (secondRetry as SpawnValidation.Rejected).code)
+        assertTrue(secondRetry.detail.contains("already been retried once"))
+    }
 }
 

@@ -101,7 +101,11 @@ internal class SubagentSupervisor(
                     "Worker '${brief.retryOf}' did not fail (current phase: ${target.state.name.lowercase(Locale.ROOT)}). Only failed workers can be retried.",
                 )
             }
-            val alreadyRetried = workers.values.any { it.retryOf == brief.retryOf }
+            val persistedWorkers = target.parentSessionId?.let {
+                services.workerStore.workersForSession(it)
+            } ?: services.workerStore.workersForRun(target.runId)
+            val alreadyRetried = workers.values.any { it.retryOf == brief.retryOf } ||
+                persistedWorkers.any { it.retryOf == brief.retryOf }
             if (alreadyRetried) {
                 return SpawnValidation.Rejected(
                     "invalid_retry",
