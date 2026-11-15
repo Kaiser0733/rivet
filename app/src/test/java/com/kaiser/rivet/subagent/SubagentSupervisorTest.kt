@@ -571,6 +571,7 @@ class SubagentSupervisorTest {
         withTimeout(3_000) {
             supervisor.state.first { list -> list.size == 3 && list.all { it.state == RunPhase.Done } }
         }
+        Unit
     }
 
     @Test

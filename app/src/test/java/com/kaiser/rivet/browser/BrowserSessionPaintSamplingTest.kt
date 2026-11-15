@@ -34,6 +34,14 @@ class BrowserSessionPaintSamplingTest {
         Dispatchers.resetMain()
     }
 
+    private fun attachSizedWebView(app: Application, session: BrowserSession) {
+        val webView = WebView(app)
+        webView.layout(0, 0, 128, 128)
+        session.attach(webView)
+        // Lay out after attach as the host does; samplePaint must see a non-zero size.
+        webView.layout(0, 0, 128, 128)
+    }
+
     private fun writeStripedShot(dir: File, name: String, offset: Int): BrowserShot {
         dir.mkdirs()
         val file = File(dir, name)
@@ -54,8 +62,7 @@ class BrowserSessionPaintSamplingTest {
     @Test fun healthyScrollablePageSamplesBeforeRestoringScrollAndReturnsPainted() = runBlocking {
         val app: Application = RuntimeEnvironment.getApplication()
         val session = BrowserSession(app, models = null)
-        val webView = WebView(app).apply { layout(0, 0, 128, 128) }
-        session.attach(webView)
+        attachSizedWebView(app, session)
 
         val scrollY = AtomicInteger(0)
         val shotCounter = AtomicInteger(0)
@@ -93,8 +100,7 @@ class BrowserSessionPaintSamplingTest {
     @Test fun wedgedScrollablePageWithIdenticalPixelsReportsStale() = runBlocking {
         val app: Application = RuntimeEnvironment.getApplication()
         val session = BrowserSession(app, models = null)
-        val webView = WebView(app).apply { layout(0, 0, 128, 128) }
-        session.attach(webView)
+        attachSizedWebView(app, session)
 
         val scrollY = AtomicInteger(0)
         val shotCounter = AtomicInteger(0)
