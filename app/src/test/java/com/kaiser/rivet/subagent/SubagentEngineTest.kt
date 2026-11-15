@@ -82,6 +82,7 @@ class SubagentEngineTest {
         private val responseText: String = "Summary: Done.\nFindings:\n- complete\nOpen questions: none",
         private val promptTokens: Long = 100L,
         private val completionTokens: Long = 50L,
+        private val onStream: () -> Unit = {},
     ) : ProviderClient {
         override suspend fun listModels(): List<ModelInfo> = emptyList()
         override suspend fun testConnection(): TestResult = TestResult(true, "ok")
@@ -90,6 +91,7 @@ class SubagentEngineTest {
             onReasoning: (String) -> Unit,
             onDelta: (String) -> Unit,
         ): AgentResponse {
+            onStream()
             gate?.await()
             onDelta(responseText)
             return AgentResponse(
@@ -301,6 +303,7 @@ class SubagentEngineTest {
         val store = WorkerSessionStore.inMemory()
         val gate1 = CompletableDeferred<Unit>()
         val gate2 = CompletableDeferred<Unit>()
+        val firstStarted = CompletableDeferred<Unit>()
         var clientCalls = 0
 
         val services = testServices(
@@ -308,7 +311,11 @@ class SubagentEngineTest {
             configs = listOf(config),
             clientFactory = { _, _ ->
                 clientCalls++
-                if (clientCalls == 1) ControllableClient(gate1) else ControllableClient(gate2)
+                if (clientCalls == 1) {
+                    ControllableClient(gate1, onStream = { firstStarted.complete(Unit) })
+                } else {
+                    ControllableClient(gate2)
+                }
             },
         )
         val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
@@ -317,7 +324,9 @@ class SubagentEngineTest {
         val r1 = supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
         val id1 = json.parseToJsonElement(r1.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
 
-        // Pause all workers
+        // Pause a worker that has actually entered its provider call; pausing the
+        // lazy job before it starts would cancel it without a pause record.
+        withTimeout(3_000) { firstStarted.await() }
         supervisor.pauseAll(RunPauseReason.NetworkLost)
         withTimeout(3_000) {
             supervisor.state.first { list ->
