@@ -3,7 +3,6 @@ package com.kaiser.rivet.storage
 import android.content.Context
 import com.kaiser.rivet.agent.SpendCaps
 import java.time.YearMonth
-import java.util.Locale
 
 /**
  * Small, synchronous ledger for the spend guard. Values are display/limit inputs, not
@@ -27,11 +26,11 @@ class SpendStore(context: Context) {
     @Synchronized
     fun save(caps: SpendCaps, userPricePerMillionUsd: Double?) {
         preferences.edit()
-            .putString(PER_RUN_USD, caps.perRunUsd?.text())
-            .putString(MONTHLY_USD, caps.monthlyUsd?.text())
+            .putString(PER_RUN_USD, caps.perRunUsd?.takeIf { it.isFinite() }?.toString())
+            .putString(MONTHLY_USD, caps.monthlyUsd?.takeIf { it.isFinite() }?.toString())
             .putString(PER_RUN_TOKENS, caps.perRunTokens?.toString())
             .putString(MONTHLY_TOKENS, caps.monthlyTokens?.toString())
-            .putString(USER_PRICE, userPricePerMillionUsd?.text())
+            .putString(USER_PRICE, userPricePerMillionUsd?.takeIf { it.isFinite() }?.toString())
             .apply()
     }
 
@@ -44,18 +43,20 @@ class SpendStore(context: Context) {
                 .putString(MONTH_USD, null).putString(MONTH_TOKENS, null).apply()
             return 0.0 to 0L
         }
-        return (decimal(MONTH_USD) ?: 0.0) to (long(MONTH_TOKENS) ?: 0L)
+        return (decimal(MONTH_USD) ?: 0.0) to (nonNegativeLong(MONTH_TOKENS) ?: 0L)
     }
 
     @Synchronized
     fun add(costUsd: Double, tokens: Long) {
+        val safeCost = costUsd.takeIf { it.isFinite() && it >= 0.0 } ?: 0.0
+        val safeTokens = tokens.coerceAtLeast(0L)
         val key = YearMonth.now().toString()
         val stale = preferences.getString(MONTH_KEY, null) != key
         val oldCost = if (stale) 0.0 else decimal(MONTH_USD) ?: 0.0
-        val oldTokens = if (stale) 0L else long(MONTH_TOKENS) ?: 0L
+        val oldTokens = if (stale) 0L else nonNegativeLong(MONTH_TOKENS) ?: 0L
         preferences.edit().putString(MONTH_KEY, key)
-            .putString(MONTH_USD, (oldCost + costUsd).text())
-            .putString(MONTH_TOKENS, (oldTokens + tokens).toString())
+            .putString(MONTH_USD, (oldCost + safeCost).toString())
+            .putString(MONTH_TOKENS, (oldTokens + safeTokens).toString())
             .apply()
     }
 
@@ -65,7 +66,8 @@ class SpendStore(context: Context) {
     private fun long(key: String): Long? =
         preferences.getString(key, null)?.toLongOrNull()?.takeIf { it > 0 }
 
-    private fun Double.text(): String = String.format(Locale.US, "%.6f", this)
+    private fun nonNegativeLong(key: String): Long? =
+        preferences.getString(key, null)?.toLongOrNull()?.takeIf { it >= 0 }
 
     companion object {
         private const val PER_RUN_USD = "per_run_usd"

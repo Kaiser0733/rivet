@@ -34,4 +34,14 @@ class SpendStoreTest {
         assertFalse(SpendStore.isLocal("https://localhost.evil.com/v1"))
         assertFalse(SpendStore.isLocal("http://172.200.0.1/v1"))
     }
+
+    @Test fun addAccumulatesSubMicrodollarCostsWithoutPrecisionLoss() {
+        val store = SpendStore(context)
+        repeat(1_000) {
+            store.add(0.0000004, 10L)
+        }
+        val (cost, tokens) = SpendStore(context).month()
+        assertEquals(0.0004, cost, 1e-9)
+        assertEquals(10_000L, tokens)
+    }
 }
