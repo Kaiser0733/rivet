@@ -437,15 +437,25 @@ internal class SubagentSupervisor(
     }
 
     suspend fun awaitTerminal(workerIds: List<String>, timeoutMs: Long): String {
+        val unknownIds = mutableListOf<String>()
         val idsToWatch = if (workerIds.isEmpty()) {
             workers.keys.toList()
         } else {
-            workerIds
+            val known = mutableListOf<String>()
+            for (id in workerIds) {
+                val resolved = workers[id] ?: services.workerStore.loadWorker(id)?.also { updateWorker(it) }
+                if (resolved == null) {
+                    unknownIds += id
+                } else {
+                    known += id
+                }
+            }
+            known
         }
 
         if (idsToWatch.isNotEmpty()) {
             val allFinishedInitially = idsToWatch.all { id ->
-                val w = workers[id] ?: services.workerStore.loadWorker(id)?.also { updateWorker(it) }
+                val w = workers[id]
                 w != null && w.isTerminal
             }
             if (!allFinishedInitially && timeoutMs > 0) {
@@ -464,7 +474,7 @@ internal class SubagentSupervisor(
         val currentWorkers = if (workerIds.isEmpty()) {
             workers.values.toList()
         } else {
-            workerIds.mapNotNull { id ->
+            idsToWatch.mapNotNull { id ->
                 workers[id] ?: services.workerStore.loadWorker(id)?.also { updateWorker(it) }
             }
         }
@@ -489,6 +499,7 @@ internal class SubagentSupervisor(
             envelopes = envelopes,
             timedOut = timedOut,
             stillRunning = stillRunning,
+            unknownWorkers = unknownIds,
         )
     }
 

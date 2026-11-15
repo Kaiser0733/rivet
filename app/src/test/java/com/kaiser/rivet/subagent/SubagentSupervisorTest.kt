@@ -34,6 +34,7 @@ import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
+import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
@@ -743,6 +744,41 @@ class SubagentSupervisorTest {
             supervisor.state.first { list -> list.size == 3 && list.all { it.state == RunPhase.Done } }
         }
         assertEquals(SubagentScheduler.MAX_RUNNING, maxConcurrent.get())
+    }
+
+    @Test
+    fun awaitTerminalReturnsImmediatelyWithoutWaitingWhenIdsContainUnknownWorker() = runBlocking {
+        val cloud = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        val services = testServices(
+            workerStore = store,
+            configs = listOf(cloud),
+        )
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+
+        val onlyUnknown = withTimeout(1_000) {
+            supervisor.awaitTerminal(listOf("missing-worker"), timeoutMs = 10_000L)
+        }
+        val onlyUnknownObj = json.parseToJsonElement(onlyUnknown).jsonObject
+        assertEquals(0, onlyUnknownObj["workers"]?.jsonArray?.size)
+        assertEquals(
+            listOf("missing-worker"),
+            onlyUnknownObj["unknown_workers"]?.jsonArray?.map { it.jsonPrimitive.content },
+        )
+
+        val v1 = supervisor.validateSpawn("""{"job":"fast","brief":"done quickly","model":"m1"}""") as SpawnValidation.Valid
+        val spawned = supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
+        val id1 = json.parseToJsonElement(spawned.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
+
+        val mixed = withTimeout(3_000) {
+            supervisor.awaitTerminal(listOf(id1, "missing-2"), timeoutMs = 10_000L)
+        }
+        val mixedObj = json.parseToJsonElement(mixed).jsonObject
+        assertEquals(1, mixedObj["workers"]?.jsonArray?.size)
+        assertEquals(
+            listOf("missing-2"),
+            mixedObj["unknown_workers"]?.jsonArray?.map { it.jsonPrimitive.content },
+        )
     }
 }
 

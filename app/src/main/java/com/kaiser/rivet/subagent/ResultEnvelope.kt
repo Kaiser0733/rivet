@@ -116,6 +116,7 @@ object ResultEnvelope {
         envelopes: List<String>,
         timedOut: List<String> = emptyList(),
         stillRunning: List<String> = emptyList(),
+        unknownWorkers: List<String> = emptyList(),
         maxTotalBytes: Int = MAX_AWAIT_BYTES,
     ): String {
         val parsed = envelopes.mapNotNull { raw ->
@@ -128,6 +129,9 @@ object ResultEnvelope {
             }
             if (stillRunning.isNotEmpty()) {
                 put("running", buildJsonArray { stillRunning.forEach { add(JsonPrimitive(it)) } })
+            }
+            if (unknownWorkers.isNotEmpty()) {
+                put("unknown_workers", buildJsonArray { unknownWorkers.forEach { add(JsonPrimitive(it)) } })
             }
         }.toString()
 
