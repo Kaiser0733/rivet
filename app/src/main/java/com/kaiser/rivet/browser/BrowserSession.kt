@@ -674,12 +674,19 @@ class BrowserSession(
         }
     }
 
-    private suspend fun samplePaint(sampledUrl: String? = null): PaintVerdict? {
+    internal var paintJsEvaluator: suspend (WebView, String) -> String = { view, script ->
+        evaluate(view, script)
+    }
+    internal var paintCapture: suspend (WebView) -> BrowserShot? = { view ->
+        runCatching { captureScreenshot(view) }.getOrNull()
+    }
+
+    internal suspend fun samplePaint(sampledUrl: String? = null): PaintVerdict? {
         val view = renderer ?: return null
         if (view.width <= 0 || view.height <= 0) return null
-        val dom = evaluate(view, "document.body?document.body.innerText.length:0")
+        val dom = paintJsEvaluator(view, "document.body?document.body.innerText.length:0")
             .trim().trim('"').toIntOrNull() ?: 0
-        val firstShot = runCatching { captureScreenshot(view) }.getOrNull()
+        val firstShot = paintCapture(view)
             ?: return PaintVerdict.Unknown
         val firstHash = runCatching { fileHash(firstShot.path) }.getOrNull()
         if (firstHash == null) {
@@ -690,18 +697,25 @@ class BrowserSession(
         var scrolledY = startY
         var secondHash = firstHash
         if (startY != null) {
-            runCatching { evaluate(view, "window.scrollBy(0,1)") }
+            runCatching { paintJsEvaluator(view, "window.scrollBy(0,1)") }
             delay(80)
             scrolledY = scrollY(view) ?: startY
-            runCatching { evaluate(view, "window.scrollBy(0,-1)") }
-            delay(80)
-            val secondShot = runCatching { captureScreenshot(view) }.getOrNull()
-            if (secondShot == null) {
-                File(firstShot.path).delete()
-                return PaintVerdict.Unknown
+            try {
+                // Capture at the scrolled offset before restoring scrollY so healthy pages
+                // actually show shifted pixels instead of always matching firstShot.
+                val secondShot = paintCapture(view)
+                if (secondShot == null) {
+                    File(firstShot.path).delete()
+                    return PaintVerdict.Unknown
+                }
+                secondHash = runCatching { fileHash(secondShot.path) }.getOrNull().orEmpty()
+                File(secondShot.path).delete()
+            } finally {
+                val delta = scrolledY - startY
+                if (delta != 0) {
+                    runCatching { paintJsEvaluator(view, "window.scrollBy(0,${-delta})") }
+                }
             }
-            secondHash = runCatching { fileHash(secondShot.path) }.getOrNull().orEmpty()
-            File(secondShot.path).delete()
         }
         val bitmap = android.graphics.BitmapFactory.decodeFile(firstShot.path)
         if (bitmap == null) {
@@ -749,7 +763,7 @@ class BrowserSession(
     }
 
     private suspend fun scrollY(view: WebView): Int? =
-        runCatching { BrowserJsParsers.parseScrollYValue(evaluate(view, "window.scrollY")) }.getOrNull()
+        runCatching { BrowserJsParsers.parseScrollYValue(paintJsEvaluator(view, "window.scrollY")) }.getOrNull()
 
     private fun fileHash(path: String): String {
         val digest = MessageDigest.getInstance("SHA-256")
