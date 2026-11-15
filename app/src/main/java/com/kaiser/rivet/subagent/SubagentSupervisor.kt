@@ -330,6 +330,7 @@ internal class SubagentSupervisor(
 
     private suspend fun drainQueue() {
         queueLock.withLock {
+            if (currentPauseReason != null) return@withLock
             val iterator = queue.iterator()
             while (iterator.hasNext()) {
                 val queued = iterator.next()
@@ -507,6 +508,35 @@ internal class SubagentSupervisor(
     fun pauseAll(reason: RunPauseReason) {
         currentPauseReason = reason
         activeJobs.values.forEach { it.cancel() }
+        scope.launch(NonCancellable) {
+            pauseQueuedWorkers(reason)
+        }
+    }
+
+    private suspend fun pauseQueuedWorkers(reason: RunPauseReason) {
+        val paused = mutableListOf<WorkerRecord>()
+        queueLock.withLock {
+            if (currentPauseReason != reason) return@withLock
+            val now = System.currentTimeMillis()
+            val iterator = queue.iterator()
+            while (iterator.hasNext()) {
+                val queued = iterator.next()
+                iterator.remove()
+                val latest = workers[queued.worker.id] ?: queued.worker
+                val pausedRecord = latest.copy(
+                    state = RunPhase.Paused,
+                    pauseReason = reason,
+                    waitingReason = null,
+                    interrupted = true,
+                    updatedAt = now,
+                )
+                updateWorker(pausedRecord)
+                paused += pausedRecord
+            }
+        }
+        for (record in paused) {
+            services.workerStore.saveWorker(record)
+        }
     }
 
     suspend fun relaunchPaused(runId: String) {
@@ -565,7 +595,9 @@ internal class SubagentSupervisor(
                     priceTier = PriceTier.Unknown,
                 )
                 queueLock.withLock {
-                    queue += QueuedWorker(record, brief, entry, skill)
+                    if (queue.none { it.worker.id == record.id }) {
+                        queue += QueuedWorker(record, brief, entry, skill)
+                    }
                 }
             }
         }

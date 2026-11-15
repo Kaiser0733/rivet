@@ -497,5 +497,74 @@ class SubagentSupervisorTest {
             ),
         )
     }
+
+    @Test
+    fun pauseAllHaltsDrainQueueAndMovesQueuedWorkersToPaused() = runBlocking {
+        val config = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        val gate1 = CompletableDeferred<Unit>()
+        val gate2 = CompletableDeferred<Unit>()
+        val gate3 = CompletableDeferred<Unit>()
+        val resumedGate1 = CompletableDeferred<Unit>()
+        val resumedGate2 = CompletableDeferred<Unit>()
+        val resumedGate3 = CompletableDeferred<Unit>()
+        var clientCount = 0
+
+        val services = testServices(
+            workerStore = store,
+            configs = listOf(config),
+            clientFactory = { _, _ ->
+                clientCount++
+                when (clientCount) {
+                    1 -> ControllableClient(gate1)
+                    2 -> ControllableClient(gate2)
+                    3 -> ControllableClient(resumedGate1)
+                    4 -> ControllableClient(resumedGate2)
+                    else -> ControllableClient(resumedGate3)
+                }
+            },
+        )
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+
+        val v1 = supervisor.validateSpawn("{\"job\": \"worker 1\", \"brief\": \"do 1\", \"model\": \"m1\"}") as SpawnValidation.Valid
+        val v2 = supervisor.validateSpawn("{\"job\": \"worker 2\", \"brief\": \"do 2\", \"model\": \"m1\"}") as SpawnValidation.Valid
+        val v3 = supervisor.validateSpawn("{\"job\": \"worker 3\", \"brief\": \"do 3\", \"model\": \"m1\"}") as SpawnValidation.Valid
+
+        supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
+        supervisor.executeSpawn(v2.brief, v2.entry, v2.skill)
+        supervisor.executeSpawn(v3.brief, v3.entry, v3.skill)
+
+        withTimeout(3_000) {
+            supervisor.state.first { list ->
+                list.count { it.state == RunPhase.Running } == 2 &&
+                    list.count { it.state == RunPhase.Queued } == 1
+            }
+        }
+
+        supervisor.pauseAll(RunPauseReason.NetworkLost)
+
+        withTimeout(3_000) {
+            supervisor.state.first { list ->
+                list.size == 3 && list.all { it.state == RunPhase.Paused }
+            }
+        }
+
+        // Cancelled workers ran drainQueue() in finally: queued worker must NOT have started while paused.
+        assertEquals(2, clientCount)
+
+        gate1.complete(Unit)
+        gate2.complete(Unit)
+        gate3.complete(Unit)
+        resumedGate1.complete(Unit)
+        resumedGate2.complete(Unit)
+        resumedGate3.complete(Unit)
+
+        supervisor.relaunchPaused("test-run")
+        supervisor.joinAll()
+
+        withTimeout(3_000) {
+            supervisor.state.first { list -> list.size == 3 && list.all { it.state == RunPhase.Done } }
+        }
+    }
 }
 
