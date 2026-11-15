@@ -664,6 +664,7 @@ class SubagentSupervisorTest {
         val maxConcurrent = AtomicInteger(0)
         val insideConfigs = AtomicInteger(0)
         val twoInsideConfigs = CompletableDeferred<Unit>()
+        val twoActive = CompletableDeferred<Unit>()
         val barrierArmed = AtomicBoolean(false)
 
         val providerSource = object : ProviderRuntimeSource {
@@ -704,6 +705,7 @@ class SubagentSupervisorTest {
                     ): AgentResponse {
                         val now = activeClients.incrementAndGet()
                         maxConcurrent.updateAndGet { prev -> maxOf(prev, now) }
+                        if (now >= 2) twoActive.complete(Unit)
                         if (idx == 1) worker1Started.complete(Unit)
                         try {
                             gate.await()
@@ -734,6 +736,7 @@ class SubagentSupervisorTest {
         val d3 = async(Dispatchers.Default) { supervisor.executeSpawn(v3.brief, v3.entry, v3.skill) }
         d2.await()
         d3.await()
+        withTimeout(3_000) { twoActive.await() }
         barrierArmed.set(false)
 
         gate1.complete(Unit)
@@ -872,6 +875,7 @@ class SubagentSupervisorTest {
             )
         }
 
+        services.checkpointGate.beginTurn("test-workspace", "test-run", "test-session")
         val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
         supervisor.relaunchPaused("test-run")
 

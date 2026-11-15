@@ -360,7 +360,8 @@ internal class SubagentSupervisor(
                 withContext(NonCancellable) {
                     liveCloudWorkers.remove(worker.id)
                     services.checkpointGate.scopeRegistry.release(worker.id)
-                    activeJobs.remove(worker.id)
+                    // Keep this job registered while drainQueue promotes queued work so
+                    // joinAll cannot observe an empty active set between completion and promotion.
                     drainQueue()
                 }
             }
@@ -722,7 +723,9 @@ internal class SubagentSupervisor(
 
     suspend fun joinAll() {
         while (true) {
-            val snapshot = activeJobs.values.toList()
+            // Admission and drainQueue publish Running before launchWorker registers the
+            // job. Take the snapshot under queueLock so joinAll cannot miss that gap.
+            val snapshot = queueLock.withLock { activeJobs.values.toList() }
             if (snapshot.isEmpty()) break
             snapshot.joinAll()
         }

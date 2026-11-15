@@ -38,8 +38,10 @@ class BrowserSessionPaintSamplingTest {
         val webView = WebView(app)
         webView.layout(0, 0, 128, 128)
         session.attach(webView)
-        // Lay out after attach as the host does; samplePaint must see a non-zero size.
-        webView.layout(0, 0, 128, 128)
+        // samplePaint reads view.width/height, which are frame fields rather than
+        // measured dimensions. Pin the frame explicitly after attach.
+        webView.right = 128
+        webView.bottom = 128
     }
 
     private fun writeStripedShot(dir: File, name: String, offset: Int): BrowserShot {
