@@ -12,6 +12,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
@@ -59,6 +60,7 @@ internal class SubagentSupervisor(
         val brief: WorkerBrief,
         val entry: ResolvedPoolEntry,
         val skill: Skill?,
+        val resuming: Boolean = false,
     )
 
     private fun findSkill(name: String): Skill? {
@@ -289,7 +291,7 @@ internal class SubagentSupervisor(
         if (!entry.local) {
             liveCloudWorkers.add(worker.id)
         }
-        val job = scope.launch {
+        val job = scope.launch(start = CoroutineStart.LAZY) {
             try {
                 val loaded = services.providerSource.loadFor(entry.config.id)
                 if (loaded is ProviderRuntimeResult.Failure) {
@@ -362,7 +364,9 @@ internal class SubagentSupervisor(
         activeJobs[worker.id] = job
         job.invokeOnCompletion {
             liveCloudWorkers.remove(worker.id)
+            activeJobs.remove(worker.id, job)
         }
+        job.start()
     }
 
     private suspend fun drainQueue() {
@@ -389,16 +393,18 @@ internal class SubagentSupervisor(
                 when (val admission = SubagentScheduler.admit(request, live, coordinator)) {
                     is Admission.Start -> {
                         iterator.remove()
-                        val starting = queued.worker.copy(
+                        val latest = workers[queued.worker.id] ?: queued.worker
+                        val starting = latest.copy(
                             state = RunPhase.Running,
                             waitingReason = null,
+                            pauseReason = null,
                             updatedAt = System.currentTimeMillis(),
                         )
                         updateWorker(starting)
                         services.workerStore.saveWorker(starting)
                         services.checkpointGate.beginRunBoundary("Before subagent: ${starting.job}")
                         services.checkpointGate.scopeRegistry.register(starting.id, starting.job, starting.writeScope)
-                        launchWorker(starting, queued.brief, queued.entry, queued.skill)
+                        launchWorker(starting, queued.brief, queued.entry, queued.skill, resuming = queued.resuming)
                     }
                     is Admission.Queue -> {
                         if (queued.worker.waitingReason != admission.detail) {
@@ -608,9 +614,13 @@ internal class SubagentSupervisor(
     suspend fun relaunchPaused(runId: String) {
         currentPauseReason = null
         val storedWorkers = services.workerStore.workersForRun(runId)
-        for (record in storedWorkers) {
-            updateWorker(record)
-            if (record.state == RunPhase.Paused) {
+        val configs = services.providerSource.configs()
+        val resolvedPool = SubagentPool.resolve(services.poolState(), configs)
+        val toSave = mutableListOf<WorkerRecord>()
+        queueLock.withLock {
+            for (record in storedWorkers) {
+                updateWorker(record)
+                if (record.state != RunPhase.Paused && record.state != RunPhase.Queued) continue
                 val brief = WorkerBrief(
                     job = record.job,
                     brief = record.brief,
@@ -618,54 +628,61 @@ internal class SubagentSupervisor(
                     skill = record.skill,
                     retryOf = record.retryOf,
                 )
-                val config = services.providerSource.configs().firstOrNull { it.id == record.configId }
-                    ?: continue
-                val skill = record.skill?.let(::findSkill)
-                val entry = ResolvedPoolEntry(
+                val config = configs.firstOrNull { it.id == record.configId }
+                if (config == null) {
+                    val missingMsg = "Provider config '${record.configId}' is unavailable."
+                    val failedRun = record.toWorkerRun().finish(RunPhase.Failed, failure = missingMsg)
+                    val failedRecord = record.withWorkerRun(failedRun).copy(
+                        activity = null,
+                        waitingReason = null,
+                        pauseReason = null,
+                        summary = missingMsg,
+                        error = missingMsg,
+                        envelope = ResultEnvelope.build(
+                            workerId = record.id,
+                            state = RunPhase.Failed,
+                            claim = WorkerClaim(missingMsg),
+                            stopReason = "provider_error",
+                            error = missingMsg,
+                        ),
+                        updatedAt = System.currentTimeMillis(),
+                    )
+                    updateWorker(failedRecord)
+                    toSave += failedRecord
+                    continue
+                }
+                val entry = resolvedPool.entries.firstOrNull {
+                    it.entry.configId == config.id && it.entry.model == record.model
+                } ?: resolvedPool.fixed?.takeIf {
+                    it.entry.configId == config.id && it.entry.model == record.model
+                } ?: SubagentPool.resolvedEntry(
                     alias = "resumed",
                     entry = PoolEntry(config.id, record.model),
                     config = config,
-                    label = record.modelLabel,
                     local = config.type == ProviderType.Local,
-                    windowTokens = 262_000,
-                    priceTier = PriceTier.Unknown,
                 )
-                val resumedWorker = record.copy(
-                    state = RunPhase.Running,
-                    pauseReason = null,
-                    waitingReason = null,
-                    updatedAt = System.currentTimeMillis(),
-                )
-                updateWorker(resumedWorker)
-                services.workerStore.saveWorker(resumedWorker)
-                services.checkpointGate.scopeRegistry.register(resumedWorker.id, resumedWorker.job, resumedWorker.writeScope)
-                launchWorker(resumedWorker, brief, entry, skill, resuming = true)
-            } else if (record.state == RunPhase.Queued) {
-                val brief = WorkerBrief(
-                    job = record.job,
-                    brief = record.brief,
-                    writeScope = record.writeScope,
-                    skill = record.skill,
-                    retryOf = record.retryOf,
-                )
-                val config = services.providerSource.configs().firstOrNull { it.id == record.configId }
-                    ?: continue
                 val skill = record.skill?.let(::findSkill)
-                val entry = ResolvedPoolEntry(
-                    alias = "resumed",
-                    entry = PoolEntry(config.id, record.model),
-                    config = config,
-                    label = record.modelLabel,
-                    local = config.type == ProviderType.Local,
-                    windowTokens = 262_000,
-                    priceTier = PriceTier.Unknown,
-                )
-                queueLock.withLock {
-                    if (queue.none { it.worker.id == record.id }) {
-                        queue += QueuedWorker(record, brief, entry, skill)
+                val resuming = record.state == RunPhase.Paused
+                val queuedRecord = if (resuming) {
+                    record.copy(
+                        state = RunPhase.Queued,
+                        pauseReason = null,
+                        waitingReason = null,
+                        updatedAt = System.currentTimeMillis(),
+                    ).also {
+                        updateWorker(it)
+                        toSave += it
                     }
+                } else {
+                    record
+                }
+                if (queue.none { it.worker.id == queuedRecord.id }) {
+                    queue += QueuedWorker(queuedRecord, brief, entry, skill, resuming = resuming)
                 }
             }
+        }
+        for (updated in toSave) {
+            services.workerStore.saveWorker(updated)
         }
         drainQueue()
     }
@@ -700,6 +717,10 @@ internal class SubagentSupervisor(
     fun hasLiveCloudWorker(): Boolean = liveCloudWorkers.isNotEmpty()
 
     suspend fun joinAll() {
-        activeJobs.values.toList().joinAll()
+        while (true) {
+            val snapshot = activeJobs.values.toList()
+            if (snapshot.isEmpty()) break
+            snapshot.joinAll()
+        }
     }
 }

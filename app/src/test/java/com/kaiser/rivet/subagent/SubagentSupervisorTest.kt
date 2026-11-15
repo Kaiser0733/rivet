@@ -780,5 +780,124 @@ class SubagentSupervisorTest {
             mixedObj["unknown_workers"]?.jsonArray?.map { it.jsonPrimitive.content },
         )
     }
+
+    @Test
+    fun relaunchPausedRespectsMaxRunningBeginsBoundariesAndJoinAllAwaitsQueued() = runBlocking {
+        val cloud = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        val boundaryCalls = AtomicInteger(0)
+        val backend = object : CheckpointBackend {
+            override suspend fun beginCheckpoint(workspaceId: String, runId: String?, sessionId: String?) = "cp-1"
+            override suspend fun finishCheckpoint(workspaceId: String, id: String) = true
+            override suspend fun recordCheckpointPost(workspaceId: String, id: String) {}
+            override suspend fun checkpointMatchesPost(workspaceId: String, id: String) = true
+            override suspend fun beginRunCheckpoint(
+                workspaceId: String,
+                runId: String,
+                sequence: Int,
+                summary: String,
+                allowDirty: Boolean,
+            ): String {
+                boundaryCalls.incrementAndGet()
+                return "b-${boundaryCalls.get()}"
+            }
+            override suspend fun finishRunCheckpoint(workspaceId: String, id: String) {}
+        }
+
+        val gate1 = CompletableDeferred<Unit>()
+        val gate2 = CompletableDeferred<Unit>()
+        val gate3 = CompletableDeferred<Unit>()
+        val activeClients = AtomicInteger(0)
+        val maxConcurrent = AtomicInteger(0)
+        val started = AtomicInteger(0)
+        val twoRunning = CompletableDeferred<Unit>()
+
+        val services = RunServices(
+            workspaceId = "test-workspace",
+            runId = "test-run",
+            parentSessionId = "test-session",
+            workerStore = store,
+            providerSource = FakeProviderSource(listOf(cloud)),
+            clientFactory = { _, _ ->
+                val idx = started.incrementAndGet()
+                val gate = when (idx) {
+                    1 -> gate1
+                    2 -> gate2
+                    else -> gate3
+                }
+                object : ProviderClient {
+                    override suspend fun listModels() = emptyList<ModelInfo>()
+                    override suspend fun testConnection() = TestResult(true, "ok")
+                    override suspend fun streamAgent(
+                        request: AgentRequest,
+                        onReasoning: (String) -> Unit,
+                        onDelta: (String) -> Unit,
+                    ): AgentResponse {
+                        val concurrent = activeClients.incrementAndGet()
+                        maxConcurrent.updateAndGet { prev -> maxOf(prev, concurrent) }
+                        if (concurrent >= 2) twoRunning.complete(Unit)
+                        try {
+                            gate.await()
+                            onDelta("Done.")
+                            return AgentResponse(text = "Summary: Done.\nFindings:\n- ok\nOpen questions: none")
+                        } finally {
+                            activeClients.decrementAndGet()
+                        }
+                    }
+                }
+            },
+            approvals = AgentApprovalGate(),
+            checkpointGate = RunCheckpointGate(backend),
+            poolState = { SubagentPoolState(allowAgentChoice = true, entries = listOf(PoolEntry(cloud.id, cloud.model))) },
+            coordinatorConfig = { cloud },
+        )
+
+        for (i in 1..3) {
+            store.saveWorker(
+                WorkerRecord(
+                    id = "w-paused-$i",
+                    runId = "test-run",
+                    parentSessionId = "test-session",
+                    workspaceId = "test-workspace",
+                    job = "job-$i",
+                    brief = "do $i",
+                    configId = cloud.id,
+                    model = cloud.model,
+                    modelLabel = "OpenAI",
+                    state = RunPhase.Paused,
+                    pauseReason = RunPauseReason.NetworkLost,
+                    createdAt = i.toLong(),
+                ),
+            )
+        }
+
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+        supervisor.relaunchPaused("test-run")
+
+        withTimeout(3_000) {
+            supervisor.state.first { list ->
+                list.count { it.state == RunPhase.Running } == 2 &&
+                    list.count { it.state == RunPhase.Queued } == 1
+            }
+            twoRunning.await()
+        }
+        assertEquals(SubagentScheduler.MAX_RUNNING, maxConcurrent.get())
+        assertEquals(2, boundaryCalls.get())
+
+        val joinJob = launch { supervisor.joinAll() }
+        gate1.complete(Unit)
+        gate2.complete(Unit)
+        withTimeout(3_000) {
+            supervisor.state.first { list -> list.firstOrNull { it.id == "w-paused-3" }?.state == RunPhase.Running }
+        }
+        assertFalse(joinJob.isCompleted)
+
+        gate3.complete(Unit)
+        joinJob.join()
+
+        assertEquals(SubagentScheduler.MAX_RUNNING, maxConcurrent.get())
+        assertEquals(3, boundaryCalls.get())
+        assertTrue(supervisor.state.value.all { it.state == RunPhase.Done })
+    }
 }
 

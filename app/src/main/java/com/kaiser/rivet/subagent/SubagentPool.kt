@@ -126,7 +126,7 @@ object SubagentPool {
         )
     }
 
-    private fun resolvedEntry(
+    internal fun resolvedEntry(
         alias: String,
         entry: PoolEntry,
         config: ProviderConfig,
