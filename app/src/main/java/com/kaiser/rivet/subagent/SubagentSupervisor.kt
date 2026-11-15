@@ -153,91 +153,128 @@ internal class SubagentSupervisor(
             model = entry.config,
             writeScope = brief.writeScope,
         )
-        val live = workers.values.map {
-            SubagentLive(
-                job = it.job,
-                model = services.providerSource.configs().firstOrNull { c -> c.id == it.configId }
-                    ?: entry.config,
-                writeScope = it.writeScope,
-                running = (it.state == RunPhase.Running),
-            )
-        }
-        val coordinator = coordinatorOrFallback()
+        return queueLock.withLock {
+            val allConfigs = services.providerSource.configs()
+            val live = workers.values.map {
+                SubagentLive(
+                    job = it.job,
+                    model = allConfigs.firstOrNull { c -> c.id == it.configId }
+                        ?: entry.config,
+                    writeScope = it.writeScope,
+                    running = (it.state == RunPhase.Running),
+                )
+            }
+            val coordinator = coordinatorOrFallback()
 
-        when (val admission = SubagentScheduler.admit(request, live, coordinator)) {
-            is Admission.Refuse -> {
-                return SpawnExecutionResult(
-                    json = buildJsonObject {
-                        put("error", "spawn_refused")
-                        put("retryable", false)
-                        put("required_action", admission.line)
-                    }.toString(),
-                    error = true,
-                )
-            }
-            is Admission.Queue -> {
-                val worker = WorkerRecord(
-                    id = workerId,
-                    runId = services.runId,
-                    parentSessionId = services.parentSessionId,
-                    workspaceId = services.workspaceId,
-                    job = brief.job,
-                    brief = brief.brief,
-                    skill = skill?.name ?: brief.skill,
-                    configId = entry.config.id,
-                    model = entry.entry.model,
-                    modelLabel = entry.label,
-                    writeScope = brief.writeScope,
-                    state = RunPhase.Queued,
-                    waitingReason = admission.detail,
-                    retryOf = brief.retryOf,
-                    createdAt = System.currentTimeMillis(),
-                )
-                updateWorker(worker)
-                services.workerStore.saveWorker(worker)
-                queueLock.withLock {
-                    queue += QueuedWorker(worker, brief, entry, skill)
+            when (val admission = SubagentScheduler.admit(request, live, coordinator)) {
+                is Admission.Refuse -> {
+                    SpawnExecutionResult(
+                        json = buildJsonObject {
+                            put("error", "spawn_refused")
+                            put("retryable", false)
+                            put("required_action", admission.line)
+                        }.toString(),
+                        error = true,
+                    )
                 }
-                return SpawnExecutionResult(
-                    json = buildJsonObject {
-                        put("worker_id", workerId)
-                        put("state", "waiting")
-                        put("model_label", entry.label)
-                        put("reason", admission.detail)
-                    }.toString(),
-                    error = false,
-                )
-            }
-            is Admission.Start -> {
-                val worker = WorkerRecord(
-                    id = workerId,
-                    runId = services.runId,
-                    parentSessionId = services.parentSessionId,
-                    workspaceId = services.workspaceId,
-                    job = brief.job,
-                    brief = brief.brief,
-                    skill = skill?.name ?: brief.skill,
-                    configId = entry.config.id,
-                    model = entry.entry.model,
-                    modelLabel = entry.label,
-                    writeScope = brief.writeScope,
-                    state = RunPhase.Running,
-                    retryOf = brief.retryOf,
-                    createdAt = System.currentTimeMillis(),
-                )
-                updateWorker(worker)
-                services.workerStore.saveWorker(worker)
-                services.checkpointGate.beginRunBoundary("Before subagent: ${worker.job}")
-                services.checkpointGate.scopeRegistry.register(worker.id, worker.job, worker.writeScope)
-                launchWorker(worker, brief, entry, skill)
-                return SpawnExecutionResult(
-                    json = buildJsonObject {
-                        put("worker_id", workerId)
-                        put("state", "running")
-                        put("model_label", entry.label)
-                    }.toString(),
-                    error = false,
-                )
+                is Admission.Queue -> {
+                    val pausedReason = currentPauseReason
+                    val worker = WorkerRecord(
+                        id = workerId,
+                        runId = services.runId,
+                        parentSessionId = services.parentSessionId,
+                        workspaceId = services.workspaceId,
+                        job = brief.job,
+                        brief = brief.brief,
+                        skill = skill?.name ?: brief.skill,
+                        configId = entry.config.id,
+                        model = entry.entry.model,
+                        modelLabel = entry.label,
+                        writeScope = brief.writeScope,
+                        state = if (pausedReason != null) RunPhase.Paused else RunPhase.Queued,
+                        waitingReason = if (pausedReason != null) null else admission.detail,
+                        pauseReason = pausedReason,
+                        interrupted = pausedReason != null,
+                        retryOf = brief.retryOf,
+                        createdAt = System.currentTimeMillis(),
+                    )
+                    updateWorker(worker)
+                    services.workerStore.saveWorker(worker)
+                    if (pausedReason == null) {
+                        queue += QueuedWorker(worker, brief, entry, skill)
+                    }
+                    SpawnExecutionResult(
+                        json = buildJsonObject {
+                            put("worker_id", workerId)
+                            put("state", if (pausedReason != null) "paused" else "waiting")
+                            put("model_label", entry.label)
+                            put("reason", admission.detail)
+                        }.toString(),
+                        error = false,
+                    )
+                }
+                is Admission.Start -> {
+                    val pausedReason = currentPauseReason
+                    if (pausedReason != null) {
+                        val pausedWorker = WorkerRecord(
+                            id = workerId,
+                            runId = services.runId,
+                            parentSessionId = services.parentSessionId,
+                            workspaceId = services.workspaceId,
+                            job = brief.job,
+                            brief = brief.brief,
+                            skill = skill?.name ?: brief.skill,
+                            configId = entry.config.id,
+                            model = entry.entry.model,
+                            modelLabel = entry.label,
+                            writeScope = brief.writeScope,
+                            state = RunPhase.Paused,
+                            pauseReason = pausedReason,
+                            interrupted = true,
+                            retryOf = brief.retryOf,
+                            createdAt = System.currentTimeMillis(),
+                        )
+                        updateWorker(pausedWorker)
+                        services.workerStore.saveWorker(pausedWorker)
+                        return@withLock SpawnExecutionResult(
+                            json = buildJsonObject {
+                                put("worker_id", workerId)
+                                put("state", "paused")
+                                put("model_label", entry.label)
+                            }.toString(),
+                            error = false,
+                        )
+                    }
+                    val worker = WorkerRecord(
+                        id = workerId,
+                        runId = services.runId,
+                        parentSessionId = services.parentSessionId,
+                        workspaceId = services.workspaceId,
+                        job = brief.job,
+                        brief = brief.brief,
+                        skill = skill?.name ?: brief.skill,
+                        configId = entry.config.id,
+                        model = entry.entry.model,
+                        modelLabel = entry.label,
+                        writeScope = brief.writeScope,
+                        state = RunPhase.Running,
+                        retryOf = brief.retryOf,
+                        createdAt = System.currentTimeMillis(),
+                    )
+                    updateWorker(worker)
+                    services.workerStore.saveWorker(worker)
+                    services.checkpointGate.beginRunBoundary("Before subagent: ${worker.job}")
+                    services.checkpointGate.scopeRegistry.register(worker.id, worker.job, worker.writeScope)
+                    launchWorker(worker, brief, entry, skill)
+                    SpawnExecutionResult(
+                        json = buildJsonObject {
+                            put("worker_id", workerId)
+                            put("state", "running")
+                            put("model_label", entry.label)
+                        }.toString(),
+                        error = false,
+                    )
+                }
             }
         }
     }

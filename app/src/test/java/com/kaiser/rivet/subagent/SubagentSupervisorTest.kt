@@ -19,14 +19,19 @@ import com.kaiser.rivet.provider.TestResult
 import com.kaiser.rivet.runtime.CheckpointBackend
 import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.workspace.WorkspacePath
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
+import kotlinx.coroutines.async
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.jsonObject
@@ -643,6 +648,101 @@ class SubagentSupervisorTest {
         val refused = store.loadWorker(id3)
         assertEquals(RunPhase.Failed, refused?.state)
         assertNotNull(refused?.envelope)
+    }
+
+    @Test
+    fun concurrentExecuteSpawnUnderQueueLockNeverExceedsMaxRunningSlots() = runBlocking {
+        val cloud = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        val gate1 = CompletableDeferred<Unit>()
+        val gate2 = CompletableDeferred<Unit>()
+        val gate3 = CompletableDeferred<Unit>()
+        val worker1Started = CompletableDeferred<Unit>()
+        val activeClients = AtomicInteger(0)
+        val maxConcurrent = AtomicInteger(0)
+        val insideConfigs = AtomicInteger(0)
+        val twoInsideConfigs = CompletableDeferred<Unit>()
+        val barrierArmed = AtomicBoolean(false)
+
+        val providerSource = object : ProviderRuntimeSource {
+            override suspend fun load() = ProviderRuntimeResult.Ready(cloud, "fake-key")
+            override suspend fun loadFor(configId: String) = ProviderRuntimeResult.Ready(cloud, "fake-key")
+            override suspend fun configs(): List<ProviderConfig> {
+                if (barrierArmed.get()) {
+                    if (insideConfigs.incrementAndGet() >= 2) {
+                        twoInsideConfigs.complete(Unit)
+                    }
+                    withTimeoutOrNull(150) { twoInsideConfigs.await() }
+                }
+                return listOf(cloud)
+            }
+        }
+
+        val clientCalls = AtomicInteger(0)
+        val services = RunServices(
+            workspaceId = "test-workspace",
+            runId = "test-run",
+            parentSessionId = "test-session",
+            workerStore = store,
+            providerSource = providerSource,
+            clientFactory = { _, _ ->
+                val idx = clientCalls.incrementAndGet()
+                val gate = when (idx) {
+                    1 -> gate1
+                    2 -> gate2
+                    else -> gate3
+                }
+                object : ProviderClient {
+                    override suspend fun listModels() = emptyList<ModelInfo>()
+                    override suspend fun testConnection() = TestResult(true, "ok")
+                    override suspend fun streamAgent(
+                        request: AgentRequest,
+                        onReasoning: (String) -> Unit,
+                        onDelta: (String) -> Unit,
+                    ): AgentResponse {
+                        val now = activeClients.incrementAndGet()
+                        maxConcurrent.updateAndGet { prev -> maxOf(prev, now) }
+                        if (idx == 1) worker1Started.complete(Unit)
+                        try {
+                            gate.await()
+                            onDelta("Done.")
+                            return AgentResponse(text = "Summary: Done.\nFindings:\n- ok\nOpen questions: none")
+                        } finally {
+                            activeClients.decrementAndGet()
+                        }
+                    }
+                }
+            },
+            approvals = AgentApprovalGate(),
+            checkpointGate = RunCheckpointGate(FakeCheckpointBackend()),
+            poolState = { SubagentPoolState(allowAgentChoice = true, entries = listOf(PoolEntry(cloud.id, cloud.model))) },
+            coordinatorConfig = { cloud },
+        )
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+
+        val v1 = supervisor.validateSpawn("""{"job":"w1","brief":"do 1","model":"m1"}""") as SpawnValidation.Valid
+        val v2 = supervisor.validateSpawn("""{"job":"w2","brief":"do 2","model":"m1"}""") as SpawnValidation.Valid
+        val v3 = supervisor.validateSpawn("""{"job":"w3","brief":"do 3","model":"m1"}""") as SpawnValidation.Valid
+
+        supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
+        withTimeout(3_000) { worker1Started.await() }
+
+        barrierArmed.set(true)
+        val d2 = async(Dispatchers.Default) { supervisor.executeSpawn(v2.brief, v2.entry, v2.skill) }
+        val d3 = async(Dispatchers.Default) { supervisor.executeSpawn(v3.brief, v3.entry, v3.skill) }
+        d2.await()
+        d3.await()
+        barrierArmed.set(false)
+
+        gate1.complete(Unit)
+        gate2.complete(Unit)
+        gate3.complete(Unit)
+        supervisor.joinAll()
+
+        withTimeout(3_000) {
+            supervisor.state.first { list -> list.size == 3 && list.all { it.state == RunPhase.Done } }
+        }
+        assertEquals(SubagentScheduler.MAX_RUNNING, maxConcurrent.get())
     }
 }
 
