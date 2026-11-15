@@ -20,23 +20,37 @@ data class FileScope(
  * so "src" covers "src/a.kt" but never "src2/a.kt".
  */
 class FileScopeRegistry {
+    private val lock = Any()
     private val scopes = linkedMapOf<String, FileScope>()
 
     fun register(writer: String, job: String, paths: Collection<WorkspacePath>) {
         require(writer.isNotBlank()) { "writer is required" }
         require(writer != COORDINATOR) { "the coordinator is not a worker scope" }
-        scopes[writer] = FileScope(writer, job, paths.toSet())
+        val scope = FileScope(writer, job, paths.toSet())
+        synchronized(lock) {
+            scopes[writer] = scope
+        }
     }
 
     fun release(writer: String) {
-        scopes.remove(writer)
+        synchronized(lock) {
+            scopes.remove(writer)
+        }
     }
 
-    fun clear() = scopes.clear()
+    fun clear() {
+        synchronized(lock) {
+            scopes.clear()
+        }
+    }
 
-    fun scopeOf(writer: String): FileScope? = scopes[writer]
+    fun scopeOf(writer: String): FileScope? = synchronized(lock) {
+        scopes[writer]
+    }
 
-    fun liveScopes(): List<FileScope> = scopes.values.toList()
+    fun liveScopes(): List<FileScope> = synchronized(lock) {
+        scopes.values.toList()
+    }
 
     /**
      * Returns null when the write is allowed, or one of the two stable tool-error
@@ -44,19 +58,21 @@ class FileScopeRegistry {
      */
     fun checkWrite(writer: String, paths: Collection<WorkspacePath>): String? {
         if (paths.isEmpty()) return null
-        if (writer != COORDINATOR) {
-            val own = scopes[writer] ?: return OUTSIDE_FILE_SCOPE
-            if (paths.any { target -> own.paths.none { target.isWithin(it) } }) {
-                return OUTSIDE_FILE_SCOPE
+        return synchronized(lock) {
+            if (writer != COORDINATOR) {
+                val own = scopes[writer] ?: return@synchronized OUTSIDE_FILE_SCOPE
+                if (paths.any { target -> own.paths.none { target.isWithin(it) } }) {
+                    return@synchronized OUTSIDE_FILE_SCOPE
+                }
             }
-        }
-        for (scope in scopes.values) {
-            if (scope.writer == writer || scope.paths.isEmpty()) continue
-            if (paths.any { target -> scope.paths.any { owned -> overlapsOne(target, owned) } }) {
-                return "$OWNED_BY_WORKER_PREFIX${scope.job}"
+            for (scope in scopes.values) {
+                if (scope.writer == writer || scope.paths.isEmpty()) continue
+                if (paths.any { target -> scope.paths.any { owned -> overlapsOne(target, owned) } }) {
+                    return@synchronized "$OWNED_BY_WORKER_PREFIX${scope.job}"
+                }
             }
+            null
         }
-        return null
     }
 
     /** Move destinations are checked in addition to the source path. */

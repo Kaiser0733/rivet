@@ -82,4 +82,41 @@ class FileScopeRegistryTest {
             "{\"path\":\"src/auth/a.kt\",\"new_name\":\"b.kt\"}")
         assertEquals(FileScopeRegistry.OUTSIDE_FILE_SCOPE, registry.checkWrite("w1", renameSibling))
     }
+
+    @Test fun concurrentRegisterReleaseAndCheckWriteAreThreadSafe() {
+        val registry = FileScopeRegistry()
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        val ready = java.util.concurrent.CountDownLatch(2)
+        val writerThread = Thread {
+            ready.countDown()
+            ready.await()
+            try {
+                for (i in 0 until 4_000) {
+                    val id = "w-${i % 25}"
+                    registry.register(id, "job-$i", listOf(path("src/a")))
+                    if (i % 2 == 0) registry.release(id)
+                }
+            } catch (t: Throwable) {
+                failure.compareAndSet(null, t)
+            }
+        }
+        val readerThread = Thread {
+            ready.countDown()
+            ready.await()
+            try {
+                val target = listOf(path("src/b/file.kt"))
+                for (i in 0 until 4_000) {
+                    registry.checkWrite(FileScopeRegistry.COORDINATOR, target)
+                    registry.liveScopes()
+                }
+            } catch (t: Throwable) {
+                failure.compareAndSet(null, t)
+            }
+        }
+        writerThread.start()
+        readerThread.start()
+        writerThread.join(10_000)
+        readerThread.join(10_000)
+        assertNull("Concurrent access threw: ${failure.get()}", failure.get())
+    }
 }
