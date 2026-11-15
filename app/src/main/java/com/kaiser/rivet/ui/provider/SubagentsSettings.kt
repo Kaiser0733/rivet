@@ -78,6 +78,7 @@ internal fun subagentModelRows(
 internal fun SubagentsSettings(
     state: SubagentPoolState,
     configs: List<ProviderConfig>,
+    error: String? = null,
     onAllowAgentChoice: (Boolean) -> Unit,
     onToggleModel: (ProviderConfig) -> Unit,
     onFixedModel: (ProviderConfig) -> Unit,
@@ -86,6 +87,14 @@ internal fun SubagentsSettings(
     val pool = SubagentPool.resolve(state, configs)
     val fixedLabel = pool.fixed?.label ?: "Choose a model"
     DetailScroll {
+        if (error != null) {
+            Text(
+                error,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.error,
+                modifier = Modifier.padding(bottom = 8.dp),
+            )
+        }
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp),
             verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {

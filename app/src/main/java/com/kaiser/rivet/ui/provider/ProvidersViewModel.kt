@@ -36,6 +36,7 @@ import com.kaiser.rivet.storage.SubagentPoolStore
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.Job
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -43,6 +44,7 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.serialization.json.Json
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicInteger
 
 data class GitHubUiState(
     val connected: Boolean = false,
@@ -64,14 +66,21 @@ data class ProviderListUiState(
 class ProvidersViewModel private constructor(
     app: Application,
     private val secrets: SecretStore,
+    subagentStoreOverride: SubagentPoolStore? = null,
 ) : AndroidViewModel(app) {
     constructor(app: Application) : this(app, SecretStore(app))
 
     internal constructor(app: Application, testKey: javax.crypto.SecretKey) :
         this(app, SecretStore(app, testKey))
 
+    internal constructor(
+        app: Application,
+        testKey: javax.crypto.SecretKey,
+        subagentStore: SubagentPoolStore,
+    ) : this(app, SecretStore(app, testKey), subagentStore)
+
     private val store = ProviderStore(app, secrets)
-    private val subagentStore = SubagentPoolStore(app, store)
+    private val subagentStore = subagentStoreOverride ?: SubagentPoolStore(app, store)
     private val gitHub = GitHubTokenStore(app)
     private val toolchain = Toolchain(app)
 
@@ -86,6 +95,16 @@ class ProvidersViewModel private constructor(
 
     private val _subagentPoolState = MutableStateFlow(SubagentPoolState())
     val subagentPoolState: StateFlow<SubagentPoolState> = _subagentPoolState.asStateFlow()
+
+    private val _subagentPoolError = MutableStateFlow<String?>(null)
+    val subagentPoolError: StateFlow<String?> = _subagentPoolError.asStateFlow()
+
+    private val subagentPoolUpdates = Channel<(SubagentPoolState) -> SubagentPoolState>(Channel.UNLIMITED)
+    private val pendingSubagentSaves = AtomicInteger(0)
+    @Volatile
+    private var persistedSubagentPool = SubagentPoolState()
+    @Volatile
+    private var persistedPoolLoaded = false
 
     private val editorRequests = ProviderEditorRequests(viewModelScope)
     private var chatGptSession: ChatGptSignInSession? = null
@@ -113,11 +132,44 @@ class ProvidersViewModel private constructor(
     init {
         viewModelScope.launch {
             try {
-                subagentStore.state.collect { _subagentPoolState.value = it }
+                subagentStore.state.collect { persisted ->
+                    persistedSubagentPool = persisted
+                    persistedPoolLoaded = true
+                    if (pendingSubagentSaves.get() == 0) {
+                        _subagentPoolState.value = persisted
+                    }
+                }
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
                 // Keep the conservative empty pool; the page still shows the toggle.
+            }
+        }
+        viewModelScope.launch {
+            for (transform in subagentPoolUpdates) {
+                try {
+                    if (!persistedPoolLoaded) {
+                        try {
+                            persistedSubagentPool = subagentStore.load()
+                            persistedPoolLoaded = true
+                        } catch (_: Exception) {
+                            // Fall back to current baseline if initial load fails.
+                        }
+                    }
+                    val next = transform(persistedSubagentPool)
+                    subagentStore.save(next)
+                    persistedSubagentPool = next
+                    _subagentPoolError.value = null
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    _subagentPoolState.value = persistedSubagentPool
+                    _subagentPoolError.value = "Rivet couldn't save subagent settings. Please try again."
+                } finally {
+                    if (pendingSubagentSaves.decrementAndGet() == 0 && _subagentPoolError.value == null) {
+                        _subagentPoolState.value = persistedSubagentPool
+                    }
+                }
             }
         }
         viewModelScope.launch {
@@ -183,16 +235,11 @@ class ProvidersViewModel private constructor(
     }
 
     private fun updateSubagentPool(transform: (SubagentPoolState) -> SubagentPoolState) {
-        val next = transform(_subagentPoolState.value)
-        _subagentPoolState.value = next
-        viewModelScope.launch {
-            try {
-                subagentStore.save(next)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                // Keep the in-memory choice for this sheet; a later change can retry the write.
-            }
+        pendingSubagentSaves.incrementAndGet()
+        _subagentPoolError.value = null
+        _subagentPoolState.update(transform)
+        if (subagentPoolUpdates.trySend(transform).isFailure) {
+            pendingSubagentSaves.decrementAndGet()
         }
     }
 

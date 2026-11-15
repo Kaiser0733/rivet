@@ -112,6 +112,7 @@ fun SettingsScreen(
 ) {
     val state by viewModel.listState.collectAsState()
     val subagentState by viewModel.subagentPoolState.collectAsState()
+    val subagentError by viewModel.subagentPoolError.collectAsState()
     val gitHubState by viewModel.gitHubState.collectAsState()
     // Level 2 lives here, not in the host: the sheet is only a container.
     var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
@@ -301,6 +302,7 @@ fun SettingsScreen(
                 SettingsSection.Subagents -> SubagentsSettings(
                     state = subagentState,
                     configs = state.configs,
+                    error = subagentError,
                     onAllowAgentChoice = viewModel::setSubagentAllowAgentChoice,
                     onToggleModel = viewModel::toggleSubagentModel,
                     onFixedModel = viewModel::setFixedSubagentModel,
