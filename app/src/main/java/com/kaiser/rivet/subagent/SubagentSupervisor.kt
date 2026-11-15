@@ -374,7 +374,25 @@ internal class SubagentSupervisor(
                         }
                     }
                     is Admission.Refuse -> {
-                        // Admission refused due to coordinator/environment change
+                        iterator.remove()
+                        val latest = workers[queued.worker.id] ?: queued.worker
+                        val failedRun = latest.toWorkerRun().finish(RunPhase.Failed, failure = admission.line)
+                        val failedRecord = latest.withWorkerRun(failedRun).copy(
+                            activity = null,
+                            waitingReason = null,
+                            summary = admission.line,
+                            error = admission.line,
+                            envelope = ResultEnvelope.build(
+                                workerId = latest.id,
+                                state = RunPhase.Failed,
+                                claim = WorkerClaim(admission.line),
+                                stopReason = "spawn_refused",
+                                error = admission.line,
+                            ),
+                            updatedAt = System.currentTimeMillis(),
+                        )
+                        updateWorker(failedRecord)
+                        services.workerStore.saveWorker(failedRecord)
                     }
                 }
             }

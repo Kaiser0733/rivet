@@ -566,5 +566,83 @@ class SubagentSupervisorTest {
             supervisor.state.first { list -> list.size == 3 && list.all { it.state == RunPhase.Done } }
         }
     }
+
+    @Test
+    fun drainQueueMarksRefusedQueuedWorkerAsFailedAndRemovesFromQueue() = runBlocking {
+        val cloud = cloudConfig("c1")
+        val local = localConfig("l1")
+        val store = WorkerSessionStore.inMemory()
+        val gate1 = CompletableDeferred<Unit>()
+        val gate2 = CompletableDeferred<Unit>()
+        val gate4 = CompletableDeferred<Unit>()
+        var cloudClients = 0
+
+        val services = testServices(
+            workerStore = store,
+            configs = listOf(cloud, local),
+            coordinatorConfig = cloud,
+            clientFactory = { cfg, _ ->
+                if (cfg.id == "l1") {
+                    ControllableClient(gate4)
+                } else {
+                    if (cloudClients++ == 0) ControllableClient(gate1) else ControllableClient(gate2)
+                }
+            },
+        )
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+
+        val v1 = supervisor.validateSpawn(
+            """{"job":"cloud 1","brief":"work a","model":"m1","write_scope":["src/a"]}"""
+        ) as SpawnValidation.Valid
+        val v2 = supervisor.validateSpawn(
+            """{"job":"cloud 2","brief":"work b","model":"m1"}"""
+        ) as SpawnValidation.Valid
+        val v3 = supervisor.validateSpawn(
+            """{"job":"queued local","brief":"work local on a","model":"m2","write_scope":["src/a"]}"""
+        ) as SpawnValidation.Valid
+
+        supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
+        supervisor.executeSpawn(v2.brief, v2.entry, v2.skill)
+        val r3 = supervisor.executeSpawn(v3.brief, v3.entry, v3.skill)
+        val id3 = json.parseToJsonElement(r3.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
+
+        withTimeout(3_000) {
+            supervisor.state.first { list ->
+                list.firstOrNull { it.id == id3 }?.state == RunPhase.Queued
+            }
+        }
+
+        // Free cloud 2's slot while cloud 1 still holds src/a, then occupy the single local slot with v4.
+        gate2.complete(Unit)
+        withTimeout(3_000) {
+            supervisor.state.first { list -> list.count { it.state == RunPhase.Running } == 1 }
+        }
+
+        val v4 = supervisor.validateSpawn(
+            """{"job":"local blocker","brief":"work local on b","model":"m2","write_scope":["src/b"]}"""
+        ) as SpawnValidation.Valid
+        supervisor.executeSpawn(v4.brief, v4.entry, v4.skill)
+
+        withTimeout(3_000) {
+            supervisor.state.first { list -> list.count { it.state == RunPhase.Running } == 2 }
+        }
+
+        // Complete cloud 1: drainQueue() checks v3 (local) while v4 (local) is running -> Admission.Refuse.
+        gate1.complete(Unit)
+
+        withTimeout(3_000) {
+            supervisor.state.first { list ->
+                list.firstOrNull { it.id == id3 }?.state == RunPhase.Failed
+            }
+        }
+
+        gate4.complete(Unit)
+        supervisor.joinAll()
+
+        assertFalse(supervisor.hasLiveWorkers())
+        val refused = store.loadWorker(id3)
+        assertEquals(RunPhase.Failed, refused?.state)
+        assertNotNull(refused?.envelope)
+    }
 }
 
