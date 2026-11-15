@@ -184,7 +184,7 @@ class WorkerPromotionTest {
         await { it.currentSessionId == promotedId }
 
         assertEquals(4, sessions.fullEventCount(promotedId))
-        val promotedEvents = sessions.olderMessages(promotedId, limit = 10)
+        val promotedEvents = sessions.recent(promotedId, limit = 10)
         assertTrue(promotedEvents.any { it.text.startsWith("Step 1") })
     }
 
