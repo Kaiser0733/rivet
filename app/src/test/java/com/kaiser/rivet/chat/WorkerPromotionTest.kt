@@ -149,6 +149,45 @@ class WorkerPromotionTest {
         assertEquals(3, workers.fullEventCount(live.id))
     }
 
+    @Test fun continueWorkerPreservesPreCompactionEventsWhenPromotingCompactedWorker() = runBlocking {
+        val compactedWorker = WorkerRecord(
+            id = "w-compacted",
+            runId = "run-c",
+            parentSessionId = "parent",
+            workspaceId = "tree",
+            job = "Refactor parser",
+            brief = "Keep history",
+            configId = "cfg",
+            model = "model-1",
+            state = RunPhase.Done,
+        )
+        val m1 = AgentMessage.user("Step 1 " + "a".repeat(2_000))
+        val m2 = AgentMessage.assistant("Reply 1 " + "b".repeat(2_000))
+        val m3 = AgentMessage.user("Step 2")
+        val m4 = AgentMessage.assistant("Reply 2")
+        val all = listOf(m1, m2, m3, m4)
+        workers.saveWorker(compactedWorker)
+        workers.saveMessages(compactedWorker.id, all, interrupted = false)
+        workers.compact(
+            expected = all,
+            retained = listOf(m3, m4),
+            summary = "Summarized step 1.",
+            attempt = null,
+            expectedSessionId = compactedWorker.id,
+        )
+        assertEquals(4, workers.fullEventCount(compactedWorker.id))
+
+        vm.continueWorker(compactedWorker.id)
+        val promotedId = awaitValue {
+            sessions.list().firstOrNull { it.title == "Subagent · Refactor parser" }?.id
+        }
+        await { it.currentSessionId == promotedId }
+
+        assertEquals(4, sessions.fullEventCount(promotedId))
+        val promotedEvents = sessions.olderMessages(promotedId, limit = 10)
+        assertTrue(promotedEvents.any { it.text.startsWith("Step 1") })
+    }
+
     private suspend fun await(predicate: (ChatUiState) -> Boolean) {
         withTimeout(5_000) {
             while (!predicate(vm.uiState.value)) delay(10)

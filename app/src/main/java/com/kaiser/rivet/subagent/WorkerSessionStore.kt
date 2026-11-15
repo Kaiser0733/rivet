@@ -99,6 +99,7 @@ data class WorkerTranscript(
     val messages: List<AgentMessage>,
     val summary: String,
     val interrupted: Boolean,
+    val events: List<AgentMessage> = messages,
 )
 
 /**
@@ -151,11 +152,13 @@ internal class WorkerSessionStore internal constructor(
             val worker = backend.getWorker(workerId)
                 ?: throw IllegalArgumentException("Unknown worker '$workerId'")
             val active = backend.getActiveMessages(workerId)
+            val events = backend.getAllEvents(workerId)
             WorkerTranscript(
                 worker = worker,
                 messages = active,
                 summary = worker.summary,
                 interrupted = worker.interrupted,
+                events = events,
             )
         }
     }
@@ -171,11 +174,13 @@ internal class WorkerSessionStore internal constructor(
                 (worker.interrupted && InterruptedTurnRecovery.hasUnfinishedTurn(active))
             val messages = recoverInterruptedLocked(worker, interrupted, active, summaryBytes)
             val updatedWorker = backend.getWorker(workerId) ?: worker
+            val events = backend.getAllEvents(workerId)
             WorkerTranscript(
                 worker = updatedWorker,
                 messages = messages,
                 summary = updatedWorker.summary,
                 interrupted = interrupted,
+                events = events,
             )
         }
     }

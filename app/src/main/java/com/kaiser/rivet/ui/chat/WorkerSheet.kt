@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.HorizontalDivider
@@ -31,6 +31,7 @@ internal fun WorkerSheet(
     worker: WorkerRecord,
     messages: List<AgentMessage>,
     loading: Boolean,
+    error: String? = null,
     onDismiss: () -> Unit,
     onStop: () -> Unit,
     onContinue: () -> Unit,
@@ -50,13 +51,23 @@ internal fun WorkerSheet(
                 Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
                     CircularProgressIndicator()
                 }
+            } else if (error != null) {
+                Box(Modifier.fillMaxWidth().weight(1f), contentAlignment = Alignment.Center) {
+                    Text(error,
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error)
+                }
             } else {
+                val filtered = messages.filter {
+                    it.role != AgentRole.Context && it.internalContext == null
+                }
                 LazyColumn(Modifier.fillMaxWidth().weight(1f),
                     verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    items(messages.filter {
-                        it.role != AgentRole.Context && it.internalContext == null
-                    }) { message ->
-                        MessageRow(message, messageKey = message.hashCode())
+                    itemsIndexed(
+                        items = filtered,
+                        key = { index, message -> "${worker.id}:$index:${message.hashCode()}" },
+                    ) { index, message ->
+                        MessageRow(message, messageKey = 31 * index + message.hashCode())
                     }
                 }
             }

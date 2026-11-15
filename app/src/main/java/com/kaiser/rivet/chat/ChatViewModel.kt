@@ -2444,7 +2444,7 @@ class ChatViewModel private constructor(
                         workspaceId = transcript.worker.workspaceId
                             ?: _uiState.value.currentSessionWorkspaceId,
                         title = "Subagent · ${transcript.worker.job}",
-                        events = transcript.messages,
+                        events = transcript.events,
                         active = transcript.messages,
                         summary = transcript.summary,
                     )

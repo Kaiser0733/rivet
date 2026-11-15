@@ -725,6 +725,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             worker = openWorker,
             messages = workerSheet.messages,
             loading = workerSheet.loading,
+            error = workerSheet.error,
             onDismiss = {
                 selectedWorkerId = null
                 chatViewModel.closeWorker()
