@@ -145,6 +145,21 @@ internal class WorkerSessionStore internal constructor(
         }
     }
 
+    /** Read-only transcript lookup for UI inspection; never mutates live worker state. */
+    suspend fun inspectTranscript(workerId: String): WorkerTranscript = withContext(Dispatchers.IO) {
+        lock.withLock {
+            val worker = backend.getWorker(workerId)
+                ?: throw IllegalArgumentException("Unknown worker '$workerId'")
+            val active = backend.getActiveMessages(workerId)
+            WorkerTranscript(
+                worker = worker,
+                messages = active,
+                summary = worker.summary,
+                interrupted = worker.interrupted,
+            )
+        }
+    }
+
     suspend fun loadTranscript(workerId: String): WorkerTranscript = withContext(Dispatchers.IO) {
         lock.withLock {
             val worker = backend.getWorker(workerId)

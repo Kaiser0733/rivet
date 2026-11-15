@@ -176,4 +176,25 @@ class WorkerSessionStoreTest {
         assertEquals("reported", estimate.source)
         assertEquals(321L, estimate.tokens)
     }
+
+    @Test
+    fun inspectTranscriptLeavesInterruptedPendingToolCallUntouched() = runBlocking {
+        val store = WorkerSessionStore.inMemory()
+        store.saveWorker(sampleWorker(id = "w-live", state = RunPhase.Running))
+        val initial = listOf(
+            AgentMessage.user("Inspect files"),
+            AgentMessage.assistant("Reading", toolCalls = listOf(AgentToolCall("tc-1", "read_file", "{}"))),
+        )
+        store.saveMessages("w-live", initial, interrupted = true)
+
+        val inspected = store.inspectTranscript("w-live")
+        assertEquals(2, inspected.messages.size)
+        assertEquals(2, store.fullEventCount("w-live"))
+
+        val withToolResult = initial + AgentMessage.tools(
+            listOf(AgentToolResult(callId = "tc-1", name = "read_file", content = "ok")),
+        )
+        store.saveMessages("w-live", withToolResult, interrupted = false)
+        assertEquals(3, store.inspectTranscript("w-live").messages.size)
+    }
 }

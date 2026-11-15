@@ -2408,7 +2408,7 @@ class ChatViewModel private constructor(
         )
         viewModelScope.launch {
             try {
-                val transcript = workerStore.loadTranscript(workerId)
+                val transcript = workerStore.inspectTranscript(workerId)
                 _workerSheet.value = WorkerSheetState(
                     worker = transcript.worker,
                     messages = transcript.messages,
@@ -2433,6 +2433,8 @@ class ChatViewModel private constructor(
     fun continueWorker(workerId: String) {
         viewModelScope.launch {
             try {
+                val current = workerStore.loadWorker(workerId) ?: return@launch
+                if (!current.isTerminal) return@launch
                 val transcript = workerStore.loadTranscript(workerId)
                 if (!transcript.worker.isTerminal) return@launch
                 val existing = transcript.worker.promotedSessionId

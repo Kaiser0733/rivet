@@ -3,6 +3,8 @@ package com.kaiser.rivet.chat
 import android.app.Application
 import androidx.lifecycle.viewModelScope
 import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
@@ -110,6 +112,41 @@ class WorkerPromotionTest {
         delay(150)
         assertEquals(1, sessions.list().count { it.title == "Subagent · Review the parser" })
         assertEquals(promoted, vm.uiState.value.currentSessionId)
+    }
+
+    @Test fun openWorkerAndContinueWorkerOnRunningWorkerDoNotMutateLiveTranscript() = runBlocking {
+        val live = WorkerRecord(
+            id = "w-live",
+            runId = "run-live",
+            parentSessionId = "parent",
+            workspaceId = "tree",
+            job = "Inspect parser edge cases",
+            brief = "Trace token loop",
+            configId = "cfg",
+            model = "model-1",
+            state = RunPhase.Running,
+        )
+        val initial = listOf(
+            AgentMessage.user("Trace token loop"),
+            AgentMessage.assistant("Reading file", toolCalls = listOf(AgentToolCall("tc-live", "read_file", "{}"))),
+        )
+        workers.saveWorker(live)
+        workers.saveMessages(live.id, initial, interrupted = true)
+
+        vm.openWorker(live.id)
+        awaitValue {
+            val sheet = vm.workerSheet.value
+            if (sheet.worker?.id == live.id && !sheet.loading) Unit else null
+        }
+        vm.continueWorker(live.id)
+        delay(100)
+
+        assertEquals(2, workers.fullEventCount(live.id))
+        val afterTool = initial + AgentMessage.tools(
+            listOf(AgentToolResult(callId = "tc-live", name = "read_file", content = "done")),
+        )
+        workers.saveMessages(live.id, afterTool, interrupted = false)
+        assertEquals(3, workers.fullEventCount(live.id))
     }
 
     private suspend fun await(predicate: (ChatUiState) -> Boolean) {
