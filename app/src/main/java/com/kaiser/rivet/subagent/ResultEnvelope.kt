@@ -174,12 +174,63 @@ object ResultEnvelope {
 
         // Second pass (fallback if non-diff fields alone exceed maxTotalBytes): trim claimed findings/summary,
         // then fit truncated diffs into whatever budget remains.
-        val perWorkerClaimBudget = ((maxTotalBytes / parsed.size.coerceAtLeast(1)) - 256).coerceAtLeast(64)
+        val strippedClaimZero = parsed.map { trimClaimed(replaceDiff(it, "", markTruncated = hasNonEmptyDiff(it)), 0) }
+        val baseClaimZeroBytes = render(strippedClaimZero).toByteArray(Charsets.UTF_8).size
+        val summaryBudgetTotal = (maxTotalBytes - baseClaimZeroBytes - parsed.size).coerceAtLeast(0)
+        val perWorkerClaimBudget = summaryBudgetTotal / parsed.size.coerceAtLeast(1)
         val trimmedClaims = parsed.map { trimClaimed(it, perWorkerClaimBudget) }
         val strippedAfterClaimTrim = trimmedClaims.map { replaceDiff(it, "", markTruncated = hasNonEmptyDiff(it)) }
         val claimTrimBaseBytes = render(strippedAfterClaimTrim).toByteArray(Charsets.UTF_8).size
         val remainingDiffBudget = (maxTotalBytes - claimTrimBaseBytes - parsed.size).coerceAtLeast(0)
-        return render(capDiffs(trimmedClaims, remainingDiffBudget))
+        val afterClaimTrim = render(capDiffs(trimmedClaims, remainingDiffBudget))
+        if (afterClaimTrim.toByteArray(Charsets.UTF_8).size <= maxTotalBytes) {
+            return afterClaimTrim
+        }
+
+        // Third pass: strip non-essential verified arrays (commands, then out_of_scope_changes, then files_changed)
+        // when structural verified lists still push the envelope over maxTotalBytes.
+        var compact = strippedClaimZero
+        val afterStripZeroSummary = render(compact)
+        if (afterStripZeroSummary.toByteArray(Charsets.UTF_8).size <= maxTotalBytes) {
+            return afterStripZeroSummary
+        }
+        for (arrayKey in listOf("commands", "out_of_scope_changes", "files_changed")) {
+            compact = compact.map { clearVerifiedArray(it, arrayKey) }
+            val candidate = render(compact)
+            if (candidate.toByteArray(Charsets.UTF_8).size <= maxTotalBytes) {
+                return candidate
+            }
+        }
+
+        // Final fallback: drop trailing worker items until even minimal stubs fit within maxTotalBytes.
+        val kept = compact.toMutableList()
+        while (kept.isNotEmpty()) {
+            val candidate = render(kept)
+            if (candidate.toByteArray(Charsets.UTF_8).size <= maxTotalBytes) {
+                return candidate
+            }
+            kept.removeAt(kept.lastIndex)
+        }
+        return render(emptyList())
+    }
+
+    private fun clearVerifiedArray(envelope: JsonObject, key: String): JsonObject {
+        val verified = envelope["verified"]?.jsonObject ?: return envelope
+        val hadItems = (verified[key] as? kotlinx.serialization.json.JsonArray)?.isNotEmpty() == true
+        val updatedVerified = buildJsonObject {
+            for ((k, v) in verified) {
+                when (k) {
+                    key -> put(k, buildJsonArray {})
+                    "truncated" -> put("truncated", (v.jsonPrimitive.booleanOrNull == true) || hadItems)
+                    else -> put(k, v)
+                }
+            }
+        }
+        return buildJsonObject {
+            for ((k, v) in envelope) {
+                if (k == "verified") put("verified", updatedVerified) else put(k, v)
+            }
+        }
     }
 
     private fun diffText(envelope: JsonObject): String =
@@ -209,7 +260,7 @@ object ResultEnvelope {
     private fun trimClaimed(envelope: JsonObject, budgetBytes: Int): JsonObject {
         val claimed = envelope["claimed"]?.jsonObject ?: return envelope
         val rawSummary = claimed["summary"]?.jsonPrimitive?.content.orEmpty()
-        val cutSummary = truncateUtf8(rawSummary, budgetBytes)
+        val cutSummary = truncateJsonEncodedPrefix(rawSummary, budgetBytes)
         val updatedClaimed = buildJsonObject {
             put("summary", cutSummary)
             put("findings", buildJsonArray {})
@@ -262,16 +313,5 @@ object ResultEnvelope {
         }
         val finalEnd = if (low < text.length && Character.isLowSurrogate(text[low])) (low - 1).coerceAtLeast(0) else low
         return text.substring(0, finalEnd)
-    }
-
-    private fun truncateUtf8(text: String, maxBytes: Int): String {
-        if (maxBytes <= 0 || text.isEmpty()) return ""
-        val bytes = text.toByteArray(Charsets.UTF_8)
-        if (bytes.size <= maxBytes) return text
-        var end = maxBytes
-        while (end > 0 && (bytes[end].toInt() and 0b1100_0000) == 0b1000_0000) {
-            end--
-        }
-        return String(bytes, 0, end, Charsets.UTF_8)
     }
 }

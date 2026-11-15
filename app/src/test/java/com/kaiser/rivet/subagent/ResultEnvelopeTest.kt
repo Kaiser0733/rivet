@@ -8,6 +8,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -123,5 +124,30 @@ class ResultEnvelopeTest {
         val workers = Json.parseToJsonElement(assembled).jsonObject["workers"]!!.jsonArray
         assertEquals(4, workers.size)
         assertTrue(workers.all { it.jsonObject["verified"]!!.jsonObject["diff"]!!.jsonPrimitive.content.isNotEmpty() })
+    }
+
+    @Test fun assembleAwaitResultStrictlyEnforcesMaxTotalBytesEvenWhenNonDiffMetadataOverflows() {
+        val denseEnvelopes = (1..25).map { idx ->
+            ResultEnvelope.build(
+                workerId = "dense-worker-$idx",
+                state = RunPhase.Done,
+                claim = WorkerClaim(
+                    summary = "Summary line\nwith \"quotes\" #$idx " + "detail ".repeat(40),
+                    findings = (1..10).map { "Finding $idx-$it with extended description text" },
+                    openQuestions = listOf("Open question for worker $idx"),
+                ),
+                files = (1..8).map { f ->
+                    ChangedFile("app/src/main/java/com/kaiser/rivet/module$idx/File$f.kt", FileChangeKind.Modified, f, 1)
+                },
+                commands = listOf(ObservedCommand("./gradlew :app:testDebugUnitTest --tests Example$idx", 0, "ok")),
+            )
+        }
+
+        val cap = 8_192
+        val assembled = ResultEnvelope.assembleAwaitResult(denseEnvelopes, maxTotalBytes = cap)
+        val bytes = assembled.toByteArray(Charsets.UTF_8).size
+        assertTrue("Assemble result must strictly respect maxTotalBytes=$cap (was $bytes)", bytes <= cap)
+        val root = Json.parseToJsonElement(assembled).jsonObject
+        assertNotNull(root["workers"])
     }
 }
