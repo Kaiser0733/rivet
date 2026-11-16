@@ -1998,8 +1998,9 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                     ),
                 )
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    selector?.invoke()
-                    Spacer(Modifier.weight(1f))
+                    Box(Modifier.weight(1f).padding(end = 4.dp)) {
+                        selector?.invoke()
+                    }
                     IconButton(onClick = { if (streaming) onCancel() else submit() },
                         enabled = streaming || canSend, modifier = Modifier.size(48.dp)
                         .clip(CircleShape)
