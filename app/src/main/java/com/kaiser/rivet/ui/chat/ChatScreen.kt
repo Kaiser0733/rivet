@@ -32,11 +32,6 @@ import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
-import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.expandVertically
-import androidx.compose.animation.fadeIn
-import androidx.compose.animation.fadeOut
-import androidx.compose.animation.shrinkVertically
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.foundation.horizontalScroll
@@ -149,6 +144,7 @@ import com.kaiser.rivet.chat.ProjectBindingState
 import com.kaiser.rivet.chat.PROJECT_ACCESS_LOST_MESSAGE
 import com.kaiser.rivet.chat.PROJECT_BINDING_MISMATCH_MESSAGE
 import com.kaiser.rivet.chat.projectBindingState
+import com.kaiser.rivet.ui.FoldReveal
 import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
 import com.kaiser.rivet.ui.RivetOutlinedButton
@@ -1217,24 +1213,18 @@ private fun TurnBlockView(
             turn.parts.forEach { part ->
                 when (part) {
                     is TurnPart.Process -> {
-                        if (isOpen) {
-                            AnimatedVisibility(
-                                visible = true,
-                                enter = expandVertically() + fadeIn(),
-                                exit = shrinkVertically() + fadeOut()
-                            ) {
-                                val groups = part.items.mapNotNull { entry ->
-                                    (entry.item as? AgentConversationItem.Activity)?.group
-                                }
-                                val thinking = part.items.mapNotNull { it.standaloneThinking }
-                                    .filter { it.isNotBlank() }
-                                if (groups.isNotEmpty() || thinking.isNotEmpty()) {
-                                    ActivityRow(
-                                        groups = groups,
-                                        thinking = thinking,
-                                        isLive = state.streaming && isLastTurn && part == lastProcess,
-                                    )
-                                }
+                        FoldReveal(expanded = isOpen) {
+                            val groups = part.items.mapNotNull { entry ->
+                                (entry.item as? AgentConversationItem.Activity)?.group
+                            }
+                            val thinking = part.items.mapNotNull { it.standaloneThinking }
+                                .filter { it.isNotBlank() }
+                            if (groups.isNotEmpty() || thinking.isNotEmpty()) {
+                                ActivityRow(
+                                    groups = groups,
+                                    thinking = thinking,
+                                    isLive = state.streaming && isLastTurn && part == lastProcess,
+                                )
                             }
                         }
                     }
@@ -1391,7 +1381,7 @@ private fun ActivityRow(
             isLive = isLive,
             onToggle = { expanded = !expanded }
         )
-        if (expanded) {
+        FoldReveal(expanded = expanded) {
             Column(
                 Modifier
                     .fillMaxWidth()
@@ -1603,7 +1593,7 @@ private fun ReasoningRow(
                 )
             }
         }
-        if (expanded) {
+        FoldReveal(expanded = expanded) {
             Column(
                 modifier = Modifier
                     .fillMaxWidth()

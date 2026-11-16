@@ -60,6 +60,7 @@ import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.provider.withModelId
+import com.kaiser.rivet.ui.FoldReveal
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.chat.displaySafeText
 import java.util.Locale
@@ -112,7 +113,7 @@ fun ProviderEditor(
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
-            if (config.type == ProviderType.OpenAiCompatible || advanced) {
+            FoldReveal(expanded = config.type == ProviderType.OpenAiCompatible || advanced) {
                 OutlinedTextField(
                     value = config.baseUrl,
                     onValueChange = { v -> viewModel.updateConfig { it.copy(baseUrl = v) } },
@@ -383,7 +384,7 @@ fun ProviderEditor(
                     tint = MaterialTheme.colorScheme.onBackground)
             }
             HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
-            if (advanced) {
+            FoldReveal(expanded = advanced) {
                 OutlinedTextField(value = state.headersText, onValueChange = viewModel::updateHeadersText,
                     label = { Text(stringResource(R.string.provider_headers_label)) },
                     placeholder = { Text(stringResource(R.string.provider_headers_hint)) },
