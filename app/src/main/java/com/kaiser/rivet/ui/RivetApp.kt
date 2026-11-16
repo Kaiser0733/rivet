@@ -223,8 +223,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     onClose = { chatViewModel.browser.close() },
                     onCloseSession = { chatViewModel.browser.endSession() },
                     modifier = Modifier.fillMaxSize().zIndex(if (browserState.visible) 2f else -1f),
-                    hostContent = { hostModifier ->
-                        BrowserHost(chatViewModel.browser, hostModifier)
+                    hostContent = { hostModifier, onPageInteraction ->
+                        BrowserHost(chatViewModel.browser, hostModifier, onPageInteraction)
                     },
                 )
             }

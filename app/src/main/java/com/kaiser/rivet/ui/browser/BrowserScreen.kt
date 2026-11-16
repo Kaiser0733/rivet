@@ -8,6 +8,7 @@ import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
@@ -19,6 +20,7 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.matchParentSize
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -54,16 +56,24 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
+import androidx.compose.ui.ExperimentalComposeUiApi
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.input.pointer.pointerInput
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
 import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -82,31 +92,45 @@ import kotlinx.coroutines.launch
  * Full-screen visual browser shell. Top chrome, banners, page surface, and bottom controls live
  * in a single Column so banners never overlap the WebView or bleed through to chat.
  */
+@OptIn(ExperimentalComposeUiApi::class)
 @Composable
 fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                   onCloseSession: () -> Unit = { session.endSession() },
                   modifier: Modifier = Modifier,
-                  hostContent: @Composable (Modifier) -> Unit = { hostModifier ->
-                      BrowserHost(session, hostModifier)
+                  hostContent: @Composable (Modifier, () -> Unit) -> Unit = { hostModifier, onPageInteraction ->
+                      BrowserHost(session, hostModifier, onPageInteraction)
                   }) {
     val state by session.state.collectAsState()
     val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
-    val urlField = remember { UrlFieldSelection.Controller(state.url) }
+    val focusRequester = remember { FocusRequester() }
+    val focusManager = LocalFocusManager.current
+    val keyboardController = LocalSoftwareKeyboardController.current
+    var isUrlFocused by remember { mutableStateOf(false) }
     var address by remember {
         mutableStateOf(TextFieldValue(state.url, selection = TextRange(state.url.length)))
     }
-    var selectAllLatch by remember { mutableStateOf(false) }
     LaunchedEffect(state.url) {
-        val synced = urlField.syncExternalUrl(state.url)
-        selectAllLatch = false
-        address = TextFieldValue(synced.text, TextRange(synced.selection.start, synced.selection.end))
+        address = TextFieldValue(state.url, selection = TextRange(state.url.length))
     }
-    LaunchedEffect(selectAllLatch) {
-        if (selectAllLatch) {
-            kotlinx.coroutines.delay(150)
-            urlField.onFocusSettled()
-            selectAllLatch = false
+    LaunchedEffect(state.visible) {
+        if (!state.visible) {
+            focusManager.clearFocus()
+            keyboardController?.hide()
+        }
+    }
+    val clearUrlFocus: () -> Unit = {
+        focusManager.clearFocus()
+        keyboardController?.hide()
+    }
+    val submitUrl: () -> Unit = {
+        clearUrlFocus()
+        if (address.text.isNotBlank()) scope.launch {
+            try {
+                session.openVisual(address.text, userInitiated = true)
+            } catch (error: BrowserFailure) {
+                session.showError(error.message)
+            }
         }
     }
     var menuOpen by remember { mutableStateOf(false) }
@@ -144,57 +168,44 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                     IconButton(onClick = onCloseSession) {
                         Icon(painterResource(R.drawable.ic_close), "Close browser")
                     }
-                    OutlinedTextField(
-                        value = address,
-                        onValueChange = { incoming ->
-                            val result = urlField.onValueChange(
-                                incoming.text,
-                                UrlFieldSelection.Range(incoming.selection.start, incoming.selection.end),
-                            )
-                            selectAllLatch = urlField.pendingSelectAllOnTap
-                            address = if (result.keepFullSelection) {
-                                incoming.copy(
-                                    selection = TextRange(
-                                        result.field.selection.start,
-                                        result.field.selection.end,
-                                    ),
-                                    composition = null,
-                                )
-                            } else {
-                                incoming
-                            }
-                        },
-                        modifier = Modifier.weight(1f).padding(horizontal = 4.dp)
-                            .onFocusChanged { focus ->
-                                val focused = urlField.onFocusChanged(
-                                    isFocused = focus.isFocused,
-                                    currentText = address.text,
-                                    currentSelection = UrlFieldSelection.Range(
-                                        address.selection.start,
-                                        address.selection.end,
-                                    ),
-                                )
-                                selectAllLatch = urlField.pendingSelectAllOnTap
-                                if (focused != null) {
-                                    address = address.copy(
-                                        selection = TextRange(focused.selection.start, focused.selection.end),
-                                        composition = null,
-                                    )
-                                }
-                            },
-                        singleLine = true,
-                        textStyle = MaterialTheme.typography.bodyMedium,
-                        label = { Text("URL") },
-                    )
-                    TextButton(onClick = {
-                        if (address.text.isNotBlank()) scope.launch {
-                            try {
-                                session.openVisual(address.text, userInitiated = true)
-                            } catch (error: BrowserFailure) {
-                                session.showError(error.message)
-                            }
+                    Box(Modifier.weight(1f).padding(horizontal = 4.dp)) {
+                        OutlinedTextField(
+                            value = address,
+                            onValueChange = { address = it },
+                            modifier = Modifier.fillMaxWidth()
+                                .focusRequester(focusRequester)
+                                .onFocusChanged { focus ->
+                                    isUrlFocused = focus.isFocused
+                                    if (focus.isFocused && address.text.isNotEmpty() &&
+                                        address.selection.collapsed) {
+                                        address = address.copy(
+                                            selection = TextRange(0, address.text.length),
+                                            composition = null,
+                                        )
+                                    }
+                                },
+                            singleLine = true,
+                            textStyle = MaterialTheme.typography.bodyMedium,
+                            label = { Text("URL") },
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                            keyboardActions = KeyboardActions(onGo = { submitUrl() }),
+                        )
+                        if (!isUrlFocused) {
+                            Box(Modifier.matchParentSize()
+                                .clearAndSetSemantics {}
+                                .pointerInput(Unit) {
+                                    detectTapGestures {
+                                        address = address.copy(
+                                            selection = TextRange(0, address.text.length),
+                                            composition = null,
+                                        )
+                                        focusRequester.requestFocus()
+                                        keyboardController?.show()
+                                    }
+                                })
                         }
-                    }) { Text("Go") }
+                    }
+                    TextButton(onClick = submitUrl) { Text("Go") }
                 }
             }
             state.handoff?.let { handoff ->
@@ -268,7 +279,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
         }
 
         Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
-            hostContent(Modifier.fillMaxSize())
+            hostContent(Modifier.fillMaxSize(), clearUrlFocus)
             if (state.visible) {
                 if (state.readerMode) {
                     ReaderPane(state.readerText, Modifier.fillMaxSize()) { url ->
