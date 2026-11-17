@@ -1,8 +1,8 @@
 package com.kaiser.rivet.provider
 
 import kotlinx.serialization.json.JsonObject
+import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
-import kotlinx.serialization.json.jsonPrimitive
 
 /** Whether the selected provider/model can accept image input. Unknown is optimistic. */
 sealed interface VisionSupport {
@@ -43,18 +43,21 @@ internal object VisionCapability {
         val architecture = model["architecture"]?.let { it as? JsonObject }
         val input = architecture?.get("input_modalities")?.let { it as? kotlinx.serialization.json.JsonArray }
         if (input != null) {
-            if (input.any { it.jsonPrimitive.content.equals("image", ignoreCase = true) }) return true
+            if (input.any {
+                    (it as? JsonPrimitive)?.takeIf(JsonPrimitive::isString)
+                        ?.content.equals("image", ignoreCase = true)
+                }) return true
             if (input.isNotEmpty()) return false
         }
-        val modality = architecture?.get("modality")?.jsonPrimitive?.content
+        val modality = (architecture?.get("modality") as? JsonPrimitive)?.content
         if (modality?.contains("image", ignoreCase = true) == true) return true
         val capabilities = model["capabilities"]?.let { it as? JsonObject }
-        return capabilities?.get("vision")?.jsonPrimitive?.booleanOrNull
+        return (capabilities?.get("vision") as? JsonPrimitive)?.booleanOrNull
     }
 
     /** Anthropic/Gemini metadata may omit vision entirely; modern models still accept it. */
     fun metadataVisionOrTrue(model: JsonObject): Boolean =
-        (model["capabilities"]?.let { it as? JsonObject }?.get("vision")?.jsonPrimitive?.booleanOrNull)
+        ((model["capabilities"]?.let { it as? JsonObject }?.get("vision") as? JsonPrimitive)?.booleanOrNull)
             ?: true
 
     fun shotAttachment(support: VisionSupport, path: String): VisionShotAttachment = when (support) {
