@@ -3,7 +3,6 @@ package com.kaiser.rivet.browser
 import android.app.Application
 import androidx.compose.foundation.layout.Box
 import androidx.compose.ui.semantics.SemanticsProperties
-import androidx.compose.ui.test.assertTextEquals
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
@@ -71,6 +70,10 @@ class BrowserUrlFieldUiTest {
         compose.onNode(hasSetTextAction()).fetchSemanticsNode()
             .config[SemanticsProperties.TextSelectionRange]
 
+    private fun editableText(): String =
+        compose.onNode(hasSetTextAction()).fetchSemanticsNode()
+            .config[SemanticsProperties.EditableText].text
+
     private fun tapUrl() {
         compose.onNode(hasSetTextAction()).performTouchInput { click() }
         compose.waitForIdle()
@@ -86,7 +89,7 @@ class BrowserUrlFieldUiTest {
 
         compose.onNode(hasSetTextAction()).performTextInput("abc")
         compose.waitForIdle()
-        compose.onNode(hasSetTextAction()).assertTextEquals("abc")
+        assertEquals("abc", editableText())
     }
 
     @Test fun pageInteractionClearsFocusSoTheNextTapSelectsAllAgain() {
