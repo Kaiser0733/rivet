@@ -292,8 +292,15 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready && !it.projectLoading && it.projectIdentity == tree.toString() }
+        await(viewModel) {
+            it.ready && !it.projectLoading && it.projectIdentity == tree.toString() &&
+                it.error?.contains("may already be saved") == true
+        }
 
+        // Loading the project runs commandBlocker, which settles the initial pending
+        // changes and consumes the provider's one-shot write rejection. Arm it again
+        // before exercising the explicit retry this test is about.
+        documents.rejectWriteOnceFor = "b.txt"
         viewModel.retryProjectChanges()
         val failed = await(viewModel) { !it.recoveringProjectChanges && it.error?.contains("may already be saved") == true }
         assertEquals("after a", documents.nodes[a.documentId]!!.bytes.readText())
