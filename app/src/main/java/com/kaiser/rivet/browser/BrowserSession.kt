@@ -2353,6 +2353,7 @@ class BrowserSession(
                 return
             }
             activeTitle = view.title.orEmpty()
+            if (lastMainHttpStatus == null) lastMainHttpStatus = 200
             recordVisit(actual)
             updateActiveWindow(actual, activeTitle)
             pageFinished?.complete(Unit)
