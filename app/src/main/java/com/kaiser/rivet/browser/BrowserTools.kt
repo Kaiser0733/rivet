@@ -54,6 +54,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "browser_key" -> prepareKey(call, args)
                 "browser_wait_for" -> readOnly(call) { waitFor(call, args) }
                 "browser_reset" -> readOnly(call) { reset(call, args) }
+                "browser_status" -> readOnly(call) { status(call) }
                 "browser_read" -> readOnly(call) { read(call, args) }
                 "browser_find" -> readOnly(call) { find(call, args) }
                 "browser_click" -> prepareClick(call, args)
@@ -97,6 +98,10 @@ class BrowserTools(private val session: BrowserSession) {
                 put("needs_renderer", result.needsRenderer)
                 put("tier", result.tier.name.lowercase())
                 put("cap_mb", result.capMb)
+                val loopback = BrowserAuthGuard.isLoopback(result.url)
+                if (result.tier != BrowserTier.Normal || loopback) {
+                    put("tier_note", BrowserGovernor.tierGuide(result.tier, loopback).summary)
+                }
                 if (preview) put("visual", true)
                 if (result.handoff) put("handoff", true)
             }, "Opened  ${result.title.ifBlank { result.url }}")
@@ -371,6 +376,31 @@ class BrowserTools(private val session: BrowserSession) {
         }, if (result.reopened) "Reset and reopened browser" else "Reset browser")
     }
 
+    private suspend fun status(call: AgentToolCall): AgentToolResult {
+        val result = session.status()
+        return value(call, buildJsonObject {
+            put("alive", result.alive)
+            put("healthy", result.healthy)
+            put("mode", result.mode)
+            put("url", result.url)
+            put("title", result.title)
+            put("tier", result.tier.name.lowercase())
+            put("cap_mb", result.capMb)
+            put("loopback_exempt", result.loopbackExempt)
+            put("tier_allows", result.tierAllows)
+            put("viewport", buildJsonObject {
+                put("width", result.viewportWidth); put("height", result.viewportHeight)
+            })
+            put("page_ready", result.pageReady)
+            put("allow_js", result.allowJs)
+            put("user_driving", result.userDriving)
+            put("handoff", result.handoff)
+            put("js_errors", result.jsErrors)
+            put("last_error", result.lastError)
+            result.hint?.let { put("hint", it) }
+        }, "Read browser status")
+    }
+
     private suspend fun read(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val chunk = args.int("chunk") ?: 0
         val visibleOnly = args["visible_only"]?.jsonPrimitive?.booleanOrNull ?: true
@@ -514,7 +544,7 @@ class BrowserTools(private val session: BrowserSession) {
         (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty()
 
     companion object {
-        val NAMES = setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_wait_for", "browser_reset", "browser_read", "browser_find", "browser_click",
+        val NAMES = setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_wait_for", "browser_reset", "browser_status", "browser_read", "browser_find", "browser_click",
             "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
             "browser_tap", "browser_swipe")
 
@@ -573,6 +603,9 @@ class BrowserTools(private val session: BrowserSession) {
             AgentToolDefinition("browser_reset",
                 "Rebuild the browser renderer after session rot, a degenerate 1x1 viewport, or a wedged page. Waits for renderer teardown (3s cap), clears transients and stale snapshot fields, preserves tabs/settings/auth invariants, and optionally reopens the previous URL. clear_storage also wipes WebStorage and cookies for this browser.",
                 schema(emptyList(), "reopen" to boolean, "clear_storage" to boolean)),
+            AgentToolDefinition("browser_status",
+                "Read browser health without starting a renderer: alive/healthy, renderer or reader mode, URL/title, tier and tier_allows, viewport, JS errors, user-driving and handoff flags. Tier legend: normal | strictdiet | readerfirst | norenderer; loopback previews are cap-exempt. A 1x1 viewport hint names browser_reset(reopen=true).",
+                schema(emptyList())),
             AgentToolDefinition("browser_read",
                 "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. Hidden DOM text is excluded by default; pass visible_only=false only when the user explicitly needs it. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
                 schema(emptyList(), "chunk" to integer, "visible_only" to boolean)),

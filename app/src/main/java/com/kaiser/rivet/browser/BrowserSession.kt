@@ -138,6 +138,27 @@ data class BrowserKeyTarget(
     val description: String,
 )
 
+data class BrowserStatusResult(
+    val alive: Boolean,
+    val healthy: Boolean,
+    val mode: String,
+    val url: String,
+    val title: String,
+    val tier: BrowserTier,
+    val capMb: Int,
+    val loopbackExempt: Boolean,
+    val tierAllows: String,
+    val viewportWidth: Int,
+    val viewportHeight: Int,
+    val pageReady: Boolean,
+    val allowJs: Boolean,
+    val userDriving: Boolean,
+    val handoff: Boolean,
+    val jsErrors: Int,
+    val lastError: String?,
+    val hint: String? = null,
+)
+
 data class BrowserResetResult(
     val reset: Boolean,
     val rendererKilled: Boolean,
@@ -715,6 +736,55 @@ class BrowserSession(
      * stale page state for the next open; unlike clearBrowserData it never touches
      * other projects, cookies/DOM storage (unless asked), or the domain trail.
      */
+    /** Non-destructive health probe. Never creates or attaches a renderer. */
+    suspend fun status(): BrowserStatusResult {
+        refreshBudget(publish = false)
+        val alive = renderer != null && !_state.value.teardownRequested
+        var width = 0
+        var height = 0
+        if (renderer != null) {
+            withContext(Dispatchers.Main) {
+                width = renderer?.width ?: 0
+                height = renderer?.height ?: 0
+            }
+        }
+        val loopback = budget.loopbackExempt || BrowserAuthGuard.isLoopback(activeUrl)
+        val guide = BrowserGovernor.tierGuide(budget.tier, loopback)
+        val readerMode = renderer == null && activeUrl.isNotBlank()
+        val healthy = when {
+            readerMode -> true
+            alive -> width > 1 && height > 1 && rendererFailure == null
+            else -> false
+        }
+        val hint = if (alive && (width <= 1 || height <= 1)) {
+            "Viewport is degenerate (1x1). Call browser_reset(reopen=true) to rebuild the renderer."
+        } else null
+        return BrowserStatusResult(
+            alive = alive,
+            healthy = healthy,
+            mode = when {
+                alive -> "renderer"
+                readerMode -> "reader"
+                else -> "none"
+            },
+            url = _state.value.url.ifBlank { activeUrl },
+            title = _state.value.title.ifBlank { activeTitle },
+            tier = budget.tier,
+            capMb = budget.capMb,
+            loopbackExempt = loopback,
+            tierAllows = guide.summary,
+            viewportWidth = width,
+            viewportHeight = height,
+            pageReady = _state.value.pageReady,
+            allowJs = _state.value.allowJs,
+            userDriving = _state.value.driving == BrowserDriving.User,
+            handoff = _state.value.handoff != null,
+            jsErrors = consoleBuffer.errorCount(),
+            lastError = consoleBuffer.lastErrorMessage(),
+            hint = hint,
+        )
+    }
+
     suspend fun reset(reopen: Boolean = true, clearStorage: Boolean = false): BrowserResetResult {
         val previousUrl = activeUrl.ifBlank { _state.value.url }
         pendingRestart = null

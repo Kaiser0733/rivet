@@ -15,7 +15,7 @@ class BrowserToolsTest {
     }
 
     @Test fun theDefinitionsCarryEveryTypedAction() {
-        assertEquals(setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_wait_for", "browser_reset", "browser_read", "browser_find", "browser_click",
+        assertEquals(setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_wait_for", "browser_reset", "browser_status", "browser_read", "browser_find", "browser_click",
             "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
             "browser_tap", "browser_swipe"),
             BrowserTools.definitions.map { it.name }.toSet())
@@ -42,6 +42,12 @@ class BrowserToolsTest {
     @Test fun resetIsRegisteredAndDriving() {
         assertTrue(BrowserTools.definitions.any { it.name == "browser_reset" })
         assertTrue(BrowserTools.NAMES.contains("browser_reset"))
+    }
+
+    @Test fun statusCarriesTierLegendAndNoArguments() {
+        val status = BrowserTools.definitions.first { it.name == "browser_status" }
+        assertTrue(status.description.contains("strictdiet"))
+        assertTrue(status.parameters.toString().contains("object"))
     }
 
     @Test fun everyDefinitionHasAnObjectSchema() {
