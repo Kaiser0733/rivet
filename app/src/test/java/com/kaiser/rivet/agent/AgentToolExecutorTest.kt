@@ -492,6 +492,18 @@ class AgentToolExecutorTest {
             """{"process_id":"$other"}""")).execute().error)
     }
 
+    @Test fun processListingIncludesProjectBackgroundProcesses() = runTest {
+        val processes = com.kaiser.rivet.runtime.ManagedProcesses()
+        processes.registerBackground("npm run dev", "tree", "Project") {}
+        processes.markBackgroundRunning(processes.processes.value.single().id)
+        val executor = AgentToolExecutor(FakeWorkspace(), managedProcesses = processes,
+            currentWorkspaceIdentity = { "tree" })
+        val result = executor.prepare(AgentToolCall("list", "list_processes", "{}")).execute()
+        assertFalse(result.error)
+        assertTrue(result.content.contains("background"))
+        assertTrue(result.content.contains("npm run dev"))
+    }
+
     @Test fun processListingDoesNotDependOnWorkspaceSynchronization() = runTest {
         val executor = AgentToolExecutor(FakeWorkspace(), requireSafCurrent = {
             throw com.kaiser.rivet.runtime.MirrorFailure("sync_required")
