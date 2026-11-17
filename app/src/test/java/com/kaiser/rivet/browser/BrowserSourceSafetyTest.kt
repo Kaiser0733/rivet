@@ -69,13 +69,31 @@ class BrowserSourceSafetyTest {
         assertTrue(safety.contains("one-time-code"))
     }
 
-    @Test fun urlFieldWiresFocusLatchThroughOnValueChange() {
+    @Test fun urlFieldUsesUnfocusedOverlayAndClearsFocusAfterPageInteraction() {
         val screen = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt"),
             File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt")).first { it.isFile }.readText()
-        assertFalse(screen.contains("onValueChange = { address = it }"))
-        assertTrue(screen.contains("UrlFieldSelection.Controller"))
-        assertTrue(screen.contains("urlField.onValueChange"))
-        assertTrue(screen.contains("urlField.onFocusChanged"))
+        assertTrue(screen.contains("matchParentSize()"))
+        assertTrue(screen.contains("clearAndSetSemantics"))
+        assertTrue(screen.contains("focusRequester.requestFocus()"))
+        assertTrue(screen.contains("focusManager.clearFocus()"))
+        assertTrue(screen.contains("onPageInteraction"))
+        val submit = screen.substringAfter("val submitUrl: () -> Unit = {").substringBefore("var menuOpen")
+        assertTrue(submit.contains("clearUrlFocus()"))
+        assertTrue(screen.contains("KeyboardActions(onGo = { submitUrl() })"))
+        assertTrue(screen.contains("LaunchedEffect(state.visible)"))
+        assertTrue(screen.contains("if (!state.visible)"))
+        assertFalse(screen.contains("UrlFieldSelection.Controller"))
+        assertFalse(screen.contains("selectAllLatch"))
+        assertFalse(screen.contains("pendingSelectAllOnTap"))
+    }
+
+    @Test fun pageTouchCanClearFocusWithoutStartingTakeover() {
+        val host = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt")).first { it.isFile }.readText()
+        assertTrue(host.contains("setOnTouchListener"))
+        assertTrue(host.contains("MotionEvent.ACTION_DOWN"))
+        assertTrue(host.contains("onPageInteraction()"))
+        assertFalse(host.contains("setDriving"))
     }
 
     @Test fun bannerLivesInColumnAboveHostWithOpaqueSurface() {

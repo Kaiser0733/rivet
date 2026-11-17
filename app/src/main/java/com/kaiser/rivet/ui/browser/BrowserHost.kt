@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.browser
 
+import android.view.MotionEvent
 import android.view.ViewGroup
 import android.webkit.WebView
 import android.widget.FrameLayout
@@ -21,7 +22,11 @@ private class HeldWebView {
  * renderer card/visibility state.
  */
 @Composable
-fun BrowserHost(session: BrowserSession, modifier: Modifier = Modifier) {
+fun BrowserHost(
+    session: BrowserSession,
+    modifier: Modifier = Modifier,
+    onPageInteraction: () -> Unit = {},
+) {
     val state by session.state.collectAsState()
     if (!state.rendererVisible || state.teardownRequested) return
     val held = remember { HeldWebView() }
@@ -30,6 +35,13 @@ fun BrowserHost(session: BrowserSession, modifier: Modifier = Modifier) {
             val frame = FrameLayout(context)
             val web = WebView(context)
             held.view = web
+            web.setOnTouchListener { _, event ->
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) onPageInteraction()
+                false
+            }
+            web.setOnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) onPageInteraction()
+            }
             frame.addView(web, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))
             session.attach(web)

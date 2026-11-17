@@ -37,6 +37,10 @@ android {
         compose = true
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     signingConfigs {
         // Public android/android debug credentials. Committing this key lets
         // consecutive CI debug APKs install over each other without forcing an
@@ -115,8 +119,12 @@ dependencies {
     implementation("org.eclipse.jgit:org.eclipse.jgit:6.10.1.202505221210-r")
     // Reader-mode HTML extraction. Jsoup is small, maintained, and Android-safe.
     implementation("org.jsoup:jsoup:1.18.3")
+    testImplementation(composeBom)
+    testImplementation("androidx.compose.ui:ui-test-junit4")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.robolectric:robolectric:4.14.1")
+    debugImplementation(composeBom)
+    debugImplementation("androidx.compose.ui:ui-test-manifest")
     testImplementation("com.squareup.okhttp3:mockwebserver:4.12.0")
     testImplementation("com.squareup.okhttp3:okhttp-tls:4.12.0")
     testImplementation("org.jetbrains.kotlinx:kotlinx-coroutines-test:1.9.0")
