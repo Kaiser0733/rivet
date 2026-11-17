@@ -33,7 +33,7 @@ class BrowserConsoleCaptureTest {
         session.attach(webView)
         val client = webView.webChromeClient!!
         assertFalse(client.onConsoleMessage(ConsoleMessage(
-            "Uncaught TypeError: nope", "game.js", 42, "http://127.0.0.1:45179/",
+            "Uncaught TypeError: nope", "game.js", 42,
             ConsoleMessage.MessageLevel.ERROR)))
         val snapshot = session.console("error", 0, 50, clear = false)
         assertEquals(1, snapshot.result.entries.size)
