@@ -37,6 +37,10 @@ android {
         compose = true
     }
 
+    testOptions {
+        unitTests.isIncludeAndroidResources = true
+    }
+
     signingConfigs {
         // Public android/android debug credentials. Committing this key lets
         // consecutive CI debug APKs install over each other without forcing an
