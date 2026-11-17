@@ -681,7 +681,10 @@ class BrowserSession(
             val vw = withContext(Dispatchers.Main) { view.width }
             val vh = withContext(Dispatchers.Main) { view.height }
             BrowserOpenResult(activeUrl, activeTitle, 0, false, budget.tier, budget.capMb,
-                httpStatus = lastMainHttpStatus, httpWarning = lastHttpWarning,
+                httpStatus = lastMainHttpStatus,
+                httpWarning = lastHttpWarning ?: lastMainHttpStatus?.takeIf { it >= 400 }?.let {
+                    "Server returned HTTP $it. Check preview_entry or server routes."
+                },
                 nodeCount = diagnostics?.optInt("nodes", 0) ?: 0,
                 hasCanvas = diagnostics?.optBoolean("canvas", false) ?: false,
                 jsEnabled = _state.value.allowJs,
@@ -969,6 +972,10 @@ class BrowserSession(
             if (_state.value.driving == BrowserDriving.User) {
                 throw BrowserFailure("browser_user_driving",
                     "The user is driving the browser. Ask them to hand it back, then retry browser_wait_for.")
+            }
+            if (BrowserAuthGuard.isAuthSurface(currentUrl()) || _state.value.handoff != null) {
+                throw BrowserFailure("browser_handoff",
+                    "Identity work moved to the phone's browser. Continue there, then share the page back.")
             }
             if (renderer == null || _state.value.teardownRequested) {
                 throw BrowserFailure("browser_renderer_unavailable",
@@ -1888,12 +1895,18 @@ class BrowserSession(
         renderer?.reload()
     }
 
-    fun console(level: String, sinceId: Long, limit: Int, clear: Boolean): BrowserConsoleSnapshot =
-        BrowserConsoleSnapshot(
+    fun console(level: String, sinceId: Long, limit: Int, clear: Boolean): BrowserConsoleSnapshot {
+        val live = _state.value.url.ifBlank { activeUrl }
+        if (BrowserAuthGuard.isAuthSurface(live) || _state.value.handoff != null) {
+            throw BrowserFailure("browser_handoff",
+                "Identity work moved to the phone's browser. Continue there, then share the page back.")
+        }
+        return BrowserConsoleSnapshot(
             result = consoleBuffer.query(level, sinceId, limit, clear),
             rendererAlive = renderer != null && !_state.value.teardownRequested,
-            url = _state.value.url.ifBlank { activeUrl },
+            url = live,
         )
+    }
 
     private fun chromeClientFor(view: WebView): WebChromeClient = object : WebChromeClient() {
         override fun onConsoleMessage(message: ConsoleMessage): Boolean {
