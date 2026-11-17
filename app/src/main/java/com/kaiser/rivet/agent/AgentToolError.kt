@@ -60,6 +60,7 @@ internal object AgentToolError {
         "browser_eval_exception" to "Fix the JS expression or inspect page errors with browser_console.",
         "browser_origin_mismatch" to "Open the expected same-origin page with browser_open before evaluating.",
         "browser_js_disabled" to "Enable JavaScript in browser settings or use browser_read instead.",
+        "browser_sensitive_field" to "Use the page in your browser or take over and type the password/OTP/card yourself.",
     )
     private val deterministic = (workspaceActions.keys - transientWorkspaceCodes) + setOf(
         "sync_required", "workspace_unavailable",
@@ -72,7 +73,8 @@ internal object AgentToolError {
         "destination_exists", "invalid_checksum", "skill_not_found", "skill_manual_only",
         "secret", "garden_first", "empty", "too_long", "reserved_goal",
         "outside_file_scope", "owned_by_worker", "browser_busy",
-        "browser_eval_exception", "browser_origin_mismatch", "browser_js_disabled")
+        "browser_eval_exception", "browser_origin_mismatch", "browser_js_disabled",
+        "browser_sensitive_field")
     private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",

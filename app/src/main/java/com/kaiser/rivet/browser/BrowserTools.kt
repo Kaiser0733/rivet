@@ -51,6 +51,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "browser_open" -> prepareOpen(call, args)
                 "browser_eval" -> readOnly(call) { eval(call, args) }
                 "browser_console" -> readOnly(call) { console(call, args) }
+                "browser_key" -> prepareKey(call, args)
                 "browser_read" -> readOnly(call) { read(call, args) }
                 "browser_find" -> readOnly(call) { find(call, args) }
                 "browser_click" -> prepareClick(call, args)
@@ -98,6 +99,64 @@ class BrowserTools(private val session: BrowserSession) {
                 if (result.handoff) put("handoff", true)
             }, "Opened  ${result.title.ifBlank { result.url }}")
         }
+    }
+
+    private suspend fun prepareKey(call: AgentToolCall, args: JsonObject): PreparedAgentTool {
+        val spec = try {
+            BrowserKeyMapping.parse(args.string("key"), args.stringList("modifiers"))
+        } catch (e: IllegalArgumentException) {
+            throw BrowserFailure("invalid_arguments", e.message ?: "Unknown key.")
+        }
+        val selector = args.string("selector").takeIf { it.isNotBlank() }
+        val action = when (args.string("action").ifBlank { "press" }) {
+            "press" -> BrowserKeyAction.Press
+            "down" -> BrowserKeyAction.Down
+            "up" -> BrowserKeyAction.Up
+            else -> throw BrowserFailure("invalid_arguments", "action must be press, down, or up.")
+        }
+        val hold = args.int("hold_ms") ?: 50
+        if (hold !in 0..2_000) throw BrowserFailure("invalid_arguments", "hold_ms must be 0..2000.")
+        val target = session.classifyKeyTarget(spec, selector)
+        if (target.sensitive) {
+            return failed(call, "browser_sensitive_field",
+                "Rivet will not send keys to a password, one-time-code, or payment field. Use the page in your browser or take over and type it yourself.")
+        }
+        if (!target.found) {
+            return readOnly(call) { key(call, spec, selector, action, hold) }
+        }
+        val riskyEnter = spec.key in setOf("Enter", " ") && target.risky
+        if (!riskyEnter) return readOnly(call) { key(call, spec, selector, action, hold) }
+        return PreparedAgentTool(
+            call,
+            AgentApprovalRequest(call, "Approve page action",
+                "Press ${spec.key} on \"${target.description.take(120)}\". It looks like a submit, send, publish, pay, or delete control."),
+            effect = AgentToolEffect.BrowserAction,
+            basicAutonomyRisk = BasicAutonomyRisk.Elevated,
+        ) {
+            try { key(call, spec, selector, action, hold) }
+            catch (e: BrowserFailure) {
+                if (e.code == "browser_user_driving") userDriving(call, e.message)
+                else failure(call, e.code, e.message)
+            }
+        }
+    }
+
+    private suspend fun key(
+        call: AgentToolCall,
+        spec: BrowserKeySpec,
+        selector: String?,
+        action: BrowserKeyAction,
+        hold: Int,
+    ): AgentToolResult {
+        val result = session.pressKey(spec, selector, action, hold)
+        return value(call, buildJsonObject {
+            put("key", result.key)
+            put("modifiers", JsonArray(result.modifiers.map(::JsonPrimitive)))
+            put("action", result.action)
+            put("dispatched", result.dispatched)
+            put("url", result.url)
+            put("changed", result.changed)
+        }, "Pressed ${result.key}")
     }
 
     private suspend fun prepareClick(call: AgentToolCall, args: JsonObject): PreparedAgentTool {
@@ -401,9 +460,11 @@ class BrowserTools(private val session: BrowserSession) {
     private fun JsonObject.bool(key: String): Boolean = this[key]?.jsonPrimitive?.content?.toBoolean() == true
     private val JsonPrimitive.booleanOrNull: Boolean? get() = content.toBooleanStrictOrNull()
     private fun JsonObject.int(key: String): Int? = this[key]?.jsonPrimitive?.intOrNull
+    private fun JsonObject.stringList(key: String): List<String> =
+        (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty()
 
     companion object {
-        val NAMES = setOf("browser_open", "browser_eval", "browser_console", "browser_read", "browser_find", "browser_click",
+        val NAMES = setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_read", "browser_find", "browser_click",
             "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
             "browser_tap", "browser_swipe")
 
@@ -438,6 +499,17 @@ class BrowserTools(private val session: BrowserSession) {
                 schema(emptyList(), "level" to string, "since_id" to integer,
                     "limit" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 100) },
                     "clear" to boolean)),
+            AgentToolDefinition("browser_key",
+                "Press a W3C key or combo (ArrowUp, Enter, Space, Escape, Tab, a, Ctrl+s). Focus a selector or #ref first. Password/OTP/card fields are refused; risky Enter/Space submits require approval. Uses native key events then a synthetic KeyboardEvent fallback.",
+                schema(listOf("key"), "key" to string,
+                    "modifiers" to buildJsonObject {
+                        put("type", "array")
+                        put("items", buildJsonObject { put("type", "string") })
+                    },
+                    "selector" to string, "action" to string,
+                    "hold_ms" to buildJsonObject {
+                        put("type", "integer"); put("minimum", 0); put("maximum", 2000)
+                    })),
             AgentToolDefinition("browser_read",
                 "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. Hidden DOM text is excluded by default; pass visible_only=false only when the user explicitly needs it. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
                 schema(emptyList(), "chunk" to integer, "visible_only" to boolean)),
@@ -524,6 +596,7 @@ class BrowserDrivingLease {
     companion object {
         private val DRIVING_TOOLS = setOf(
             "browser_eval",
+            "browser_key",
             "browser_click",
             "browser_type",
             "browser_scroll",

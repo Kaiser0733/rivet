@@ -129,6 +129,25 @@ data class BrowserOpenResult(
 
 data class BrowserEvalResult(val content: String, val origin: String)
 
+enum class BrowserKeyAction { Press, Down, Up }
+
+data class BrowserKeyTarget(
+    val found: Boolean,
+    val sensitive: Boolean,
+    val risky: Boolean,
+    val description: String,
+)
+
+data class BrowserKeyResult(
+    val key: String,
+    val modifiers: List<String>,
+    val action: String,
+    val dispatched: String,
+    val url: String,
+    val changed: String,
+    val target: String,
+)
+
 data class BrowserConsoleSnapshot(
     val result: BrowserConsoleQueryResult,
     val rendererAlive: Boolean,
@@ -667,6 +686,165 @@ class BrowserSession(
                 "The browser viewport is degenerate (1x1 or not laid out). Call browser_reset(reopen=true) to rebuild the renderer.")
         }
     }
+
+    suspend fun classifyKeyTarget(spec: BrowserKeySpec, selector: String?): BrowserKeyTarget =
+        actionLock.withLock {
+            if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
+            val view = ensureRenderer()
+            loadForInteraction(view, activeUrl)
+            val url = withContext(Dispatchers.Main) { view.url } ?: activeUrl
+            if (BrowserAuthGuard.isAuthSurface(url) || _state.value.handoff != null) {
+                throw BrowserFailure("browser_handoff",
+                    "Identity work moved to the phone's browser. Continue there, then share the page back.")
+            }
+            keyTarget(view, spec, selector)
+        }
+
+    suspend fun pressKey(
+        spec: BrowserKeySpec,
+        selector: String? = null,
+        action: BrowserKeyAction = BrowserKeyAction.Press,
+        holdMs: Int = 50,
+    ): BrowserKeyResult = actionLock.withLock {
+        if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        val beforeUrl = _state.value.url
+        val beforeTitle = _state.value.title
+        val url = withContext(Dispatchers.Main) { view.url } ?: activeUrl
+        if (BrowserAuthGuard.isAuthSurface(url) || _state.value.handoff != null) {
+            throw BrowserFailure("browser_handoff",
+                "Identity work moved to the phone's browser. Continue there, then share the page back.")
+        }
+        val target = keyTarget(view, spec, selector)
+        if (target.sensitive) {
+            throw BrowserFailure("browser_sensitive_field",
+                "Rivet will not send keys to a password, one-time-code, or payment field. Use the page in your browser or take over and type it yourself.")
+        }
+        if (!target.found) {
+            throw BrowserFailure("browser_target",
+                "Rivet couldn't find that key target. Check the selector or omit it to use the focused element.")
+        }
+        val clampedHold = holdMs.coerceIn(0, 2_000)
+        val native = withContext(Dispatchers.Main) {
+            view.isAttachedToWindow && view.hasWindowFocus()
+        }
+        var dispatched = "synthetic"
+        if (native) {
+            evaluate(view, keyCounterScript())
+            withContext(Dispatchers.Main) {
+                view.requestFocus()
+                val downAt = SystemClock.uptimeMillis()
+                fun event(code: Int, act: Int, at: Long) =
+                    android.view.KeyEvent(at, at, act, code, 0, spec.metaState)
+                when (action) {
+                    BrowserKeyAction.Down -> view.dispatchKeyEvent(event(spec.keyCode,
+                        android.view.KeyEvent.ACTION_DOWN, downAt))
+                    BrowserKeyAction.Up -> view.dispatchKeyEvent(event(spec.keyCode,
+                        android.view.KeyEvent.ACTION_UP, downAt))
+                    BrowserKeyAction.Press -> {
+                        view.dispatchKeyEvent(event(spec.keyCode,
+                            android.view.KeyEvent.ACTION_DOWN, downAt))
+                        if (clampedHold > 0) delay(clampedHold.toLong())
+                        view.dispatchKeyEvent(event(spec.keyCode,
+                            android.view.KeyEvent.ACTION_UP, downAt + clampedHold))
+                    }
+                }
+            }
+            if (action != BrowserKeyAction.Up) delay(16L)
+            // The native event counter is read through the same bridge in a second call;
+            // a missed read is treated as synthetic rather than double-fired.
+            val counter = runCatching { evaluate(view, "window.__rivetKeyCount||0") }
+                .getOrDefault("0").trim().toIntOrNull() ?: 0
+            if (counter > 0) dispatched = "native"
+            else syntheticKey(view, spec, action, target, url)
+        } else {
+            syntheticKey(view, spec, action, target, url)
+        }
+        recordVisit(url, publish = false)
+        val changed = changeLine(beforeUrl, beforeTitle)
+        BrowserKeyResult(spec.key, spec.modifiers.map { it.name.lowercase() }.sorted(),
+            action.name.lowercase(), dispatched, url, changed, target.description)
+    }
+
+    private suspend fun keyTarget(view: WebView, spec: BrowserKeySpec, selector: String?): BrowserKeyTarget {
+        val raw = evaluate(view, keyTargetScript(selector, spec.key))
+        val clean = BrowserElementRefs.unwrapJsResult(raw)
+        val obj = runCatching { org.json.JSONObject(clean) }.getOrNull()
+            ?: return BrowserKeyTarget(false, false, false, "")
+        return BrowserKeyTarget(
+            found = obj.optBoolean("found", false),
+            sensitive = obj.optBoolean("sensitive", false),
+            risky = obj.optBoolean("risky", false),
+            description = obj.optString("description", "").take(120),
+        )
+    }
+
+    private suspend fun syntheticKey(
+        view: WebView,
+        spec: BrowserKeySpec,
+        action: BrowserKeyAction,
+        target: BrowserKeyTarget,
+        url: String,
+    ) {
+        evaluate(view, keyDispatchScript(spec, action, target.description))
+    }
+
+    private fun keyCounterScript(): String = """
+        (function(){
+          if(!window.__rivetKeyHook){
+            window.__rivetKeyHook=1;
+            window.addEventListener('keydown',function(){window.__rivetKeyCount=(window.__rivetKeyCount||0)+1;},true);
+            window.addEventListener('keyup',function(){window.__rivetKeyCount=(window.__rivetKeyCount||0)+1;},true);
+          }
+          window.__rivetKeyCount=0;
+          return '1';
+        })()
+    """.trimIndent()
+
+    private fun keyTargetScript(selector: String?, key: String): String = """
+        (function(){
+          var sel=${jsonString(selector)};
+          var ref=sel?/^#(\d+)$/.exec(sel):null;
+          var el=ref?[].slice.call(document.querySelectorAll('a,button,input,[role=button]'))[parseInt(ref[1],10)-1]||null:(sel?document.querySelector(sel):document.activeElement);
+          if(!el) return JSON.stringify({found:false,sensitive:false,risky:false,description:''});
+          var type=(el.getAttribute('type')||el.type||'text').toLowerCase();
+          var ac=(el.getAttribute('autocomplete')||'').toLowerCase();
+          var hint=(el.getAttribute('name')||'')+' '+(el.getAttribute('placeholder')||'')+' '+(el.getAttribute('aria-label')||'')+' '+ac;
+          var sensitive=type==='password'||type==='hidden'||type==='file'||
+            /one-time-code|cc-|current-password|new-password/.test(ac)||
+            /pass(word|cod)|otp|one.?time|card|cvv|cvc|security.?code/i.test(hint);
+          var form=el.closest('form');
+          var label=(el.innerText||el.value||el.getAttribute('aria-label')||'').trim();
+          var risky=(type==='submit'||(form&&(el.type==='submit'||/submit|send|publish|pay|buy|post|delete|confirm/i.test(label))));
+          try { el.focus(); } catch(e) {}
+          return JSON.stringify({found:true,sensitive:!!sensitive,risky:!!risky,description:label||type||el.tagName});
+        })()
+    """.trimIndent()
+
+    private fun keyDispatchScript(
+        spec: BrowserKeySpec,
+        action: BrowserKeyAction,
+        target: String,
+    ): String = """
+        (function(){
+          var el=document.activeElement||document.body||document;
+          var key=${jsonString(spec.key)};
+          var code=${jsonString(spec.code)};
+          var codeNum=${spec.keyCode};
+          var charNum=${spec.charCode};
+          var init={key:key,code:code,keyCode:codeNum,which:codeNum,charCode:charNum,
+            bubbles:true,cancelable:true,ctrlKey:${spec.ctrlKey},shiftKey:${spec.shiftKey},
+            altKey:${spec.altKey},metaKey:${spec.metaKey}};
+          var printable=key.length===1||key==='Enter';
+          function fire(type){var e;try{e=new KeyboardEvent(type,init);}catch(x){
+            e=document.createEvent('Event');e.initEvent(type,true,true);
+            for(var k in init)e[k]=init[k];}el.dispatchEvent(e);}
+          if('${action.name.lowercase()}'!=='up'){fire('keydown');if(printable)fire('keypress');}
+          if('${action.name.lowercase()}'!=='down'){fire('keyup');}
+          return '1';
+        })()
+    """.trimIndent()
 
     suspend fun read(chunk: Int = 0, visibleOnly: Boolean = true): BrowserReadResult = actionLock.withLock {
         val cached = readerCache.cached()
