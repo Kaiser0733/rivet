@@ -1,6 +1,7 @@
 package com.kaiser.rivet.browser
 
 import android.app.Application
+import android.webkit.WebView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.runBlocking
@@ -11,6 +12,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -35,6 +37,18 @@ class BrowserStatusTest {
         assertEquals("", status.url)
         assertNull(status.hint)
         assertEquals(0, status.jsErrors)
+    }
+
+    @Test fun aOneByOneRendererIsUnhealthyAndNamesReset() = runBlocking {
+        val app: Application = RuntimeEnvironment.getApplication()
+        val session = BrowserSession(app, models = null)
+        val view = WebView(app)
+        view.layout(0, 0, 1, 1)
+        session.attach(view)
+        val status = session.status()
+        assertTrue(status.alive)
+        assertFalse(status.healthy)
+        assertTrue(status.hint!!.contains("browser_reset(reopen=true)"))
     }
 
     @Test fun readerOnlyPageIsHealthyAndNamesTheTierCapability() = runBlocking {
