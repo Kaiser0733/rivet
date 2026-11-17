@@ -284,7 +284,10 @@ class ManagedProcesses {
     internal fun finishBackground(id: String, status: ManagedProcessStatus, exitCode: Int?) = synchronized(lock) {
         val entry = entries[id] ?: return@synchronized
         entry.info = entry.info.copy(
-            status = if (entry.info.status == ManagedProcessStatus.Stopping) ManagedProcessStatus.Stopped else status,
+            status = if (entry.info.status in setOf(
+                    ManagedProcessStatus.Stopping, ManagedProcessStatus.Stopped)) {
+                ManagedProcessStatus.Stopped
+            } else status,
             exitCode = exitCode,
             finishedAtMillis = System.currentTimeMillis(),
         )

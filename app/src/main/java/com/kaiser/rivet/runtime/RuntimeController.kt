@@ -683,12 +683,13 @@ class RuntimeController(
         runningJob.invokeOnCompletion { guard.cancel() }
         val deadline = System.currentTimeMillis() + readyWaitMs
         var matched = false
-        while (System.currentTimeMillis() < deadline && runningJob.isActive) {
+        while (System.currentTimeMillis() < deadline) {
             val snap = ring.snapshot()
             if (pattern == null || pattern in snap.stdout || pattern in snap.stderr) {
                 matched = pattern != null || snap.stdout.isNotEmpty() || snap.stderr.isNotEmpty()
                 if (matched) break
             }
+            if (!runningJob.isActive) break
             kotlinx.coroutines.delay(50)
         }
         val info = registry.info(id, identity)

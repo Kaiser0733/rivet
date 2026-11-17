@@ -19,6 +19,8 @@ class ManagedProcessesBackgroundTest {
         assertEquals(1, stopped)
         assertEquals(ManagedProcessStatus.Stopped, processes.info(id, "tree-a")!!.status)
         assertEquals(0, processes.foregroundState.value.activeBackgrounds)
+        processes.finishBackground(id, ManagedProcessStatus.Completed, 0)
+        assertEquals(ManagedProcessStatus.Stopped, processes.info(id, "tree-a")!!.status)
     }
 
     @Test fun previewsAreReusablePerWorkspaceAndRoot() {
