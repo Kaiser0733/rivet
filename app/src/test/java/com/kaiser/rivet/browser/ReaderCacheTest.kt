@@ -25,4 +25,40 @@ class ReaderCacheTest {
         assertEquals(false, cache.record(old, doc("https://a", "old")))
         assertNull(cache.cached())
     }
+
+    @Test fun aHiddenTextCacheIsNeverServedAsAVisibleDocument() {
+        val cache = ReaderCache()
+        cache.record(cache.navigationToken, doc("https://a", "with hidden"))
+        cache.record(cache.navigationToken, doc("https://a", "without hidden"),
+            visibleOnly = true)
+        assertEquals("without hidden", cache.cached(visibleOnly = true)?.text)
+        cache.record(cache.navigationToken, doc("https://a", "with hidden again"),
+            visibleOnly = false)
+        assertEquals("with hidden again", cache.cached(visibleOnly = false)?.text)
+        assertNull(cache.cached(visibleOnly = true))
+    }
+
+    @Test fun rawHtmlIsBoundToTheNavigationAndSupportsReextraction() {
+        val cache = ReaderCache()
+        val token = cache.navigationToken
+        assertEquals(true, cache.recordRaw(token, "<html><body>raw</body></html>"))
+        assertEquals("<html><body>raw</body></html>", cache.rawHtml())
+        cache.navigate()
+        assertNull(cache.rawHtml())
+        assertEquals(false, cache.recordRaw(token, "<html>old</html>"))
+        assertNull(cache.rawHtml())
+        cache.recordRaw(cache.navigationToken, "<html><body>new</body></html>")
+        assertEquals("<html><body>new</body></html>", cache.rawHtml())
+        cache.invalidate()
+        assertNull(cache.rawHtml())
+    }
+
+    @Test fun navigationClearsBothVisibilityVariants() {
+        val cache = ReaderCache()
+        cache.record(cache.navigationToken, doc("https://a", "hidden"), visibleOnly = false)
+        assertNull(cache.cached(visibleOnly = true))
+        cache.navigate()
+        assertNull(cache.cached(visibleOnly = false))
+        assertNull(cache.rawHtml())
+    }
 }

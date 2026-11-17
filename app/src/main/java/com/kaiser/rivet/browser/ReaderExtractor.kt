@@ -79,10 +79,11 @@ object ReaderExtractor {
     }
 
     private fun removeHidden(doc: org.jsoup.nodes.Document) {
-        doc.select("[hidden],input[type=hidden]").remove()
+        doc.select("[hidden],input[type=hidden],[data-rivet-hidden=1]").remove()
         doc.select("[style]").forEach { element ->
             val style = element.attr("style").lowercase().replace(Regex("\\s+"), "")
             if (style.contains("display:none") || style.contains("visibility:hidden") ||
+                style.contains("visibility:collapse") ||
                 OPACITY_ZERO_REGEX.containsMatchIn(style) || style.contains("left:-") ||
                 style.contains("top:-9") || style.contains("transform:translate(-")) {
                 element.remove()

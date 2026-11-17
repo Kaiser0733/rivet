@@ -90,4 +90,20 @@ class ReaderExtractorTest {
         assertTrue(docNoBase.text.contains("[SafeHttps](https://example.com/safe)", ignoreCase = true))
         assertTrue(docNoBase.text.contains("[SafeHttp](http://example.com/plain)"))
     }
+
+    @Test fun computedHiddenTagsAndCollapsedVisibilityAreRemovedOnlyForVisibleReads() {
+        val html = """<html><body><article>
+            <p>Main article body with enough words to score well in reader mode.</p>
+            <div data-rivet-hidden="1"><p>Computed hidden panel</p></div>
+            <div style="visibility:collapse"><p>Collapsed hidden panel</p></div>
+            <div class="hidden"><p>Class hidden panel needs a computed-style pass</p></div>
+        </article></body></html>"""
+        val visible = ReaderExtractor.extract(html, "https://game.example")
+        assertTrue(visible.text.contains("Main article body"))
+        assertFalse(visible.text.contains("Computed hidden panel"))
+        assertFalse(visible.text.contains("Collapsed hidden panel"))
+        val all = ReaderExtractor.extract(html, "https://game.example", visibleOnly = false)
+        assertTrue(all.text.contains("Computed hidden panel"))
+        assertTrue(all.text.contains("Collapsed hidden panel"))
+    }
 }
