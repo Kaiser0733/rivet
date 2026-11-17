@@ -20,9 +20,13 @@ class BrowserSourceSafetyTest {
         assertTrue(readers.none { it.readText().contains("userAgent") })
     }
 
-    @Test fun thereIsNoRawEvalToolAndNoFileOpen() {
+    @Test fun evalIsRegisteredOnlyAsBoundedSameOriginToolAndNoFileOpen() {
         val tools = source("BrowserTools.kt")
-        assertFalse(tools.contains("\"browser_eval\""))
+        assertTrue(tools.contains("\"browser_eval\""))
+        val session = source("BrowserSession.kt")
+        assertTrue(session.contains("BrowserEvalPolicy.originOf(liveUrl)"))
+        assertTrue(session.contains("BrowserEvalPolicy.wrapScript"))
+        assertTrue(session.contains("BrowserAuthGuard.isAuthSurface(liveUrl)"))
         val reader = source("ReaderService.kt")
         assertTrue(reader.contains("BrowserUrlPolicy.requireReadable("))
         assertFalse(reader.contains("scheme in setOf(\"http\", \"https\", \"file\")"))

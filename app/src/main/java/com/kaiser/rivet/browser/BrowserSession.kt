@@ -125,6 +125,8 @@ data class BrowserOpenResult(
     val handoff: Boolean = false,
 )
 
+data class BrowserEvalResult(val content: String, val origin: String)
+
 data class BrowserReadResult(
     val url: String,
     val title: String,
@@ -569,6 +571,91 @@ class BrowserSession(
             }
             BrowserOpenResult(activeUrl, activeTitle, 0, false, budget.tier, budget.capMb)
         }
+
+    /**
+     * Same-origin, bounded synchronous JS evaluation. Promises are not awaited; use
+     * waitFor for async conditions. Auth surfaces and cross-origin navigation are
+     * refused before and after the call.
+     */
+    suspend fun eval(
+        expression: String,
+        expectedOrigin: String? = null,
+        timeoutMs: Long = 2_000L,
+    ): BrowserEvalResult = actionLock.withLock {
+        if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
+        if (!_state.value.allowJs) {
+            throw BrowserFailure("browser_js_disabled",
+                "JavaScript is disabled. Enable JavaScript in browser settings or use browser_read.")
+        }
+        val expected = expectedOrigin?.takeIf { it.isNotBlank() }
+        if (expected != null && BrowserEvalPolicy.originOf(expected) == null) {
+            throw BrowserFailure("browser_origin_mismatch",
+                "expected_origin is not an http(s) origin. Pass an origin such as http://127.0.0.1:45179.")
+        }
+        val view = ensureRenderer()
+        loadForInteraction(view, activeUrl)
+        awaitLaidOut(view)
+        val liveUrl = withContext(Dispatchers.Main) { view.url } ?: activeUrl
+        if (BrowserAuthGuard.isAuthSurface(liveUrl) || _state.value.handoff != null) {
+            throw BrowserFailure("browser_handoff",
+                "Identity work moved to the phone's browser. Continue there, then share the page back.")
+        }
+        val actualOrigin = BrowserEvalPolicy.originOf(liveUrl)
+            ?: throw BrowserFailure("browser_origin_mismatch",
+                "The live page has no http(s) origin. browser_eval only runs on http(s) pages; use browser_read.")
+        if (expected != null && BrowserEvalPolicy.originOf(expected) != actualOrigin) {
+            throw BrowserFailure("browser_origin_mismatch",
+                "Expected origin $expected but the live page is $actualOrigin. Re-open the expected page with browser_open.")
+        }
+        val wrapped = try {
+            BrowserEvalPolicy.wrapScript(expression, maxChars = BrowserEvalPolicy.MAX_SCRIPT_CHARS)
+        } catch (e: IllegalArgumentException) {
+            throw BrowserFailure("invalid_arguments", e.message ?: "The JS expression is invalid or too large.")
+        }
+        val timeout = timeoutMs.coerceIn(100L, 5_000L)
+        val raw = withTimeoutOrNull(timeout) { evalScript(view, wrapped) }
+            ?: throw BrowserFailure("browser_eval_timeout",
+                "Script evaluation timed out after ${timeout}ms. Simplify the expression or call browser_reset(reopen=true) if page JS hung.")
+        val clean = BrowserElementRefs.unwrapJsResult(raw)
+        val bounded = BrowserEvalPolicy.boundJson(clean)
+        val payload = runCatching { org.json.JSONObject(bounded.json) }.getOrElse {
+            throw BrowserFailure("browser_eval_exception",
+                "The page returned an unreadable JS result. Retry with a simpler expression or inspect browser_console.")
+        }
+        payload.put("origin", actualOrigin)
+        payload.put("truncated", payload.optBoolean("truncated", bounded.truncated))
+        val afterUrl = withContext(Dispatchers.Main) { view.url } ?: activeUrl
+        if (BrowserAuthGuard.isAuthSurface(afterUrl) || _state.value.handoff != null) {
+            throw BrowserFailure("browser_handoff",
+                "The page moved to an identity surface during evaluation. Continue in the phone's browser.")
+        }
+        if (BrowserEvalPolicy.originOf(afterUrl) != actualOrigin) {
+            throw BrowserFailure("browser_origin_mismatch",
+                "The page navigated to ${BrowserEvalPolicy.originOf(afterUrl) ?: "an unknown origin"} during evaluation. Re-open the expected page and retry.")
+        }
+        BrowserEvalResult(payload.toString(), actualOrigin)
+    }
+
+    internal var evalScript: suspend (WebView, String) -> String = { view, script ->
+        evaluate(view, script)
+    }
+
+    internal var rendererLayoutTimeoutMs: Long = 1_500L
+
+    internal suspend fun awaitLaidOut(view: WebView, timeoutMs: Long = rendererLayoutTimeoutMs) {
+        if (withContext(Dispatchers.Main) { view.width > 1 && view.height > 1 }) return
+        withContext(Dispatchers.Main) { view.requestLayout() }
+        val laidOut = withTimeoutOrNull(timeoutMs.coerceAtLeast(1L)) {
+            while (!withContext(Dispatchers.Main) { view.width > 1 && view.height > 1 }) {
+                delay(16L)
+            }
+            true
+        } ?: false
+        if (!laidOut) {
+            throw BrowserFailure("browser_renderer_unavailable",
+                "The browser viewport is degenerate (1x1 or not laid out). Call browser_reset(reopen=true) to rebuild the renderer.")
+        }
+    }
 
     suspend fun read(chunk: Int = 0, visibleOnly: Boolean = true): BrowserReadResult = actionLock.withLock {
         val cached = readerCache.cached()
@@ -1696,6 +1783,7 @@ class BrowserSession(
             throw BrowserFailure("browser_renderer_unavailable",
                 "The visual browser could not start. Try opening it again.")
         }
+        awaitLaidOut(attached)
         return attached
     }
 

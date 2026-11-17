@@ -6,12 +6,16 @@ import org.junit.Test
 import kotlinx.serialization.json.jsonPrimitive
 
 class BrowserToolsTest {
-    @Test fun thereIsNoEvalTool() {
-        assertTrue(BrowserTools.NAMES.none { it == "browser_eval" })
+    @Test fun evalIsRegisteredWithBoundedArguments() {
+        assertTrue("browser_eval" in BrowserTools.NAMES)
+        val eval = BrowserTools.definitions.first { it.name == "browser_eval" }
+        assertTrue(eval.parameters.toString().contains("expected_origin"))
+        assertTrue(eval.parameters.toString().contains("timeout_ms"))
+        assertTrue(eval.parameters.toString().contains("expression"))
     }
 
     @Test fun theDefinitionsCarryEveryTypedAction() {
-        assertEquals(setOf("browser_open", "browser_read", "browser_find", "browser_click",
+        assertEquals(setOf("browser_open", "browser_eval", "browser_read", "browser_find", "browser_click",
             "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
             "browser_tap", "browser_swipe"),
             BrowserTools.definitions.map { it.name }.toSet())

@@ -56,6 +56,10 @@ internal object AgentToolError {
         "outside_file_scope" to "That path is outside this worker's write_scope. Only edit paths declared in your write_scope.",
         "owned_by_worker" to "Await that worker or ask the user to stop it before editing its files.",
         "browser_busy" to "Another agent in this run is already driving the browser. Wait for it to finish or use other tools.",
+        "browser_eval_timeout" to "The JS expression timed out. Simplify it or call browser_reset(reopen=true) if the page is hung.",
+        "browser_eval_exception" to "Fix the JS expression or inspect page errors with browser_console.",
+        "browser_origin_mismatch" to "Open the expected same-origin page with browser_open before evaluating.",
+        "browser_js_disabled" to "Enable JavaScript in browser settings or use browser_read instead.",
     )
     private val deterministic = (workspaceActions.keys - transientWorkspaceCodes) + setOf(
         "sync_required", "workspace_unavailable",
@@ -67,7 +71,8 @@ internal object AgentToolError {
         "invalid_url", "redirect_blocked", "download_too_large", "download_sha_mismatch",
         "destination_exists", "invalid_checksum", "skill_not_found", "skill_manual_only",
         "secret", "garden_first", "empty", "too_long", "reserved_goal",
-        "outside_file_scope", "owned_by_worker", "browser_busy")
+        "outside_file_scope", "owned_by_worker", "browser_busy",
+        "browser_eval_exception", "browser_origin_mismatch", "browser_js_disabled")
     private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",

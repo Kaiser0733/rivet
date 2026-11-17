@@ -18,7 +18,7 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
-/** Typed browser tools. There is deliberately no browser_eval. */
+/** Typed browser tools. browser_eval is same-origin, synchronous, and bounded. */
 class BrowserTools(private val session: BrowserSession) {
     private val json = Json { ignoreUnknownKeys = true }
 
@@ -49,6 +49,7 @@ class BrowserTools(private val session: BrowserSession) {
                 .getOrElse { throw BrowserFailure("invalid_arguments", "The browser tool arguments are not JSON.") }
             when (call.name) {
                 "browser_open" -> prepareOpen(call, args)
+                "browser_eval" -> readOnly(call) { eval(call, args) }
                 "browser_read" -> readOnly(call) { read(call, args) }
                 "browser_find" -> readOnly(call) { find(call, args) }
                 "browser_click" -> prepareClick(call, args)
@@ -190,6 +191,50 @@ class BrowserTools(private val session: BrowserSession) {
             put("changed", session.changeLine(before.first, before.second))
         }, summary)
 
+    private suspend fun eval(call: AgentToolCall, args: JsonObject): AgentToolResult {
+        val expression = args.string("expression")
+        if (expression.isBlank()) {
+            throw BrowserFailure("invalid_arguments", "browser_eval needs a non-empty expression.")
+        }
+        if (expression.length > BrowserEvalPolicy.MAX_EXPRESSION_CHARS) {
+            throw BrowserFailure("invalid_arguments",
+                "expression is ${expression.length} chars; the limit is ${BrowserEvalPolicy.MAX_EXPRESSION_CHARS}.")
+        }
+        val timeout = args.int("timeout_ms") ?: 2_000
+        if (timeout !in 100..5_000) {
+            throw BrowserFailure("invalid_arguments", "timeout_ms must be 100..5000.")
+        }
+        val expected = args.string("expected_origin").takeIf { it.isNotBlank() }
+        val result = session.eval(expression, expected, timeout.toLong())
+        val payload = runCatching { org.json.JSONObject(result.content) }.getOrElse {
+            throw BrowserFailure("browser_eval_exception",
+                "The page returned an unreadable JS result. Retry with a simpler expression.")
+        }
+        if (!payload.optBoolean("ok", false)) {
+            return AgentToolResult(
+                call.id, call.name,
+                buildJsonObject {
+                    put("error", "browser_eval_exception")
+                    put("origin", payload.optString("origin", result.origin))
+                    put("name", payload.optString("name", "Error"))
+                    put("detail", payload.optString("message", "The JS expression failed."))
+                    put("stack", payload.optString("stack", "").take(2_000))
+                    put("required_action",
+                        "Fix the JS expression or inspect page errors with browser_console.")
+                }.toString(),
+                error = true,
+                summary = "Failed  ${call.name}",
+            )
+        }
+        return value(call, buildJsonObject {
+            put("ok", true)
+            put("origin", result.origin)
+            put("type", payload.optString("type", "undefined"))
+            put("value", payload.opt("value") ?: org.json.JSONObject.NULL)
+            put("truncated", payload.optBoolean("truncated", false))
+        }, "Evaluated browser JS")
+    }
+
     private suspend fun read(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val chunk = args.int("chunk") ?: 0
         val visibleOnly = args["visible_only"]?.jsonPrimitive?.booleanOrNull ?: true
@@ -328,7 +373,7 @@ class BrowserTools(private val session: BrowserSession) {
     private fun JsonObject.int(key: String): Int? = this[key]?.jsonPrimitive?.intOrNull
 
     companion object {
-        val NAMES = setOf("browser_open", "browser_read", "browser_find", "browser_click",
+        val NAMES = setOf("browser_open", "browser_eval", "browser_read", "browser_find", "browser_click",
             "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
             "browser_tap", "browser_swipe")
 
@@ -351,6 +396,13 @@ class BrowserTools(private val session: BrowserSession) {
                 "Open a public http/https page in the invisible text browser. This never shows browser UI and never starts a renderer. For an agent-built page, pass preview_root/preview_entry instead of url to start the existing local preview server. file:// is not accepted. Sign-in and checkout surfaces stop for handoff.",
                 schema(emptyList(), "url" to string, "new_window" to boolean,
                     "preview_root" to string, "preview_entry" to string)),
+            AgentToolDefinition("browser_eval",
+                "Evaluate one synchronous same-origin JS expression or function body on the current page. Returns bounded JSON. Promises are not awaited; use browser_wait_for for async conditions. Refused on auth/handoff surfaces and when expected_origin differs. file:// is never allowed.",
+                schema(listOf("expression"), "expression" to string,
+                    "expected_origin" to string,
+                    "timeout_ms" to buildJsonObject {
+                        put("type", "integer"); put("minimum", 100); put("maximum", 5000)
+                    })),
             AgentToolDefinition("browser_read",
                 "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. Hidden DOM text is excluded by default; pass visible_only=false only when the user explicitly needs it. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
                 schema(emptyList(), "chunk" to integer, "visible_only" to boolean)),
@@ -436,6 +488,7 @@ class BrowserDrivingLease {
 
     companion object {
         private val DRIVING_TOOLS = setOf(
+            "browser_eval",
             "browser_click",
             "browser_type",
             "browser_scroll",
