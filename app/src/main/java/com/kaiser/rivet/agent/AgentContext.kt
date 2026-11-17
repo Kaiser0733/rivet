@@ -87,7 +87,11 @@ internal object AgentContext {
         val prunedResults = tool.toolResults.map { result ->
             if (result.error || result.content.toByteArray(Charsets.UTF_8).size < 2048 ||
                 result.name == "run_command" && !runCommandCanPrune(result)) result
-            else result.copy(content = prunedContent(result))
+            else result.copy(
+                content = prunedContent(result),
+                imagePath = null,
+                imageMime = null,
+            )
         }
         return listOf(
             if (prunedCalls == assistant.toolCalls) assistant else assistant.copy(toolCalls = prunedCalls),

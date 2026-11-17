@@ -5,6 +5,8 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonElement
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonObject
@@ -48,8 +50,11 @@ internal class AnthropicClient(
                     if (models.size >= MAX_RETAINED_MODELS && id !in models) return@forEach
                     val thinking = model["capabilities"]?.obj()?.get("thinking")?.obj()
                     val types = thinking?.get("types")?.obj()
-                    models[id] = ModelInfo(id, model["display_name"]?.str() ?: id,
-                        model["max_input_tokens"].positiveInt(), AnthropicModelMetadata(
+                    models[id] = ModelInfo(
+                        id,
+                        model["display_name"]?.str() ?: id,
+                        model["max_input_tokens"].positiveInt(),
+                        AnthropicModelMetadata(
                             model = id,
                             baseUrl = config.baseUrl,
                             maxOutputTokens = model["max_tokens"].positiveInt(),
@@ -58,7 +63,9 @@ internal class AnthropicClient(
                                 ?.get("supported").booleanValue(),
                             manualThinkingSupported = types?.get("enabled")?.obj()
                                 ?.get("supported").booleanValue(),
-                        ))
+                        ),
+                        supportsVision = VisionCapability.metadataVisionOrTrue(model),
+                    )
                 }
                 if (models.size >= MAX_RETAINED_MODELS || page["has_more"]?.jsonPrimitive?.booleanOrNull != true) {
                     return models.values.sortedBy { it.id.lowercase() }
@@ -92,7 +99,11 @@ internal class AnthropicClient(
         onReasoning: (String) -> Unit,
         onDelta: (String) -> Unit,
     ): AgentResponse {
-        val body = requestBody(request)
+        val messages = modelMessages(request.messages)
+        val images = if (ProviderVisionAttachments.hasTrailingImages(messages)) {
+            withContext(Dispatchers.IO) { ProviderVisionAttachments.trailingImages(messages) }
+        } else emptyMap()
+        val body = requestBody(request, images)
         val httpRequest = base(Endpoints.anthropicChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
@@ -103,7 +114,10 @@ internal class AnthropicClient(
         return stream.response(completed)
     }
 
-    internal fun requestBody(request: AgentRequest): JsonObject = buildJsonObject {
+    internal fun requestBody(
+        request: AgentRequest,
+        images: Map<String, EncodedImage> = emptyMap(),
+    ): JsonObject = buildJsonObject {
         put("model", request.model)
         put("stream", true)
         // Automatic five-minute caching is documented for the native Claude
@@ -147,9 +161,10 @@ internal class AnthropicClient(
             }
             AnthropicThinkingMode.Unsupported -> Unit
         }
+        val wireMessages = modelMessages(request.messages)
         put("messages", buildJsonArray {
-            modelMessages(request.messages).forEach { m ->
-                add(anthropicMessage(m))
+            wireMessages.forEach { m ->
+                add(anthropicMessage(m, images))
             }
         })
         if (request.tools.isNotEmpty()) put("tools", buildJsonArray {
@@ -169,7 +184,10 @@ internal class AnthropicClient(
     }
 }
 
-private fun anthropicMessage(message: AgentMessage): JsonObject = when (message.role) {
+internal fun anthropicMessage(
+    message: AgentMessage,
+    images: Map<String, EncodedImage> = emptyMap(),
+): JsonObject = when (message.role) {
     AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> buildJsonObject { put("role", "user"); put("content", message.text) }
     AgentRole.Assistant -> buildJsonObject {
@@ -193,10 +211,28 @@ private fun anthropicMessage(message: AgentMessage): JsonObject = when (message.
     }
     AgentRole.Tool -> buildJsonObject {
         put("role", "user")
-        put("content", buildJsonArray { message.toolResults.forEach { result -> add(buildJsonObject {
-            put("type", "tool_result"); put("tool_use_id", result.callId); put("content", result.content)
-            if (result.error) put("is_error", true)
-        }) } })
+        put("content", buildJsonArray { message.toolResults.forEach { result ->
+            add(buildJsonObject {
+                put("type", "tool_result"); put("tool_use_id", result.callId)
+                val image = images[result.callId]
+                if (image == null) {
+                    put("content", result.content)
+                } else {
+                    put("content", buildJsonArray {
+                        add(buildJsonObject { put("type", "text"); put("text", result.content) })
+                        add(buildJsonObject {
+                            put("type", "image")
+                            put("source", buildJsonObject {
+                                put("type", "base64")
+                                put("media_type", image.mime)
+                                put("data", image.base64)
+                            })
+                        })
+                    })
+                }
+                if (result.error) put("is_error", true)
+            })
+        } })
     }
 }
 

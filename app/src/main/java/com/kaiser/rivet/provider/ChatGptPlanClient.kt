@@ -6,6 +6,8 @@ import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.modelMessages
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -58,6 +60,10 @@ internal class ChatGptPlanClient(
         onReasoning: (String) -> Unit,
         onDelta: (String) -> Unit,
     ): AgentResponse {
+        val messages = modelMessages(request.messages)
+        val images = if (ProviderVisionAttachments.hasTrailingImages(messages)) {
+            withContext(Dispatchers.IO) { ProviderVisionAttachments.trailingImages(messages) }
+        } else emptyMap()
         val body = buildJsonObject {
             put("model", request.model)
             // Responses API system prompt field; the agent's project
@@ -66,8 +72,8 @@ internal class ChatGptPlanClient(
             put("store", false)
             put("stream", true)
             put("input", buildJsonArray {
-                modelMessages(request.messages).forEach { message ->
-                    responsesInputItems(message).forEach(::add)
+                messages.forEach { message ->
+                    responsesInputItems(message, images).forEach(::add)
                 }
             })
             if (request.tools.isNotEmpty()) put("tools", buildJsonArray {
@@ -130,11 +136,15 @@ internal fun parseChatGptModels(text: String): List<ModelInfo> {
             label = model["display_name"]?.str() ?: slug,
             inputLimitTokens = extractModelContextWindow(model),
             outputLimitTokens = extractModelOutputLimit(model),
+            supportsVision = true,
         )
     }.take(MAX_RETAINED_MODELS).sortedBy { it.id.lowercase() }.toList()
 }
 
-private fun responsesInputItems(message: AgentMessage): List<JsonObject> = when (message.role) {
+internal fun responsesInputItems(
+    message: AgentMessage,
+    images: Map<String, EncodedImage> = emptyMap(),
+): List<JsonObject> = when (message.role) {
     AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> listOf(buildJsonObject { put("role", "user"); put("content", message.text) })
     AgentRole.Assistant -> buildList {
@@ -148,11 +158,27 @@ private fun responsesInputItems(message: AgentMessage): List<JsonObject> = when 
             put("arguments", call.arguments)
         }) }
     }
-    AgentRole.Tool -> message.toolResults.map { result -> buildJsonObject {
-        put("type", "function_call_output")
-        put("call_id", result.callId)
-        put("output", result.content)
-    } }
+    AgentRole.Tool -> buildList {
+        message.toolResults.forEach { result ->
+            add(buildJsonObject {
+                put("type", "function_call_output")
+                put("call_id", result.callId)
+                put("output", result.content)
+            })
+            images[result.callId]?.let { image -> add(buildJsonObject {
+                put("role", "user")
+                put("content", buildJsonArray {
+                    add(buildJsonObject {
+                        put("type", "input_text"); put("text", "[Screenshot from ${result.name}]")
+                    })
+                    add(buildJsonObject {
+                        put("type", "input_image")
+                        put("image_url", "data:${image.mime};base64,${image.base64}")
+                    })
+                })
+            }) }
+        }
+    }
 }
 
 // Accumulates Responses API SSE events into an AgentResponse. Terminal state

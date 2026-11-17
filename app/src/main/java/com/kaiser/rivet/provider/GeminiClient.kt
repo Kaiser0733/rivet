@@ -5,6 +5,8 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.add
@@ -50,6 +52,7 @@ internal class GeminiClient(
                     models.putIfAbsent(id, ModelInfo(
                         id, model["displayName"]?.str() ?: name, model["inputTokenLimit"].positiveInt(),
                         outputLimitTokens = model["outputTokenLimit"].positiveInt(),
+                        supportsVision = VisionCapability.metadataVisionOrTrue(model),
                     ))
                 }
                 if (models.size >= MAX_RETAINED_MODELS) {
@@ -81,10 +84,14 @@ internal class GeminiClient(
         onReasoning: (String) -> Unit,
         onDelta: (String) -> Unit,
     ): AgentResponse {
+        val messages = modelMessages(request.messages)
+        val images = if (ProviderVisionAttachments.hasTrailingImages(messages)) {
+            withContext(Dispatchers.IO) { ProviderVisionAttachments.trailingImages(messages) }
+        } else emptyMap()
         val body = buildJsonObject {
             put("contents", buildJsonArray {
-                modelMessages(request.messages).forEach { m ->
-                    add(geminiMessage(m))
+                messages.forEach { m ->
+                    add(geminiMessage(m, images))
                 }
             })
             if (request.system.isNotEmpty()) {
@@ -126,7 +133,10 @@ internal class GeminiClient(
     }
 }
 
-private fun geminiMessage(message: AgentMessage): JsonObject {
+internal fun geminiMessage(
+    message: AgentMessage,
+    images: Map<String, EncodedImage> = emptyMap(),
+): JsonObject {
     val state = message.transportState?.let { raw ->
         parseJsonObject(raw)
     } ?: buildJsonObject {}
@@ -168,6 +178,12 @@ private fun geminiMessage(message: AgentMessage): JsonObject {
                     if (!result.callId.startsWith(GEMINI_LOCAL_ID_PREFIX)) put("id", result.callId)
                     put("name", result.name); put("response", response)
                 }) })
+                images[result.callId]?.let { image ->
+                    add(buildJsonObject { put("text", "[Screenshot for ${result.name}]") })
+                    add(buildJsonObject { put("inlineData", buildJsonObject {
+                        put("mimeType", image.mime); put("data", image.base64)
+                    }) })
+                }
             } })
         }
     }

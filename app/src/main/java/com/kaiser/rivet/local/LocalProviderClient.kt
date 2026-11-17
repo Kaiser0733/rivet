@@ -29,7 +29,7 @@ class LocalProviderClient(
     private val app: Application,
 ) : ProviderClient {
     override suspend fun listModels(): List<ModelInfo> = manager.installed.value.map {
-        ModelInfo(it.entry.id, it.entry.name)
+        ModelInfo(it.entry.id, it.entry.name, supportsVision = false)
     }
 
     override suspend fun testConnection(): TestResult {

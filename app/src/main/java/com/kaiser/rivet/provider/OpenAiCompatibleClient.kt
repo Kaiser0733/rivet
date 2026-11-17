@@ -5,6 +5,8 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolCall
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.add
 import kotlinx.serialization.json.buildJsonArray
@@ -35,7 +37,11 @@ internal class OpenAiCompatibleClient(
                 val id = model["id"]?.str() ?: return@mapNotNull null
                 val inputLimit = extractModelContextWindow(model)
                 val outputLimit = extractModelOutputLimit(model)
-                ModelInfo(id, id, inputLimit, outputLimitTokens = outputLimit)
+                ModelInfo(
+                    id, id, inputLimit,
+                    outputLimitTokens = outputLimit,
+                    supportsVision = VisionCapability.openAiVisionSupport(model),
+                )
             }.take(MAX_RETAINED_MODELS).sortedBy { it.id.lowercase() }.toList()
         }
     }
@@ -60,6 +66,10 @@ internal class OpenAiCompatibleClient(
         onReasoning: (String) -> Unit,
         onDelta: (String) -> Unit,
     ): AgentResponse {
+        val messages = modelMessages(request.messages)
+        val images = if (ProviderVisionAttachments.hasTrailingImages(messages)) {
+            withContext(Dispatchers.IO) { ProviderVisionAttachments.trailingImages(messages) }
+        } else emptyMap()
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)
@@ -74,7 +84,7 @@ internal class OpenAiCompatibleClient(
                     put("role", "system")
                     put("content", request.system)
                 })
-                modelMessages(request.messages).forEach { message -> openAiMessages(message).forEach(::add) }
+                messages.forEach { message -> openAiMessages(message, images).forEach(::add) }
             })
             if (request.tools.isNotEmpty()) put("tools", buildJsonArray {
                 request.tools.forEach { tool -> add(buildJsonObject {
@@ -97,8 +107,11 @@ internal class OpenAiCompatibleClient(
             onDelta = onDelta,
             documentedCacheWrites = config.type == ProviderType.OpenRouter,
         )
-        val completed = http.sse(httpRequest) { payload ->
-            stream.accept(payload)
+        val completed = try {
+            http.sse(httpRequest) { payload -> stream.accept(payload) }
+        } catch (e: ProviderError) {
+            VisionCapability.visionRejection(e, images.isNotEmpty())?.let { throw it }
+            throw e
         }
         return stream.response(completed)
     }
@@ -111,7 +124,10 @@ internal class OpenAiCompatibleClient(
     }
 }
 
-private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (message.role) {
+internal fun openAiMessages(
+    message: AgentMessage,
+    images: Map<String, EncodedImage> = emptyMap(),
+): List<JsonObject> = when (message.role) {
     AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> listOf(buildJsonObject { put("role", "user"); put("content", message.text) })
     AgentRole.Assistant -> listOf(buildJsonObject {
@@ -123,9 +139,24 @@ private fun openAiMessages(message: AgentMessage): List<JsonObject> = when (mess
             }) }
         })
     })
-    AgentRole.Tool -> message.toolResults.map { result -> buildJsonObject {
-        put("role", "tool"); put("tool_call_id", result.callId); put("content", result.content)
-    } }
+    AgentRole.Tool -> buildList {
+        message.toolResults.forEach { result -> add(buildJsonObject {
+            put("role", "tool"); put("tool_call_id", result.callId); put("content", result.content)
+        }) }
+        val attached = message.toolResults.mapNotNull { result -> images[result.callId] }
+        if (attached.isNotEmpty()) add(buildJsonObject {
+            put("role", "user")
+            put("content", buildJsonArray {
+                add(buildJsonObject { put("type", "text"); put("text", "[Screenshot from browser_shot]") })
+                attached.forEach { image -> add(buildJsonObject {
+                    put("type", "image_url")
+                    put("image_url", buildJsonObject {
+                        put("url", "data:${image.mime};base64,${image.base64}")
+                    })
+                }) }
+            })
+        })
+    }
 }
 
 internal class OpenAiAgentStream(

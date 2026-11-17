@@ -53,6 +53,13 @@ internal object ContextBudget {
     // planned at 220K of the 256K. Trade accepted with it: a model whose real window is smaller
     // than the guess fails at the provider instead of at Rivet's polite wall.
     private const val GUESSED_INPUT_TOKENS = 220_000
+    private const val IMAGE_TOKEN_ESTIMATE = 1_024L
+
+    /** Only the trailing tool result can receive image bytes in a request. */
+    fun attachedImageCount(messages: List<AgentMessage>): Int {
+        val trailing = messages.lastOrNull()?.takeIf { it.role == AgentRole.Tool } ?: return 0
+        return trailing.toolResults.count { !it.imagePath.isNullOrBlank() }
+    }
 
     fun estimateRequestTokens(request: AgentRequest): Long {
         val messageBytes = AgentContext.serializedBytes(request.messages).toLong()
@@ -64,7 +71,8 @@ internal object ContextBudget {
                 tool.parameters.toString().toByteArray(Charsets.UTF_8).size + 96L
         }
         val framingBytes = request.messages.size * 64L
-        return (messageBytes + fixedBytes + toolBytes + framingBytes + 2) / 3
+        val imageTokens = attachedImageCount(request.messages) * IMAGE_TOKEN_ESTIMATE
+        return (messageBytes + fixedBytes + toolBytes + framingBytes + 2) / 3 + imageTokens
     }
 
     fun assess(config: ProviderConfig, inputTokens: Long?, source: TokenEstimateSource): ContextAssessment {

@@ -53,7 +53,8 @@ data class ProviderHeader(val name: String, val value: String)
 
 @Serializable
 data class ModelContextLimit(val model: String, val baseUrl: String, val inputLimitTokens: Int,
-                             val maxOutputTokens: Int? = null)
+                             val maxOutputTokens: Int? = null,
+                             val supportsVision: Boolean? = null)
 
 @Serializable
 data class ModelTokenSettings(
@@ -199,11 +200,12 @@ fun ProviderConfig.selectListedModel(info: ModelInfo): ProviderConfig {
     } else modelTokenSettings
     val detectedOutput = info.outputLimitTokens?.takeIf { it > 0 }
         ?: info.anthropicMetadata?.maxOutputTokens?.takeIf { it > 0 }
+    val detectedInput = info.inputLimitTokens?.takeIf { it > 0 }
     return copy(
         model = info.id,
-        modelContextLimit = info.inputLimitTokens?.takeIf { it > 0 }?.let {
-            ModelContextLimit(info.id, baseUrl, it, detectedOutput)
-        },
+        modelContextLimit = if (detectedInput != null || info.supportsVision != null) {
+            ModelContextLimit(info.id, baseUrl, detectedInput ?: 0, detectedOutput, info.supportsVision)
+        } else null,
         anthropicModelMetadata = info.anthropicMetadata?.takeIf {
             type == ProviderType.Anthropic && it.model == info.id && it.baseUrl == baseUrl
         },

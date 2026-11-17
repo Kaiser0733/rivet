@@ -12,6 +12,8 @@ data class ModelInfo(
     val inputLimitTokens: Int? = null,
     val anthropicMetadata: AnthropicModelMetadata? = null,
     val outputLimitTokens: Int? = null,
+    /** null = unknown, true = image input, false = text-only. */
+    val supportsVision: Boolean? = null,
 )
 
 data class TestResult(val ok: Boolean, val message: String)

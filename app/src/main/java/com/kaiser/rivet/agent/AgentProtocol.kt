@@ -27,6 +27,9 @@ data class AgentToolResult(
     val content: String,
     val error: Boolean = false,
     val summary: String = name,
+    /** Screenshot path only; image bytes are hydrated into the transient wire request. */
+    val imagePath: String? = null,
+    val imageMime: String? = null,
 )
 
 @Serializable
