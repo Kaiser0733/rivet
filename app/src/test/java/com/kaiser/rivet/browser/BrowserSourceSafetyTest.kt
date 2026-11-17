@@ -161,4 +161,14 @@ class BrowserSourceSafetyTest {
         assertTrue(session.contains("data-rivet-hidden"))
         assertTrue(session.contains("document.body.textContent"))
     }
+
+    @Test fun openNormalizesPreflightAndCapturesMainFrameErrors() {
+        val session = source("BrowserSession.kt")
+        assertTrue(session.contains("BrowserUrlPolicy.normalize(rawUrl)"))
+        assertTrue(session.contains("pendingMainFrameError"))
+        assertTrue(session.contains("lastMainHttpStatus"))
+        assertTrue(session.contains("browser_cleartext_blocked"))
+        val policy = source("BrowserUrlPolicy.kt")
+        assertTrue(policy.contains("fun normalize(raw: String)"))
+    }
 }

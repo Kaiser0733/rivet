@@ -85,11 +85,12 @@ class BrowserTools(private val session: BrowserSession) {
         } else args.string("url")
         if (url.isBlank()) throw BrowserFailure("browser_invalid_url", "browser_open needs a URL or a preview entry.")
         return readOnly(call) {
-            val preview = previewEntry.isNotBlank() || BrowserAuthGuard.isLoopback(url)
+            val normalized = BrowserOpenPreflight.normalize(url)
+            val preview = previewEntry.isNotBlank() || BrowserAuthGuard.isLoopback(normalized)
             val result = if (preview) {
-                session.openVisual(url, userInitiated = false, projectPreview = true, agentAction = true)
+                session.openVisual(normalized, userInitiated = false, projectPreview = true, agentAction = true)
             } else {
-                session.openText(url, args.bool("new_window"), projectPreview = false)
+                session.openText(normalized, args.bool("new_window"), projectPreview = false)
             }
             value(call, buildJsonObject {
                 put("url", result.url)
@@ -100,8 +101,16 @@ class BrowserTools(private val session: BrowserSession) {
                 put("cap_mb", result.capMb)
                 val loopback = BrowserAuthGuard.isLoopback(result.url)
                 if (result.tier != BrowserTier.Normal || loopback) {
-                    put("tier_note", BrowserGovernor.tierGuide(result.tier, loopback).summary)
+                        put("tier_note", BrowserGovernor.tierGuide(result.tier, loopback).summary)
                 }
+                result.httpStatus?.let { put("http_status", it) }
+                result.httpWarning?.let { put("http_warning", it) }
+                put("node_count", result.nodeCount)
+                put("has_canvas", result.hasCanvas)
+                put("js_enabled", result.jsEnabled)
+                put("viewport", buildJsonObject {
+                    put("width", result.viewportWidth); put("height", result.viewportHeight)
+                })
                 if (preview) put("visual", true)
                 if (result.handoff) put("handoff", true)
             }, "Opened  ${result.title.ifBlank { result.url }}")

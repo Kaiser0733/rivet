@@ -5,6 +5,9 @@ import java.util.Locale
 class BrowserFailure(val code: String, override val message: String = code) : Exception(message)
 
 object BrowserUrlPolicy {
+    /** Typed loopback URLs are normalized, wildcard hosts and cleartext are named. */
+    fun normalize(raw: String): String = BrowserOpenPreflight.normalize(raw)
+
     fun validate(raw: String): String {
         val url = raw.trim()
         if (url.isEmpty()) throw BrowserFailure("browser_invalid_url", "Enter a page address.")

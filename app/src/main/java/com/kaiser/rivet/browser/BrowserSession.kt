@@ -125,6 +125,13 @@ data class BrowserOpenResult(
     val tier: BrowserTier,
     val capMb: Int,
     val handoff: Boolean = false,
+    val httpStatus: Int? = null,
+    val httpWarning: String? = null,
+    val nodeCount: Int = 0,
+    val hasCanvas: Boolean = false,
+    val jsEnabled: Boolean = true,
+    val viewportWidth: Int = 0,
+    val viewportHeight: Int = 0,
 )
 
 data class BrowserEvalResult(val content: String, val origin: String)
@@ -249,6 +256,9 @@ class BrowserSession(
     private var paintWatchdogJob: kotlinx.coroutines.Job? = null
     private var pendingRestart: PendingPaintRestart? = null
     private var pageLoading: Boolean = false
+    @Volatile private var pendingMainFrameError: BrowserFailure? = null
+    private var lastMainHttpStatus: Int? = null
+    private var lastHttpWarning: String? = null
     private var activeUrl: String = ""
     private var activeTitle: String = ""
     private var authLimitStated = false
@@ -575,7 +585,7 @@ class BrowserSession(
     /** Invisible AI text path: fetch and parse without touching screen state. */
     suspend fun openText(rawUrl: String, newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
-            val url = BrowserUrlPolicy.validate(rawUrl)
+            val url = BrowserUrlPolicy.normalize(rawUrl)
             activeUrl = url
             elementRefs = emptyList()
             readerCache.navigate()
@@ -596,7 +606,9 @@ class BrowserSession(
                 recordVisit(url, projectPreview || BrowserAuthGuard.isLoopback(url), publish = false)
                 updateActiveWindow(url, document.title, publish = false)
                 BrowserOpenResult(url, document.title, document.chunks.size,
-                    document.needsRenderer, budget.tier, budget.capMb)
+                    document.needsRenderer, budget.tier, budget.capMb,
+                    httpStatus = page.httpStatus, nodeCount = page.nodeCount,
+                    hasCanvas = page.hasCanvas, jsEnabled = _state.value.allowJs)
             } catch (handoff: BrowserHandoff) {
                 stateHandoff(handoff.url, handoff.reason)
                 BrowserOpenResult(url, "", 0, false, budget.tier, budget.capMb, handoff = true)
@@ -610,8 +622,16 @@ class BrowserSession(
         actionLock.withLock {
             idleJob?.cancel(); idleJob = null
             idleArming.onActivity()
-            val url = BrowserUrlPolicy.validate(rawUrl)
+            val url = BrowserUrlPolicy.normalize(rawUrl)
             activeUrl = url
+            pendingMainFrameError = null
+            lastMainHttpStatus = null
+            lastHttpWarning = null
+            if (BrowserAuthGuard.isLoopback(url)) {
+                val probe = withContext(Dispatchers.IO) { BrowserOpenPreflight.probeLoopback(url) }
+                lastMainHttpStatus = probe.httpStatus
+                lastHttpWarning = probe.warning
+            }
             elementRefs = emptyList()
             readerCache.navigate()
             refreshBudget(publish = true)
@@ -634,6 +654,8 @@ class BrowserSession(
             val view = ensureRenderer(showWatch = !userInitiated,
                 allowUserDriving = userInitiated, agentAction = agentAction)
             loadForInteraction(view, url)
+            awaitLaidOut(view)
+            pendingMainFrameError?.let { throw it }
             schedulePostLoadBudgetChecks()
             activeUrl = view.url ?: url
             activeTitle = view.title.orEmpty()
@@ -645,7 +667,24 @@ class BrowserSession(
                     activeWindowId = activeWindowId,
                     windows = if (userInitiated) windowSummaries() else it.windows)
             }
-            BrowserOpenResult(activeUrl, activeTitle, 0, false, budget.tier, budget.capMb)
+            val diagnostics = runCatching {
+                val raw = evaluate(view, """
+                    (function(){return JSON.stringify({
+                      nodes:document.querySelectorAll('*').length,
+                      canvas:!!document.querySelector('canvas')
+                    });})()
+                """.trimIndent())
+                val clean = BrowserElementRefs.unwrapJsResult(raw)
+                org.json.JSONObject(clean)
+            }.getOrNull()
+            val vw = withContext(Dispatchers.Main) { view.width }
+            val vh = withContext(Dispatchers.Main) { view.height }
+            BrowserOpenResult(activeUrl, activeTitle, 0, false, budget.tier, budget.capMb,
+                httpStatus = lastMainHttpStatus, httpWarning = lastHttpWarning,
+                nodeCount = diagnostics?.optInt("nodes", 0) ?: 0,
+                hasCanvas = diagnostics?.optBoolean("canvas", false) ?: false,
+                jsEnabled = _state.value.allowJs,
+                viewportWidth = vw, viewportHeight = vh)
         }
 
     /**
@@ -2329,9 +2368,19 @@ class BrowserSession(
             error: android.webkit.WebResourceError,
         ) {
             recordRenderProcess(view)
-            if (request.isForMainFrame) pageLoading = false
+            val description = error.description?.toString().orEmpty()
+            if (request.isForMainFrame) {
+                pageLoading = false
+                pendingMainFrameError = if (description.contains("CLEARTEXT", ignoreCase = true)) {
+                    BrowserFailure("browser_cleartext_blocked",
+                        "Cleartext http:// was blocked for ${request.url}. Use https://, or pass preview_root/preview_entry for local files.")
+                } else {
+                    BrowserFailure("browser_load_failed",
+                        "Failed to load ${request.url}: $description. Check the URL, network, or server process.")
+                }
+            }
             consoleBuffer.add(BrowserConsoleLevel.NetworkError, "webview", 0,
-                "${error.description} ${request.url}", request.url.toString())
+                "$description ${request.url}", request.url.toString())
             super.onReceivedError(view, request, error)
         }
 
@@ -2341,6 +2390,7 @@ class BrowserSession(
             errorResponse: WebResourceResponse,
         ) {
             recordRenderProcess(view)
+            if (request.isForMainFrame) lastMainHttpStatus = errorResponse.statusCode
             if (errorResponse.statusCode >= 400) {
                 consoleBuffer.add(BrowserConsoleLevel.NetworkError, "http", 0,
                     "HTTP ${errorResponse.statusCode} ${request.url}", request.url.toString())

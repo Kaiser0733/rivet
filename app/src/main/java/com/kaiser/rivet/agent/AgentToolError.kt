@@ -65,6 +65,9 @@ internal object AgentToolError {
         "browser_renderer_unavailable" to "Call browser_reset(reopen=true) to rebuild the renderer, then retry.",
         "browser_target" to "Check the selector or use browser_read refs before retrying.",
         "browser_renderer_blocked" to "Close other apps or call browser_reset(reopen=true); if memory is low, use browser_read instead.",
+        "browser_cleartext_blocked" to "Use https:// for public pages, or pass preview_root/preview_entry (or http://127.0.0.1:PORT/) for local files.",
+        "browser_loopback_unreachable" to "Start the preview with preview_root/preview_entry or start_preview, or start a server with spawn_process.",
+        "browser_load_failed" to "Check the URL, network, or server process, then retry browser_open.",
     )
     private val deterministic = (workspaceActions.keys - transientWorkspaceCodes) + setOf(
         "sync_required", "workspace_unavailable",
@@ -78,7 +81,8 @@ internal object AgentToolError {
         "secret", "garden_first", "empty", "too_long", "reserved_goal",
         "outside_file_scope", "owned_by_worker", "browser_busy",
         "browser_eval_exception", "browser_origin_mismatch", "browser_js_disabled",
-        "browser_sensitive_field", "browser_target")
+        "browser_sensitive_field", "browser_target",
+        "browser_cleartext_blocked", "browser_loopback_unreachable")
     private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",
