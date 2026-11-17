@@ -53,6 +53,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "browser_console" -> readOnly(call) { console(call, args) }
                 "browser_key" -> prepareKey(call, args)
                 "browser_wait_for" -> readOnly(call) { waitFor(call, args) }
+                "browser_reset" -> readOnly(call) { reset(call, args) }
                 "browser_read" -> readOnly(call) { read(call, args) }
                 "browser_find" -> readOnly(call) { find(call, args) }
                 "browser_click" -> prepareClick(call, args)
@@ -349,6 +350,27 @@ class BrowserTools(private val session: BrowserSession) {
         }, "Browser condition matched")
     }
 
+    private suspend fun reset(call: AgentToolCall, args: JsonObject): AgentToolResult {
+        val reopen = args["reopen"]?.jsonPrimitive?.booleanOrNull ?: true
+        val clear = args.bool("clear_storage")
+        val result = session.reset(reopen = reopen, clearStorage = clear)
+        return value(call, buildJsonObject {
+            put("reset", result.reset)
+            put("renderer_killed", result.rendererKilled)
+            put("storage_cleared", result.storageCleared)
+            put("reopened", result.reopened)
+            put("previous_url", result.previousUrl)
+            put("url", result.url)
+            put("title", result.title)
+            put("viewport", buildJsonObject {
+                put("width", result.viewportWidth); put("height", result.viewportHeight)
+            })
+            put("tier", result.tier.name.lowercase())
+            put("alive", result.alive)
+            result.detail?.let { put("detail", it) }
+        }, if (result.reopened) "Reset and reopened browser" else "Reset browser")
+    }
+
     private suspend fun read(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val chunk = args.int("chunk") ?: 0
         val visibleOnly = args["visible_only"]?.jsonPrimitive?.booleanOrNull ?: true
@@ -492,7 +514,7 @@ class BrowserTools(private val session: BrowserSession) {
         (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty()
 
     companion object {
-        val NAMES = setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_wait_for", "browser_read", "browser_find", "browser_click",
+        val NAMES = setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_wait_for", "browser_reset", "browser_read", "browser_find", "browser_click",
             "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
             "browser_tap", "browser_swipe")
 
@@ -548,6 +570,9 @@ class BrowserTools(private val session: BrowserSession) {
                     "poll_ms" to buildJsonObject {
                         put("type", "integer"); put("minimum", 50); put("maximum", 1000)
                     })),
+            AgentToolDefinition("browser_reset",
+                "Rebuild the browser renderer after session rot, a degenerate 1x1 viewport, or a wedged page. Waits for renderer teardown (3s cap), clears transients and stale snapshot fields, preserves tabs/settings/auth invariants, and optionally reopens the previous URL. clear_storage also wipes WebStorage and cookies for this browser.",
+                schema(emptyList(), "reopen" to boolean, "clear_storage" to boolean)),
             AgentToolDefinition("browser_read",
                 "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. Hidden DOM text is excluded by default; pass visible_only=false only when the user explicitly needs it. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
                 schema(emptyList(), "chunk" to integer, "visible_only" to boolean)),
@@ -636,6 +661,7 @@ class BrowserDrivingLease {
             "browser_eval",
             "browser_key",
             "browser_wait_for",
+            "browser_reset",
             "browser_click",
             "browser_type",
             "browser_scroll",

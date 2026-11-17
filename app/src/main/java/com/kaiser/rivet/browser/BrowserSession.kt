@@ -138,6 +138,21 @@ data class BrowserKeyTarget(
     val description: String,
 )
 
+data class BrowserResetResult(
+    val reset: Boolean,
+    val rendererKilled: Boolean,
+    val storageCleared: Boolean,
+    val reopened: Boolean,
+    val previousUrl: String,
+    val url: String,
+    val title: String,
+    val viewportWidth: Int,
+    val viewportHeight: Int,
+    val tier: BrowserTier,
+    val alive: Boolean,
+    val detail: String? = null,
+)
+
 data class BrowserWaitResult(
     val matched: Boolean,
     val elapsedMs: Long,
@@ -693,6 +708,103 @@ class BrowserSession(
             throw BrowserFailure("browser_renderer_unavailable",
                 "The browser viewport is degenerate (1x1 or not laid out). Call browser_reset(reopen=true) to rebuild the renderer.")
         }
+    }
+
+    /**
+     * Targeted renderer/session-rot recovery. Unlike browser_close this does not save
+     * stale page state for the next open; unlike clearBrowserData it never touches
+     * other projects, cookies/DOM storage (unless asked), or the domain trail.
+     */
+    suspend fun reset(reopen: Boolean = true, clearStorage: Boolean = false): BrowserResetResult {
+        val previousUrl = activeUrl.ifBlank { _state.value.url }
+        pendingRestart = null
+        postLoadBudgetJob?.cancel(); postLoadBudgetJob = null
+        paintRecoveryJob?.cancel(); paintRecoveryJob = null
+        readerSampleJob?.cancel(); readerSampleJob = null
+        paintWatchdogJob?.cancel(); paintWatchdogJob = null
+        pendingSnapshotRestore = null
+        pendingGoneJob?.cancel(); pendingGoneJob = null
+        pendingGoneView = null
+        forceDestroyed = null
+        rotationScroll.clear()
+        lastPaintedFrame = null
+        rendererFailure = null
+        pageLoading = false
+        readerCache.invalidate()
+        reader = null
+        elementRefs = emptyList()
+        consoleBuffer.clear()
+        renderer?.clearCache(true)
+        _state.update {
+            it.copy(error = null, notice = null, loadValveNotice = null,
+                visualScreenshot = null, pageReady = false, handoff = null, authNotice = null,
+                downloadPrompt = null, budgetCloseAction = false)
+        }
+        requestRendererTeardown()
+        val stopped = withTimeoutOrNull(3_000L) {
+            while (renderer != null || _state.value.teardownRequested) delay(50L)
+            true
+        } == true
+        if (!stopped) {
+            renderer?.let { held -> releaseRenderer(held) }
+            finishRendererTeardown(null)
+        }
+        teardownWatchdog?.cancel(); teardownWatchdog = null
+        pendingRestart = null
+        activeTitle = ""
+        activeWindowId?.let { id -> windows[id]?.let { snapshot ->
+            val clean = snapshot.copy(title = "", scrollY = 0, formFields = emptyMap(),
+                fidelity = BrowserFidelity.Reloaded)
+            windows[id] = clean
+            snapshots.save(clean)
+        } }
+        baselineOwnPss = 0L
+        baselineAvailMem = 0L
+        lastOwnGrowthBytes = 0L
+        observedBrowserBytes = 0L
+        _state.update {
+            it.copy(activeWindowId = activeWindowId, windows = windowSummaries(),
+                url = if (reopen) it.url else previousUrl, title = "",
+                rendererVisible = false, pageReady = false, visualScreenshot = null,
+                error = null, notice = null, loadValveNotice = null,
+                mode = BrowserMode.Reader, fidelity = BrowserFidelity.Reloaded,
+                teardownRequested = false)
+        }
+        var storageCleared = false
+        if (clearStorage) {
+            runCatching { android.webkit.WebStorage.getInstance().deleteAllData() }
+            runCatching {
+                CookieManager.getInstance().removeAllCookies(null)
+                CookieManager.getInstance().flush()
+            }
+            storageCleared = true
+        }
+        var reopened = false
+        var url = previousUrl
+        var title = ""
+        var width = 0
+        var height = 0
+        var detail: String? = null
+        if (reopen && previousUrl.isNotBlank()) {
+            if (budget.tier == BrowserTier.NoRenderer) {
+                detail = "Renderer reset succeeded, but memory tier norenderer blocks reopening the renderer. Use browser_read or open in the phone's browser."
+            } else {
+                val result = openVisual(previousUrl, userInitiated = false,
+                    projectPreview = BrowserAuthGuard.isLoopback(previousUrl), agentAction = true)
+                reopened = true
+                url = result.url
+                title = result.title
+                withContext(Dispatchers.Main) {
+                    width = renderer?.width ?: 0
+                    height = renderer?.height ?: 0
+                }
+            }
+        } else if (reopen) {
+            detail = "There was no previous URL to reopen."
+        }
+        val alive = renderer != null && !_state.value.teardownRequested
+        return BrowserResetResult(true, true, storageCleared, reopened, previousUrl, url,
+            title, width, height, budget.tier, alive, detail)
     }
 
     suspend fun waitFor(

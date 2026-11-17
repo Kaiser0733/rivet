@@ -64,6 +64,7 @@ internal object AgentToolError {
         "browser_wait_timeout" to "Inspect current state with browser_status, browser_console, or browser_read before retrying.",
         "browser_renderer_unavailable" to "Call browser_reset(reopen=true) to rebuild the renderer, then retry.",
         "browser_target" to "Check the selector or use browser_read refs before retrying.",
+        "browser_renderer_blocked" to "Close other apps or call browser_reset(reopen=true); if memory is low, use browser_read instead.",
     )
     private val deterministic = (workspaceActions.keys - transientWorkspaceCodes) + setOf(
         "sync_required", "workspace_unavailable",
