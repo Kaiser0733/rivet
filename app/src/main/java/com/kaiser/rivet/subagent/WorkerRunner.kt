@@ -83,9 +83,12 @@ internal class RunServices(
     val browserContextLine: () -> String? = { null },
     val systemInstruction: (workspace: Boolean, terminalState: String?, browserState: String?) -> String = { _, _, _ -> "" },
     val activityFor: (String) -> String = { tool ->
-        when (tool) {
-            "read_file", "list_directory", "search_files", "git_status", "git_diff" -> "Looking through the project…"
-            "run_command" -> "Running a project command…"
+        when {
+            tool.startsWith("browser_") -> "Using the browser…"
+            tool == "spawn_process" || tool == "process_output" -> "Managing project processes…"
+            tool in setOf("read_file", "list_directory", "search_files", "git_status", "git_diff") ->
+                "Looking through the project…"
+            tool == "run_command" -> "Running a project command…"
             else -> "Updating the project…"
         }
     },

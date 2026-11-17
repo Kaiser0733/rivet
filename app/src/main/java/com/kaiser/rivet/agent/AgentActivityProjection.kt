@@ -168,6 +168,16 @@ object AgentActivityProjection {
             "run_command" -> arg("command").orEmpty()
             "start_preview" -> output("entry") ?: arg("entry").orEmpty()
             "list_processes" -> result["processes"]?.let { "${runCatching { it.jsonArray.size }.getOrDefault(0)} active" }.orEmpty()
+            "browser_open" -> arg("url") ?: arg("preview_entry") ?: ""
+            "browser_eval" -> arg("expression").orEmpty()
+            "browser_key" -> arg("key").orEmpty()
+            "browser_wait_for" -> listOfNotNull(
+                arg("selector")?.let { "selector:$it" },
+                arg("text")?.let { "text:\"$it\"" },
+                if (arg("network_idle") == "true") "network_idle" else null,
+            ).joinToString(" + ")
+            "browser_console", "browser_status", "browser_reset",
+            "browser_read", "browser_find" -> ""
             else -> ""
         }
         return safeText(text, if (name == "run_command") MAX_COMMAND_DISPLAY_CHARS else MAX_DETAIL_CHARS)
@@ -188,6 +198,15 @@ object AgentActivityProjection {
         "start_preview" -> "Preview"
         "list_processes" -> "List processes"
         "stop_process" -> "Stop process"
+        "browser_open", "browser_read", "browser_find", "browser_click",
+        "browser_type", "browser_scroll", "browser_back", "browser_shot",
+        "browser_close", "browser_tap", "browser_swipe" -> "Browser"
+        "browser_eval" -> "Evaluate browser JS"
+        "browser_console" -> "Read browser console"
+        "browser_key" -> "Press browser key"
+        "browser_wait_for" -> "Wait for browser"
+        "browser_reset" -> "Reset browser"
+        "browser_status" -> "Browser status"
         else -> "Project operation"
     }
 
@@ -214,6 +233,13 @@ object AgentActivityProjection {
                 "Preview" -> "Started" to "preview"
                 "List processes" -> "Listed" to "process list"
                 "Stop process" -> "Stopped" to "process"
+                "Browser" -> "Used" to "browser action"
+                "Evaluate browser JS" -> "Evaluated" to "browser expression"
+                "Read browser console" -> "Read" to "browser console"
+                "Press browser key" -> "Pressed" to "browser key"
+                "Wait for browser" -> "Waited for" to "browser condition"
+                "Reset browser" -> "Reset" to "browser renderer"
+                "Browser status" -> "Checked" to "browser status"
                 else -> "Handled" to "operation"
             }
             val plural = if (count == 1) unit else when (unit) {
@@ -226,6 +252,13 @@ object AgentActivityProjection {
                 "preview" -> "previews"
                 "process list" -> "process lists"
                 "process" -> "processes"
+                "browser action" -> "browser actions"
+                "browser expression" -> "browser expressions"
+                "browser console" -> "browser consoles"
+                "browser key" -> "browser keys"
+                "browser condition" -> "browser conditions"
+                "browser renderer" -> "browser renderers"
+                "browser status" -> "browser statuses"
                 else -> "operations"
             }
             if (outcome == ActivityOutcome.Completed) "$verb $count $plural"

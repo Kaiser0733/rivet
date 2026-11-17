@@ -68,6 +68,18 @@ internal object AgentToolError {
         "browser_cleartext_blocked" to "Use https:// for public pages, or pass preview_root/preview_entry (or http://127.0.0.1:PORT/) for local files.",
         "browser_loopback_unreachable" to "Start the preview with preview_root/preview_entry or start_preview, or start a server with spawn_process.",
         "browser_load_failed" to "Check the URL, network, or server process, then retry browser_open.",
+        "browser_not_open" to "Open a page with browser_open before using browser tools.",
+        "browser_handoff" to "Continue sign-in in the phone's browser, then share the page back.",
+        "browser_empty" to "Wait for the page to finish loading, then retry browser_read.",
+        "browser_chunk_out_of_range" to "Read chunk 0 first, then use a returned chunk index.",
+        "browser_page_loading" to "Wait for the page to finish loading, then retry browser_read.",
+        "browser_screenshot_blocked" to "Use browser_read/browser_find in this memory tier, or open the page in the phone's browser.",
+        "browser_teardown_pending" to "Wait for the browser to finish closing, then retry.",
+        "browser_timeout" to "Check the server/process and retry browser_open, or call browser_reset(reopen=true).",
+        "browser_network" to "Check the URL, server process, and connection, then retry.",
+        "browser_http" to "Check preview_entry/server routes or retry browser_open; a 4xx/5xx page may still be readable.",
+        "browser_too_large" to "Use a smaller page or open it in the phone's browser.",
+        "browser_redirect" to "Use the final page URL or check the server redirects.",
     )
     private val deterministic = (workspaceActions.keys - transientWorkspaceCodes) + setOf(
         "sync_required", "workspace_unavailable",
@@ -82,7 +94,9 @@ internal object AgentToolError {
         "outside_file_scope", "owned_by_worker", "browser_busy",
         "browser_eval_exception", "browser_origin_mismatch", "browser_js_disabled",
         "browser_sensitive_field", "browser_target",
-        "browser_cleartext_blocked", "browser_loopback_unreachable")
+        "browser_cleartext_blocked", "browser_loopback_unreachable",
+        "browser_handoff", "browser_empty", "browser_chunk_out_of_range",
+        "browser_page_loading", "browser_screenshot_blocked", "browser_teardown_pending")
     private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",

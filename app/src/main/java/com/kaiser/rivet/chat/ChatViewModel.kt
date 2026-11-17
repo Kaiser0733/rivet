@@ -2743,9 +2743,12 @@ class ChatViewModel private constructor(
             "unsafe_entry",
         )
 
-        internal fun activityFor(tool: String): String = when (tool) {
-            "read_file", "list_directory", "search_files", "git_status", "git_diff" -> "Looking through the project…"
-            "run_command" -> "Running a project command…"
+        internal fun activityFor(tool: String): String = when {
+            tool.startsWith("browser_") -> "Using the browser…"
+            tool == "spawn_process" || tool == "process_output" -> "Managing project processes…"
+            tool in setOf("read_file", "list_directory", "search_files", "git_status", "git_diff") ->
+                "Looking through the project…"
+            tool == "run_command" -> "Running a project command…"
             else -> "Updating the project…"
         }
 

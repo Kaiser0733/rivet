@@ -174,4 +174,24 @@ class AgentActivityProjectionTest {
         assertTrue(group.operations.last().outcomeDetail!!.contains("JSON"))
         assertFalse(group.summary.contains("Ran"))
     }
+
+    @Test fun browserToolsGetRealTitlesAndDetails() {
+        val calls = listOf(
+            AgentToolCall("open", "browser_open", """{"url":"https://example.test/"}"""),
+            AgentToolCall("eval", "browser_eval", """{"expression":"document.title"}"""),
+            AgentToolCall("key", "browser_key", """{"key":"ArrowUp"}"""),
+            AgentToolCall("wait", "browser_wait_for", """{"text":"Ready","network_idle":true}"""),
+            AgentToolCall("status", "browser_status", "{}"),
+        )
+        val results = calls.map { AgentToolResult(it.id, it.name, "{}") }
+        val group = (AgentActivityProjection.conversation(listOf(
+            AgentMessage.assistant("", calls), AgentMessage.tools(results)))
+            .single() as AgentConversationItem.Activity).group
+        val rendered = group.operations.joinToString(" ") { "${it.title} ${it.detail}" }
+        assertTrue(rendered.contains("Browser"))
+        assertTrue(rendered.contains("document.title"))
+        assertTrue(rendered.contains("ArrowUp"))
+        assertTrue(rendered.contains("network_idle"))
+        assertFalse(rendered.contains("Project operation"))
+    }
 }

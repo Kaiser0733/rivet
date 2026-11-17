@@ -89,7 +89,9 @@ enum class ProcessActivityKind(val key: String) {
                 n == "run_code" -> Code
                 n == "web_search" || n == "browser_find" || n == "browser_search" -> WebSearch
                 n == "web_fetch" || n in listOf(
-                    "browser_open", "browser_read", "browser_click", "browser_type",
+                    "browser_open", "browser_eval", "browser_console", "browser_key",
+                    "browser_wait_for", "browser_reset", "browser_status",
+                    "browser_read", "browser_click", "browser_type",
                     "browser_scroll", "browser_back", "browser_tap", "browser_swipe",
                     "browser_shot", "browser_close"
                 ) -> WebFetch
