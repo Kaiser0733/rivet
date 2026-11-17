@@ -6,12 +6,23 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import okhttp3.OkHttpClient
 import okhttp3.Request
+import org.jsoup.Jsoup
 
 class BrowserHandoff(val url: String, val reason: String) : Exception(reason)
 
+data class ReaderPage(
+    val document: ReaderDocument,
+    val rawHtml: String?,
+    val httpStatus: Int,
+    val nodeCount: Int,
+    val hasCanvas: Boolean,
+)
+
 /** Renderer-free fetching and extraction. Never sets a User-Agent. */
 class ReaderService(private val client: OkHttpClient = defaultClient()) {
-    suspend fun fetch(url: String): ReaderDocument = withContext(Dispatchers.IO) {
+    suspend fun fetch(url: String): ReaderDocument = fetchPage(url).document
+
+    suspend fun fetchPage(url: String, visibleOnly: Boolean = true): ReaderPage = withContext(Dispatchers.IO) {
         var target = BrowserUrlPolicy.requireReadable(url)
         repeat(MAX_REDIRECTS) {
             if (BrowserAuthGuard.isAuthSurface(target)) throw BrowserHandoff(target, "identity")
@@ -29,7 +40,7 @@ class ReaderService(private val client: OkHttpClient = defaultClient()) {
                     if (BrowserAuthGuard.isAuthSurface(target)) throw BrowserHandoff(target, "identity")
                     return@use
                 }
-                if (!it.isSuccessful) throw BrowserFailure("browser_http", "The page returned HTTP ${it.code}.")
+                if (!it.isSuccessful) throw BrowserFailure("browser_http", "The page returned HTTP ${it.code}. Use browser_open to inspect the real response or check preview_entry.")
                 val finalUrl = it.request.url.toString()
                 if (BrowserAuthGuard.isAuthSurface(finalUrl)) throw BrowserHandoff(finalUrl, "identity")
                 val body = it.body ?: throw BrowserFailure("browser_empty", "The page returned no content.")
@@ -49,10 +60,23 @@ class ReaderService(private val client: OkHttpClient = defaultClient()) {
                 val text = bytes.toString(charset)
                 if (!type.contains("html") && !type.contains("xml")) {
                     val plain = text.trim()
-                    return@withContext ReaderDocument(finalUrl, finalUrl.substringAfterLast('/'),
-                        plain, ReaderExtractor.chunk(plain), needsRenderer = false)
+                    return@withContext ReaderPage(
+                        ReaderDocument(finalUrl, finalUrl.substringAfterLast('/'),
+                            plain, ReaderExtractor.chunk(plain), needsRenderer = false),
+                        rawHtml = null,
+                        httpStatus = it.code,
+                        nodeCount = 0,
+                        hasCanvas = false,
+                    )
                 }
-                return@withContext ReaderExtractor.extract(text, finalUrl)
+                val parsed = Jsoup.parse(text, finalUrl)
+                return@withContext ReaderPage(
+                    ReaderExtractor.extract(text, finalUrl, visibleOnly),
+                    rawHtml = text,
+                    httpStatus = it.code,
+                    nodeCount = parsed.allElements.size,
+                    hasCanvas = parsed.selectFirst("canvas") != null,
+                )
             }
         }
         throw BrowserFailure("browser_redirect", "The page redirected too many times.")

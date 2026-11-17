@@ -587,8 +587,10 @@ class BrowserSession(
             if (newWindow || activeWindowId == null) createWindow(url, publish = false)
             activeUrl = url
             try {
-                val document = readerService.fetch(url)
-                readerCache.record(readerCache.navigationToken, document)
+                val page = readerService.fetchPage(url, visibleOnly = true)
+                val document = page.document
+                readerCache.record(readerCache.navigationToken, document, visibleOnly = true)
+                page.rawHtml?.let { readerCache.recordRaw(readerCache.navigationToken, it) }
                 reader = document
                 activeTitle = document.title
                 recordVisit(url, projectPreview || BrowserAuthGuard.isLoopback(url), publish = false)
@@ -1207,12 +1209,18 @@ class BrowserSession(
     """.trimIndent()
 
     suspend fun read(chunk: Int = 0, visibleOnly: Boolean = true): BrowserReadResult = actionLock.withLock {
-        val cached = readerCache.cached()
-        val document = when {
-            visibleOnly && cached != null && cached.url == activeUrl -> cached
-            renderer != null && activeUrl.isNotBlank() -> readRenderedDocument(visibleOnly)
-            cached != null -> cached
-            else -> throw BrowserFailure("browser_not_open", "Open a page first.")
+        val document = if (renderer != null && activeUrl.isNotBlank()) {
+            // A live DOM may have changed since the last read; never serve a stale cache
+            // over it just because the URL stayed the same.
+            readRenderedDocument(visibleOnly)
+        } else {
+            val cached = readerCache.cached(visibleOnly)
+            cached ?: readerCache.rawHtml()?.let { raw ->
+                ReaderExtractor.extract(raw, activeUrl, visibleOnly).also {
+                    readerCache.record(readerCache.navigationToken, it, visibleOnly)
+                }
+            } ?: throw BrowserFailure("browser_not_open",
+                "Open a page first, or retry with visible_only=${!visibleOnly} after a text open.")
         }
         if (document.needsRenderer) throw BrowserFailure("browser_needs_renderer",
             "This page needs the renderer for readable text. Rivet will start a quiet visual session.")
@@ -1228,12 +1236,14 @@ class BrowserSession(
     }
 
     suspend fun find(text: String): List<ReaderHit> = actionLock.withLock {
-        val cached = readerCache.cached()
-        val document = when {
-            cached != null && cached.url == activeUrl -> cached
-            renderer != null && activeUrl.isNotBlank() -> readRenderedDocument()
-            cached != null -> cached
-            else -> throw BrowserFailure("browser_not_open", "Open a page first.")
+        val document = if (renderer != null && activeUrl.isNotBlank()) {
+            readRenderedDocument(visibleOnly = true)
+        } else {
+            readerCache.cached(visibleOnly = true) ?: readerCache.rawHtml()?.let { raw ->
+                ReaderExtractor.extract(raw, activeUrl, true).also {
+                    readerCache.record(readerCache.navigationToken, it, visibleOnly = true)
+                }
+            } ?: throw BrowserFailure("browser_not_open", "Open a page first.")
         }
         if (document.needsRenderer) throw BrowserFailure("browser_needs_renderer",
             "This page needs the renderer for searchable text. Rivet will start a quiet visual session.")
@@ -1487,12 +1497,35 @@ class BrowserSession(
 
     private data class PendingPaintRestart(val url: String, val snapshot: BrowserSnapshot?)
 
+    private fun renderedHtmlScript(visibleOnly: Boolean): String {
+        if (!visibleOnly || !_state.value.allowJs) return "document.documentElement.outerHTML"
+        return """
+            (function(){
+              var marked=[];
+              try{
+                var nodes=document.body?document.body.querySelectorAll('*'):[];
+                for(var i=0;i<nodes.length;i++){
+                  var el=nodes[i]; var cs=getComputedStyle(el);
+                  if(cs.display==='none'||cs.visibility==='hidden'||cs.visibility==='collapse'||
+                    parseFloat(cs.opacity)===0||el.hasAttribute('hidden')||
+                    el.getAttribute('aria-hidden')==='true'){
+                    el.setAttribute('data-rivet-hidden','1'); marked.push(el);
+                  }
+                }
+                return document.documentElement.outerHTML;
+              } finally {
+                for(var j=0;j<marked.length;j++) marked[j].removeAttribute('data-rivet-hidden');
+              }
+            })()
+        """.trimIndent()
+    }
+
     private suspend fun readRenderedDocument(visibleOnly: Boolean = true): ReaderDocument {
         val token = readerCache.navigationToken
         val view = renderer ?: throw BrowserFailure("browser_renderer_unavailable",
             "Open the visual browser so the page renderer can start.")
         val pageUrl = view.url ?: activeUrl
-        val rawHtml = evaluate(view, "document.documentElement.outerHTML")
+        val rawHtml = evaluate(view, renderedHtmlScript(visibleOnly))
         val html = runCatching { org.json.JSONTokener(rawHtml).nextValue() as? String }
             .getOrNull().orEmpty()
         val document = if (html.length in 80..2_000_000) {
@@ -1500,7 +1533,7 @@ class BrowserSession(
                 .getOrNull()?.takeIf { it.text.isNotBlank() }?.copy(needsRenderer = false)
         } else null
         val fallbackText = if (document == null) {
-            val raw = evaluate(view, "document.body.innerText")
+            val raw = evaluate(view, if (visibleOnly) "document.body.innerText" else "document.body.textContent")
             runCatching { org.json.JSONTokener(raw).nextValue() as? String }
                 .getOrNull()?.trim().orEmpty()
         } else ""
@@ -1517,7 +1550,7 @@ class BrowserSession(
         }.getOrDefault(emptyList())
         if (result.text.isBlank()) throw BrowserFailure("browser_empty",
             "This page has no readable text. If the page is still loading, retry browser_read after it finishes.")
-        if (!readerCache.record(token, result)) {
+        if (!readerCache.record(token, result, visibleOnly)) {
             throw BrowserFailure("browser_page_loading",
                 "The page changed while Rivet was reading it. Retry browser_read after the page finishes loading.")
         }

@@ -151,4 +151,14 @@ class BrowserSourceSafetyTest {
             File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt")).first { it.isFile }.readText()
         assertFalse(host.contains("surfaceReattacher"))
     }
+
+    @Test fun liveRendererReadsAreNeverServedFromAStaleCache() {
+        val session = source("BrowserSession.kt")
+        val read = session.substringAfter("suspend fun read(").substringBefore("suspend fun find(")
+        assertTrue(read.contains("if (renderer != null && activeUrl.isNotBlank())"))
+        assertTrue(read.contains("readRenderedDocument(visibleOnly)"))
+        assertTrue(read.contains("readerCache.cached(visibleOnly)"))
+        assertTrue(session.contains("data-rivet-hidden"))
+        assertTrue(session.contains("document.body.textContent"))
+    }
 }
