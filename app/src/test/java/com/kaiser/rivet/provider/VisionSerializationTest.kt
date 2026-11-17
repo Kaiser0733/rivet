@@ -133,6 +133,9 @@ class VisionSerializationTest {
         assertEquals(false, VisionCapability.openAiVisionSupport(parse(
             """{"architecture":{"input_modalities":["text"]}}"""
         )))
+        assertEquals(false, VisionCapability.openAiVisionSupport(parse(
+            """{"architecture":{"input_modalities":[{"unexpected":true}]}}"""
+        )))
         assertEquals(true, VisionCapability.openAiVisionSupport(parse(
             """{"architecture":{"modality":"text+image"}}"""
         )))
