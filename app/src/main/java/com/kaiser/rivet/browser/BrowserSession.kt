@@ -235,7 +235,7 @@ class BrowserSession(
     private val readerCache = ReaderCache()
     private val consoleBuffer = BrowserConsoleBuffer()
     private val trail = BrowserDomainTrail()
-    private val snapshots = BrowserSnapshotStore(File(app.filesDir, "browser-snapshots"))
+    private var snapshots = BrowserSnapshotStore(File(app.filesDir, "browser-snapshots"))
     private var shotStore = BrowserShotStore(app.filesDir, "unbound")
     var projectKey: String = "unbound"
         set(value) {
@@ -1920,15 +1920,55 @@ class BrowserSession(
         """.trimIndent(), null)
     }
 
+    /** Saves the old project, drops transient browser state, and loads the new project. */
+    fun bindProject(key: String) {
+        val nextKey = key.ifBlank { "unbound" }
+        if (nextKey == projectKey) return
+        saveActiveSnapshot()
+        requestRendererTeardown()
+        paintRecoveryJob?.cancel(); paintRecoveryJob = null
+        readerSampleJob?.cancel(); readerSampleJob = null
+        consoleBuffer.clear()
+        readerCache.invalidate()
+        reader = null
+        elementRefs = emptyList()
+        trail.clear()
+        pendingSnapshotRestore = null
+        rotationScroll.clear()
+        lastPaintedFrame = null
+        pendingRestart = null
+        pageLoading = false
+        activeUrl = ""
+        activeTitle = ""
+        activeWindowId = null
+        windows.clear()
+        projectKey = nextKey
+        shotStore = BrowserShotStore(app.filesDir, nextKey)
+        snapshots = snapshotStoreFor(nextKey)
+        snapshots.loadAll().forEach { windows[it.id] = it }
+        _state.update {
+            it.copy(activeWindowId = null, windows = windowSummaries(), domains = emptyList(),
+                url = "", title = "", readerText = "", readerMode = false,
+                chunkIndex = 0, chunkCount = 0, chunkAnchor = "",
+                rendererVisible = false, pageReady = false, visualScreenshot = null,
+                handoff = null, authNotice = null)
+        }
+    }
+
+    private fun snapshotStoreFor(key: String): BrowserSnapshotStore {
+        val digest = MessageDigest.getInstance("SHA-256")
+            .digest(key.toByteArray()).joinToString("") { "%02x".format(it.toInt() and 0xff) }
+        return BrowserSnapshotStore(File(app.filesDir, "browser-snapshots/${digest.take(24)}"))
+    }
+
     fun clearBrowserData() {
         CookieManager.getInstance().removeAllCookies(null)
         CookieManager.getInstance().flush()
         renderer?.clearCache(true)
         renderer?.clearHistory()
         snapshots.clear()
-        File(app.filesDir, "browser-snapshots").deleteRecursively()
         shotStore.cleanSession()
-        File(app.filesDir, "browser-shots").deleteRecursively()
+        shotStore.directory.deleteRecursively()
         trail.clear()
         consoleBuffer.clear()
         readerCache.navigate()

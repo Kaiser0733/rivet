@@ -171,4 +171,14 @@ class BrowserSourceSafetyTest {
         val policy = source("BrowserUrlPolicy.kt")
         assertTrue(policy.contains("fun normalize(raw: String)"))
     }
+
+    @Test fun browserDataClearsOnlyTheCurrentProject() {
+        val session = source("BrowserSession.kt")
+        val clear = session.substringAfter("fun clearBrowserData()").substringBefore("fun afterInteraction()")
+        assertTrue(clear.contains("snapshots.clear()"))
+        assertTrue(clear.contains("shotStore.directory.deleteRecursively()"))
+        assertFalse(clear.contains("File(app.filesDir, \"browser-snapshots\").deleteRecursively()"))
+        assertFalse(clear.contains("File(app.filesDir, \"browser-shots\").deleteRecursively()"))
+        assertTrue(session.contains("fun bindProject(key: String)"))
+    }
 }
