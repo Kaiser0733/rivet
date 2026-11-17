@@ -48,6 +48,16 @@ data class BrowserBudget(
     val observedMb: Int get() = (observedBrowserBytes / BYTES_PER_MIB).toInt()
 }
 
+
+data class BrowserTierInfo(
+    val wireName: String,
+    val rendererAllowed: Boolean,
+    val screenshotsAllowed: Boolean,
+    val strictDiet: Boolean,
+    val singleStepTeardown: Boolean,
+    val summary: String,
+)
+
 object BrowserGovernor {
     const val MAX_BROWSER_BYTES = 250L * 1024 * 1024
     const val SAFETY_BYTES = 300L * 1024 * 1024
@@ -89,6 +99,47 @@ object BrowserGovernor {
     fun canOpenRenderer(tier: BrowserTier, interaction: Boolean): Boolean = when (tier) {
         BrowserTier.Normal, BrowserTier.StrictDiet, BrowserTier.ReaderFirst -> interaction
         BrowserTier.NoRenderer -> false
+    }
+
+    /**
+     * Agent-facing explanation of a tier. Capability booleans come from the same
+     * gates the renderer enforces, so a tool description cannot drift from behaviour.
+     */
+    fun tierGuide(tier: BrowserTier, loopbackExempt: Boolean): BrowserTierInfo {
+        val wire = when (tier) {
+            BrowserTier.Normal -> "normal"
+            BrowserTier.StrictDiet -> "strictdiet"
+            BrowserTier.ReaderFirst -> "readerfirst"
+            BrowserTier.NoRenderer -> "norenderer"
+        }
+        val summary = when {
+            tier == BrowserTier.Normal && loopbackExempt ->
+                "Loopback preview: memory cap paused; full renderer, JS, and screenshots " +
+                    "active (hang safety valve only)."
+            tier == BrowserTier.Normal ->
+                "normal: >=200MB headroom and <120MB used. Full renderer, screenshots, " +
+                    "and diet mode active."
+            tier == BrowserTier.StrictDiet ->
+                "strictdiet: 120-199MB cap/used. Heavy images replaced with 1x1 " +
+                    "placeholders (HTML/JS unaffected); screenshots allowed; inactive " +
+                    "tabs may unload."
+            tier == BrowserTier.ReaderFirst ->
+                "readerfirst: 60-119MB cap or >=200MB used. Renderer opens for one " +
+                    "interaction step then tears down; browser_shot blocked; prefer " +
+                    "browser_read."
+            else ->
+                "norenderer: <60MB cap or >=250MB used. Visual renderer and " +
+                    "screenshots blocked; browser_read/browser_find text mode only, or " +
+                    "open in phone browser."
+        }
+        return BrowserTierInfo(
+            wireName = wire,
+            rendererAllowed = canOpenRenderer(tier, interaction = true),
+            screenshotsAllowed = canTakeScreenshot(tier),
+            strictDiet = tier == BrowserTier.StrictDiet,
+            singleStepTeardown = tier == BrowserTier.ReaderFirst,
+            summary = summary,
+        )
     }
 
     fun canTakeScreenshot(tier: BrowserTier): Boolean =

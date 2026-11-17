@@ -77,4 +77,33 @@ class BrowserGovernorTest {
         assertTrue(line.contains("cap"))
         assertTrue(line.contains("local model loaded"))
     }
+
+    @Test fun tierGuideExplainsCapabilitiesAndMatchesTheGates() {
+        val expected = mapOf(
+            BrowserTier.Normal to "normal",
+            BrowserTier.StrictDiet to "strictdiet",
+            BrowserTier.ReaderFirst to "readerfirst",
+            BrowserTier.NoRenderer to "norenderer",
+        )
+        for ((tier, wire) in expected) {
+            val info = BrowserGovernor.tierGuide(tier, loopbackExempt = false)
+            assertEquals(wire, info.wireName)
+            assertEquals(BrowserGovernor.canOpenRenderer(tier, interaction = true),
+                info.rendererAllowed)
+            assertEquals(BrowserGovernor.canTakeScreenshot(tier), info.screenshotsAllowed)
+            assertEquals(tier == BrowserTier.StrictDiet, info.strictDiet)
+            assertEquals(tier == BrowserTier.ReaderFirst, info.singleStepTeardown)
+            assertTrue(info.summary.startsWith(wire))
+        }
+        val loopback = BrowserGovernor.tierGuide(BrowserTier.Normal, loopbackExempt = true)
+        assertEquals("normal", loopback.wireName)
+        assertTrue(loopback.rendererAllowed)
+        assertTrue(loopback.screenshotsAllowed)
+        assertTrue(loopback.summary.contains("Loopback preview"))
+        assertTrue(loopback.summary.contains("hang safety valve"))
+        assertTrue(BrowserGovernor.tierGuide(BrowserTier.ReaderFirst, false)
+            .summary.contains("browser_shot blocked"))
+        assertTrue(BrowserGovernor.tierGuide(BrowserTier.NoRenderer, false)
+            .summary.contains("browser_read/browser_find"))
+    }
 }
