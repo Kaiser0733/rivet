@@ -709,7 +709,7 @@ class BrowserSession(
                 "expected_origin is not an http(s) origin. Pass an origin such as http://127.0.0.1:45179.")
         }
         val view = ensureRenderer()
-        loadForInteraction(view, activeUrl)
+        loadInteraction(view)
         awaitLaidOut(view)
         val liveUrl = withContext(Dispatchers.Main) { view.url } ?: activeUrl
         if (BrowserAuthGuard.isAuthSurface(liveUrl) || _state.value.handoff != null) {
@@ -754,6 +754,10 @@ class BrowserSession(
 
     internal var evalScript: suspend (WebView, String) -> String = { view, script ->
         evaluate(view, script)
+    }
+
+    internal var loadInteraction: suspend (WebView) -> Unit = { view ->
+        loadForInteraction(view, activeUrl)
     }
 
     internal var rendererLayoutTimeoutMs: Long = 1_500L
