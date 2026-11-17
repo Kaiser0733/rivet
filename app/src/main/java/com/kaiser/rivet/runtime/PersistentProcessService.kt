@@ -128,7 +128,8 @@ class PersistentProcessService : Service() {
     private fun updateForegroundNotification(state: ForegroundServiceState) {
         val notification = notification(state)
         if (Build.VERSION.SDK_INT >= 34) {
-            val type = if (state.activeTurns > 0 && state.activePreviews == 0) {
+            val type = if (state.activeTurns > 0 && state.activePreviews == 0 &&
+                state.activeBackgrounds == 0) {
                 ServiceInfo.FOREGROUND_SERVICE_TYPE_DATA_SYNC
             } else ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE
             startForeground(NOTIFICATION_ID, notification, type)
@@ -139,7 +140,8 @@ class PersistentProcessService : Service() {
         val turnActive = state.activeTurns > 0
         val open = PendingIntent.getActivity(this, REQUEST_OPEN,
             Intent(this, MainActivity::class.java)
-                .putExtra(MainActivity.EXTRA_OPEN_PROCESSES, !turnActive && state.activePreviews > 0)
+                .putExtra(MainActivity.EXTRA_OPEN_PROCESSES,
+                    !turnActive && (state.activePreviews > 0 || state.activeBackgrounds > 0))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val stop = PendingIntent.getService(this, REQUEST_STOP,
@@ -153,10 +155,16 @@ class PersistentProcessService : Service() {
                     ?: "Approval needed — approve or deny from this notification."
             turnActive -> state.runAction?.takeIf { it.isNotBlank() }
                 ?: TURN_NOTIFICATION_TEXT
-            state.activePreviews == 1 -> "1 local preview is running"
-            else -> "${state.activePreviews} local previews are running"
+            state.activePreviews == 1 && state.activeBackgrounds == 0 -> "1 local preview is running"
+            state.activePreviews == 0 && state.activeBackgrounds == 1 -> "1 background process is running"
+            state.activePreviews == 1 && state.activeBackgrounds == 1 ->
+                "1 local preview and 1 background process are running"
+            state.activePreviews > 0 && state.activeBackgrounds > 0 ->
+                "${state.activePreviews} local previews and ${state.activeBackgrounds} background processes are running"
+            state.activePreviews > 0 -> "${state.activePreviews} local previews are running"
+            else -> "${state.activeBackgrounds} background processes are running"
         }
-        val stopLabel = if (turnActive && state.activePreviews == 0) "Stop" else "Stop all"
+        val stopLabel = if (turnActive && state.activePreviews == 0 && state.activeBackgrounds == 0) "Stop" else "Stop all"
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_processes)
             .setContentTitle(state.runTitle?.takeIf { turnActive }?.let { "Rivet · $it" } ?: "Rivet")

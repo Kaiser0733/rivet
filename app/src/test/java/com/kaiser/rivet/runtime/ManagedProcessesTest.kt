@@ -81,6 +81,47 @@ class ManagedProcessesTest {
         assertNotNull(processes.registerCommand("three", "", "tree", "Project", second))
     }
 
+    @Test fun backgroundProcessesSharePersistentSlotsAndAreStoppableByWorkspace() {
+        val processes = ManagedProcesses()
+        var stopped = 0
+        val first = processes.registerBackground("npm run dev", "tree-a", "Project A") { stopped++ }!!
+        assertEquals(ManagedProcessKind.Background, processes.info(first, "tree-a")!!.kind)
+        assertEquals("Background command for Project A", processes.stopDescription(first, "tree-a"))
+        assertEquals(1, processes.foregroundState.value.activeBackgrounds)
+        assertTrue(processes.foregroundState.value.hasActiveWork)
+        processes.updateBackgroundOutput(first, "ready", "warning")
+        assertTrue(processes.info(first, "tree-a")!!.output.contains("ready"))
+
+        processes.stopForWorkspace("tree-a")
+        assertEquals(1, stopped)
+        assertEquals(ManagedProcessStatus.Stopped, processes.info(first, "tree-a")!!.status)
+        assertEquals(0, processes.foregroundState.value.activeBackgrounds)
+    }
+
+    @Test fun previewsAreReusablePerWorkspaceAndRootAndOthersAreStopped() {
+        val processes = ManagedProcesses()
+        val first = processes.registerPreview(
+            "tree-a", "Project A", "index.html", "http://127.0.0.1:54001/",
+            rootPath = "site",
+        ) {}!!
+        processes.markPreviewRunning(first)
+        assertEquals(first, processes.previewFor("tree-a", "site")!!.id)
+        assertNull(processes.previewFor("tree-a", "other"))
+        assertNull(processes.previewFor("tree-b", "site"))
+
+        var stoppedA = false
+        var stoppedB = false
+        val second = processes.registerPreview(
+            "tree-b", "Project B", "index.html", "http://127.0.0.1:54002/",
+            rootPath = "", stop = { stoppedB = true },
+        )!!
+        processes.stopForOtherWorkspaces("tree-a")
+        assertTrue(stoppedB)
+        assertFalse(stoppedA)
+        assertEquals(first, processes.previewFor("tree-a", "site")!!.id)
+        assertEquals(second, processes.processes.value.first { it.id == second }.id)
+    }
+
     @Test fun outputAndDisplayMetadataAreBounded() {
         val processes = ManagedProcesses()
         val id = processes.registerCommand(

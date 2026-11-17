@@ -17,12 +17,13 @@ import kotlinx.coroutines.flow.asStateFlow
 import java.util.UUID
 import java.util.WeakHashMap
 
-enum class ManagedProcessKind { Command, Preview }
+enum class ManagedProcessKind { Command, Preview, Background }
 enum class ManagedProcessStatus { Starting, Running, Stopping, Completed, Failed, Stopped }
 
 internal data class ForegroundServiceState(
     val activeTurns: Int = 0,
     val activePreviews: Int = 0,
+    val activeBackgrounds: Int = 0,
     val runTitle: String? = null,
     val runAction: String? = null,
     val runStartedAt: Long = 0L,
@@ -30,7 +31,7 @@ internal data class ForegroundServiceState(
     val approvalToken: Long? = null,
     val approvalDangerous: Boolean = false,
 ) {
-    val hasActiveWork: Boolean get() = activeTurns > 0 || activePreviews > 0
+    val hasActiveWork: Boolean get() = activeTurns > 0 || activePreviews > 0 || activeBackgrounds > 0
 }
 
 data class ManagedProcessInfo(
@@ -44,6 +45,8 @@ data class ManagedProcessInfo(
     val output: String = "",
     val exitCode: Int? = null,
     val finishedAtMillis: Long? = null,
+    val rootPath: String? = null,
+    val entryPath: String? = null,
 )
 
 /** App-process ownership for live commands, loopback previews, and active agent turns. */
@@ -144,6 +147,10 @@ class ManagedProcesses {
         canStartPersistentLocked() && entries.values.count { it.info.status in ACTIVE } < activeLimit
     }
 
+    fun canStartBackground(): Boolean = synchronized(lock) {
+        canStartPersistentLocked() && entries.values.count { it.info.status in ACTIVE } < activeLimit
+    }
+
     fun canStartCommand(): Boolean = synchronized(lock) {
         entries.values.count { it.info.status in ACTIVE } < activeLimit
     }
@@ -159,8 +166,11 @@ class ManagedProcesses {
 
     fun stopDescription(id: String): String? = synchronized(lock) {
         val info = entries[id]?.info?.takeIf { it.status in ACTIVE } ?: return@synchronized null
-        if (info.kind == ManagedProcessKind.Preview) "Local preview for ${info.projectName}"
-        else "Project command for ${info.projectName}"
+        when (info.kind) {
+            ManagedProcessKind.Preview -> "Local preview for ${info.projectName}"
+            ManagedProcessKind.Background -> "Background command for ${info.projectName}"
+            ManagedProcessKind.Command -> "Project command for ${info.projectName}"
+        }
     }
 
     fun activeForWorkspace(identity: String?): List<ManagedProcessInfo> = synchronized(lock) {
@@ -173,8 +183,11 @@ class ManagedProcesses {
         val entry = entries[id]?.takeIf { it.workspaceIdentity == workspaceIdentity }
             ?: return@synchronized null
         entry.info.takeIf { it.status in ACTIVE }?.let {
-            if (it.kind == ManagedProcessKind.Preview) "Local preview for ${it.projectName}"
-            else "Project command for ${it.projectName}"
+            when (it.kind) {
+                ManagedProcessKind.Preview -> "Local preview for ${it.projectName}"
+                ManagedProcessKind.Background -> "Background command for ${it.projectName}"
+                ManagedProcessKind.Command -> "Project command for ${it.projectName}"
+            }
         }
     }
 
@@ -188,6 +201,7 @@ class ManagedProcesses {
         projectName: String?,
         entryPath: String,
         url: String,
+        rootPath: String = "",
         stop: () -> Unit,
     ): String? = synchronized(lock) {
         if (!canStartPersistentLocked() || entries.values.count { it.info.status in ACTIVE } >= activeLimit) return null
@@ -195,7 +209,8 @@ class ManagedProcesses {
         entries[id] = Entry(
             ManagedProcessInfo(id, ManagedProcessKind.Preview,
                 projectName?.take(100) ?: "Selected project", entryPath.take(MAX_LABEL_CHARS),
-                ManagedProcessStatus.Starting, System.currentTimeMillis(), url = url.take(160)),
+                ManagedProcessStatus.Starting, System.currentTimeMillis(), url = url.take(160),
+                rootPath = rootPath, entryPath = entryPath),
             workspaceIdentity,
             persistent = true,
             stop = stop,
@@ -212,6 +227,93 @@ class ManagedProcesses {
                 publishLocked()
             }
         }
+    }
+
+    fun previewFor(workspaceIdentity: String, rootPath: String): ManagedProcessInfo? = synchronized(lock) {
+        entries.values.firstOrNull {
+            it.workspaceIdentity == workspaceIdentity && it.info.kind == ManagedProcessKind.Preview &&
+                it.info.status == ManagedProcessStatus.Running && it.info.rootPath == rootPath
+        }?.info
+    }
+
+    fun info(id: String, workspaceIdentity: String): ManagedProcessInfo? = synchronized(lock) {
+        entries[id]?.takeIf { it.workspaceIdentity == workspaceIdentity }?.info
+    }
+
+    internal fun registerBackground(
+        label: String,
+        workspaceIdentity: String,
+        projectName: String?,
+        stop: () -> Unit,
+    ): String? = synchronized(lock) {
+        if (!canStartPersistentLocked() || entries.values.count { it.info.status in ACTIVE } >= activeLimit) {
+            return@synchronized null
+        }
+        val id = UUID.randomUUID().toString()
+        entries[id] = Entry(
+            ManagedProcessInfo(id, ManagedProcessKind.Background,
+                projectName?.take(100) ?: "Selected project",
+                redactCommand(label).take(MAX_LABEL_CHARS),
+                ManagedProcessStatus.Starting, System.currentTimeMillis()),
+            workspaceIdentity,
+            persistent = true,
+            stop = stop,
+        )
+        trimCompletedLocked()
+        publishLocked()
+        id
+    }
+
+    internal fun markBackgroundRunning(id: String) = synchronized(lock) {
+        entries[id]?.let { entry ->
+            if (entry.info.status == ManagedProcessStatus.Starting) {
+                entry.info = entry.info.copy(status = ManagedProcessStatus.Running)
+                publishLocked()
+            }
+        }
+    }
+
+    internal fun updateBackgroundOutput(id: String, stdout: String, stderr: String) = synchronized(lock) {
+        val entry = entries[id]?.takeIf {
+            it.info.kind == ManagedProcessKind.Background && it.info.status in ACTIVE
+        } ?: return@synchronized
+        entry.info = entry.info.copy(output = boundedOutput(stdout, stderr))
+        publishLocked()
+    }
+
+    internal fun finishBackground(id: String, status: ManagedProcessStatus, exitCode: Int?) = synchronized(lock) {
+        val entry = entries[id] ?: return@synchronized
+        entry.info = entry.info.copy(
+            status = if (entry.info.status == ManagedProcessStatus.Stopping) ManagedProcessStatus.Stopped else status,
+            exitCode = exitCode,
+            finishedAtMillis = System.currentTimeMillis(),
+        )
+        trimCompletedLocked()
+        publishLocked()
+    }
+
+    fun stopForWorkspace(workspaceIdentity: String) {
+        stopMatching { it.workspaceIdentity == workspaceIdentity && it.info.kind in setOf(
+            ManagedProcessKind.Preview, ManagedProcessKind.Background) }
+    }
+
+    fun stopForOtherWorkspaces(workspaceIdentity: String) {
+        stopMatching { it.workspaceIdentity != workspaceIdentity && it.info.kind == ManagedProcessKind.Preview }
+    }
+
+    internal fun stopPreviewsForWorkspace(workspaceIdentity: String) {
+        stopMatching {
+            it.workspaceIdentity == workspaceIdentity && it.info.kind == ManagedProcessKind.Preview
+        }
+    }
+
+    private fun stopMatching(predicate: (Entry) -> Boolean) {
+        val ids = synchronized(lock) {
+            entries.values.filter { predicate(it) && it.info.status in setOf(
+                ManagedProcessStatus.Starting, ManagedProcessStatus.Running) }
+                .map { it.info.id }
+        }
+        ids.forEach { stop(it) }
     }
 
     fun stop(id: String): Boolean {
@@ -432,7 +534,12 @@ class ManagedProcesses {
         mutableProcesses.value = entries.values.map { it.info }.sortedByDescending { it.startedAtMillis }
         mutableForegroundState.value = ForegroundServiceState(
             activeTurns = activeTurns.size,
-            activePreviews = activePersistentCountLocked(),
+            activePreviews = entries.values.count {
+                it.info.kind == ManagedProcessKind.Preview && it.info.status in ACTIVE
+            },
+            activeBackgrounds = entries.values.count {
+                it.info.kind == ManagedProcessKind.Background && it.info.status in ACTIVE
+            },
             runTitle = runTitle,
             runAction = runAction,
             runStartedAt = runStartedAt,

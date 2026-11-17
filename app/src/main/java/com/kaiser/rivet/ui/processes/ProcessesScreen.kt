@@ -243,8 +243,11 @@ private fun ProcessRow(
         Column(Modifier.fillMaxWidth().padding(14.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Column(Modifier.weight(1f)) {
-                    Text(if (process.kind == ManagedProcessKind.Preview) "Local preview" else "Project command",
-                        style = MaterialTheme.typography.titleMedium)
+                    Text(when (process.kind) {
+                        ManagedProcessKind.Preview -> "Local preview"
+                        ManagedProcessKind.Background -> "Background process"
+                        ManagedProcessKind.Command -> "Project command"
+                    }, style = MaterialTheme.typography.titleMedium)
                     Text(process.projectName, style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

@@ -44,7 +44,14 @@ class CommandOutputCache(
     }
 
     @Synchronized
-    fun put(stdout: String, stderr: String, workspace: String? = null, force: Boolean = false): String? {
+    fun put(
+        stdout: String,
+        stderr: String,
+        workspace: String? = null,
+        force: Boolean = false,
+        stdoutTruncated: Boolean = false,
+        stderrTruncated: Boolean = false,
+    ): String? {
         if (!force && !worthCaching(stdout, stderr)) return null
         val streamLimit = minOf(maxStreamBytes, maxTotalBytes)
         val out = clip(stdout, streamLimit)
@@ -55,8 +62,8 @@ class CommandOutputCache(
             workspace = workspace,
             bytes = out.text.toByteArray(Charsets.UTF_8).size +
                 err.text.toByteArray(Charsets.UTF_8).size,
-            stdoutTruncated = out.truncated,
-            stderrTruncated = err.truncated,
+            stdoutTruncated = stdoutTruncated || out.truncated,
+            stderrTruncated = stderrTruncated || err.truncated,
         )
         try {
             file(id, "stdout").writeText(out.text, Charsets.UTF_8)

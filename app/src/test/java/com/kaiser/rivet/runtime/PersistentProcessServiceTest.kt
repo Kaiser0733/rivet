@@ -74,4 +74,12 @@ class PersistentProcessServiceTest {
         assertFalse(actions(notification).contains("Deny"))
         assertEquals(listOf("Stop", "Pause"), actions(notification))
     }
+    @Test
+    fun backgroundOnlyServiceNotificationSaysWhatIsRunningAndOffersStopAll() {
+        val notification = service().notification(ForegroundServiceState(activeBackgrounds = 1))
+        assertTrue(notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
+            .contains("1 background process is running"))
+        assertEquals(listOf("Stop all"), actions(notification))
+    }
+
 }

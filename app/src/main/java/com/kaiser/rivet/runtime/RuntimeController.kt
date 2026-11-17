@@ -12,6 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.TimeoutCancellationException
@@ -34,9 +36,37 @@ data class RuntimeCommandResult(
     val error: String? = null,
     val tooManyChildren: Boolean = false,
     val memoryLimit: Boolean = false,
+    val stderrPresent: Boolean = false,
+    val outputId: String? = null,
 )
 
-data class PreviewLaunch(val processId: String, val url: String, val entry: String)
+data class PreviewLaunch(
+    val processId: String,
+    val url: String,
+    val entry: String,
+    val reused: Boolean = false,
+)
+
+data class BackgroundLaunch(
+    val processId: String,
+    val status: String,
+    val ttlMs: Long,
+    val stdout: String,
+    val stderr: String,
+    val stderrPresent: Boolean,
+    val readyMatched: Boolean?,
+    val exitCode: Int?,
+)
+
+data class ProcessOutputSnapshot(
+    val processId: String,
+    val status: String,
+    val exitCode: Int?,
+    val stdout: String,
+    val stderr: String,
+    val stderrPresent: Boolean,
+)
+
 
 /** A project sync is a UI-blocking prerequisite for the terminal; it must never hold
  * the pane forever. On expiry the existing worktree is used and the terminal starts. */
@@ -54,6 +84,12 @@ class RuntimeController(
     private val projectName: () -> String? = { null },
 ) {
     private val app = context.applicationContext
+    private val outputCache = CommandOutputCache(File(app.cacheDir, "command-outputs"))
+    private val backgroundScope = kotlinx.coroutines.CoroutineScope(
+        kotlinx.coroutines.SupervisorJob() + Dispatchers.IO)
+    private val backgroundRings = java.util.concurrent.ConcurrentHashMap<String, ProcessLogRing>()
+    private val drainedRings = java.util.concurrent.ConcurrentHashMap<String, ProcessLogRing>()
+    private val drainedOrder = java.util.concurrent.ConcurrentLinkedQueue<String>()
     private val toolchain = Toolchain(app)
     private val gitHub = GitHubTokenStore(app)
     private val governor = TerminalGovernor(app)
@@ -137,10 +173,19 @@ class RuntimeController(
         }
         if (result.memoryLimit) governor.recordStop("memory limit")
         else if (result.tooManyChildren) governor.recordStop("too many child processes")
+        val outputId = runCatching {
+            outputCache.put(
+                result.stdoutFull, result.stderrFull,
+                workspace = mirrorIdentity,
+                stdoutTruncated = result.stdoutFullTruncated,
+                stderrTruncated = result.stderrFullTruncated,
+            )
+        }.getOrNull()
         processId?.let { id -> managedProcesses?.finishCommand(id,
             RuntimeCommandResult(result.exitCode, result.stdout, result.stderr, result.stdoutTruncated,
                 result.stderrTruncated, result.timedOut, cwd, "not_started",
-                tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit)) }
+                tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit,
+                stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId)) }
         val sync = try { active.sync() }
             catch (_: CancellationException) {
                 // The command already ran. Return its exit status with an
@@ -149,13 +194,15 @@ class RuntimeController(
                     result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
                     "interrupted", vcsNote = worktreeVcsNote(ready.worktree),
                     tooManyChildren = result.tooManyChildren,
-                    memoryLimit = result.memoryLimit)
+                    memoryLimit = result.memoryLimit,
+                    stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId)
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
         RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
             result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
             sync.state.code, sync.path, syncSkipped = sync.skipped, syncConflicts = sync.conflicts,
             vcsNote = worktreeVcsNote(ready.worktree),
-            tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit)
+            tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit,
+            stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId)
     }
 
     /** Plan §5 rule 14: the one plain terminal state sentence. */
@@ -516,6 +563,167 @@ class RuntimeController(
         }
     }
 
+    fun clearCommandOutput(workspace: String) = outputCache.clearForWorkspace(workspace)
+
+    fun cachedCommandOutput(id: String, workspace: String): CommandOutputCache.CachedOutput? {
+        val cached = outputCache.get(id) ?: return null
+        if (cached.workspace != workspace) return null
+        return cached
+    }
+
+    suspend fun backgroundBlocker(): String? = operations.withLock {
+        if (managedProcesses?.canStartBackground() == false) return@withLock "process_limit"
+        val active = currentMirror() ?: return@withLock "workspace_unavailable"
+        if (!active.hasLocalChanges()) return@withLock null
+        when (active.sync().state) {
+            MirrorSync.Ok, MirrorSync.NoChanges -> null
+            MirrorSync.Conflict -> "sync_required"
+            MirrorSync.Failed -> "sync_failed"
+        }
+    }
+
+    suspend fun spawnProcess(
+        command: String,
+        cwd: String,
+        ttlMs: Long,
+        readyWaitMs: Long,
+        readyPattern: String?,
+    ): BackgroundLaunch {
+        if (ttlMs !in 5_000L..1_800_000L) {
+            throw MirrorFailure("invalid_arguments")
+        }
+        if (readyWaitMs !in 0L..10_000L) throw MirrorFailure("invalid_arguments")
+        val pattern = readyPattern?.takeIf { it.isNotBlank() }
+        if (pattern != null && pattern.length > 256) throw MirrorFailure("invalid_arguments")
+        val launch: Triple<String, String, Pair<String, Array<String>>> = operations.withLock {
+            val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+            val readings = governor.readings()
+            managedProcesses?.setActiveLimit(effectiveSlots(readings.thermalStatus))
+            commandGate(ttlMs, readings)?.let { throw MirrorFailure(it) }
+            if (managedProcesses?.canStartBackground() == false) throw MirrorFailure("process_limit")
+            var ready = active.prepare()
+            if (ready.dirty) {
+                when (active.sync().state) {
+                    MirrorSync.Conflict -> throw MirrorFailure("sync_required")
+                    MirrorSync.Failed -> throw MirrorFailure("sync_failed")
+                    MirrorSync.Ok, MirrorSync.NoChanges -> Unit
+                }
+                ready = active.prepare()
+            }
+            if (ready.dirty) throw MirrorFailure("sync_required")
+            toolchain.ensurePrepared()
+            val credentialFile = if (toolchain.gitReady) {
+                withContext(Dispatchers.IO) { gitHub.refresh() }
+            } else null
+            val directory = runtimeDirectory(ready.worktree, cwd)
+            val environment = environment(active, directory, credentialFile)
+            val identity = mirrorIdentity ?: throw MirrorFailure("workspace_unavailable")
+            Triple(identity, directory.absolutePath, directory.absolutePath to environment)
+        }
+        val identity = launch.first
+        val directory = launch.second
+        val environment = launch.third.second
+        var job: Job? = null
+        val registry = managedProcesses ?: throw MirrorFailure("runtime_unavailable")
+        val id = registry.registerBackground(command, identity, projectName()) {
+            job?.cancel(CancellationException("Stopped from Processes"))
+        } ?: throw MirrorFailure("process_limit")
+        val ring = ProcessLogRing().also { backgroundRings[id] = it }
+        val runningJob = backgroundScope.launch {
+            var outcome: CommandOutput? = null
+            try {
+                outcome = CommandProcess().run(
+                    command, directory, environment, ttlMs,
+                    onOutput = { out, err ->
+                        ring.append(out, err)
+                        registry.updateBackgroundOutput(id, ring.snapshot().stdout, ring.snapshot().stderr)
+                    },
+                    memoryCapBytes = governor.memoryCapBytes(),
+                )
+            } catch (e: CancellationException) {
+                registry.finishBackground(id, ManagedProcessStatus.Stopped, null)
+                throw e
+            } catch (_: Exception) {
+                registry.finishBackground(id, ManagedProcessStatus.Failed, null)
+            } finally {
+                backgroundRings.remove(id)
+                drainedRings[id] = ring
+                drainedOrder.add(id)
+                while (drainedRings.size > 8) {
+                    drainedOrder.poll()?.let(drainedRings::remove)
+                }
+                outcome?.let {
+                    registry.finishBackground(
+                        id,
+                        if (it.timedOut) ManagedProcessStatus.Stopped
+                        else if (it.exitCode != 0 || it.memoryLimit || it.tooManyChildren) ManagedProcessStatus.Failed
+                        else ManagedProcessStatus.Completed,
+                        it.exitCode,
+                    )
+                }
+                if (selection.currentIdentity() == identity && !operations.isLocked) {
+                    runCatching { syncTerminal(identity) }
+                }
+            }
+        }
+        job = runningJob
+        if (registry.info(id, identity)?.status == ManagedProcessStatus.Stopping) {
+            runningJob.cancel(CancellationException("Stopped before start"))
+        }
+        registry.markBackgroundRunning(id)
+        if (!registry.ensureForegroundService(app)) {
+            runningJob.cancel()
+            registry.finishBackground(id, ManagedProcessStatus.Failed, null)
+            throw MirrorFailure("foreground_service_unavailable")
+        }
+        val guard = backgroundScope.launch {
+            selection.awaitIdentityChange(identity)
+            job?.cancel(CancellationException("Workspace changed"))
+        }
+        runningJob.invokeOnCompletion { guard.cancel() }
+        val deadline = System.currentTimeMillis() + readyWaitMs
+        var matched = false
+        while (System.currentTimeMillis() < deadline && runningJob.isActive) {
+            val snap = ring.snapshot()
+            if (pattern == null || pattern in snap.stdout || pattern in snap.stderr) {
+                matched = pattern != null || snap.stdout.isNotEmpty() || snap.stderr.isNotEmpty()
+                if (matched) break
+            }
+            kotlinx.coroutines.delay(50)
+        }
+        val info = registry.info(id, identity)
+        val snap = ring.snapshot()
+        val status = when (info?.status) {
+            ManagedProcessStatus.Running, ManagedProcessStatus.Starting -> "running"
+            ManagedProcessStatus.Completed -> "completed"
+            ManagedProcessStatus.Stopped -> "stopped"
+            ManagedProcessStatus.Failed -> "failed"
+            else -> "running"
+        }
+        return BackgroundLaunch(
+            id, status, ttlMs,
+            snap.stdout.takeLast(ProcessLogRing.MAX_OUTPUT_CHARS),
+            snap.stderr.takeLast(ProcessLogRing.MAX_OUTPUT_CHARS),
+            snap.stderrPresent,
+            if (pattern != null) matched else null,
+            info?.exitCode,
+        )
+    }
+
+    suspend fun outputFor(processId: String, workspace: String): ProcessOutputSnapshot? {
+        val info = managedProcesses?.info(processId, workspace) ?: return null
+        val ring = backgroundRings[processId] ?: drainedRings[processId]
+        val snap = ring?.snapshot()
+        return ProcessOutputSnapshot(
+            processId,
+            info.status.name.lowercase(),
+            info.exitCode,
+            snap?.stdout ?: info.output,
+            snap?.stderr.orEmpty(),
+            snap?.stderrPresent ?: false,
+        )
+    }
+
     suspend fun startPreview(
         workspace: SafWorkspace,
         expectedWorkspace: String,
@@ -539,6 +747,21 @@ class RuntimeController(
         } catch (e: CancellationException) { throw e
         } catch (e: WorkspaceFailure) { throw MirrorFailure(e.reason.name.lowercase()) }
 
+        registry.stopForOtherWorkspaces(expectedWorkspace)
+        val existing = registry.previewFor(expectedWorkspace, rootPath.value)
+        if (existing?.url == null) registry.stopPreviewsForWorkspace(expectedWorkspace)
+        if (existing?.url != null) {
+            if (existing.entryPath == entryPath.value) {
+                return PreviewLaunch(existing.id, existing.url, entryPath.value, reused = true)
+            }
+            return PreviewLaunch(
+                existing.id,
+                previewEntryUrl(existing.url, rootPath, entryPath),
+                entryPath.value,
+                reused = true,
+            )
+        }
+
         val server = LocalPreviewServer(
             rootPath,
             entryPath,
@@ -552,13 +775,15 @@ class RuntimeController(
         // The thermal throttle is refreshed before the preview claims a slot, matching
         // the command path; it never stops an existing preview.
         registry.setActiveLimit(effectiveSlots(governor.readings().thermalStatus))
-        val id = registry.registerPreview(expectedWorkspace, projectLabel, entryPath.value, url, server::close)
-            ?: run { server.close(); throw MirrorFailure("process_limit") }
+        val id = registry.registerPreview(
+            expectedWorkspace, projectLabel, entryPath.value, url,
+            rootPath = rootPath.value, stop = server::close,
+        ) ?: run { server.close(); throw MirrorFailure("process_limit") }
         server.onWorkspaceInvalidated { registry.stop(id) }
         try {
             if (!registry.ensureForegroundService(app)) throw MirrorFailure("foreground_service_unavailable")
             registry.markPreviewRunning(id)
-            return PreviewLaunch(id, url, entryPath.value)
+            return PreviewLaunch(id, url, entryPath.value, reused = false)
         } catch (e: CancellationException) {
             registry.stop(id)
             throw e
