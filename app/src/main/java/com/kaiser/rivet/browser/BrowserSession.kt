@@ -12,7 +12,9 @@ import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
 import android.view.Choreographer
+import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.WebChromeClient
 import android.view.PixelCopy
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -127,6 +129,12 @@ data class BrowserOpenResult(
 
 data class BrowserEvalResult(val content: String, val origin: String)
 
+data class BrowserConsoleSnapshot(
+    val result: BrowserConsoleQueryResult,
+    val rendererAlive: Boolean,
+    val url: String,
+)
+
 data class BrowserReadResult(
     val url: String,
     val title: String,
@@ -155,6 +163,7 @@ class BrowserSession(
     private val prefs = app.getSharedPreferences("browser", Context.MODE_PRIVATE)
     private val readerService = ReaderService()
     private val readerCache = ReaderCache()
+    private val consoleBuffer = BrowserConsoleBuffer()
     private val trail = BrowserDomainTrail()
     private val snapshots = BrowserSnapshotStore(File(app.filesDir, "browser-snapshots"))
     private var shotStore = BrowserShotStore(app.filesDir, "unbound")
@@ -176,6 +185,7 @@ class BrowserSession(
     private var hangCallback: Choreographer.FrameCallback? = null
     private var paintWatchdogJob: kotlinx.coroutines.Job? = null
     private var pendingRestart: PendingPaintRestart? = null
+    private var pageLoading: Boolean = false
     private var activeUrl: String = ""
     private var activeTitle: String = ""
     private var authLimitStated = false
@@ -365,6 +375,7 @@ class BrowserSession(
                 handoff = null, authNotice = null, downloadPrompt = null, loadValveNotice = null)
         }
         disarmHangValve()
+        consoleBuffer.clear()
         shotStore.cleanSession()
         requestRendererTeardown()
         armTeardownWatchdog()
@@ -1186,6 +1197,7 @@ class BrowserSession(
         view.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
         configure(view)
         rendererReady?.complete(view)
+        view.webChromeClient = chromeClientFor(view)
         view.webViewClient = clientFor(view)
         view.setDownloadListener { url, _, contentDisposition, mime, contentLength ->
             onDownloadRequested(url, contentDisposition, mime, contentLength)
@@ -1261,6 +1273,43 @@ class BrowserSession(
         renderer?.reload()
     }
 
+    fun console(level: String, sinceId: Long, limit: Int, clear: Boolean): BrowserConsoleSnapshot =
+        BrowserConsoleSnapshot(
+            result = consoleBuffer.query(level, sinceId, limit, clear),
+            rendererAlive = renderer != null && !_state.value.teardownRequested,
+            url = _state.value.url.ifBlank { activeUrl },
+        )
+
+    private fun chromeClientFor(view: WebView): WebChromeClient = object : WebChromeClient() {
+        override fun onConsoleMessage(message: ConsoleMessage): Boolean {
+            val level = when (message.messageLevel()) {
+                ConsoleMessage.MessageLevel.ERROR -> BrowserConsoleLevel.Error
+                ConsoleMessage.MessageLevel.WARNING -> BrowserConsoleLevel.Warn
+                ConsoleMessage.MessageLevel.LOG -> BrowserConsoleLevel.Log
+                ConsoleMessage.MessageLevel.TIP -> BrowserConsoleLevel.Info
+                ConsoleMessage.MessageLevel.DEBUG -> BrowserConsoleLevel.Debug
+                null -> BrowserConsoleLevel.Log
+            }
+            consoleBuffer.add(level, message.sourceId().orEmpty(), message.lineNumber(),
+                message.message().orEmpty(), view.url.orEmpty())
+            return false
+        }
+    }
+
+    private fun installConsoleErrorHook(view: WebView) {
+        if (!_state.value.allowJs) return
+        view.evaluateJavascript("""
+            (function(){
+              if(!window.__rivetErrHook){
+                window.__rivetErrHook=1;
+                window.addEventListener('unhandledrejection',function(e){
+                  console.error('UnhandledRejection: '+(e&&e.reason?(e.reason.stack||e.reason.message||String(e.reason)):'unknown'));
+                });
+              }
+            })()
+        """.trimIndent(), null)
+    }
+
     fun clearBrowserData() {
         CookieManager.getInstance().removeAllCookies(null)
         CookieManager.getInstance().flush()
@@ -1271,6 +1320,7 @@ class BrowserSession(
         shotStore.cleanSession()
         File(app.filesDir, "browser-shots").deleteRecursively()
         trail.clear()
+        consoleBuffer.clear()
         readerCache.navigate()
         windows.clear()
         activeWindowId = null
@@ -1628,6 +1678,8 @@ class BrowserSession(
 
         override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
             recordRenderProcess(view)
+            pageLoading = true
+            installConsoleErrorHook(view)
             if (url != null && BrowserAuthGuard.isAuthSurface(url)) {
                 stateHandoff(url, "identity")
                 view.stopLoading()
@@ -1636,6 +1688,8 @@ class BrowserSession(
 
         override fun onPageFinished(view: WebView, url: String?) {
             recordRenderProcess(view)
+            pageLoading = false
+            installConsoleErrorHook(view)
             val actual = url ?: view.url ?: activeUrl
             activeUrl = actual
             readerCache.navigate()
@@ -1703,6 +1757,8 @@ class BrowserSession(
             error: android.webkit.WebResourceError,
         ) {
             recordRenderProcess(view)
+            consoleBuffer.add(BrowserConsoleLevel.NetworkError, "webview", 0,
+                "${error.description} ${request.url}", request.url.toString())
             super.onReceivedError(view, request, error)
         }
 
@@ -1712,6 +1768,10 @@ class BrowserSession(
             errorResponse: WebResourceResponse,
         ) {
             recordRenderProcess(view)
+            if (errorResponse.statusCode >= 400) {
+                consoleBuffer.add(BrowserConsoleLevel.NetworkError, "http", 0,
+                    "HTTP ${errorResponse.statusCode} ${request.url}", request.url.toString())
+            }
             super.onReceivedHttpError(view, request, errorResponse)
         }
 

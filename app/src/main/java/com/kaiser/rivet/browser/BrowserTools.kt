@@ -50,6 +50,7 @@ class BrowserTools(private val session: BrowserSession) {
             when (call.name) {
                 "browser_open" -> prepareOpen(call, args)
                 "browser_eval" -> readOnly(call) { eval(call, args) }
+                "browser_console" -> readOnly(call) { console(call, args) }
                 "browser_read" -> readOnly(call) { read(call, args) }
                 "browser_find" -> readOnly(call) { find(call, args) }
                 "browser_click" -> prepareClick(call, args)
@@ -235,6 +236,35 @@ class BrowserTools(private val session: BrowserSession) {
         }, "Evaluated browser JS")
     }
 
+    private fun console(call: AgentToolCall, args: JsonObject): AgentToolResult {
+        val level = args.string("level").ifBlank { "all" }
+        if (level !in setOf("all", "error", "warn", "log")) {
+            throw BrowserFailure("invalid_arguments", "level must be all, error, warn, or log.")
+        }
+        val sinceId = (args.int("since_id") ?: 0).coerceAtLeast(0).toLong()
+        val limit = args.int("limit") ?: 50
+        if (limit !in 1..100) throw BrowserFailure("invalid_arguments", "limit must be 1..100.")
+        val snapshot = session.console(level, sinceId, limit, args.bool("clear"))
+        val result = snapshot.result
+        return value(call, buildJsonObject {
+            put("url", snapshot.url)
+            put("renderer_alive", snapshot.rendererAlive)
+            put("total_buffered", result.totalBuffered)
+            put("error_count", result.errorCount)
+            put("next_since_id", result.nextSinceId)
+            put("truncated", result.truncated)
+            put("entries", JsonArray(result.entries.map { entry ->
+                buildJsonObject {
+                    put("id", entry.id)
+                    put("level", entry.level.name.lowercase())
+                    put("message", entry.message)
+                    put("source", entry.source)
+                    put("line", entry.line)
+                }
+            }))
+        }, "Read browser console")
+    }
+
     private suspend fun read(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val chunk = args.int("chunk") ?: 0
         val visibleOnly = args["visible_only"]?.jsonPrimitive?.booleanOrNull ?: true
@@ -373,7 +403,7 @@ class BrowserTools(private val session: BrowserSession) {
     private fun JsonObject.int(key: String): Int? = this[key]?.jsonPrimitive?.intOrNull
 
     companion object {
-        val NAMES = setOf("browser_open", "browser_eval", "browser_read", "browser_find", "browser_click",
+        val NAMES = setOf("browser_open", "browser_eval", "browser_console", "browser_read", "browser_find", "browser_click",
             "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
             "browser_tap", "browser_swipe")
 
@@ -403,6 +433,11 @@ class BrowserTools(private val session: BrowserSession) {
                     "timeout_ms" to buildJsonObject {
                         put("type", "integer"); put("minimum", 100); put("maximum", 5000)
                     })),
+            AgentToolDefinition("browser_console",
+                "Read the bounded browser console and failed-network buffer. Use since_id/next_since_id to page without repeating entries. Works after a renderer crash; renderer_alive=false is not an error. clear=true removes returned history after this query.",
+                schema(emptyList(), "level" to string, "since_id" to integer,
+                    "limit" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 100) },
+                    "clear" to boolean)),
             AgentToolDefinition("browser_read",
                 "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. Hidden DOM text is excluded by default; pass visible_only=false only when the user explicitly needs it. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
                 schema(emptyList(), "chunk" to integer, "visible_only" to boolean)),
