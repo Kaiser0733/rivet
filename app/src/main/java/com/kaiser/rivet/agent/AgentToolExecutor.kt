@@ -309,7 +309,7 @@ class AgentToolExecutor(
                     }
                     require(args.offset == null || args.offset >= 0)
                     require(args.tail == null || args.tail in 1..CommandOutputSlicer.MAX_LINES)
-                    require(!(args.offset != null && args.tail != null)) {
+                    require(!(args.offset != null && args.offset > 0 && args.tail != null)) {
                         "Pass either offset or tail, not both."
                     }
                     require(args.maxLines == null || args.maxLines in 1..CommandOutputSlicer.MAX_LINES)
@@ -392,7 +392,7 @@ class AgentToolExecutor(
                     require(PROCESS_ID.matches(processId))
                     require(args.offset == null || args.offset >= 0)
                     require(args.tail == null || args.tail in 1..CommandOutputSlicer.MAX_LINES)
-                    require(!(args.offset != null && args.tail != null)) {
+                    require(!(args.offset != null && args.offset > 0 && args.tail != null)) {
                         "Pass either offset or tail, not both."
                     }
                     require(args.maxLines == null || args.maxLines in 1..CommandOutputSlicer.MAX_LINES)
