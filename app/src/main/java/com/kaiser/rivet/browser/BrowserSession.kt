@@ -38,6 +38,7 @@ import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
@@ -1898,7 +1899,7 @@ class BrowserSession(
                 ConsoleMessage.MessageLevel.LOG -> BrowserConsoleLevel.Log
                 ConsoleMessage.MessageLevel.TIP -> BrowserConsoleLevel.Info
                 ConsoleMessage.MessageLevel.DEBUG -> BrowserConsoleLevel.Debug
-                null -> BrowserConsoleLevel.Log
+                else -> BrowserConsoleLevel.Log
             }
             consoleBuffer.add(level, message.sourceId().orEmpty(), message.lineNumber(),
                 message.message().orEmpty(), view.url.orEmpty())

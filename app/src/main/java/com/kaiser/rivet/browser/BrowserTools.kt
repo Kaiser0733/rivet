@@ -10,6 +10,7 @@ import com.kaiser.rivet.agent.BasicAutonomyRisk
 import com.kaiser.rivet.agent.PreparedAgentTool
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
+import kotlinx.serialization.json.JsonNull
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -306,7 +307,13 @@ class BrowserTools(private val session: BrowserSession) {
             put("ok", true)
             put("origin", result.origin)
             put("type", payload.optString("type", "undefined"))
-            put("value", payload.opt("value") ?: org.json.JSONObject.NULL)
+            when (val value = payload.opt("value")) {
+                null -> put("value", JsonNull)
+                is Boolean -> put("value", value)
+                is Number -> put("value", value)
+                is String -> put("value", value)
+                else -> put("value", value.toString())
+            }
             put("truncated", payload.optBoolean("truncated", false))
         }, "Evaluated browser JS")
     }
