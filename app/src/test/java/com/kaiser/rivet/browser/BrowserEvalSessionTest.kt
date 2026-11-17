@@ -33,6 +33,9 @@ class BrowserEvalSessionTest {
         val view = WebView(app)
         view.layout(0, 0, 720, 1480)
         session.attach(view)
+        // width/height are frame fields; pin them after attach, as the paint test does.
+        view.right = 720
+        view.bottom = 1480
         view.webViewClient.onPageFinished(view, url)
         session.rendererLayoutTimeoutMs = 100
         session.loadInteraction = { }
