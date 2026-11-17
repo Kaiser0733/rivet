@@ -71,6 +71,7 @@ data class ProcessOutputSnapshot(
 /** A project sync is a UI-blocking prerequisite for the terminal; it must never hold
  * the pane forever. On expiry the existing worktree is used and the terminal starts. */
 internal const val WORKSPACE_SYNC_TIMEOUT_MS = 15_000L
+internal const val DEFAULT_BACKGROUND_TTL_MS = 600_000L
 
 data class RunCheckpointRestoreResult(
     val restored: List<String>,
@@ -573,6 +574,8 @@ class RuntimeController(
 
     suspend fun backgroundBlocker(): String? = operations.withLock {
         if (managedProcesses?.canStartBackground() == false) return@withLock "process_limit"
+        if (managedProcesses?.canStartCommand() == false) return@withLock "process_limit"
+        commandGate(DEFAULT_BACKGROUND_TTL_MS, governor.readings())?.let { return@withLock it }
         val active = currentMirror() ?: return@withLock "workspace_unavailable"
         if (!active.hasLocalChanges()) return@withLock null
         when (active.sync().state) {
@@ -589,6 +592,10 @@ class RuntimeController(
         readyWaitMs: Long,
         readyPattern: String?,
     ): BackgroundLaunch {
+        if (command.isBlank() || '\u0000' in command ||
+            command.toByteArray(Charsets.UTF_8).size > 8_192) {
+            throw MirrorFailure("invalid_arguments")
+        }
         if (ttlMs !in 5_000L..1_800_000L) {
             throw MirrorFailure("invalid_arguments")
         }
@@ -653,6 +660,8 @@ class RuntimeController(
                     drainedOrder.poll()?.let(drainedRings::remove)
                 }
                 outcome?.let {
+                    if (it.memoryLimit) governor.recordStop("memory limit")
+                    else if (it.tooManyChildren) governor.recordStop("too many child processes")
                     registry.finishBackground(
                         id,
                         if (it.timedOut) ManagedProcessStatus.Stopped
@@ -713,6 +722,7 @@ class RuntimeController(
 
     suspend fun outputFor(processId: String, workspace: String): ProcessOutputSnapshot? {
         val info = managedProcesses?.info(processId, workspace) ?: return null
+        if (info.kind != ManagedProcessKind.Background) return null
         val ring = backgroundRings[processId] ?: drainedRings[processId]
         val snap = ring?.snapshot()
         return ProcessOutputSnapshot(
