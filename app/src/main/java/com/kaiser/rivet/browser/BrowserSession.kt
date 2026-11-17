@@ -138,6 +138,14 @@ data class BrowserKeyTarget(
     val description: String,
 )
 
+data class BrowserWaitResult(
+    val matched: Boolean,
+    val elapsedMs: Long,
+    val url: String,
+    val title: String,
+    val condition: String,
+)
+
 data class BrowserKeyResult(
     val key: String,
     val modifiers: List<String>,
@@ -685,6 +693,176 @@ class BrowserSession(
             throw BrowserFailure("browser_renderer_unavailable",
                 "The browser viewport is degenerate (1x1 or not laid out). Call browser_reset(reopen=true) to rebuild the renderer.")
         }
+    }
+
+    suspend fun waitFor(
+        selector: String? = null,
+        text: String? = null,
+        gone: Boolean = false,
+        networkIdle: Boolean = false,
+        js: String? = null,
+        timeoutMs: Long = 5_000L,
+        pollMs: Long = 150L,
+    ): BrowserWaitResult {
+        if (selector.isNullOrBlank() && text.isNullOrBlank() && !networkIdle && js.isNullOrBlank()) {
+            throw BrowserFailure("invalid_arguments",
+                "Provide at least one condition: selector, text, network_idle, or js.")
+        }
+        if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
+        if (!js.isNullOrBlank() && !_state.value.allowJs) {
+            throw BrowserFailure("browser_js_disabled",
+                "JavaScript is disabled. Enable JavaScript or wait on selector/text instead.")
+        }
+        val timeout = timeoutMs.coerceIn(100L, 15_000L)
+        val poll = pollMs.coerceIn(50L, 1_000L)
+        actionLock.withLock {
+            val view = ensureRenderer()
+            loadForInteraction(view, activeUrl)
+            val url = withContext(Dispatchers.Main) { view.url } ?: activeUrl
+            if (BrowserAuthGuard.isAuthSurface(url) || _state.value.handoff != null) {
+                throw BrowserFailure("browser_handoff",
+                    "Identity work moved to the phone's browser. Continue there, then share the page back.")
+            }
+            installNetworkHook(view)
+            installConsoleErrorHook(view)
+        }
+        val started = SystemClock.elapsedRealtime()
+        var stableSince = 0L
+        var stableCount = -1
+        val condition = buildString {
+            if (!selector.isNullOrBlank()) append("selector:$selector")
+            if (!text.isNullOrBlank()) append(if (isNotEmpty()) " + " else "").append("text:\"$text\"")
+            if (networkIdle) append(if (isNotEmpty()) " + " else "").append("network_idle")
+            if (!js.isNullOrBlank()) append(if (isNotEmpty()) " + " else "").append("js")
+            if (gone) append(" (gone=true)")
+        }
+        while (true) {
+            kotlinx.coroutines.currentCoroutineContext().ensureActive()
+            if (_state.value.driving == BrowserDriving.User) {
+                throw BrowserFailure("browser_user_driving",
+                    "The user is driving the browser. Ask them to hand it back, then retry browser_wait_for.")
+            }
+            if (renderer == null || _state.value.teardownRequested) {
+                throw BrowserFailure("browser_renderer_unavailable",
+                    "The browser renderer stopped during the wait. Call browser_reset(reopen=true) and retry.")
+            }
+            val probe = actionLock.withLock { waitProbe(selector, text, gone, networkIdle, js) }
+            var networkMatched = true
+            if (networkIdle) {
+                val now = SystemClock.elapsedRealtime()
+                if (!pageLoading && probe.readyComplete && probe.inFlight == 0) {
+                    if (stableCount != probe.resourceCount) {
+                        stableCount = probe.resourceCount
+                        stableSince = now
+                    }
+                    networkMatched = stableSince > 0L && now - stableSince >= 500L
+                } else {
+                    stableSince = 0L
+                    stableCount = -1
+                    networkMatched = false
+                }
+            }
+            var matched = probe.selectorMatched && probe.textMatched && networkMatched
+            if (js != null && js.isNotBlank() && matched) {
+                matched = evalPredicate(js)
+            }
+            if (matched) {
+                val url = currentUrl()
+                return BrowserWaitResult(true, SystemClock.elapsedRealtime() - started,
+                    url, _state.value.title, condition)
+            }
+            val elapsed = SystemClock.elapsedRealtime() - started
+            if (elapsed >= timeout) {
+                throw BrowserFailure("browser_wait_timeout",
+                    "Timed out after ${elapsed}ms waiting for $condition. Inspect current state with browser_status, browser_console, or browser_read.")
+            }
+            delay(poll)
+        }
+    }
+
+    private data class WaitProbe(
+        val selectorMatched: Boolean,
+        val textMatched: Boolean,
+        val readyComplete: Boolean,
+        val inFlight: Int,
+        val resourceCount: Int,
+    )
+
+    private suspend fun waitProbe(
+        selector: String?,
+        text: String?,
+        gone: Boolean,
+        networkIdle: Boolean,
+        js: String?,
+    ): WaitProbe {
+        val raw = evaluate(renderer ?: throw BrowserFailure("browser_renderer_unavailable",
+            "The browser renderer stopped during the wait. Call browser_reset(reopen=true) and retry."),
+            waitProbeScript(selector, text, gone))
+        val clean = BrowserElementRefs.unwrapJsResult(raw)
+        val obj = runCatching { org.json.JSONObject(clean) }.getOrNull()
+        return WaitProbe(
+            selectorMatched = obj?.optBoolean("selector", true) ?: true,
+            textMatched = obj?.optBoolean("text", true) ?: true,
+            readyComplete = obj?.optString("ready", "") == "complete",
+            inFlight = obj?.optInt("inFlight", 0) ?: 0,
+            resourceCount = obj?.optInt("resources", 0) ?: 0,
+        )
+    }
+
+    private suspend fun evalPredicate(expression: String): Boolean {
+        val view = renderer ?: return false
+        val wrapped = try { BrowserEvalPolicy.wrapScript(expression) } catch (_: IllegalArgumentException) { return false }
+        val raw = withTimeoutOrNull(500L) { evalScript(view, wrapped) } ?: return false
+        val clean = BrowserElementRefs.unwrapJsResult(raw)
+        val obj = runCatching { org.json.JSONObject(clean) }.getOrNull() ?: return false
+        if (!obj.optBoolean("ok", false)) return false
+        return when (val value = obj.opt("value")) {
+            is Boolean -> value
+            is Number -> value.toDouble() != 0.0
+            is String -> value.isNotEmpty() && value != "false" && value != "0"
+            null, org.json.JSONObject.NULL -> false
+            else -> true
+        }
+    }
+
+    private fun waitProbeScript(selector: String?, text: String?, gone: Boolean): String = """
+        (function(){
+          function visible(el){
+            if(!el) return false;
+            var cs=getComputedStyle(el);
+            if(cs.display==='none'||cs.visibility==='hidden'||cs.visibility==='collapse'||
+              parseFloat(cs.opacity)===0) return false;
+            var r=el.getBoundingClientRect();
+            return r.width>0&&r.height>0;
+          }
+          var sel=${jsonString(selector)};
+          var txt=${jsonString(text)};
+          var gone=${gone};
+          var el=sel?document.querySelector(sel):null;
+          var selMatch=sel?(gone?!visible(el):visible(el)):true;
+          var body=(document.body&&document.body.innerText)||'';
+          var textMatch=txt?(gone?body.indexOf(txt)<0:body.indexOf(txt)>=0):true;
+          return JSON.stringify({selector:!!selMatch,text:!!textMatch,
+            ready:document.readyState,inFlight:window.__rivetInFlight||0,
+            resources:(performance.getEntriesByType?performance.getEntriesByType('resource').length:0)});
+        })()
+    """.trimIndent()
+
+    private fun installNetworkHook(view: WebView) {
+        if (!_state.value.allowJs) return
+        view.evaluateJavascript("""
+          (function(){
+            if(window.__rivetNetHook) return;
+            window.__rivetNetHook=1; window.__rivetInFlight=0;
+            var f=window.fetch;
+            if(f){window.fetch=function(){window.__rivetInFlight++;
+              return f.apply(this,arguments).finally(function(){window.__rivetInFlight--;});};}
+            var send=XMLHttpRequest.prototype.send;
+            XMLHttpRequest.prototype.send=function(){window.__rivetInFlight++;
+              this.addEventListener('loadend',function(){window.__rivetInFlight--;});
+              return send.apply(this,arguments);};
+          })()
+        """.trimIndent(), null)
     }
 
     suspend fun classifyKeyTarget(spec: BrowserKeySpec, selector: String?): BrowserKeyTarget =
@@ -1868,6 +2046,7 @@ class BrowserSession(
             recordRenderProcess(view)
             pageLoading = false
             installConsoleErrorHook(view)
+            installNetworkHook(view)
             val actual = url ?: view.url ?: activeUrl
             activeUrl = actual
             readerCache.navigate()
@@ -1935,6 +2114,7 @@ class BrowserSession(
             error: android.webkit.WebResourceError,
         ) {
             recordRenderProcess(view)
+            if (request.isForMainFrame) pageLoading = false
             consoleBuffer.add(BrowserConsoleLevel.NetworkError, "webview", 0,
                 "${error.description} ${request.url}", request.url.toString())
             super.onReceivedError(view, request, error)

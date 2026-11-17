@@ -15,7 +15,7 @@ class BrowserToolsTest {
     }
 
     @Test fun theDefinitionsCarryEveryTypedAction() {
-        assertEquals(setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_read", "browser_find", "browser_click",
+        assertEquals(setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_wait_for", "browser_read", "browser_find", "browser_click",
             "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
             "browser_tap", "browser_swipe"),
             BrowserTools.definitions.map { it.name }.toSet())
@@ -31,6 +31,12 @@ class BrowserToolsTest {
         assertTrue(key.parameters.toString().contains("modifiers"))
         assertTrue(key.parameters.toString().contains("hold_ms"))
         assertTrue(BrowserTools.NAMES.contains("browser_key"))
+    }
+
+    @Test fun waitForIsRegisteredWithAllConditions() {
+        val wait = BrowserTools.definitions.first { it.name == "browser_wait_for" }
+        assertTrue(wait.parameters.toString().contains("network_idle"))
+        assertTrue(wait.parameters.toString().contains("poll_ms"))
     }
 
     @Test fun everyDefinitionHasAnObjectSchema() {

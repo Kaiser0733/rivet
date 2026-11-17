@@ -52,6 +52,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "browser_eval" -> readOnly(call) { eval(call, args) }
                 "browser_console" -> readOnly(call) { console(call, args) }
                 "browser_key" -> prepareKey(call, args)
+                "browser_wait_for" -> readOnly(call) { waitFor(call, args) }
                 "browser_read" -> readOnly(call) { read(call, args) }
                 "browser_find" -> readOnly(call) { find(call, args) }
                 "browser_click" -> prepareClick(call, args)
@@ -324,6 +325,30 @@ class BrowserTools(private val session: BrowserSession) {
         }, "Read browser console")
     }
 
+    private suspend fun waitFor(call: AgentToolCall, args: JsonObject): AgentToolResult {
+        val selector = args.string("selector").takeIf { it.isNotBlank() }
+        val text = args.string("text").takeIf { it.isNotBlank() }
+        val networkIdle = args.bool("network_idle")
+        val js = args.string("js").takeIf { it.isNotBlank() }
+        if (selector == null && text == null && !networkIdle && js == null) {
+            throw BrowserFailure("invalid_arguments",
+                "Provide at least one condition: selector, text, network_idle, or js.")
+        }
+        val timeout = args.int("timeout_ms") ?: 5_000
+        val poll = args.int("poll_ms") ?: 150
+        if (timeout !in 100..15_000) throw BrowserFailure("invalid_arguments", "timeout_ms must be 100..15000.")
+        if (poll !in 50..1_000) throw BrowserFailure("invalid_arguments", "poll_ms must be 50..1000.")
+        val result = session.waitFor(selector, text, args.bool("gone"), networkIdle, js,
+            timeout.toLong(), poll.toLong())
+        return value(call, buildJsonObject {
+            put("matched", result.matched)
+            put("elapsed_ms", result.elapsedMs)
+            put("url", result.url)
+            put("title", result.title)
+            put("condition", result.condition)
+        }, "Browser condition matched")
+    }
+
     private suspend fun read(call: AgentToolCall, args: JsonObject): AgentToolResult {
         val chunk = args.int("chunk") ?: 0
         val visibleOnly = args["visible_only"]?.jsonPrimitive?.booleanOrNull ?: true
@@ -449,7 +474,10 @@ class BrowserTools(private val session: BrowserSession) {
 
     private fun failure(call: AgentToolCall, code: String, message: String) = AgentToolResult(
         call.id, call.name,
-        buildJsonObject { put("error", code); put("detail", message) }.toString(),
+        buildJsonObject {
+            put("error", code); put("detail", message)
+            AgentToolError.action(code)?.let { put("required_action", it) }
+        }.toString(),
         true, "Failed  ${call.name}",
     )
 
@@ -464,7 +492,7 @@ class BrowserTools(private val session: BrowserSession) {
         (this[key] as? JsonArray)?.mapNotNull { (it as? JsonPrimitive)?.content }.orEmpty()
 
     companion object {
-        val NAMES = setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_read", "browser_find", "browser_click",
+        val NAMES = setOf("browser_open", "browser_eval", "browser_console", "browser_key", "browser_wait_for", "browser_read", "browser_find", "browser_click",
             "browser_type", "browser_scroll", "browser_back", "browser_shot", "browser_close",
             "browser_tap", "browser_swipe")
 
@@ -509,6 +537,16 @@ class BrowserTools(private val session: BrowserSession) {
                     "selector" to string, "action" to string,
                     "hold_ms" to buildJsonObject {
                         put("type", "integer"); put("minimum", 0); put("maximum", 2000)
+                    })),
+            AgentToolDefinition("browser_wait_for",
+                "Wait until all supplied conditions hold on one poll: selector visible (or gone), visible text (or gone), network idle for 500ms, and a same-origin JS predicate. Releases the action lock between polls. Timeout names browser_status/browser_console/browser_read.",
+                schema(emptyList(), "selector" to string, "text" to string, "gone" to boolean,
+                    "network_idle" to boolean, "js" to string,
+                    "timeout_ms" to buildJsonObject {
+                        put("type", "integer"); put("minimum", 100); put("maximum", 15000)
+                    },
+                    "poll_ms" to buildJsonObject {
+                        put("type", "integer"); put("minimum", 50); put("maximum", 1000)
                     })),
             AgentToolDefinition("browser_read",
                 "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. Hidden DOM text is excluded by default; pass visible_only=false only when the user explicitly needs it. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
@@ -597,6 +635,7 @@ class BrowserDrivingLease {
         private val DRIVING_TOOLS = setOf(
             "browser_eval",
             "browser_key",
+            "browser_wait_for",
             "browser_click",
             "browser_type",
             "browser_scroll",
