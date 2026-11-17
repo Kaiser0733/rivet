@@ -294,12 +294,14 @@ class ChatViewModelTest {
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) {
             it.ready && !it.projectLoading && it.projectIdentity == tree.toString() &&
-                it.error?.contains("may already be saved") == true
+                it.errorAction == ChatErrorAction.RetryProjectChanges
         }
 
         // Loading the project runs commandBlocker, which settles the initial pending
-        // changes and consumes the provider's one-shot write rejection. Arm it again
-        // before exercising the explicit retry this test is about.
+        // changes and consumes the provider's one-shot write rejection. Its recovery
+        // banner is the generic pending-changes message, not the retry-specific
+        // "may already be saved" text, so wait for its Retry action above. Arm the
+        // rejection again before exercising the explicit retry this test is about.
         documents.rejectWriteOnceFor = "b.txt"
         viewModel.retryProjectChanges()
         val failed = await(viewModel) { !it.recoveringProjectChanges && it.error?.contains("may already be saved") == true }
