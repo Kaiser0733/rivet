@@ -4,8 +4,8 @@ import android.app.Application
 import android.webkit.WebView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.junit.After
@@ -26,7 +26,7 @@ class BrowserResetTest {
     @Before fun setUp() { Dispatchers.setMain(UnconfinedTestDispatcher()) }
     @After fun tearDown() { Dispatchers.resetMain() }
 
-    @Test fun resetPreservesProjectAndReportsNoPreviousUrl() = runBlocking {
+    @Test fun resetPreservesProjectAndReportsNoPreviousUrl() = runTest {
         val app: Application = RuntimeEnvironment.getApplication()
         val session = BrowserSession(app, models = null)
         session.projectKey = "project-a"
@@ -38,7 +38,7 @@ class BrowserResetTest {
         assertEquals("There was no previous URL to reopen.", result.detail)
     }
 
-    @Test fun resetAwaitLayoutRejectsADegenerateViewport() = runBlocking {
+    @Test fun resetAwaitLayoutRejectsADegenerateViewport() = runTest {
         val app: Application = RuntimeEnvironment.getApplication()
         val session = BrowserSession(app, models = null)
         val view = WebView(app)

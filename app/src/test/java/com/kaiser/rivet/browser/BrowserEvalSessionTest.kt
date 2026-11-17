@@ -5,8 +5,8 @@ import android.webkit.WebView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
+import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.setMain
 import org.json.JSONObject
@@ -39,7 +39,7 @@ class BrowserEvalSessionTest {
         return session to view
     }
 
-    @Test fun evalReturnsBoundedSuccessAndOrigin() = runBlocking {
+    @Test fun evalReturnsBoundedSuccessAndOrigin() = runTest {
         val (session, _) = readySession()
         session.evalScript = { _, _ -> JSONObject.quote("""{"ok":true,"type":"number","value":42}""") }
         val result = session.eval("42", expectedOrigin = "http://127.0.0.1:45179")
@@ -48,7 +48,7 @@ class BrowserEvalSessionTest {
         assertEquals("http://127.0.0.1:45179", result.origin)
     }
 
-    @Test fun evalTimeoutAndExpectedOriginMismatchAreNamed() = runBlocking {
+    @Test fun evalTimeoutAndExpectedOriginMismatchAreNamed() = runTest {
         val (session, _) = readySession()
         session.evalScript = { _, _ -> delay(300); "{}" }
         val timeout = runCatching { session.eval("slow", timeoutMs = 100) }.exceptionOrNull()
@@ -64,7 +64,7 @@ class BrowserEvalSessionTest {
         assertEquals("browser_origin_mismatch", (mismatch as BrowserFailure).code)
     }
 
-    @Test fun evalRefusesAnIdentityHandoff() = runBlocking {
+    @Test fun evalRefusesAnIdentityHandoff() = runTest {
         val app: Application = RuntimeEnvironment.getApplication()
         val session = BrowserSession(app, models = null)
         session.openText("https://accounts.google.com/signin")
