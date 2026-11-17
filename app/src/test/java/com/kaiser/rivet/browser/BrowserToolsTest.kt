@@ -50,6 +50,12 @@ class BrowserToolsTest {
         assertTrue(status.parameters.toString().contains("object"))
     }
 
+    @Test fun shotDescriptionExplainsVisionAttachAndTextOnlyFallback() {
+        val shot = BrowserTools.definitions.first { it.name == "browser_shot" }
+        assertTrue(shot.description.contains("Vision-capable"))
+        assertTrue(shot.description.contains("vision_attached=false"))
+    }
+
     @Test fun everyDefinitionHasAnObjectSchema() {
         assertTrue(BrowserTools.definitions.all { it.parameters["type"]?.jsonPrimitive?.content == "object" })
     }
