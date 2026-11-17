@@ -1925,6 +1925,13 @@ class BrowserSession(
     fun bindProject(key: String) {
         val nextKey = key.ifBlank { "unbound" }
         if (nextKey == projectKey) return
+        // Keep the old project's tab even if the live snapshot callback cannot finish
+        // before the renderer is torn down and windows are swapped.
+        val oldId = activeWindowId
+        oldId?.let { id -> windows[id]?.let { snapshot ->
+            snapshots.save(snapshot.copy(title = activeTitle,
+                lastUsedAt = System.currentTimeMillis()))
+        } }
         saveActiveSnapshot()
         requestRendererTeardown()
         paintRecoveryJob?.cancel(); paintRecoveryJob = null
@@ -2197,6 +2204,7 @@ class BrowserSession(
     }
 
     private fun saveActiveSnapshot() {
+        val targetStore = snapshots
         val id = activeWindowId ?: return
         val current = windows[id] ?: return
         val titleSnapshot = activeTitle
@@ -2214,7 +2222,7 @@ class BrowserSession(
                     formFields = if (hasDomSnapshot) parseSafeFields(raw) else latest.formFields,
                 )
                 windows[id] = saved
-                snapshots.save(saved)
+                targetStore.save(saved)
             }
             captureThumbnail(view, id)
         } else {
@@ -2234,7 +2242,7 @@ class BrowserSession(
                 lastUsedAt = System.currentTimeMillis(),
             )
             windows[id] = saved
-            snapshots.save(saved)
+            targetStore.save(saved)
         }
     }
 
