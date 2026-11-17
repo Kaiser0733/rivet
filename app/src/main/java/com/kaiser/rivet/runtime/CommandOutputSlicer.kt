@@ -43,7 +43,9 @@ object CommandOutputSlicer {
             )
         }
         val all = lines(stdout)
-        val filtered = if (grep.isNullOrEmpty()) all else all.filter { it.contains(grep) }
+        val indexed = all.mapIndexed { index, text -> Line(text, index) }
+        val filtered = if (grep.isNullOrEmpty()) indexed
+        else indexed.filter { it.text.contains(grep) }
         val start = if (tail != null) {
             (filtered.size - tail.coerceIn(1, MAX_LINES)).coerceAtLeast(0)
         } else {
@@ -52,10 +54,10 @@ object CommandOutputSlicer {
         val count = (maxLines ?: MAX_LINES).coerceIn(1, MAX_LINES)
         val available = filtered.drop(start).take(count)
         val stdoutBudget = minOf(MAX_STDOUT_BYTES, maxBytes)
-        val selected = ArrayList<String>(available.size)
+        val selected = ArrayList<Line>(available.size)
         var stdoutBytes = 0
         for (line in available) {
-            val cost = line.toByteArray(Charsets.UTF_8).size + 1
+            val cost = line.text.toByteArray(Charsets.UTF_8).size + 1
             if (selected.isNotEmpty() && stdoutBytes + cost > stdoutBudget) break
             selected += line
             stdoutBytes += cost
@@ -66,8 +68,11 @@ object CommandOutputSlicer {
         } else null
         val stderrBudget = minOf(MAX_STDERR_BYTES, maxBytes)
         val stderrTruncated = stderr.toByteArray(Charsets.UTF_8).size > stderrBudget
+        val retainsTerminator = stdout.endsWith('\n') &&
+            selected.lastOrNull()?.index == all.lastIndex
         return Slice(
-            stdout = selected.joinToString("\n"),
+            stdout = selected.joinToString("\n") { it.text } +
+                if (retainsTerminator) "\n" else "",
             stderr = boundStderr(stderr, stderrBudget),
             totalLines = all.size,
             returnedLines = selected.size,
@@ -78,6 +83,8 @@ object CommandOutputSlicer {
             stderrPresent = stderr.isNotEmpty(),
         )
     }
+
+    private data class Line(val text: String, val index: Int)
 
     private fun lines(text: String): List<String> {
         if (text.isEmpty()) return emptyList()

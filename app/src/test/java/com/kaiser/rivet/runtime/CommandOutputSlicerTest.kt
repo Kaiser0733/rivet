@@ -27,6 +27,16 @@ class CommandOutputSlicerTest {
         assertNull(slice.nextOffset)
     }
 
+    @Test fun stdoutPreservesOriginalLineTerminators() {
+        assertEquals("hello\n", CommandOutputSlicer.slice("hello\n", "").stdout)
+        assertEquals("a\nb", CommandOutputSlicer.slice("a\nb", "").stdout)
+        assertEquals("a\nb\n", CommandOutputSlicer.slice("a\nb\n", "").stdout)
+        assertEquals("b\n", CommandOutputSlicer.slice("a\nb\n", "",
+            offset = 1, maxLines = 1).stdout)
+        assertEquals("a", CommandOutputSlicer.slice("a\nb\n", "",
+            offset = 0, maxLines = 1).stdout)
+    }
+
     @Test fun grepIsLiteralAndReportsMatchedLines() {
         val output = buildString {
             repeat(1_200) {
