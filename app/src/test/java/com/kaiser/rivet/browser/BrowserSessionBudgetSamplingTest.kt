@@ -103,15 +103,20 @@ class BrowserSessionBudgetSamplingTest {
             while (samples.get() < 2) delay(20)
         }
         pssBytes.set(40L * 1024 * 1024 + 150L * 1024 * 1024)
-        // The follow-up samples are delayed on the test dispatcher's virtual clock.
-        // Advance through the production follow-up points (+1.5 s and +3.0 s), with
-        // an extra step so a first delay registered late still runs. The 5 s periodic
-        // fallback is deliberately beyond this window.
-        repeat(3) {
+        // The probe increments `samples` while the post-load coroutine is in
+        // withContext(Dispatchers.Default), before that coroutine resumes on Main and
+        // registers its next virtual delay. Give that handoff a real-time turn before
+        // advancing the virtual clock. Cap the virtual advance at +4.5 s so the 5 s
+        // periodic fallback cannot satisfy this test.
+        var advancedMs = 0L
+        while (samples.get() < 3 && advancedMs < 4_500L) {
             scheduler.runCurrent()
+            delay(50)
             scheduler.advanceTimeBy(1_500L)
+            advancedMs += 1_500L
             scheduler.runCurrent()
         }
+        assertTrue("post-load follow-up sampled", samples.get() >= 3)
 
         val tightened = withTimeout(3_500) {
             session.state.first {
