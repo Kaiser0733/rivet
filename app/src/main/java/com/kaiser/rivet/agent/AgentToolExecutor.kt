@@ -441,6 +441,7 @@ class AgentToolExecutor(
                                         ManagedProcessKind.Command -> "command"
                                     })
                                     put("project", process.projectName.take(100))
+                                    put("command", process.label)
                                     put("status", process.status.name.lowercase())
                                     process.url?.let { put("url", it) }
                                 }) }
