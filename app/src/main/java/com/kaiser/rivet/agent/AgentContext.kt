@@ -105,7 +105,8 @@ internal object AgentContext {
             put("arguments_pruned", true)
             put("original_bytes", call.arguments.toByteArray(Charsets.UTF_8).size)
             for (key in listOf("path", "destination", "cwd", "expected_sha256", "create_parents",
-                    "overwrite", "offset", "limit", "query", "glob")) {
+                    "overwrite", "offset", "limit", "query", "glob",
+                    "output_id", "tail", "grep", "max_lines")) {
                 val value = old?.get(key) as? JsonPrimitive ?: continue
                 if (value.isString) put(key, clipped(value.content, 200)) else put(key, value)
             }
@@ -120,8 +121,10 @@ internal object AgentContext {
             put("original_bytes", result.content.toByteArray(Charsets.UTF_8).size)
             put("summary", clipped(result.summary, 180))
             for (key in listOf("path", "sha256", "size", "exit_code", "timed_out", "sync", "worktree_vcs", "sync_path",
-                    "stdout_truncated", "stderr_truncated", "limited", "files_scanned", "entries_visited",
-                    "bytes_scanned", "eof", "next_offset", "truncated")) {
+                    "stdout_truncated", "stderr_truncated", "stderr_present", "total_lines",
+                    "returned_lines", "next_offset", "matched_lines", "output_id",
+                    "limited", "files_scanned", "entries_visited",
+                    "bytes_scanned", "eof", "truncated")) {
                 val value = old?.get(key) as? JsonPrimitive ?: continue
                 if (value.isString) put(key, clipped(value.content, 200)) else put(key, value)
             }

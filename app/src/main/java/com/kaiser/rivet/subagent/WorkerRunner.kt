@@ -96,6 +96,7 @@ internal class RunServices(
     val readAutonomyMode: suspend () -> AutonomyMode = { AutonomyMode.Ask },
     val workspaceIsCurrent: suspend () -> Boolean = { true },
     val commandBlocker: suspend () -> String? = { null },
+    val backgroundBlocker: suspend () -> String? = { null },
     val canStartPreview: () -> Boolean = { true },
     val failureState: suspend () -> String = { "ready" },
     val isProjectLockBusy: () -> Boolean = { false },
@@ -405,6 +406,7 @@ internal class WorkerRunner(
                     when (call.name) {
                         "run_command" -> services.commandBlocker()
                         "start_preview" -> if (services.canStartPreview()) null else "process_limit"
+                        "spawn_process" -> services.backgroundBlocker()
                         else -> null
                     }
                 },

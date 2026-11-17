@@ -84,7 +84,8 @@ enum class ProcessActivityKind(val key: String) {
                     n == "download_file" || n == "write_file" -> Write
                 n == "edit" || n == "apply_patch" || n == "rename_path" ||
                     n == "move_path" || n == "delete_path" -> Edit
-                n in listOf("bash", "pwsh", "exec_command", "write_stdin", "run_command", "list_processes", "stop_process", "start_preview") ||
+                n in listOf("bash", "pwsh", "exec_command", "write_stdin", "run_command",
+                    "spawn_process", "process_output", "list_processes", "stop_process", "start_preview") ||
                     n.startsWith("terminal_") -> Commands
                 n == "run_code" -> Code
                 n == "web_search" || n == "browser_find" || n == "browser_search" -> WebSearch

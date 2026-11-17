@@ -583,14 +583,18 @@ class ChatViewModel private constructor(
                     catch (_: Exception) { "Selected project" }
                 _uiState.update { it.copy(projectName = name, projectIdentity = workspace.tree.toString(),
                     projectLoading = false, projectError = null) }
+                browser.bindProject(workspace.tree.toString())
                 refreshGoalMemory(workspace, _uiState.value.currentSessionId)
                 val pending = try { runtimeController.commandBlocker() in SYNC_RECOVERY_CODES }
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { false }
                 if (pending) _uiState.update { it.copy(error = runtimeFailureMessage("sync_required"),
                     errorAction = ChatErrorAction.RetryProjectChanges) }
-            } else _uiState.update { it.copy(projectName = null, projectIdentity = null,
-                projectLoading = false) }
+            } else {
+                _uiState.update { it.copy(projectName = null, projectIdentity = null,
+                    projectLoading = false) }
+                browser.bindProject(_uiState.value.currentSessionWorkspaceId ?: "unbound")
+            }
         } catch (e: CancellationException) { throw e
         } catch (_: Exception) {
             _uiState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
@@ -647,6 +651,7 @@ class ChatViewModel private constructor(
             errorAction = null, activity = null) }
         viewModelScope.launch {
             try {
+                val previousIdentity = _uiState.value.projectIdentity
                 val workspace = workspaceSelection.select(uri, flags)
                 // An interactive shell belongs to the project it was opened in.
                 terminalSession.close()
@@ -654,6 +659,11 @@ class ChatViewModel private constructor(
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { "Selected project" }
                 val identity = workspace.tree.toString()
+                if (previousIdentity != null && previousIdentity != identity) {
+                    managedProcesses.stopForWorkspace(previousIdentity)
+                    runtimeController.clearCommandOutput(previousIdentity)
+                }
+                browser.bindProject(identity)
                 _uiState.update { it.copy(projectName = name, projectIdentity = identity,
                     projectError = null) }
                 val current = _uiState.value
@@ -1311,7 +1321,7 @@ class ChatViewModel private constructor(
                     workspaceAccessFailed = true
                 }
             }
-            browser.projectKey = workspaceId ?: _uiState.value.currentSessionWorkspaceId ?: "unbound"
+            browser.bindProject(workspaceId ?: _uiState.value.currentSessionWorkspaceId ?: "unbound")
             if (workspaceId != null && snapshot.config.type == ProviderType.Local) {
                 val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
                 val block = local?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)
@@ -1417,6 +1427,11 @@ class ChatViewModel private constructor(
                     currentWorkspaceIdentity = workspaceSelection::currentIdentity,
                     skills = skills,
                     loadedSkills = loadedSkills,
+                    readCommandOutput = { id, identity -> identity?.let { runtime.cachedCommandOutput(id, it) } },
+                    readProcessOutput = { id, identity, offset, tail, grep, maxLines ->
+                        identity?.let { runtime.outputFor(id, it) }
+                    },
+                    spawnProcess = runtime::spawnProcess,
                     rememberMemory = { fact ->
                         val files = ProjectStateFiles(selectedWorkspace)
                         val result = MemoryFormat.append(files.loadMemory(), fact)
@@ -1694,6 +1709,9 @@ class ChatViewModel private constructor(
                             catch (e: CancellationException) { throw e }
                             catch (e: MirrorFailure) { e.code }
                         "start_preview" -> if (managedProcesses.canStartPreview()) null else "process_limit"
+                        "spawn_process" -> try { runtime.backgroundBlocker() }
+                            catch (e: CancellationException) { throw e }
+                            catch (e: MirrorFailure) { e.code }
                         else -> null
                     }
                 },
@@ -2714,6 +2732,7 @@ class ChatViewModel private constructor(
                     run = project.run, runRecovery = project.runRecovery,
                     spendCaps = spendStore.caps(), userPricePerMillionUsd = spendStore.userPricePerMillionUsd(),
                     spendLabel = project.spendLabel, runSpendUsd = project.runSpendUsd)
+                selected.workspaceId?.let { browser.bindProject(it) }
                 refreshGoalMemory(
                     try { workspaceSelection.restore()?.first } catch (_: Exception) { null }, selected.id)
                 rehydrateUndo(selected.workspaceId)

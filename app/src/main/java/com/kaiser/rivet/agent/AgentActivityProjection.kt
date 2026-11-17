@@ -165,7 +165,8 @@ object AgentActivityProjection {
             "git_diff" -> path?.takeIf(String::isNotEmpty) ?: "Project changes"
             "rename_path" -> "${arg("path").orEmpty()} → ${output("path") ?: arg("new_name").orEmpty()}"
             "move_path" -> "${arg("path").orEmpty()} → ${output("path") ?: arg("destination").orEmpty()}"
-            "run_command" -> arg("command").orEmpty()
+            "run_command", "spawn_process" -> arg("command").orEmpty()
+            "process_output" -> arg("process_id").orEmpty()
             "start_preview" -> output("entry") ?: arg("entry").orEmpty()
             "list_processes" -> result["processes"]?.let { "${runCatching { it.jsonArray.size }.getOrDefault(0)} active" }.orEmpty()
             "browser_open" -> arg("url") ?: arg("preview_entry") ?: ""
@@ -194,6 +195,8 @@ object AgentActivityProjection {
         "move_path" -> "Move"
         "delete_path" -> "Delete"
         "run_command" -> "Run"
+        "spawn_process" -> "Start background process"
+        "process_output" -> "Read process output"
         "download_file" -> "Download"
         "start_preview" -> "Preview"
         "list_processes" -> "List processes"
@@ -229,6 +232,8 @@ object AgentActivityProjection {
                 "Rename" -> "Renamed" to "item"
                 "Move" -> "Moved" to "item"
                 "Run" -> "Ran" to "command"
+                "Start background process" -> "Started" to "background process"
+                "Read process output" -> "Read" to "process output"
                 "Download" -> "Downloaded" to "file"
                 "Preview" -> "Started" to "preview"
                 "List processes" -> "Listed" to "process list"

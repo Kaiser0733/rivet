@@ -157,6 +157,6 @@ private fun defaultEffect(name: String): AgentToolEffect = when (name) {
     "run_command" -> AgentToolEffect.ForegroundCommand
     "download_file" -> AgentToolEffect.Download
     "start_preview" -> AgentToolEffect.Preview
-    "stop_process" -> AgentToolEffect.PersistentProcess
+    "spawn_process", "stop_process" -> AgentToolEffect.PersistentProcess
     else -> AgentToolEffect.ReadOnly
 }

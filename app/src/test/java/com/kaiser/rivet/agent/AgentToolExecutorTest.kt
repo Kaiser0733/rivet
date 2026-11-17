@@ -3,9 +3,16 @@ package com.kaiser.rivet.agent
 import com.kaiser.rivet.runtime.RepositoryDiff
 import com.kaiser.rivet.runtime.RepositoryStatus
 import com.kaiser.rivet.runtime.PreviewLaunch
+import com.kaiser.rivet.runtime.BackgroundLaunch
+import com.kaiser.rivet.runtime.CommandOutputCache
+import com.kaiser.rivet.runtime.ProcessOutputSnapshot
+import com.kaiser.rivet.runtime.RuntimeCommandResult
+import java.io.File
 import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
 import kotlinx.coroutines.test.runTest
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.boolean
+import kotlinx.serialization.json.int
 import kotlinx.serialization.json.jsonArray
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
@@ -405,7 +412,7 @@ class AgentToolExecutorTest {
         val names = AgentToolExecutor.definitions.map { it.name }
         assertEquals(listOf("git_status", "git_diff", "list_directory", "read_file", "search_files", "skill", "remember", "write_file", "apply_patch",
             "create_file", "create_directory", "rename_path", "move_path", "delete_path", "run_command",
-            "list_processes", "stop_process", "start_preview", "download_file"), names)
+            "spawn_process", "process_output", "list_processes", "stop_process", "start_preview", "download_file"), names)
         assertTrue(names.none { it in setOf("shell", "terminal", "exec", "bash") })
     }
 
@@ -538,4 +545,86 @@ class AgentToolExecutorTest {
         assertEquals(largeOffset, observedOffset)
         assertFalse(readResult.error)
     }
+    @Test fun outputIdPagesWithoutRunningTheCommandAgain() = runTest {
+        val cache = CommandOutputCache(File.createTempFile("command-cache", "").parentFile.resolve(
+            "cache-${System.nanoTime()}"))
+        val cached = cache.put((1..20).joinToString("\n") { "line $it" }, "error",
+            workspace = "tree", force = true)!!
+        var runs = 0
+        val executor = AgentToolExecutor(
+            FakeWorkspace(),
+            runCommand = { _, _, _ -> runs++; RuntimeCommandResult(0, "unexpected", sync = "ok") },
+            readCommandOutput = { id, workspace -> if (workspace == "tree") cache.get(id) else null },
+            currentWorkspaceIdentity = { "tree" },
+        )
+        val result = executor.prepare(AgentToolCall("paged", "run_command",
+            """{"output_id":"$cached","offset":5,"max_lines":3}""")).execute()
+        assertFalse(result.error)
+        assertEquals(0, runs)
+        val body = Json.parseToJsonElement(result.content).jsonObject
+        assertEquals("line 6", body["stdout"]!!.jsonPrimitive.content.lineSequence().first())
+        assertEquals(3, body["returned_lines"]!!.jsonPrimitive.int)
+        assertEquals(8, body["next_offset"]!!.jsonPrimitive.int)
+        assertEquals(true, body["stderr_present"]!!.jsonPrimitive.boolean)
+        assertEquals(cached, body["output_id"]!!.jsonPrimitive.content)
+    }
+
+    @Test fun commandResultReportsStderrPresentBeforeSlicing() = runTest {
+        val executor = AgentToolExecutor(
+            FakeWorkspace(),
+            runCommand = { _, _, _ -> RuntimeCommandResult(
+                exitCode = 0, stdout = "out", stderr = "warning",
+                stderrPresent = true, sync = "ok",
+            ) },
+            requireSafCurrent = {},
+        )
+        val result = executor.prepare(AgentToolCall("cmd", "run_command",
+            """{"command":"echo out"}""")).execute()
+        assertFalse(result.error)
+        assertEquals(true, Json.parseToJsonElement(result.content).jsonObject["stderr_present"]!!.jsonPrimitive.boolean)
+    }
+
+    @Test fun spawnProcessIsPersistentProcessWithApproval() = runTest {
+        var seen: List<Any?>? = null
+        val executor = AgentToolExecutor(
+            FakeWorkspace(),
+            spawnProcess = { command, cwd, ttl, wait, pattern ->
+                seen = listOf(command, cwd, ttl, wait, pattern)
+                BackgroundLaunch("process-1", "running", ttl, "ready", "", false, true, null)
+            },
+            requireSafCurrent = {},
+        )
+        val prepared = executor.prepare(AgentToolCall("spawn", "spawn_process",
+            """{"command":"npm run dev","ttl_ms":120000,"ready_pattern":"ready"}"""))
+        assertNotNull(prepared.approval)
+        assertEquals(AgentToolEffect.PersistentProcess, prepared.effect)
+        val result = prepared.execute()
+        assertFalse(result.error)
+        assertEquals("process-1", Json.parseToJsonElement(result.content).jsonObject["process_id"]!!.jsonPrimitive.content)
+        assertEquals(listOf<Any?>("npm run dev", "", 120_000L, 1_000L, "ready"), seen)
+    }
+
+    @Test fun processOutputRequiresWorkspaceOwnership() = runTest {
+        val executor = AgentToolExecutor(
+            FakeWorkspace(),
+            readProcessOutput = { id, workspace, _, _, _, _ ->
+                if (id == "aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa" && workspace == "tree") {
+                    ProcessOutputSnapshot(id, "running", null, "one\ntwo", "err", true)
+                } else null
+            },
+            currentWorkspaceIdentity = { "tree" },
+        )
+        assertEquals(AgentToolEffect.ReadOnly,
+            executor.prepare(AgentToolCall("read", "process_output",
+                """{"process_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa"}""")).effect)
+        val owned = executor.prepare(AgentToolCall("read", "process_output",
+            """{"process_id":"aaaaaaaa-aaaa-aaaa-aaaa-aaaaaaaaaaaa","tail":1}""")).execute()
+        assertFalse(owned.error)
+        assertTrue(owned.content.contains("total_lines"))
+        val foreign = executor.prepare(AgentToolCall("read", "process_output",
+            """{"process_id":"bbbbbbbb-bbbb-bbbb-bbbb-bbbbbbbbbbbb"}""")).execute()
+        assertTrue(foreign.error)
+        assertTrue(foreign.content.contains("process_unavailable"))
+    }
+
 }

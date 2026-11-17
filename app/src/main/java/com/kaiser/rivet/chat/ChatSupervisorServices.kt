@@ -98,6 +98,13 @@ internal object ChatSupervisorServices {
                 e.code
             }
         },
+        backgroundBlocker = {
+            try {
+                runtime.backgroundBlocker()
+            } catch (e: MirrorFailure) {
+                e.code
+            }
+        },
         canStartPreview = { managedProcesses.canStartPreview() },
         failureState = { runtime.agentFailureState() },
         isProjectLockBusy = { runtime.isOperationsLocked() },

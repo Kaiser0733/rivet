@@ -194,4 +194,20 @@ class AgentActivityProjectionTest {
         assertTrue(rendered.contains("network_idle"))
         assertFalse(rendered.contains("Project operation"))
     }
+    @Test fun backgroundProcessToolsGetRealTitlesAndDetails() {
+        val calls = listOf(
+            AgentToolCall("spawn", "spawn_process", """{"command":"npm run dev"}"""),
+            AgentToolCall("read", "process_output", """{"process_id":"process-1"}"""),
+        )
+        val results = calls.map { AgentToolResult(it.id, it.name, "{}") }
+        val group = (AgentActivityProjection.conversation(listOf(
+            AgentMessage.assistant("", calls), AgentMessage.tools(results)))
+            .single() as AgentConversationItem.Activity).group
+        val rendered = group.operations.joinToString(" ") { "${it.title} ${it.detail}" }
+        assertTrue(rendered.contains("background process"))
+        assertTrue(rendered.contains("npm run dev"))
+        assertTrue(rendered.contains("process-1"))
+        assertFalse(rendered.contains("Project operation"))
+    }
+
 }

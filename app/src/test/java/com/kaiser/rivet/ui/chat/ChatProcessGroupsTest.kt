@@ -34,6 +34,8 @@ class ChatProcessGroupsTest {
         assertEquals(ProcessActivityKind.Commands, ProcessActivityKind.fromToolName("run_command"))
         assertEquals(ProcessActivityKind.Commands, ProcessActivityKind.fromToolName("bash"))
         assertEquals(ProcessActivityKind.Commands, ProcessActivityKind.fromToolName("terminal_exec"))
+        assertEquals(ProcessActivityKind.Commands, ProcessActivityKind.fromToolName("spawn_process"))
+        assertEquals(ProcessActivityKind.Commands, ProcessActivityKind.fromToolName("process_output"))
         assertEquals(ProcessActivityKind.Code, ProcessActivityKind.fromToolName("run_code"))
         assertEquals(ProcessActivityKind.WebSearch, ProcessActivityKind.fromToolName("web_search"))
         assertEquals(ProcessActivityKind.WebSearch, ProcessActivityKind.fromToolName("browser_search"))

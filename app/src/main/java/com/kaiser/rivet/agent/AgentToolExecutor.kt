@@ -7,6 +7,10 @@ import com.kaiser.rivet.runtime.RepositoryStatus
 import com.kaiser.rivet.runtime.ManagedProcessStatus
 import com.kaiser.rivet.runtime.ManagedProcessKind
 import com.kaiser.rivet.runtime.ManagedProcesses
+import com.kaiser.rivet.runtime.CommandOutputCache
+import com.kaiser.rivet.runtime.CommandOutputSlicer
+import com.kaiser.rivet.runtime.BackgroundLaunch
+import com.kaiser.rivet.runtime.ProcessOutputSnapshot
 import com.kaiser.rivet.runtime.PreviewPaths
 import com.kaiser.rivet.runtime.PreviewLaunch
 import com.kaiser.rivet.runtime.ProjectDownloader
@@ -103,6 +107,9 @@ class AgentToolExecutor(
     private val loadedSkills: Set<String> = emptySet(),
     // Durable project memory writes; null when no project is open. Refusals are tool errors.
     private val rememberMemory: (suspend (String) -> MemoryFormat.Append)? = null,
+    private val readCommandOutput: (suspend (String, String?) -> CommandOutputCache.CachedOutput?)? = null,
+    private val readProcessOutput: (suspend (String, String?, Int?, Int?, String?, Int?) -> ProcessOutputSnapshot?)? = null,
+    private val spawnProcess: (suspend (String, String, Long, Long, String?) -> BackgroundLaunch)? = null,
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
@@ -295,8 +302,31 @@ class AgentToolExecutor(
                 }
                 "run_command" -> {
                     val args = json.decodeFromString<CommandArgs>(call.arguments)
-                    require(args.command.isNotBlank() && '\u0000' !in args.command &&
-                        args.command.toByteArray(Charsets.UTF_8).size <= 8192)
+                    val hasCommand = args.command.isNotBlank()
+                    val outputId = args.outputId?.takeIf(String::isNotBlank)
+                    require(hasCommand != (outputId != null)) {
+                        "Pass either command or output_id, not both."
+                    }
+                    require(args.offset == null || args.offset >= 0)
+                    require(args.tail == null || args.tail in 1..CommandOutputSlicer.MAX_LINES)
+                    require(!(args.offset != null && args.tail != null)) {
+                        "Pass either offset or tail, not both."
+                    }
+                    require(args.maxLines == null || args.maxLines in 1..CommandOutputSlicer.MAX_LINES)
+                    require(args.grep == null || args.grep.length <= CommandOutputSlicer.MAX_GREP_CHARS)
+                    if (outputId != null) {
+                        return readOnly(call) {
+                            val cached = readCommandOutput?.invoke(outputId, currentWorkspaceIdentity())
+                                ?: throw AgentWorkspaceFailure("output_unavailable")
+                            val slice = CommandOutputSlicer.slice(
+                                cached.stdout, cached.stderr,
+                                offset = args.offset, tail = args.tail, grep = args.grep,
+                                maxLines = args.maxLines,
+                                maxBytes = 18 * 1024,
+                            )
+                            commandPage(call, outputId, cached.stdoutTruncated, cached.stderrTruncated, slice)
+                        }
+                    }
                     val cwd = path(args.cwd, root = true)
                     val matchedScripts = matchSkillScripts(args.command, skills, cwd = cwd)
                     require(args.timeoutMs in 1000..MAX_COMMAND_TIMEOUT_MS)
@@ -312,11 +342,87 @@ class AgentToolExecutor(
                         skillScript = matchedScripts.firstOrNull(),
                         skillScripts = matchedScripts,
                     ) {
-                        execute(call) {
+                        execute(call) { requireSafCurrent()
                             val result = runCommand?.invoke(args.command, cwd, args.timeoutMs.toLong())
                                 ?: throw AgentWorkspaceFailure("runtime_unavailable")
-                            commandResult(call, result)
+                            commandResult(call, result, args)
                         }
+                    }
+                }
+                "spawn_process" -> {
+                    val args = json.decodeFromString<SpawnProcessArgs>(call.arguments)
+                    require(args.command.isNotBlank() && '\u0000' !in args.command &&
+                        args.command.toByteArray(Charsets.UTF_8).size <= 8192)
+                    require(args.ttlMs in 5_000..1_800_000)
+                    require(args.readyWaitMs in 0..10_000)
+                    require(args.readyPattern == null || args.readyPattern.length <= 256)
+                    val cwd = path(args.cwd, root = true)
+                    PreparedAgentTool(
+                        call,
+                        AgentApprovalRequest(call, "Run background command",
+                            "${args.command}${if (cwd.isEmpty()) "" else "\nIn folder: $cwd"}",
+                            dangerous = true),
+                        effect = AgentToolEffect.PersistentProcess,
+                        basicAutonomyRisk = BasicAutonomyRisk.Elevated,
+                        modelRequestsApproval = args.askUser,
+                        blockedReason = ApprovalPolicy.blockedCommandReason(args.command),
+                    ) {
+                        execute(call) {
+                            requireSafCurrent()
+                            val result = spawnProcess?.invoke(
+                                args.command, cwd, args.ttlMs.toLong(),
+                                args.readyWaitMs.toLong(), args.readyPattern,
+                            ) ?: throw AgentWorkspaceFailure("runtime_unavailable")
+                            success(call, buildJsonObject {
+                                put("process_id", result.processId)
+                                put("status", result.status)
+                                put("ttl_ms", result.ttlMs)
+                                result.exitCode?.let { put("exit_code", it) }
+                                put("stdout", result.stdout)
+                                put("stderr", result.stderr)
+                                put("stderr_present", result.stderrPresent)
+                                result.readyMatched?.let { put("ready_matched", it) }
+                            }, "Started background process")
+                        }
+                    }
+                }
+                "process_output" -> {
+                    val args = json.decodeFromString<ProcessOutputArgs>(call.arguments)
+                    val processId = args.processId
+                    require(PROCESS_ID.matches(processId))
+                    require(args.offset == null || args.offset >= 0)
+                    require(args.tail == null || args.tail in 1..CommandOutputSlicer.MAX_LINES)
+                    require(!(args.offset != null && args.tail != null)) {
+                        "Pass either offset or tail, not both."
+                    }
+                    require(args.maxLines == null || args.maxLines in 1..CommandOutputSlicer.MAX_LINES)
+                    require(args.grep == null || args.grep.length <= CommandOutputSlicer.MAX_GREP_CHARS)
+                    readOnly(call) {
+                        val identity = currentWorkspaceIdentity()
+                            ?: throw AgentWorkspaceFailure("process_unavailable")
+                        val output = readProcessOutput?.invoke(
+                            processId, identity, args.offset, args.tail, args.grep, args.maxLines,
+                        ) ?: throw AgentWorkspaceFailure("process_unavailable")
+                        val slice = CommandOutputSlicer.slice(
+                            output.stdout, output.stderr,
+                            offset = args.offset, tail = args.tail,
+                            grep = args.grep, maxLines = args.maxLines,
+                            maxBytes = 18 * 1024,
+                        )
+                        success(call, buildJsonObject {
+                            put("process_id", processId)
+                            put("status", output.status)
+                            put("exit_code", output.exitCode)
+                            put("stdout", slice.stdout)
+                            put("stderr", slice.stderr)
+                            put("stdout_truncated", slice.stdoutTruncated)
+                            put("stderr_truncated", slice.stderrTruncated)
+                            put("stderr_present", output.stderrPresent || slice.stderrPresent)
+                            put("total_lines", slice.totalLines)
+                            put("returned_lines", slice.returnedLines)
+                            slice.nextOffset?.let { put("next_offset", it) }
+                            slice.matchedLines?.let { put("matched_lines", it) }
+                        }, "Read background process output")
                     }
                 }
                 "list_processes" -> {
@@ -329,7 +435,11 @@ class AgentToolExecutor(
                             put("processes", buildJsonArray {
                                 active.forEach { process -> add(buildJsonObject {
                                     put("process_id", process.id)
-                                    put("type", if (process.kind == ManagedProcessKind.Preview) "preview" else "command")
+                                    put("type", when (process.kind) {
+                                        ManagedProcessKind.Preview -> "preview"
+                                        ManagedProcessKind.Background -> "background"
+                                        ManagedProcessKind.Command -> "command"
+                                    })
                                     put("project", process.projectName.take(100))
                                     put("status", process.status.name.lowercase())
                                     process.url?.let { put("url", it) }
@@ -384,6 +494,7 @@ class AgentToolExecutor(
                                 put("process_id", started.processId)
                                 put("url", started.url)
                                 put("entry", started.entry)
+                                put("reused", started.reused)
                                 put("state", "running")
                             }, "Started preview  ${started.entry}")
                         }
@@ -512,11 +623,39 @@ class AgentToolExecutor(
         put("path", file.path); put("sha256", file.sha256); put("size", file.size)
     }, summary)
 
-    private fun commandResult(call: AgentToolCall, result: RuntimeCommandResult): AgentToolResult {
-        var stdout = result.stdout
-        var stderr = result.stderr
-        var stdoutCut = result.stdoutTruncated
-        var stderrCut = result.stderrTruncated
+    private fun commandPage(
+        call: AgentToolCall,
+        outputId: String,
+        sourceStdoutTruncated: Boolean,
+        sourceStderrTruncated: Boolean,
+        slice: CommandOutputSlicer.Slice,
+    ) = success(call, buildJsonObject {
+        put("stdout", slice.stdout)
+        put("stderr", slice.stderr)
+        put("stdout_truncated", sourceStdoutTruncated || slice.stdoutTruncated)
+        put("stderr_truncated", sourceStderrTruncated || slice.stderrTruncated)
+        put("stderr_present", slice.stderrPresent)
+        put("total_lines", slice.totalLines)
+        put("returned_lines", slice.returnedLines)
+        slice.nextOffset?.let { put("next_offset", it) }
+        slice.matchedLines?.let { put("matched_lines", it) }
+        put("output_id", outputId)
+        put("sync", "not_started")
+    }, "Paged cached command output")
+
+    private fun commandResult(
+        call: AgentToolCall,
+        result: RuntimeCommandResult,
+        args: CommandArgs,
+    ): AgentToolResult {
+        val slice = CommandOutputSlicer.slice(
+            result.stdout, result.stderr,
+            offset = args.offset, tail = args.tail, grep = args.grep, maxLines = args.maxLines,
+        )
+        var stdout = slice.stdout
+        var stderr = slice.stderr
+        var stdoutCut = result.stdoutTruncated || slice.stdoutTruncated
+        var stderrCut = result.stderrTruncated || slice.stderrTruncated
         fun value() = buildJsonObject {
             result.error?.let {
                 put("error", it)
@@ -530,6 +669,12 @@ class AgentToolExecutor(
             put("stderr", stderr)
             put("stdout_truncated", stdoutCut)
             put("stderr_truncated", stderrCut)
+            put("stderr_present", result.stderrPresent || slice.stderrPresent)
+            put("total_lines", slice.totalLines)
+            put("returned_lines", slice.returnedLines)
+            slice.nextOffset?.let { put("next_offset", it) }
+            slice.matchedLines?.let { put("matched_lines", it) }
+            result.outputId?.let { put("output_id", it) }
             put("timed_out", result.timedOut)
             if (result.tooManyChildren) put("too_many_child_processes", true)
             if (result.memoryLimit) put("memory_limit", true)
@@ -720,6 +865,21 @@ class AgentToolExecutor(
         val root: String = "",
         @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
     )
+    @Serializable private data class SpawnProcessArgs(
+        val command: String,
+        val cwd: String = "",
+        @kotlinx.serialization.SerialName("ttl_ms") val ttlMs: Int = 600_000,
+        @kotlinx.serialization.SerialName("ready_wait_ms") val readyWaitMs: Int = 1_000,
+        @kotlinx.serialization.SerialName("ready_pattern") val readyPattern: String? = null,
+        @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
+    )
+    @Serializable private data class ProcessOutputArgs(
+        @kotlinx.serialization.SerialName("process_id") val processId: String,
+        val offset: Int? = null,
+        val tail: Int? = null,
+        val grep: String? = null,
+        @kotlinx.serialization.SerialName("max_lines") val maxLines: Int? = null,
+    )
     @Serializable private data class DownloadArgs(
         val url: String,
         val path: String,
@@ -729,11 +889,17 @@ class AgentToolExecutor(
     )
     @Serializable private data class GitDiffArgs(val path: String = "")
     @Serializable private data class CommandArgs(
-        val command: String,
+        val command: String = "",
         val cwd: String = "",
         @kotlinx.serialization.SerialName("timeout_ms") val timeoutMs: Int = 300_000,
         @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
+        @kotlinx.serialization.SerialName("output_id") val outputId: String? = null,
+        val offset: Int? = null,
+        val tail: Int? = null,
+        val grep: String? = null,
+        @kotlinx.serialization.SerialName("max_lines") val maxLines: Int? = null,
     )
+
 
     companion object {
         private val json = Json { ignoreUnknownKeys = false; isLenient = false }
@@ -795,11 +961,27 @@ class AgentToolExecutor(
             AgentToolDefinition("rename_path", "Rename an existing file or directory. Use the returned actual path afterward. In Basic YOLO, set ask_user=true to request confirmation; destructive actions still follow Rivet policy.", schema(listOf("path", "new_name"), path, "new_name" to string, askUser)),
             AgentToolDefinition("move_path", "Move a path into an existing directory; empty destination means root. Use the returned actual path afterward. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path", "destination"), path, "destination" to string, askUser)),
             AgentToolDefinition("delete_path", "Permanently delete a non-root path. Inspect first; never delete an uncertain or pre-existing path just for testing. Set ask_user=true to request confirmation in Basic YOLO.", schema(listOf("path"), path, askUser)),
-            AgentToolDefinition("run_command", "Run one foreground project command. Ask mode requires approval; Basic YOLO only auto-runs Rivet-classified routine inspection commands; YOLO runs allowed commands without prompts. Set ask_user=true to request confirmation in Basic YOLO. Rivet's capability and workspace checks always apply. A returned exit_code describes the executed command; sync separately confirms whether changes reached the project. If command access or synchronization fails, stop and report that state rather than retrying unchanged. Use a project-relative cwd; empty means root. Output is bounded and marks truncation. Commands may time out or be stopped.",
+            AgentToolDefinition("run_command", "Run one foreground project command, or page cached output with output_id without re-running it. Ask mode requires approval; Basic YOLO only auto-runs Rivet-classified routine inspection commands; YOLO runs allowed commands without prompts. Provide command XOR output_id. offset/tail/grep/max_lines select lines; stderr stays separate. A returned exit_code describes the executed command; sync separately confirms whether changes reached the project. Use a project-relative cwd; empty means root.",
+                schema(emptyList(), "command" to string, "output_id" to string, "cwd" to string,
+                    "timeout_ms" to buildJsonObject { put("type", "integer"); put("minimum", 1000); put("maximum", MAX_COMMAND_TIMEOUT_MS) },
+                    "offset" to nonNegativeInteger,
+                    "tail" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 500) },
+                    "grep" to string,
+                    "max_lines" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 500) },
+                    askUser)),
+            AgentToolDefinition("spawn_process", "Start one background project command that keeps running after this tool returns. It is visible and stoppable in Processes, has a bounded 5..1800 second lifetime, and shares the four persistent process slots. Waits up to ready_wait_ms for ready_pattern in stdout/stderr. Ask mode and Basic YOLO require approval; YOLO skips the prompt but keeps command, thermal, battery, workspace, and process-limit checks. In Basic YOLO ask_user=true requests confirmation.",
                 schema(listOf("command"), "command" to string, "cwd" to string,
-                    "timeout_ms" to buildJsonObject { put("type", "integer"); put("minimum", 1000); put("maximum", MAX_COMMAND_TIMEOUT_MS) }, askUser)),
-            AgentToolDefinition("list_processes", "List currently active Rivet commands and local previews. Process IDs are opaque Rivet IDs, not operating-system PIDs.", schema(emptyList())),
-            AgentToolDefinition("stop_process", "Stop one active Rivet-owned command or preview by its opaque process_id. This does not accept operating-system PIDs. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("process_id"), processId, askUser)),
+                    "ttl_ms" to buildJsonObject { put("type", "integer"); put("minimum", 5000); put("maximum", 1_800_000) },
+                    "ready_wait_ms" to buildJsonObject { put("type", "integer"); put("minimum", 0); put("maximum", 10000) },
+                    "ready_pattern" to string, askUser)),
+            AgentToolDefinition("process_output", "Read or page the bounded stdout/stderr of a Rivet-owned background process. offset/tail/grep/max_lines are line-based; stderr stays separate. The process must belong to the selected project.",
+                schema(listOf("process_id"), processId,
+                    "offset" to nonNegativeInteger,
+                    "tail" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 500) },
+                    "grep" to string,
+                    "max_lines" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 500) })),
+            AgentToolDefinition("list_processes", "List currently active Rivet commands, background processes, and local previews. Process IDs are opaque Rivet IDs, not operating-system PIDs.", schema(emptyList())),
+            AgentToolDefinition("stop_process", "Stop one active Rivet-owned command, background process, or preview by its opaque process_id. This does not accept operating-system PIDs. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("process_id"), processId, askUser)),
             AgentToolDefinition("start_preview", "Serve static project files from the selected workspace on this device's 127.0.0.1 loopback address. It stays available after this tool returns; use the returned URL. It is visible and stoppable in Processes. root is the static directory relative to the selected project (empty means project root). entry may be relative to root, such as index.html, or equivalent project-relative site/index.html. Example: {\"root\":\"site\",\"entry\":\"index.html\"}. / serves entry and relative assets resolve under root. GET and HEAD only; no execution, directory listing, LAN access, or uploads. Ask mode requires approval. Basic YOLO may start this read-only loopback preview automatically. In Basic YOLO set ask_user=true to request confirmation.", schema(listOf("entry"), entry, root, askUser)),
             AgentToolDefinition("download_file", "Download one HTTPS file into the selected project. The streamed temporary copy is limited to 64 MiB and at most five revalidated HTTPS redirects; Rivet uses no provider credentials or cookies and never executes or installs the file. For an existing destination, provide expected_sha256 with its current hash before replacing it. content_sha256 optionally verifies the downloaded bytes. Ask mode and Basic YOLO require approval; YOLO skips the prompt but keeps scheme, path, size, hash, and workspace checks. In Basic YOLO, ask_user=true requests confirmation.", schema(listOf("url", "path"), url, path, expectedSha, contentSha, askUser)),
         )

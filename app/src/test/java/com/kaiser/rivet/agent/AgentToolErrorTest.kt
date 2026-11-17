@@ -59,4 +59,13 @@ class AgentToolErrorTest {
         assertTrue(action.contains("500 MB"))
         assertTrue(action.contains(".rivetignore"))
     }
+    @Test fun backgroundProcessFailuresCarryAnExplicitAction() {
+        listOf("output_unavailable", "process_limit", "thermal_blocked", "battery_low",
+            "foreground_service_unavailable", "process_unavailable").forEach { code ->
+            assertNotNull(code, requiredAction(AgentToolError.content(code)))
+        }
+        assertEquals("output_unavailable",
+            AgentToolError.deterministicCode(failure("output_unavailable")))
+    }
+
 }
