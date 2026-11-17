@@ -439,6 +439,7 @@ class BrowserSession(
                 lastUsedAt = System.currentTimeMillis()))
         }
         saveActiveSnapshot()
+        readerCache.invalidate()
         unparkRenderer()
         elementRefs = emptyList()
         pendingSnapshotRestore = null
