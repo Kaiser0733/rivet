@@ -39,6 +39,7 @@ import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.VisionCapability
 import com.kaiser.rivet.agent.SpendGuard
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
 import com.kaiser.rivet.runtime.RunCheckpointGate
@@ -308,6 +309,7 @@ internal class WorkerRunner(
                             call = call,
                             owner = currentWorker.id,
                             lease = services.browserLease,
+                            visionSupport = { VisionCapability.assess(config) },
                         ) ?: services.customPrepareTool?.invoke(currentWorker.id, call)
                             ?: executor?.prepare(call)
                             ?: PreparedAgentTool(

@@ -8,6 +8,8 @@ import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.BasicAutonomyRisk
 import com.kaiser.rivet.agent.PreparedAgentTool
+import com.kaiser.rivet.provider.VisionCapability
+import com.kaiser.rivet.provider.VisionSupport
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonNull
@@ -27,6 +29,7 @@ class BrowserTools(private val session: BrowserSession) {
         call: AgentToolCall,
         owner: String,
         lease: BrowserDrivingLease?,
+        visionSupport: () -> VisionSupport = { VisionSupport.Unknown },
     ): PreparedAgentTool? {
         if (call.name !in NAMES) return null
         if (lease != null && !lease.tryAcquire(owner, call)) {
@@ -40,10 +43,16 @@ class BrowserTools(private val session: BrowserSession) {
                 )
             }
         }
-        return prepare(call)
+        return prepare(call, visionSupport)
     }
 
-    suspend fun prepare(call: AgentToolCall): PreparedAgentTool? {
+    suspend fun prepare(call: AgentToolCall): PreparedAgentTool? =
+        prepare(call) { VisionSupport.Unknown }
+
+    private suspend fun prepare(
+        call: AgentToolCall,
+        visionSupport: () -> VisionSupport,
+    ): PreparedAgentTool? {
         if (call.name !in NAMES) return null
         return try {
             val args = runCatching { json.parseToJsonElement(call.arguments).jsonObject }
@@ -64,7 +73,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "browser_back" -> readOnly(call) { back(call) }
                 "browser_tap" -> prepareTap(call, args)
                 "browser_swipe" -> readOnly(call) { swipe(call, args) }
-                "browser_shot" -> readOnly(call) { shot(call) }
+                "browser_shot" -> readOnly(call) { shot(call, visionSupport) }
                 "browser_close" -> readOnly(call) { close(call) }
                 else -> null
             }
@@ -503,15 +512,21 @@ class BrowserTools(private val session: BrowserSession) {
         return value(call, buildJsonObject { put("closed", true) }, "Closed visual browser")
     }
 
-    private suspend fun shot(call: AgentToolCall): AgentToolResult {
+    private suspend fun shot(
+        call: AgentToolCall,
+        visionSupport: () -> VisionSupport,
+    ): AgentToolResult {
         try {
             val shot = session.screenshot()
+            val attachment = VisionCapability.shotAttachment(visionSupport(), shot.path)
             return value(call, buildJsonObject {
                 put("path", shot.path)
                 put("mime", "image/webp")
                 put("width", shot.width)
                 put("height", shot.height)
-            }, "Captured browser viewport")
+                put("vision_attached", attachment.attached)
+                attachment.note?.let { put("vision_note", it) }
+            }, "Captured browser viewport", attachment.imagePath, attachment.imageMime)
         } finally { session.afterInteraction() }
     }
 
@@ -549,8 +564,16 @@ class BrowserTools(private val session: BrowserSession) {
         true, "Failed  ${call.name}",
     )
 
-    private fun value(call: AgentToolCall, value: JsonObject, summary: String) =
-        AgentToolResult(call.id, call.name, value.toString(), summary = summary)
+    private fun value(
+        call: AgentToolCall,
+        value: JsonObject,
+        summary: String,
+        imagePath: String? = null,
+        imageMime: String? = null,
+    ) = AgentToolResult(
+        call.id, call.name, value.toString(),
+        summary = summary, imagePath = imagePath, imageMime = imageMime,
+    )
 
     private fun JsonObject.string(key: String): String = this[key]?.jsonPrimitive?.content.orEmpty()
     private fun JsonObject.bool(key: String): Boolean = this[key]?.jsonPrimitive?.content?.toBoolean() == true
@@ -641,7 +664,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "Go back in the current browser window's history.",
                 schema(emptyList())),
             AgentToolDefinition("browser_shot",
-                "Capture the current viewport with PixelCopy, encode it to WebP on disk, release the bitmap, and return the image path.",
+                "Capture the current viewport. Vision-capable models receive the image directly; text-only models get vision_attached=false and a plain notice with the on-disk path.",
                 schema(emptyList())),
             AgentToolDefinition("browser_close",
                 "Close the visual browser session now: save the window snapshot, destroy the renderer, and free its memory.",

@@ -74,6 +74,7 @@ import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.ReasoningLevel
+import com.kaiser.rivet.provider.VisionCapability
 import com.kaiser.rivet.local.LocalPrompt
 import com.kaiser.rivet.provider.isUnsupportedReasoningError
 import com.kaiser.rivet.provider.offeredReasoning
@@ -1636,7 +1637,12 @@ class ChatViewModel private constructor(
                 prepareTool = { call ->
                     if (call.name == "delete_path") checkpointGate.beginRunBoundary("Before deleting a file")
                     val prepared = subagentTools?.prepare(call)
-                        ?: browserTools.prepare(call, RunCheckpointGate.COORDINATOR, browserLease)
+                        ?: browserTools.prepare(
+                            call = call,
+                            owner = RunCheckpointGate.COORDINATOR,
+                            lease = browserLease,
+                            visionSupport = { VisionCapability.assess(snapshot.config) },
+                        )
                         ?: executor?.prepare(call) ?: PreparedAgentTool(
                         call,
                         null,
