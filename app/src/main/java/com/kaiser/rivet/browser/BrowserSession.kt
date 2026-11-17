@@ -707,6 +707,10 @@ class BrowserSession(
             throw BrowserFailure("browser_js_disabled",
                 "JavaScript is disabled. Enable JavaScript in browser settings or use browser_read.")
         }
+        if (_state.value.handoff != null) {
+            throw BrowserFailure("browser_handoff",
+                "Identity work moved to the phone's browser. Continue there, then share the page back.")
+        }
         val expected = expectedOrigin?.takeIf { it.isNotBlank() }
         if (expected != null && BrowserEvalPolicy.originOf(expected) == null) {
             throw BrowserFailure("browser_origin_mismatch",
