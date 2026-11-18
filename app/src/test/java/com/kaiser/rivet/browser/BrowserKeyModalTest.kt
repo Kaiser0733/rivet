@@ -28,13 +28,18 @@ import org.robolectric.annotation.Config
 @Config(manifest = Config.NONE, sdk = [28])
 class BrowserKeyModalTest {
     private val url = "http://127.0.0.1:45179/"
+    private var session: BrowserSession? = null
 
     @Before fun setUp() { Dispatchers.setMain(UnconfinedTestDispatcher()) }
-    @After fun tearDown() { Dispatchers.resetMain() }
+    @After fun tearDown() {
+        session?.endSession()
+        session = null
+        Dispatchers.resetMain()
+    }
 
     private fun readySession(): Pair<BrowserSession, WebView> {
         val app: Application = RuntimeEnvironment.getApplication()
-        val session = BrowserSession(app, models = null)
+        val session = BrowserSession(app, models = null).also { this.session = it }
         val view = EvaluatingWebView(app)
         view.layout(0, 0, 720, 1480)
         session.attach(view)
