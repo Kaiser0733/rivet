@@ -20,9 +20,11 @@ class TerminalEnvironmentTest {
         "TERM=old",
     )
 
-    @Test fun addsTermAndAFolderOnlyDollarPrompt() {
+    @Test fun addsTermPagersAndAFolderOnlyDollarPrompt() {
         val env = terminalEnvironment(base)
 
+        assertEquals("PAGER=cat", env[env.size - 5])
+        assertEquals("GIT_PAGER=cat", env[env.size - 4])
         assertEquals("ENV=/dev/null", env[env.size - 3])
         assertEquals("TERM=xterm-256color", env[env.size - 2])
         assertEquals("PS1=${TerminalPrompt.PS1}", env.last())
@@ -30,7 +32,14 @@ class TerminalEnvironmentTest {
         assertFalse(env.last().contains("\\u"))
         assertFalse(env.last().contains("\\h"))
         assertTrue("prompt starts on a new line", env.last().startsWith("PS1=${TerminalPrompt.PS1}"))
-        assertEquals(base.dropLast(1), env.dropLast(3))
+        assertEquals(base.dropLast(1), env.dropLast(5))
+    }
+
+    @Test fun inheritedPagersAreReplacedWithCat() {
+        val env = terminalEnvironment(base + listOf("PAGER=less", "GIT_PAGER=less"))
+
+        assertEquals(listOf("PAGER=cat", "GIT_PAGER=cat"),
+            env.filter { it.startsWith("PAGER=") || it.startsWith("GIT_PAGER=") })
     }
 
     @Test fun absentToolchainLeavesPathAtTheSystemBase() {

@@ -867,11 +867,14 @@ internal const val SYSTEM_SHELL = "/system/bin/sh"
 internal fun terminalShellPath(binDir: File?): String =
     binDir?.let { File(it, "ash") }?.takeIf { it.isFile }?.absolutePath ?: SYSTEM_SHELL
 
-/** TERM and a folder-only, dollar prompt: no user, host, or absolute path. */
+/** TERM, non-interactive pagers, and a folder-only, dollar prompt. */
 internal fun terminalEnvironment(base: List<String>): List<String> {
     // No startup rc: Android's mksh rc can overwrite PS1 with its own login prompt.
+    // Git defaults to a pager when stdout is a TTY; Android has no less(1), so pin cat.
     val kept = base.filterNot {
-        it.startsWith("TERM=") || it.startsWith("PS1=") || it.startsWith("ENV=")
+        it.startsWith("TERM=") || it.startsWith("PS1=") || it.startsWith("ENV=") ||
+            it.startsWith("PAGER=") || it.startsWith("GIT_PAGER=")
     }
-    return kept + "ENV=/dev/null" + "TERM=xterm-256color" + "PS1=${TerminalPrompt.PS1}"
+    return kept + "PAGER=cat" + "GIT_PAGER=cat" + "ENV=/dev/null" +
+        "TERM=xterm-256color" + "PS1=${TerminalPrompt.PS1}"
 }
