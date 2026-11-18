@@ -1992,6 +1992,26 @@ class ChatViewModelTest {
         assertEquals(1, persistence.saveAttempts)
     }
 
+    @Test fun unknownSlashCommandShowsNoticeAndCreatesNoTurn() = runBlocking {
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val provider = QueueProvider(ArrayDeque())
+        val viewModel = newChatViewModel(app, RejectingPersistence(),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> provider })
+        await(viewModel) { it.ready }
+
+        viewModel.send("/GoalList show goals")
+
+        val rejected = viewModel.uiState.value
+        assertTrue(rejected.messages.isEmpty())
+        assertEquals(0L, rejected.acceptedMessageCount)
+        assertEquals(1L, rejected.commandAckCount)
+        assertFalse(rejected.streaming)
+        assertTrue(rejected.notice.orEmpty().contains("Unknown command"))
+        assertEquals(0, provider.requests.size)
+    }
+
     @Test fun goalCommandIncrementsCommandAckCountEvenWhenNoticeUnchanged() = runBlocking {
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")

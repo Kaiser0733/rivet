@@ -49,6 +49,19 @@ class SkillGestureTest {
         assertNull(skillGesture("/notes do the thing", null))
     }
 
+    @Test fun unknownLeadingCommandIsDetectedForTheComposer() {
+        val skills = listOf(skill("notes"), skill("manual", userInvocable = false))
+
+        assertEquals("GoalList", SlashCommands.unknownLeading("/GoalList show goals", skills))
+        assertEquals("unknown", SlashCommands.unknownLeading("/unknown do the thing", skills))
+        assertNull(SlashCommands.unknownLeading("/goal status", skills))
+        assertNull(SlashCommands.unknownLeading("/notes do the thing", skills))
+        assertNull(SlashCommands.unknownLeading("/notes", skills))
+        assertNull(SlashCommands.unknownLeading("please /unknown do the thing", skills))
+        assertNull(SlashCommands.unknownLeading("/", skills))
+        assertEquals("manual", SlashCommands.unknownLeading("/manual do the thing", skills))
+    }
+
     @Test fun invocationIsAValidContextCarryingTheRenderedBlock() {
         val message = SkillContext.invocation(skill("notes"), "ws")
         val context = message.validatedContext()
