@@ -1116,6 +1116,7 @@ class ChatViewModel private constructor(
             try {
                 val result = runtimeController.restoreRunCheckpoint(record, undoRun = undoRun)
                 if (result.conflicts.isEmpty()) {
+                    terminalSession.recoverAfterRestore()
                     pendingRollback = "The user rolled back the project to checkpoint " +
                         "${record.summary}. Do not assume later file changes are present."
                 }
@@ -2579,6 +2580,7 @@ class ChatViewModel private constructor(
                 }
                 val outcome = controller.undoLastCheckpoint()
                 if (outcome.state == MirrorSync.Ok || outcome.state == MirrorSync.NoChanges) {
+                    terminalSession.recoverAfterRestore()
                     _uiState.update { it.copy(undoing = false, undoCheckpointId = null,
                         lastTurnFiles = emptyList(), lastTurnFileCount = 0, notice = "Changes undone.") }
                 } else {

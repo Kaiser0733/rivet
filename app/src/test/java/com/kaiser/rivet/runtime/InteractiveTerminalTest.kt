@@ -121,6 +121,32 @@ class InteractiveTerminalTest {
         assertEquals("B", harness.engines.last().launch.workspaceIdentity)
     }
 
+    @Test fun restoreReplacesALiveShellWhoseWorktreeWasSwapped() = runTest {
+        val harness = harness(this)
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+        val old = harness.engines.single()
+
+        harness.holder.recoverAfterRestore()
+        settle()
+
+        assertEquals(2, harness.launches())
+        assertTrue(old.closed)
+        assertEquals(listOf("m1"), harness.closed)
+        assertTrue(harness.holder.state.value.running)
+    }
+
+    @Test fun restoreDoesNotStartAClosedTerminal() = runTest {
+        val harness = harness(this)
+        harness.holder.recoverAfterRestore()
+        settle()
+
+        assertEquals(0, harness.launches())
+        assertFalse(harness.holder.state.value.running)
+        assertFalse(harness.holder.state.value.starting)
+    }
+
     @Test fun rapidSizeChangesReachThePtyOnceAtTheFinalSize() = runTest {
         val harness = harness(this)
         harness.holder.open("A")
@@ -239,6 +265,28 @@ class InteractiveTerminalTest {
         assertEquals(listOf("m1"), harness.closed)
         assertEquals(dir.absolutePath, harness.engines.last().launch.cwd)
         assertTrue(java.io.File(harness.engines.last().launch.cwd).isDirectory)
+    }
+
+    @Test fun aReplacedCwdAtTheSamePathIsNotTrusted() = runTest {
+        val root = java.nio.file.Files.createTempDirectory("rivet-terminal-cwd-key").toFile()
+        val live = java.io.File(root, "worktree").apply { mkdirs() }
+        val harness = harness(this, cwd = { live.absolutePath })
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+        val old = harness.engines.single()
+
+        java.nio.file.Files.move(live.toPath(), java.io.File(root, "worktree-old").toPath())
+        live.mkdirs()
+        assertTrue("the old path now names a different directory", live.isDirectory)
+
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+
+        assertEquals(2, harness.launches())
+        assertTrue(old.closed)
+        root.deleteRecursively()
     }
 
     @Test fun rowOnlyImeChangesDoNotReprintTheShellPrompt() = runTest {

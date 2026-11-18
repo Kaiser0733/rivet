@@ -29,6 +29,16 @@ internal data class TerminalLaunch(
 
 internal const val TERMINAL_RESIZE_DEBOUNCE_MS = 150L
 
+/** The filesystem identity of a live cwd; a renamed-and-replaced path gets a new key. */
+internal fun worktreeCwdKey(path: String): String? = try {
+    java.nio.file.Files.readAttributes(
+        File(path).toPath(),
+        java.nio.file.attribute.BasicFileAttributes::class.java,
+    ).fileKey()?.toString()
+} catch (_: Exception) {
+    null
+}
+
 internal data class InteractiveTerminalState(
     val running: Boolean = false,
     val starting: Boolean = false,
@@ -94,6 +104,7 @@ internal class InteractiveTerminalSession(
 
     private var engine: TerminalEngine? = null
     private var launch: TerminalLaunch? = null
+    private var launchCwdKey: String? = null
     private var sessionJob: Job? = null
     private var watcherJob: Job? = null
     private var requested = false
@@ -123,11 +134,15 @@ internal class InteractiveTerminalSession(
         // fresh one in the current worktree.
         val liveCwd = launch?.cwd
         val existing = launch?.workspaceIdentity
+        val cwdCurrent = liveCwd.isNullOrEmpty() || (
+            File(liveCwd).isDirectory &&
+                (launchCwdKey == null || worktreeCwdKey(liveCwd) == launchCwdKey)
+            )
         when (TerminalStartGate.decideOpenReset(
             hasLiveEngine = engine != null,
             isStarting = starting,
             liveCwd = liveCwd,
-            cwdExists = liveCwd.isNullOrEmpty() || File(liveCwd).isDirectory,
+            cwdExists = cwdCurrent,
             projectIdentity = projectIdentity,
             existingIdentity = existing,
             jobCancelled = sessionJob?.isCancelled == true,
@@ -195,6 +210,7 @@ internal class InteractiveTerminalSession(
                 return@launch
             }
             this@InteractiveTerminalSession.launch = launch
+            launchCwdKey = worktreeCwdKey(launch.cwd)
             val created = try {
                 engineFactory.create(launch, observer)
             } catch (e: CancellationException) {
@@ -314,6 +330,16 @@ internal class InteractiveTerminalSession(
         ensureStarted(columns, rows, cellWidthPx, cellHeightPx)
     }
 
+    /**
+     * A checkpoint restore replaces the worktree under a live shell, so its cwd can
+     * point at a deleted directory even though the path exists again. Recreate the
+     * shell in the current worktree instead of trying to cd out of a dead inode.
+     */
+    fun recoverAfterRestore() {
+        if (!requested && engine == null) return
+        restart()
+    }
+
     private val observer = object : TerminalObserver {
         override fun changed() {
             mutableRevision.update { it + 1 }
@@ -362,7 +388,7 @@ internal class InteractiveTerminalSession(
         engine = null
         val previous = launch
         launch = null
-        launch = null
+        launchCwdKey = null
         val pid = ended?.pid ?: 0
         ended?.close()
         killSession(pid)
@@ -389,6 +415,7 @@ internal class InteractiveTerminalSession(
         engine = null
         val previous = launch
         launch = null
+        launchCwdKey = null
         val pid = ended?.pid ?: 0
         ended?.close()
         killSession(pid)
