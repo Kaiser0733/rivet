@@ -20,6 +20,10 @@ data class ContextPlan(
 /** Plans a smaller active transcript without changing the durable event history. */
 internal object AgentContext {
     private const val SUMMARY_INPUT_BYTES = 96 * 1024
+    private const val TOOL_RESULT_PRUNE_THRESHOLD = 8192
+    private const val TOOL_RESULT_HEAD = 4096
+    private const val TOOL_RESULT_TAIL = 1024
+    private const val TOOL_RESULT_PRUNE_MARKER = "\n[Tool result middle omitted.]\n"
     private val serializer = ListSerializer(AgentMessage.serializer())
     private val secretPattern = Regex("(?i)(sk-[a-z0-9_-]{12,}|gh[pousr]_[a-z0-9]{20,}|AIza[a-z0-9_-]{20,}|AKIA[A-Z0-9]{16})")
     private val bearerPattern = Regex("(?i)\\bBearer\\s+[a-z0-9._~+/-]{12,}")
@@ -135,6 +139,7 @@ internal object AgentContext {
         messages: List<AgentMessage>,
         targetBytes: Int,
         minimumSavingsBytes: Int = 4096,
+        sourceForSummary: List<AgentMessage> = messages,
     ): ContextPlan? {
         require(targetBytes > 0)
         require(minimumSavingsBytes >= 0)
@@ -162,7 +167,10 @@ internal object AgentContext {
         }
         val retainedBytes = serializedBytes(ProjectContext.projection(messages, retained, ""))
         if (retainedBytes > targetBytes || originalBytes - retainedBytes < minimumSavingsBytes) return null
-        val removed = groups.indices.filterNot { it in selected }.flatMap(groups::get)
+        // Stubbing can change bodies, but it keeps group order and membership.
+        val originalGroups = if (sourceForSummary === messages) groups else
+            completeGroups(sourceForSummary)?.filter { it.singleOrNull()?.role != AgentRole.Context } ?: return null
+        val removed = groups.indices.filterNot { it in selected }.flatMap(originalGroups::get)
         if (removed.isEmpty()) return null
         return ContextPlan(retained, summarizeInput(removed, SUMMARY_INPUT_BYTES), originalBytes, retainedBytes, removed)
     }
@@ -215,10 +223,11 @@ internal object AgentContext {
         for (index in groups.lastIndex downTo 0) {
             val marker = if (index > 0) omittedMarker(maxBytes) ?: break else ""
             var row: String? = null
-            for (detailLimit in listOf(1200, 600, 240, 80, 24, 0)) {
-                val candidateRow = summarizeGroup(groups[index], detailLimit)
+            for ((detailLimit, includeToolBody) in listOf(1200 to true, 1200 to false, 600 to false,
+                    240 to false, 80 to false, 24 to false, 0 to false)) {
+                val candidateRow = summarizeGroup(groups[index], detailLimit, includeToolBody)
                 val candidate = marker + candidateRow + selected.joinToString("")
-                if (candidate.toByteArray(Charsets.UTF_8).size <= maxBytes) {
+                if (candidateRow.isNotEmpty() && candidate.toByteArray(Charsets.UTF_8).size <= maxBytes) {
                     row = candidateRow
                     break
                 }
@@ -237,14 +246,16 @@ internal object AgentContext {
         return result
     }
 
-    private fun summarizeGroup(group: List<AgentMessage>, detailLimit: Int): String = buildString {
+    private fun summarizeGroup(group: List<AgentMessage>, detailLimit: Int, includeToolBody: Boolean): String = buildString {
         for (message in group) {
             when (message.role) {
                 AgentRole.Context -> append("INTERNAL CONTEXT: ").append(clipped(message.internalContext?.scope.orEmpty(), 160)).append('\n')
-                AgentRole.User -> append("USER: ").append(clipped(message.text, detailLimit)).append('\n')
+                AgentRole.User -> if (detailLimit > 0) {
+                    append("USER: ").append(clipped(message.text, detailLimit)).append('\n')
+                }
                 AgentRole.Assistant -> {
                     if (message.text.isNotBlank()) {
-                        append("ASSISTANT: ").append(clipped(message.text, detailLimit)).append('\n')
+                        if (detailLimit > 0) append("ASSISTANT: ").append(clipped(message.text, detailLimit)).append('\n')
                     } else if (message.toolCalls.isEmpty()) {
                         append("ASSISTANT: [empty response]\n")
                     }
@@ -259,10 +270,22 @@ internal object AgentContext {
                     if (result.name == "run_command") append(commandSummary(result))
                     else append(if (result.error) "error " else "ok ")
                         .append(clipped(result.summary, minOf(180, detailLimit)))
+                    if (includeToolBody) {
+                        append('\n').append(prePruneToolResult(redact(result.content)))
+                    } else if (result.content.isNotEmpty()) {
+                        append(" [body omitted for input budget]")
+                    }
                     append('\n')
                 }
             }
         }
+    }
+
+    private fun prePruneToolResult(body: String): String {
+        if (body.length <= TOOL_RESULT_PRUNE_THRESHOLD) return body
+        val head = body.take(TOOL_RESULT_HEAD).dropLastWhile { it.isHighSurrogate() }
+        val tail = body.takeLast(TOOL_RESULT_TAIL).dropWhile { it.isLowSurrogate() }
+        return head + TOOL_RESULT_PRUNE_MARKER + tail
     }
 
     private fun omittedMarker(maxBytes: Int): String? {

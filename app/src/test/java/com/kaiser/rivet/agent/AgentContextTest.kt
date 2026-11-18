@@ -98,7 +98,7 @@ class AgentContextTest {
         assertNotNull(plan)
         assertTrue(plan!!.retainedBytes < plan.originalBytes)
         assertTrue(plan.summaryInput.toByteArray().size <= 96 * 1024)
-        assertFalse(plan.summaryInput.contains("x".repeat(100)))
+        assertTrue(plan.summaryInput.contains("x".repeat(4096)))
         assertEquals(original, history)
         for (index in plan.retained.indices) {
             val message = plan.retained[index]
@@ -336,6 +336,27 @@ class AgentContextTest {
         assertNull(AgentContext.plan(history, targetBytes = 1_000))
         assertNotNull(AgentContext.plan(history, targetBytes = 1_000, minimumSavingsBytes = 1))
     }
+
+    @Test fun summaryInputKeepsHeadAndTailOfOversizedToolResult() {
+        val head = "H".repeat(4096)
+        val tail = "T".repeat(1024)
+        val body = head + "discard me".repeat(400) + tail
+        val input = AgentContext.summarizeInput(resultHistory(body))
+
+        assertTrue(input.contains(head + "\n[Tool result middle omitted.]\n" + tail))
+        assertFalse(input.contains("discard me"))
+    }
+
+    @Test fun summaryInputKeepsToolResultAtOrBelowThresholdVerbatim() {
+        for (body in listOf("  exact result\n", "A".repeat(8191), "B".repeat(8192))) {
+            assertTrue(AgentContext.summarizeInput(resultHistory(body)).contains(body))
+        }
+    }
+
+    private fun resultHistory(body: String) = listOf(
+        AgentMessage.assistant("", listOf(AgentToolCall("read", "read_file", "{}"))),
+        AgentMessage.tools(listOf(AgentToolResult("read", "read_file", body))),
+    )
 
     private fun commandHistory(content: String) = listOf(
         AgentMessage.user("Run the project command"),
