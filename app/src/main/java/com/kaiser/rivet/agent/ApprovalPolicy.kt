@@ -38,11 +38,22 @@ object ApprovalPolicy {
             return BasicAutonomyRisk.Elevated
         }
         val parts = value.split(Regex("\\s+")).filter(String::isNotEmpty)
+        val command = parts.firstOrNull()
         return when {
-            parts == listOf("pwd") -> BasicAutonomyRisk.Routine
-            parts.firstOrNull() == "ls" && parts.drop(1).all { it.matches(Regex("-[alhA]+")) } ->
+            command == "pwd" -> BasicAutonomyRisk.Routine
+            command == "ls" && parts.drop(1).all { it.matches(Regex("-[alhA]+")) } ->
                 BasicAutonomyRisk.Routine
+            command != null && command in READ_ONLY_INSPECTION &&
+                !(command == "tail" && follows(parts)) -> BasicAutonomyRisk.Routine
             else -> BasicAutonomyRisk.Elevated
         }
     }
+
+    private fun follows(parts: List<String>): Boolean = parts.drop(1).any {
+        it == "--retry" || it.startsWith("--follow") ||
+            (it.startsWith("-") && !it.startsWith("--") &&
+                it.drop(1).any { flag -> flag == 'f' || flag == 'F' })
+    }
+
+    private val READ_ONLY_INSPECTION = setOf("wc", "head", "tail", "cat", "grep")
 }
