@@ -422,6 +422,13 @@ class BrowserTools(private val session: BrowserSession) {
             put("handoff", result.handoff)
             put("js_errors", result.jsErrors)
             put("last_error", result.lastError)
+            put("modal_blocked", result.modal != null)
+            result.modal?.let { modal ->
+                put("modal", buildJsonObject {
+                    put("kind", modal.kind.name.lowercase())
+                    put("message", modal.message)
+                })
+            }
             result.hint?.let { put("hint", it) }
         }, "Read browser status")
     }

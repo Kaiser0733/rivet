@@ -14,6 +14,8 @@ import android.os.SystemClock
 import android.view.Choreographer
 import android.webkit.ConsoleMessage
 import android.webkit.CookieManager
+import android.webkit.JsPromptResult
+import android.webkit.JsResult
 import android.webkit.WebChromeClient
 import android.view.PixelCopy
 import android.webkit.WebResourceRequest
@@ -111,6 +113,7 @@ data class BrowserUiState(
     val blockThirdParty: Boolean = true,
     val desktopMode: Boolean = false,
     val fidelity: BrowserFidelity? = null,
+    val modal: BrowserModalState? = null,
 ) {
     /** Derived, never written: both the button and the banner/card read this. */
     val agentVisualActive: Boolean
@@ -139,6 +142,10 @@ data class BrowserEvalResult(val content: String, val origin: String)
 
 enum class BrowserKeyAction { Press, Down, Up }
 
+enum class BrowserModalKind { Alert, Confirm, Prompt }
+
+data class BrowserModalState(val kind: BrowserModalKind, val message: String)
+
 data class BrowserKeyTarget(
     val found: Boolean,
     val sensitive: Boolean,
@@ -165,6 +172,7 @@ data class BrowserStatusResult(
     val jsErrors: Int,
     val lastError: String?,
     val hint: String? = null,
+    val modal: BrowserModalState? = null,
 )
 
 data class BrowserResetResult(
@@ -264,6 +272,7 @@ class BrowserSession(
     private var activeTitle: String = ""
     private var authLimitStated = false
     private var renderer: WebView? = null
+    private var pendingModal: PendingModal? = null
     private var teardown = RendererTeardown()
     private val processRegistry = RendererProcessRegistry()
     internal var rendererTerminateSupported: () -> Boolean = {
@@ -702,6 +711,7 @@ class BrowserSession(
         expectedOrigin: String? = null,
         timeoutMs: Long = 2_000L,
     ): BrowserEvalResult = actionLock.withLock {
+        requireNoPageModal()
         if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
         if (!_state.value.allowJs) {
             throw BrowserFailure("browser_js_disabled",
@@ -810,9 +820,14 @@ class BrowserSession(
             alive -> width > 1 && height > 1 && rendererFailure == null
             else -> false
         }
-        val hint = if (alive && (width <= 1 || height <= 1)) {
-            "Viewport is degenerate (1x1). Call browser_reset(reopen=true) to rebuild the renderer."
-        } else null
+        val modal = _state.value.modal
+        val hint = when {
+            modal != null -> "page_modal_blocked: a JavaScript ${modal.kind.name.lowercase()} dialog is showing. " +
+                "Call browser_reset(reopen=true) to clear it."
+            alive && (width <= 1 || height <= 1) ->
+                "Viewport is degenerate (1x1). Call browser_reset(reopen=true) to rebuild the renderer."
+            else -> null
+        }
         return BrowserStatusResult(
             alive = alive,
             healthy = healthy,
@@ -836,6 +851,7 @@ class BrowserSession(
             jsErrors = consoleBuffer.errorCount(),
             lastError = consoleBuffer.lastErrorMessage(),
             hint = hint,
+            modal = modal,
         )
     }
 
@@ -1107,6 +1123,7 @@ class BrowserSession(
 
     suspend fun classifyKeyTarget(spec: BrowserKeySpec, selector: String?): BrowserKeyTarget =
         actionLock.withLock {
+            requireNoPageModal()
             if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
             val view = ensureRenderer()
             loadForInteraction(view, activeUrl)
@@ -1124,6 +1141,7 @@ class BrowserSession(
         action: BrowserKeyAction = BrowserKeyAction.Press,
         holdMs: Int = 50,
     ): BrowserKeyResult = actionLock.withLock {
+        requireNoPageModal()
         if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
         val view = ensureRenderer()
         loadForInteraction(view, activeUrl)
@@ -1179,6 +1197,7 @@ class BrowserSession(
         } else {
             syntheticKey(view, spec, action, target, url)
         }
+        requireNoPageModal()
         recordVisit(url, publish = false)
         val changed = changeLine(beforeUrl, beforeTitle)
         BrowserKeyResult(spec.key, spec.modifiers.map { it.name.lowercase() }.sorted(),
@@ -1624,6 +1643,7 @@ class BrowserSession(
     }
 
     suspend fun classifyTap(x: Int, y: Int): BrowserClickTarget = actionLock.withLock {
+        requireNoPageModal()
         val view = ensureRenderer()
         loadForInteraction(view, activeUrl)
         val px = BrowserCoordinates.pixel(x, view.width)
@@ -1632,6 +1652,7 @@ class BrowserSession(
     }
 
     suspend fun tap(x: Int, y: Int): String = actionLock.withLock {
+        requireNoPageModal()
         val view = ensureRenderer()
         loadForInteraction(view, activeUrl)
         val px = BrowserCoordinates.pixel(x, view.width)
@@ -1644,6 +1665,7 @@ class BrowserSession(
     }
 
     suspend fun swipe(fromX: Int, fromY: Int, toX: Int, toY: Int): String = actionLock.withLock {
+        requireNoPageModal()
         val view = ensureRenderer()
         loadForInteraction(view, activeUrl)
         val x1 = BrowserCoordinates.pixel(fromX, view.width)
@@ -1684,6 +1706,7 @@ class BrowserSession(
 
     suspend fun classifyClick(selector: String?, text: String?): BrowserClickTarget =
         actionLock.withLock {
+            requireNoPageModal()
             val view = ensureRenderer()
             loadForInteraction(view, activeUrl)
             val script = clickTargetScript(selector, text)
@@ -1692,6 +1715,7 @@ class BrowserSession(
         }
 
     suspend fun click(selector: String?, text: String?): String = actionLock.withLock {
+        requireNoPageModal()
         val view = ensureRenderer()
         loadForInteraction(view, activeUrl)
         val target = parseClickTarget(evaluate(view, clickTargetScript(selector, text)))
@@ -1704,6 +1728,7 @@ class BrowserSession(
     }
 
     suspend fun type(field: String, text: String): String = actionLock.withLock {
+        requireNoPageModal()
         val view = ensureRenderer()
         loadForInteraction(view, activeUrl)
         val raw = evaluate(view, typeScript(field, text))
@@ -1720,6 +1745,7 @@ class BrowserSession(
     }
 
     suspend fun scroll(direction: String, amount: Int = 1): String = actionLock.withLock {
+        requireNoPageModal()
         val view = ensureRenderer()
         loadForInteraction(view, activeUrl)
         val pages = amount.coerceIn(1, 5)
@@ -1814,6 +1840,7 @@ class BrowserSession(
             _state.update { it.copy(teardownRequested = false) }
         }
         rendererFailure = null
+        resolvePageModal()
         renderer = view
         recordRenderProcess(view)
         baselineAvailMem = availableMemBytes() ?: 0L
@@ -1913,7 +1940,66 @@ class BrowserSession(
         )
     }
 
+    /**
+     * A dialog is held open until reset (or an explicit resolution) clears it. Returning
+     * true tells WebView that this client owns the dialog; never cancel it here, because
+     * that would silently dismiss the page's alert before the agent can report the block.
+     */
+    private fun beginPageModal(kind: BrowserModalKind, message: String, result: JsResult) {
+        val state = BrowserModalState(kind,
+            message.trim().replace(Regex("\\s+"), " ").take(200))
+        pendingModal = PendingModal(state, result)
+        _state.update { it.copy(modal = state) }
+    }
+
+    /** Clears the modal state and resolves the held JsResult. Reset calls this on the way out. */
+    internal fun resolvePageModal(confirm: Boolean = false, promptValue: String? = null) {
+        val pending = pendingModal
+        pendingModal = null
+        _state.update { it.copy(modal = null) }
+        if (pending == null) return
+        runCatching {
+            val result = pending.result
+            when {
+                result is JsPromptResult -> if (confirm) result.confirm(promptValue.orEmpty()) else result.cancel()
+                confirm -> result.confirm()
+                else -> result.cancel()
+            }
+        }
+    }
+
+    private fun pageModalFailure(): BrowserFailure? {
+        val modal = _state.value.modal ?: return null
+        val detail = modal.message.trim().replace(Regex("\\s+"), " ").take(160)
+            .let { if (it.isEmpty()) "" else " (\"$it\")" }
+        return BrowserFailure("page_modal_blocked",
+            "page_modal_blocked: a JavaScript ${modal.kind.name.lowercase()} dialog$detail is blocking the page. " +
+                "Call browser_reset(reopen=true) to clear it; key, click, type, scroll, swipe, and eval actions are refused while it is open.")
+    }
+
+    private fun requireNoPageModal() {
+        pageModalFailure()?.let { throw it }
+    }
+
+    private data class PendingModal(val state: BrowserModalState, val result: JsResult)
+
     private fun chromeClientFor(view: WebView): WebChromeClient = object : WebChromeClient() {
+        override fun onJsAlert(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
+            beginPageModal(BrowserModalKind.Alert, message.orEmpty(), result)
+            return true
+        }
+
+        override fun onJsConfirm(view: WebView, url: String?, message: String?, result: JsResult): Boolean {
+            beginPageModal(BrowserModalKind.Confirm, message.orEmpty(), result)
+            return true
+        }
+
+        override fun onJsPrompt(view: WebView, url: String?, message: String?,
+            defaultValue: String?, result: JsPromptResult): Boolean {
+            beginPageModal(BrowserModalKind.Prompt, message.orEmpty(), result)
+            return true
+        }
+
         override fun onConsoleMessage(message: ConsoleMessage): Boolean {
             val level = when (message.messageLevel()) {
                 ConsoleMessage.MessageLevel.ERROR -> BrowserConsoleLevel.Error
@@ -1992,6 +2078,7 @@ class BrowserSession(
     }
 
     fun clearBrowserData() {
+        resolvePageModal()
         CookieManager.getInstance().removeAllCookies(null)
         CookieManager.getInstance().flush()
         renderer?.clearCache(true)
@@ -2359,6 +2446,7 @@ class BrowserSession(
 
         override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
             recordRenderProcess(view)
+            resolvePageModal()
             pageLoading = true
             installConsoleErrorHook(view)
             if (url != null && BrowserAuthGuard.isAuthSurface(url)) {
@@ -2804,6 +2892,7 @@ class BrowserSession(
      * calls onRendererReleased with the actual cleanup lambda.
      */
     fun requestRendererTeardown() {
+        resolvePageModal()
         periodic?.cancel()
         periodic = null
         postLoadBudgetJob?.cancel()
