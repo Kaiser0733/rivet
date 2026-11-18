@@ -4,7 +4,7 @@ import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.booleanOrNull
 
-/** Whether the selected provider/model can accept image input. Unknown is optimistic. */
+/** Whether the selected provider/model can accept image input. Unknown must not be claimed as support. */
 sealed interface VisionSupport {
     data object Supported : VisionSupport
     data object Unknown : VisionSupport
@@ -63,10 +63,12 @@ internal object VisionCapability {
     fun shotAttachment(support: VisionSupport, path: String): VisionShotAttachment = when (support) {
         VisionSupport.Supported -> VisionShotAttachment(path, "image/jpeg", attached = true, note = null)
         VisionSupport.Unknown -> VisionShotAttachment(
-            path,
-            "image/jpeg",
-            attached = true,
-            note = "Image attached; if this model rejects image input, rely on browser_eval/browser_read/browser_console.",
+            imagePath = null,
+            imageMime = null,
+            attached = false,
+            note = "Rivet could not confirm that the current model accepts image input, so the " +
+                "screenshot was not attached. The model cannot see it; use browser_eval, " +
+                "browser_read, and browser_console, or switch to a vision-capable model.",
         )
         is VisionSupport.Unsupported -> VisionShotAttachment(
             imagePath = null,

@@ -114,7 +114,7 @@ class VisionSerializationTest {
         assertTrue(attachment.note!!.contains("text-only"))
     }
 
-    @Test fun supportedAndUnknownModelsAttachTheScreenshot() {
+    @Test fun supportedModelsAttachAndUnknownModelsDoNot() {
         val supported = VisionCapability.shotAttachment(VisionSupport.Supported, "/tmp/shot.webp")
         assertTrue(supported.attached)
         assertEquals("/tmp/shot.webp", supported.imagePath)
@@ -122,8 +122,28 @@ class VisionSerializationTest {
         assertNull(supported.note)
 
         val unknown = VisionCapability.shotAttachment(VisionSupport.Unknown, "/tmp/shot.webp")
-        assertTrue(unknown.attached)
-        assertTrue(unknown.note!!.contains("if this model rejects image input"))
+        assertFalse(unknown.attached)
+        assertNull(unknown.imagePath)
+        assertNull(unknown.imageMime)
+        assertTrue(unknown.note!!.contains("could not confirm"))
+        assertTrue(unknown.note.contains("cannot see"))
+    }
+
+    @Test fun modelWithoutVisionMetadataIsNotReportedAsAttached() {
+        val config = ProviderConfig(
+            id = "deepseek",
+            type = ProviderType.OpenAiCompatible,
+            name = "DeepSeek",
+            baseUrl = "https://api.deepseek.com",
+            model = "deepseek-v4.1-flash",
+        )
+        val support = VisionCapability.assess(config)
+        assertTrue(support is VisionSupport.Unknown)
+        val attachment = VisionCapability.shotAttachment(support, "/tmp/shot.webp")
+        assertFalse(attachment.attached)
+        assertNull(attachment.imagePath)
+        assertNull(attachment.imageMime)
+        assertTrue(attachment.note!!.contains("could not confirm"))
     }
 
     @Test fun modelMetadataIsParsedForVisionCapability() {
