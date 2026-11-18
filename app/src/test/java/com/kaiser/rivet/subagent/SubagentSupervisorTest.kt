@@ -172,6 +172,19 @@ class SubagentSupervisorTest {
     }
 
     @Test
+    fun omittedModelUsesTheFirstTickedPoolEntry() = runBlocking {
+        val config = cloudConfig("c1")
+        val services = testServices(WorkerSessionStore.inMemory(), listOf(config))
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+
+        val result = supervisor.validateSpawn("""{"job":"job1","brief":"brief1"}""")
+
+        val valid = requireNotNull(result as? SpawnValidation.Valid)
+        assertEquals("m1", valid.entry.alias)
+        assertEquals("c1", valid.entry.config.id)
+    }
+
+    @Test
     fun executeSpawnAdmitsFirstTwoAndQueuesThirdUntilSlotFrees() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()

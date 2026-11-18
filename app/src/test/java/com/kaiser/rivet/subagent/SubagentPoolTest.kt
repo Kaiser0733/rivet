@@ -93,6 +93,18 @@ class SubagentPoolTest {
             is PoolValidation.Refused)
     }
 
+    @Test fun omittedAliasUsesTheFirstTickedEntry() {
+        val configs = listOf(cloud("c1", "gpt-4o-mini"), cloud("c2", "gpt-4o"))
+        val state = SubagentPoolState(entries = listOf(
+            PoolEntry("c1", "gpt-4o-mini"),
+            PoolEntry("c2", "gpt-4o"),
+        ))
+        val validation = SubagentPool.validate("", state, configs)
+        val valid = requireNotNull(validation as? PoolValidation.Valid)
+        assertEquals("m1", valid.entry.alias)
+        assertEquals("c1", valid.entry.config.id)
+    }
+
     @Test fun unknownAliasListsTheValidAliases() {
         val configs = listOf(cloud("c1", "gpt-4o-mini"))
         val state = SubagentPoolState(entries = listOf(PoolEntry("c1", "gpt-4o-mini")))

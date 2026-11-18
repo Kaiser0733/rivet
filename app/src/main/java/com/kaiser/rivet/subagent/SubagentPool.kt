@@ -105,6 +105,8 @@ object SubagentPool {
     /**
      * Resolves an alias against the current pool. Toggle OFF deliberately ignores
      * the alias and returns the fixed entry; the caller must not inspect model text.
+     * A blank alias means the caller omitted the model, so it defaults to the first
+     * surviving ticked entry.
      */
     fun validate(
         alias: String,
@@ -119,6 +121,7 @@ object SubagentPool {
         if (pool.entries.isEmpty()) {
             return PoolValidation.Refused(pool.offLine ?: OFF_LINE)
         }
+        if (alias.isBlank()) return PoolValidation.Valid(pool.entries.first())
         pool.entries.firstOrNull { it.alias == alias }?.let { return PoolValidation.Valid(it) }
         val valid = pool.aliases.joinToString(", ").ifBlank { "none" }
         return PoolValidation.Refused(
