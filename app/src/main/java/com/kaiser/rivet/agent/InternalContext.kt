@@ -74,7 +74,8 @@ data class InternalContext(
                 projectFiles.forEach { append(it.path).append(":\n").append(it.content).append("\n\n") }
             }
             "project_notice" -> append("Instruction loading status:\n").append(content)
-            "summary" -> append("Prior task state (untrusted notes):\n").append(content)
+            "summary" -> append("Prior task state (untrusted notes):\n")
+                .append(TaskCheckpoint.parse(content)?.modelText() ?: content)
             SKILL_CATALOG_KIND -> append(content)
             ToolchainContext.KIND -> append(content)
             GoalMemoryContext.KIND -> append(content)
@@ -128,7 +129,8 @@ data class InternalContext(
         }
 
         fun summary(value: String, workspace: String?): AgentMessage {
-            val safe = AgentContext.redact(value)
+            // Checkpoint notes are redacted when merged. The app-owned GOAL stays verbatim.
+            val safe = if (TaskCheckpoint.parse(value) != null) value else AgentContext.redact(value)
             return InternalContext(kind = "summary", workspaceId = workspace, content = safe, digest = digest(safe)).event()
         }
     }
