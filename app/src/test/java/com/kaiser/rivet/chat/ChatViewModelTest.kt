@@ -81,6 +81,14 @@ class ChatViewModelTest {
         assertEquals(com.kaiser.rivet.agent.AgentRole.Context, context.role)
     }
 
+    @Test fun workspacePromptTellsAgentToRememberEstablishedDecisionsConstraintsAndPreferences() {
+        val instruction = ChatViewModel.systemInstruction(workspace = true)
+        assertTrue(instruction.lines().any {
+            it.contains("decision, constraint, or preference") && it.contains("remember tool") &&
+                it.contains(".rivet/memory.md")
+        })
+    }
+
     private val models = mutableListOf<ChatViewModel>()
     private fun newChatViewModel(app: Application, sessionPersistence: AgentSessionPersistence,
                                  providerSource: ProviderRuntimeSource,
@@ -893,7 +901,7 @@ class ChatViewModelTest {
             }
         }
         sessions.save(history, interrupted = false)
-        val taskState = """{"objective":"Finish the project task","userConstraints":["Preserve existing behavior"],"completed":["Inspected prior code"],"pending":["Verify change"],"nextStep":"Continue"}"""
+        val taskState = """{"CONSTRAINTS & PREFERENCES":["Preserve existing behavior"],"STATE":["Inspected prior code"],"OPEN THREADS":["Verify change"]}"""
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = taskState),
             AgentResponse(text = "Done"))))
         val endpoint = "https://example.invalid"
@@ -903,14 +911,15 @@ class ChatViewModelTest {
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready }
 
-        viewModel.send("Continue")
+        val goal = "  Continue\n  with the fix.\n"
+        viewModel.send(goal)
         val finished = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Done" }
 
         assertNull(finished.error)
         assertEquals(2, provider.requests.size)
-        assertTrue(provider.requests[0].system.contains("task state"))
+        assertTrue(provider.requests[0].system.contains("\"DECISIONS + WHY\""))
         assertTrue(provider.requests[1].messages.size < history.size + 1)
-        assertTrue(sessions.load().summary.contains("Finish the project task"))
+        assertEquals(goal, com.kaiser.rivet.agent.TaskCheckpoint.parse(sessions.load().summary)?.goal)
         assertEquals(history.size + 2, sessions.fullEventCount(id))
     }
 
@@ -1010,7 +1019,7 @@ class ChatViewModelTest {
         await(viewModel) { it.ready }
 
         viewModel.send("Continue")
-        assertTrue(withTimeout(5_000) { entered.await() }.system.contains("task state"))
+        assertTrue(withTimeout(5_000) { entered.await() }.system.contains("\"DECISIONS + WHY\""))
         viewModel.cancel()
         await(viewModel) { !it.streaming }
 
@@ -1034,8 +1043,8 @@ class ChatViewModelTest {
         }
         sessions.save(history, interrupted = false)
         val provider = QueueProvider(ArrayDeque(listOf(
-            AgentResponse(text = """{"objective":"Fix crash","completed":["Inspected code"],"pending":["Patch"]}"""),
-            AgentResponse(text = """{"objective":"Fix crash","completed":["Inspected code","Patched files"],"pending":["Verify"],"nextStep":"Run checks"}"""),
+            AgentResponse(text = """{"STATE":["Inspected code"],"OPEN THREADS":["Patch"]}"""),
+            AgentResponse(text = """{"STATE":["Patched files"],"OPEN THREADS":["RESOLVED: Patch","Run checks"]}"""),
         )))
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
@@ -1094,7 +1103,7 @@ class ChatViewModelTest {
         val smallConfig = largeConfig.copy(model = "small",
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val secondProvider = QueueProvider(ArrayDeque(listOf(
-            AgentResponse(text = """{"objective":"Finish task","completed":["Inspected code"],"pending":["Verify"]}"""),
+            AgentResponse(text = """{"STATE":["Inspected code"],"OPEN THREADS":["Verify"]}"""),
             AgentResponse(text = "Second"),
         )))
         val second = newChatViewModel(app, sessions,
@@ -1106,7 +1115,7 @@ class ChatViewModelTest {
 
         assertEquals(2, secondProvider.requests.size)
         assertEquals("small", secondProvider.requests.last().model)
-        assertTrue(CodingSessions(app).load().summary.contains("Finish task"))
+        assertTrue(CodingSessions(app).load().summary.contains("Continue on small model"))
         assertEquals(history.size + 4, sessions.fullEventCount(id))
     }
 
@@ -1126,7 +1135,7 @@ class ChatViewModelTest {
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text =
-            """{"objective":"Keep coding","pending":["Verify"]}"""))))
+            """{"OPEN THREADS":["Verify"]}"""))))
         val preparation = ContextPreparation(sessions, id, provider, config, "turn", "") {
             messages, _ -> AgentRequest(config.model,
                 com.kaiser.rivet.agent.modelMessages(messages), "System", config.reasoning, emptyList())

@@ -119,10 +119,9 @@ class ContextPreparationTest {
         assertEquals(latest, reduced.filter { it.internalContext == null })
         assertEquals(1, reduced.count { it.internalContext?.kind == "summary" })
 
-        assertEquals(1, provider.requests.size)
-        assertTrue(provider.requests.single().messages.single().text.contains("Original objective"))
+        assertTrue(provider.requests.isEmpty())
         assertEquals(latest, sessions.recent(id))
-        assertTrue(sessions.load().summary.contains("Continue the current fix"))
+        assertTrue(sessions.load().summary.contains("Continue the fix"))
     }
 
     @Test fun summaryRequestKeepsNewestRemovedGroupUnderTightInputBudget() = runBlocking {
@@ -131,7 +130,7 @@ class ContextPreparationTest {
         val sessions = CodingSessions(app)
         val id = sessions.load().id!!
         val history = (0 until 70).map { index ->
-            AgentMessage.user("marker-$index " + "x".repeat(3000))
+            AgentMessage.user(if (index == 69) "Continue" else "marker-$index " + "x".repeat(3000))
         }
         sessions.save(history, interrupted = true)
         val prior = TaskState("Carry original objective", completed = List(9) { "y".repeat(800) },
@@ -432,7 +431,7 @@ class ContextPreparationTest {
             onDelta: (String) -> Unit,
         ): AgentResponse {
             requests += request
-            return AgentResponse(text = """{"objective":"Continue the current fix","nextStep":"Inspect"}""")
+            return AgentResponse(text = """{"OPEN THREADS":["Inspect"]}""")
         }
     }
 }
