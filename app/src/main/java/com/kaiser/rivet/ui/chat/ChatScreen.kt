@@ -102,7 +102,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.animation.core.rememberInfiniteTransition
 import androidx.compose.animation.core.infiniteRepeatable
 import androidx.compose.animation.core.tween
@@ -145,6 +144,7 @@ import com.kaiser.rivet.chat.PROJECT_ACCESS_LOST_MESSAGE
 import com.kaiser.rivet.chat.PROJECT_BINDING_MISMATCH_MESSAGE
 import com.kaiser.rivet.chat.projectBindingState
 import com.kaiser.rivet.ui.FoldReveal
+import com.kaiser.rivet.ui.foldChevronRotation
 import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
 import com.kaiser.rivet.ui.RivetOutlinedButton
@@ -1103,7 +1103,7 @@ private fun TurnProcessRow(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val rotation by animateFloatAsState(targetValue = if (open) 180f else 0f, label = "turnChevronRotation")
+    val rotation = foldChevronRotation(open)
     val hairlineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
 
     Row(
@@ -1274,7 +1274,7 @@ private fun ProcessGroupHeader(
     onToggle: () -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    val rotation by animateFloatAsState(targetValue = if (open) 180f else 0f, label = "chevronRotation")
+    val rotation = foldChevronRotation(open)
     val alphaAnim = if (isLive) {
         val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
         val alpha by infiniteTransition.animateFloat(
@@ -1517,7 +1517,7 @@ private fun ReasoningRow(
     modifier: Modifier = Modifier,
 ) {
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
-    val rotation by animateFloatAsState(targetValue = if (expanded) 180f else 0f, label = "reasoningChevronRotation")
+    val rotation = foldChevronRotation(expanded)
     val alphaAnim = if (streaming) {
         val infiniteTransition = rememberInfiniteTransition(label = "reasoningShimmer")
         val alpha by infiniteTransition.animateFloat(
