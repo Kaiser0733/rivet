@@ -10,13 +10,13 @@ Built on `feat/compaction` from `batch/surface-fix` at `84f7f52d629aeee615d98027
 | Tool result pre-pruning | When formatting the removed span, results over 8,192 characters contribute the first 4,096 and last 1,024 with an omission marker. Shorter bodies are included in full when the input budget permits. Existing redaction still applies. The summarize path uses the original removed span when active-projection planning generates tool stubs. | `agent/AgentContext.kt`, `agent/AgentContextTest.kt`, `chat/ContextPreparation.kt`, `chat/TaskCheckpointTest.kt` | `5ac358b503139fcf0a5d7f0764eefd6034345ee3`, `096913424d4ac3dd150f12d69a4dda8143951819` |
 | Remember discipline | Tell the agent to record established decisions, constraints, and preferences with `remember`. The existing project memory snapshot remains available through compaction. | `chat/ChatViewModel.kt`, `chat/ChatViewModelTest.kt` | `096913424d4ac3dd150f12d69a4dda8143951819` |
 
- owns the compaction request and merge.  supplies the existing thresholds and needed no changes.
+`ContextPreparation.kt` owns the compaction request and merge. `ContextBudget.kt` supplies the existing thresholds.
 
 ## Verification
 
-- Isolated JVM run using JUnit 4.13.2. The parent with the updated tests produced 9 expected failures out of 47. The feature run passed all 47. The run covered tool inputs, checkpoint creation and chained merges, the existing budget and memory tests, legacy task-state parsing, and the workspace prompt rule. Local and cloud preparation used fake provider responses. The workspace prompt check used the production function extracted from .
--  with the relevant filters exited 1 during  configuration because the Android SDK location was unavailable. No Android or Robolectric tests ran.
--  passed.
+- Isolated JVM run using JUnit 4.13.2. The parent with the updated tests produced 9 expected failures out of 47. The feature run passed all 47. The run covered tool inputs, checkpoint creation and chained merges, the existing budget and memory tests, legacy task-state parsing, and the workspace prompt rule. Local and cloud preparation used fake provider responses. The workspace prompt check used the production function extracted from `ChatViewModel.kt`.
+- `bash gradlew :app:testDebugUnitTest` with the relevant filters exited 1 during `:terminal-emulator` configuration because the Android SDK location was unavailable. No Android or Robolectric tests ran.
+- `git diff --check` passed.
 
 ## Honest gaps
 
