@@ -42,8 +42,9 @@ class FoldRevealTest {
         }
         compose.mainClock.advanceTimeByFrame()
         compose.runOnUiThread { expanded = true }
-        compose.mainClock.advanceTimeByFrame()
+        compose.waitForIdle()
         compose.mainClock.advanceTimeBy(90)
+        compose.waitForIdle()
 
         val partial = compose.onNodeWithTag("fold").fetchSemanticsNode().size.height
         compose.mainClock.advanceTimeBy(200)
