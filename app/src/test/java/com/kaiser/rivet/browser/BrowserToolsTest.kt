@@ -37,6 +37,7 @@ class BrowserToolsTest {
         val wait = BrowserTools.definitions.first { it.name == "browser_wait_for" }
         assertTrue(wait.parameters.toString().contains("network_idle"))
         assertTrue(wait.parameters.toString().contains("poll_ms"))
+        assertTrue(wait.description.contains("run_command"))
     }
 
     @Test fun resetIsRegisteredAndDriving() {

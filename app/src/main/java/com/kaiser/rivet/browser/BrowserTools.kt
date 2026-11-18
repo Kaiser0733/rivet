@@ -637,7 +637,7 @@ class BrowserTools(private val session: BrowserSession) {
                         put("type", "integer"); put("minimum", 0); put("maximum", 2000)
                     })),
             AgentToolDefinition("browser_wait_for",
-                "Wait until all supplied conditions hold on one poll: selector visible (or gone), visible text (or gone), network idle for 500ms, and a same-origin JS predicate. Releases the action lock between polls. Timeout names browser_status/browser_console/browser_read.",
+                "Wait for page state instead of sleeping with run_command. Waits until all supplied conditions hold on one poll: selector visible (or gone), visible text (or gone), network idle for 500ms, and a same-origin JS predicate. Use this for async page updates, not run_command sleep polls. Releases the action lock between polls. Timeout names browser_status/browser_console/browser_read.",
                 schema(emptyList(), "selector" to string, "text" to string, "gone" to boolean,
                     "network_idle" to boolean, "js" to string,
                     "timeout_ms" to buildJsonObject {
