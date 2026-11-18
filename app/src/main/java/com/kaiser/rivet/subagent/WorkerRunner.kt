@@ -375,8 +375,8 @@ internal class WorkerRunner(
                 requestApproval = { request ->
                     publishUpdate {
                         it.copy(
-                            activity = "waiting for your approval",
-                            waitingReason = "waiting for your approval",
+                            activity = WorkerRecord.WAITING_FOR_APPROVAL,
+                            waitingReason = WorkerRecord.WAITING_FOR_APPROVAL,
                             updatedAt = System.currentTimeMillis(),
                         )
                     }

@@ -19,13 +19,11 @@ import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
-import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.joinAll
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
-import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -470,15 +468,7 @@ internal class SubagentSupervisor(
                 w != null && w.isTerminal
             }
             if (!allFinishedInitially && timeoutMs > 0) {
-                withTimeoutOrNull(timeoutMs) {
-                    state.first { currentList ->
-                        val map = currentList.associateBy { it.id }
-                        idsToWatch.all { id ->
-                            val w = map[id]
-                            w != null && w.isTerminal
-                        }
-                    }
-                }
+                awaitWatchedWorkers(state, idsToWatch.toSet(), timeoutMs)
             }
         }
 

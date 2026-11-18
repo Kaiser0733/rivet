@@ -69,6 +69,9 @@ data class WorkerRecord(
     val isTerminal: Boolean
         get() = state == RunPhase.Done || state == RunPhase.Failed || state == RunPhase.Stopped
 
+    val awaitingApproval: Boolean
+        get() = waitingReason == WAITING_FOR_APPROVAL
+
     fun toWorkerRun(): WorkerRun = WorkerRun(
         record = RunRecord(
             id = id,
@@ -92,6 +95,10 @@ data class WorkerRecord(
         error = workerRun.record.failure,
         updatedAt = workerRun.record.updatedAt,
     )
+
+    companion object {
+        const val WAITING_FOR_APPROVAL = "waiting for your approval"
+    }
 }
 
 data class WorkerTranscript(
