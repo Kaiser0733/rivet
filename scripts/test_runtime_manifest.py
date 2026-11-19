@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from runtime_manifest import (
     ALLOWED_PERMISSIONS,
@@ -227,6 +228,11 @@ class RuntimeManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "unexpected APK permissions"):
             verify_apk_runtime_manifest(DEBUG_TREE,
                 ALLOWED_PERMISSIONS | {"android.permission.CAMERA"})
+
+    def test_verify_apk_permission_gate_uses_the_shared_allowlist(self):
+        source = (Path(__file__).resolve().parent / "verify_apk.py").read_text()
+        self.assertIn("requested <= ALLOWED_PERMISSIONS", source)
+        self.assertNotIn("allowed_permissions = {", source)
 
     def test_release_merged_manifest_allows_phone_permissions(self):
         verify_release_runtime_manifest(release_with_phone_permissions())
