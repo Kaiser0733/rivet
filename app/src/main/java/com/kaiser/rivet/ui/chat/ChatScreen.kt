@@ -1759,6 +1759,7 @@ private fun InlineMarkdown(text: String, modifier: Modifier = Modifier, style: T
 internal fun approvalTitle(request: AgentApprovalRequest): String = when {
     request.call.name == "run_command" -> "Run a project command?"
     request.dangerous -> request.title
+    request.title.trimEnd().endsWith("?") -> request.title
     else -> "Allow Rivet to ${request.title.lowercase()}?"
 }
 

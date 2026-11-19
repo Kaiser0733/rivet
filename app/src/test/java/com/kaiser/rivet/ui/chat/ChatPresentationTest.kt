@@ -39,8 +39,11 @@ class ChatPresentationTest {
             "Run command", "./gradlew test", dangerous = true)
         val deletion = AgentApprovalRequest(AgentToolCall("id", "delete_path", "{}"),
             "Delete existing file?", "old-config.json", dangerous = true)
+        val question = AgentApprovalRequest(AgentToolCall("id", "spawn_subagents", "{}"),
+            "Allow subagents in this chat?", "", dangerous = false)
         assertEquals("Run a project command?", approvalTitle(command))
         assertEquals("Delete existing file?", approvalTitle(deletion))
+        assertEquals("Allow subagents in this chat?", approvalTitle(question))
         assertTrue(COMMAND_APPROVAL_WARNING.contains("Rivet's saved data"))
         assertTrue(COMMAND_APPROVAL_WARNING.contains("read, change, or delete project files"))
         assertTrue(COMMAND_APPROVAL_WARNING.contains("network"))
