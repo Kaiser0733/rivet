@@ -10,6 +10,7 @@ import android.content.pm.ProviderInfo
 import android.os.SystemClock
 import android.provider.DocumentsContract
 import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.validatedContext
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.AgentToolCall
@@ -866,7 +867,11 @@ class ChatViewModelTest {
         val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Complete" }
 
         assertNull(complete.error)
-        assertEquals(68, sessions.fullEventCount(id))
+        // The compaction notice is a real persisted transcript row now.
+        assertEquals(1, sessions.load().messages.count {
+            it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
+        })
+        assertEquals(69, sessions.fullEventCount(id))
         assertTrue(AgentContext.serializedBytes(sessions.load().messages) <
             AgentContext.serializedBytes(history) / 2)
         assertEquals("", sessions.load().summary)
@@ -875,7 +880,7 @@ class ChatViewModelTest {
             AgentContext.serializedBytes(history) / 2)
         assertTrue(provider.requests.single().messages.flatMap { it.toolResults }
             .any { it.content.contains("output_pruned") })
-        assertEquals(68, sessions.recent(id, 100).size)
+        assertEquals(69, sessions.recent(id, 100).size)
 
         val switchedProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "After switch"))))
         val switched = newChatViewModel(app, sessions,
@@ -886,7 +891,7 @@ class ChatViewModelTest {
         await(switched) { !it.streaming && it.messages.lastOrNull()?.text == "After switch" }
         assertEquals("model-b", switchedProvider.requests.single().model)
         assertTrue(switchedProvider.requests.single().messages.last().text.contains("Follow up"))
-        assertEquals(70, sessions.fullEventCount(id))
+        assertEquals(71, sessions.fullEventCount(id))
     }
 
     @Test fun knownCapacityPreparesContextBelowOldByteThreshold() = runBlocking {
@@ -920,7 +925,10 @@ class ChatViewModelTest {
         assertTrue(provider.requests[0].system.contains("\"DECISIONS + WHY\""))
         assertTrue(provider.requests[1].messages.size < history.size + 1)
         assertEquals(goal, com.kaiser.rivet.agent.TaskCheckpoint.parse(sessions.load().summary)?.goal)
-        assertEquals(history.size + 2, sessions.fullEventCount(id))
+        assertEquals(1, sessions.load().messages.count {
+            it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
+        })
+        assertEquals(history.size + 3, sessions.fullEventCount(id))
     }
 
     @Test fun latestUserMessageThatCannotFitStopsBeforeProviderCall() = runBlocking {
@@ -1116,7 +1124,10 @@ class ChatViewModelTest {
         assertEquals(2, secondProvider.requests.size)
         assertEquals("small", secondProvider.requests.last().model)
         assertTrue(CodingSessions(app).load().summary.contains("Continue on small model"))
-        assertEquals(history.size + 4, sessions.fullEventCount(id))
+        assertEquals(1, sessions.load().messages.count {
+            it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
+        })
+        assertEquals(history.size + 5, sessions.fullEventCount(id))
     }
 
     @Test fun summaryPersistenceFailureCannotReplaceActiveOrCanonicalHistory() = runBlocking {
