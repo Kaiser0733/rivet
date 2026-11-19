@@ -74,6 +74,16 @@ class MainActivity : ComponentActivity() {
         if (::chatViewModel.isInitialized) chatViewModel.browser.onAppForeground()
     }
 
+    override fun onResume() {
+        super.onResume()
+        phoneCapture.rivetResumed = true
+    }
+
+    override fun onPause() {
+        phoneCapture.rivetResumed = false
+        super.onPause()
+    }
+
     override fun onDestroy() {
         if (phoneCapture.consentLauncher === openCapturePermission) phoneCapture.consentLauncher = null
         super.onDestroy()

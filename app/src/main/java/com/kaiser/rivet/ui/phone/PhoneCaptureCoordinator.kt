@@ -13,6 +13,7 @@ import com.kaiser.rivet.runtime.PhoneCaptureState
 import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -20,6 +21,7 @@ internal class PhoneCaptureCoordinator(context: Context) {
     private val app = context.applicationContext
     var consentLauncher: ((Intent) -> Boolean)? = null
     var rivetVisible = false
+    var rivetResumed = false
 
     private var active: Capture? = null
     private var awaitingActivityResult = false
@@ -43,14 +45,46 @@ internal class PhoneCaptureCoordinator(context: Context) {
             } else projection.createScreenCaptureIntent()
             awaitingActivityResult = true
             if (!launcher(intent)) {
-                awaitingActivityResult = false
-                return@withContext error("phone_shot_unavailable")
+                val failure = awaitForegroundLaunch(intent, launcher, request)
+                if (failure != null) {
+                    awaitingActivityResult = false
+                    return@withContext error(failure)
+                }
             }
             withTimeoutOrNull(180_000) { request.result.await() } ?: error("phone_shot_cancelled")
         } finally {
             if (active === request) active = null
             if (request.startedService) app.stopService(Intent(app, PhoneCaptureService::class.java))
         }
+    }
+
+    /**
+     * A chained tool can call phone_shot while a Custom Tab owns the screen, so the
+     * activity is paused and the consent launcher refuses. Wait for the resume instead
+     * of failing instantly; only a bounded expiry reports needs_foreground.
+     */
+    private suspend fun awaitForegroundLaunch(
+        intent: Intent,
+        launcher: (Intent) -> Boolean,
+        request: Capture,
+    ): String? {
+        var accepted = false
+        var refusedWhileResumed = false
+        request.onStatus(PHONE_SHOT_WAITING_FOREGROUND)
+        val completed = withTimeoutOrNull(PHONE_SHOT_FOREGROUND_WAIT_MS) {
+            while (true) {
+                if (rivetResumed) {
+                    if (launcher(intent)) {
+                        accepted = true
+                        return@withTimeoutOrNull true
+                    }
+                    refusedWhileResumed = true
+                    return@withTimeoutOrNull false
+                }
+                delay(200)
+            }
+        }
+        return phoneShotFailureCode(accepted, refusedWhileResumed, completed == null)
     }
 
     fun consent(resultCode: Int, data: Intent?) {

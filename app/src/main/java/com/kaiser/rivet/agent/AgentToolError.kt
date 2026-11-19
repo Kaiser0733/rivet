@@ -60,7 +60,8 @@ internal object AgentToolError {
         "invalid_arguments" to "The tool arguments did not match this tool's JSON contract. Re-read the argument names and send one complete JSON object.",
         "phone_shot_denied" to "Screen capture was declined.",
         "phone_shot_cancelled" to "Screen capture was cancelled.",
-        "phone_shot_unavailable" to "Rivet couldn't capture the screen. Open Rivet and try again.",
+        "phone_shot_unavailable" to "Rivet couldn't start screen capture on this device.",
+        "phone_shot_needs_foreground" to "Rivet needs to be on screen to ask for capture permission — bring Rivet to the front and retry",
         "phone_shot_notifications_off" to "Turn on Rivet's Screen capture notifications, then try again.",
         "phone_shot_busy" to "Finish or cancel the current screen capture, then try again.",
         "termux_missing" to "Install the Termux app, then follow the setup in Settings → Phone access.",
@@ -130,7 +131,8 @@ internal object AgentToolError {
     private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",
-        "foreground_service_unavailable", "preview_unavailable", "phone_shot_denied", "phone_shot_cancelled")
+        "foreground_service_unavailable", "preview_unavailable", "phone_shot_denied", "phone_shot_cancelled",
+        "phone_shot_needs_foreground")
 
     fun content(code: String, statusCode: Int? = null, subject: String? = null): String {
         val baseCode = if (code.startsWith("owned_by_worker:")) "owned_by_worker" else code

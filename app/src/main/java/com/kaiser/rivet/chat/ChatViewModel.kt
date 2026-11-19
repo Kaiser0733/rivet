@@ -1541,6 +1541,9 @@ class ChatViewModel private constructor(
                             if (status == "phone_shot_armed") _uiState.update {
                                 it.copy(activity = "Switch apps, then tap Capture now in Rivet’s notification.")
                             }
+                            if (status == com.kaiser.rivet.ui.phone.PHONE_SHOT_WAITING_FOREGROUND) _uiState.update {
+                                it.copy(activity = "Waiting for Rivet to return to the screen to ask for capture permission.")
+                            }
                         }
                     }
                 }

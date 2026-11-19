@@ -68,4 +68,15 @@ class AgentToolErrorTest {
             AgentToolError.deterministicCode(failure("output_unavailable")))
     }
 
+    @Test fun phoneShotFailuresSayWhatActuallyHappened() {
+        assertEquals("Rivet needs to be on screen to ask for capture permission — bring Rivet to the front and retry",
+            requiredAction(AgentToolError.content("phone_shot_needs_foreground")))
+        val unavailable = requiredAction(AgentToolError.content("phone_shot_unavailable"))
+        assertNotNull(unavailable)
+        assertTrue(!unavailable!!.contains("Open Rivet"))
+        assertEquals("Screen capture was declined.", requiredAction(AgentToolError.content("phone_shot_denied")))
+        assertEquals("Screen capture was cancelled.", requiredAction(AgentToolError.content("phone_shot_cancelled")))
+        assertNotNull(requiredAction(AgentToolError.content("phone_shot_notifications_off")))
+    }
+
 }
