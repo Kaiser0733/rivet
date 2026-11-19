@@ -482,11 +482,15 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                             tint = if (canChooseProject) MaterialTheme.colorScheme.onBackground
                                 else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f))
                     }
-                    // Subagent chip slot; the empty state is the same 48dp spacer so the
-                    // header does not jump when the first worker appears.
+                    // Subagent chip: the label opens the newest worker's sheet, the
+                    // chevron lists every worker of this chat.
                     SubagentChip(
                         workers = subagents,
                         onWorkerClick = { worker ->
+                            selectedWorkerId = worker.id
+                            chatViewModel.openWorker(worker.id)
+                        },
+                        onChipClick = { worker ->
                             selectedWorkerId = worker.id
                             chatViewModel.openWorker(worker.id)
                         },

@@ -19,10 +19,10 @@ class SubagentChipTest {
         state = state,
     )
 
-    @Test fun zeroWorkersRendersTheEmptySpacerInsteadOfAChipLabel() {
+    @Test fun zeroWorkersRendersNoChipLabel() {
         assertNull(subagentChipText(0))
-        assertEquals("1 subagent ⌄", subagentChipText(1))
-        assertEquals("3 subagents ⌄", subagentChipText(3))
+        assertEquals("1 subagent", subagentChipText(1))
+        assertEquals("3 subagents", subagentChipText(3))
     }
 
     @Test fun popoverStateAndActivityFollowTheWorkerRecord() {
