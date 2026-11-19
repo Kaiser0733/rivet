@@ -459,42 +459,45 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                                 tint = MaterialTheme.colorScheme.onBackground)
                         }
                     }
-                    // Title: session title or project name (tappable to choose project)
+                    // Title: session title or project name (tappable to choose project).
+                    // The subagent chip overlays the title's trailing edge so the action
+                    // icons below keep their positions when workers appear or finish.
                     val titleText = state.currentSessionTitle ?: state.projectName ?: "Rivet"
                     val canChooseProject = providers.configs.isNotEmpty() && state.ready &&
                         !state.streaming && !state.projectLoading && !state.undoing &&
                         !state.recoveringProjectChanges
-                    Row(
-                        modifier = Modifier
-                            .weight(1f)
-                            .padding(horizontal = 8.dp)
-                            .clickable(enabled = canChooseProject, onClick = ::chooseProject),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text(titleText,
-                            style = MaterialTheme.typography.titleMedium,
-                            color = MaterialTheme.colorScheme.onBackground,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis)
-                        Icon(
-                            painterResource(R.drawable.ic_chevron_down),
-                            contentDescription = null,
-                            modifier = Modifier.size(18.dp).padding(start = 2.dp),
-                            tint = if (canChooseProject) MaterialTheme.colorScheme.onBackground
-                                else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f))
+                    Box(Modifier.weight(1f)) {
+                        Row(
+                            modifier = Modifier
+                                .fillMaxWidth()
+                                .padding(start = 8.dp, end = chatTitleEndPaddingDp(subagents.size).dp)
+                                .clickable(enabled = canChooseProject, onClick = ::chooseProject),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(titleText,
+                                style = MaterialTheme.typography.titleMedium,
+                                color = MaterialTheme.colorScheme.onBackground,
+                                maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                            Icon(
+                                painterResource(R.drawable.ic_chevron_down),
+                                contentDescription = null,
+                                modifier = Modifier.size(18.dp).padding(start = 2.dp),
+                                tint = if (canChooseProject) MaterialTheme.colorScheme.onBackground
+                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f))
+                        }
+                        SubagentChip(
+                            workers = subagents,
+                            onWorkerClick = { worker ->
+                                selectedWorkerId = worker.id
+                                chatViewModel.openWorker(worker.id)
+                            },
+                            onChipClick = { worker ->
+                                selectedWorkerId = worker.id
+                                chatViewModel.openWorker(worker.id)
+                            },
+                            modifier = Modifier.align(Alignment.CenterEnd),
+                        )
                     }
-                    // Subagent chip: the label opens the newest worker's sheet, the
-                    // chevron lists every worker of this chat.
-                    SubagentChip(
-                        workers = subagents,
-                        onWorkerClick = { worker ->
-                            selectedWorkerId = worker.id
-                            chatViewModel.openWorker(worker.id)
-                        },
-                        onChipClick = { worker ->
-                            selectedWorkerId = worker.id
-                            chatViewModel.openWorker(worker.id)
-                        },
-                    )
                     // Browser action
                     IconButton(onClick = onOpenBrowser, modifier = Modifier.size(48.dp)) {
                         Icon(painterResource(R.drawable.ic_browser), "Browser",

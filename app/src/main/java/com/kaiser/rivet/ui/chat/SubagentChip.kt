@@ -5,10 +5,8 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
-import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
 import androidx.compose.material3.DropdownMenu
 import androidx.compose.material3.DropdownMenuItem
@@ -59,10 +57,7 @@ internal fun SubagentChip(
     onChipClick: (WorkerRecord) -> Unit,
     modifier: Modifier = Modifier,
 ) {
-    if (workers.isEmpty()) {
-        Spacer(Modifier.size(48.dp))
-        return
-    }
+    if (workers.isEmpty()) return
     var open by remember { mutableStateOf(false) }
     Row(modifier.heightIn(min = 48.dp), verticalAlignment = Alignment.CenterVertically) {
         TextButton(
