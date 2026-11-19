@@ -22,6 +22,14 @@ class ProviderMessageTextTest {
             providerMessageText("quota &gt; limit &amp; frozen"))
     }
 
+    @Test fun numericAndExtendedNamedEntitiesAreDecoded() {
+        assertEquals("a\nb & c", decodeEntities("a&#10;b &amp; c"))
+        assertEquals("A", decodeEntities("&#65;"))
+        assertEquals("A", decodeEntities("&#x41;"))
+        assertEquals("it's — fine…", decodeEntities("it&apos;s &mdash; fine&hellip;"))
+        assertEquals("&bogus;", decodeEntities("&bogus;"))
+    }
+
     @Test fun whitespaceIsCollapsedSoTheLineStaysReadable() {
         assertEquals("The provider said: upstream connect error",
             providerMessageText("  upstream   connect\n\terror  "))

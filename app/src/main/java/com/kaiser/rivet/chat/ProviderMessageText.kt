@@ -20,14 +20,36 @@ internal fun providerMessageText(raw: String): String? {
     return "The provider said: $capped"
 }
 
-private fun decodeEntities(value: String): String = value
-    .replace("&nbsp;", " ")
-    .replace("&quot;", "\"")
-    .replace("&#39;", "'")
-    .replace("&apos;", "'")
-    .replace("&lt;", "<")
-    .replace("&gt;", ">")
-    .replace("&amp;", "&")
+internal fun decodeEntities(value: String): String = ENTITY.replace(value) { match ->
+    val named = match.groups[3]?.value
+    if (named != null) {
+        NAMED_ENTITIES[named] ?: match.value
+    } else {
+        val hex = match.groups[1]?.value
+        val code = if (hex != null) hex.toIntOrNull(16)
+        else match.groups[2]?.value?.toIntOrNull()
+        if (code != null && code in 0..0x10FFFF && code !in 0xD800..0xDFFF)
+            String(Character.toChars(code))
+        else match.value
+    }
+}
+
+private val ENTITY = Regex("&(?:#(?:[xX]([0-9a-fA-F]+)|([0-9]+))|([a-zA-Z]+));")
+private val NAMED_ENTITIES = mapOf(
+    "nbsp" to " ",
+    "quot" to "\"",
+    "apos" to "'",
+    "lt" to "<",
+    "gt" to ">",
+    "amp" to "&",
+    "ndash" to "–",
+    "mdash" to "—",
+    "hellip" to "…",
+    "lsquo" to "‘",
+    "rsquo" to "’",
+    "ldquo" to "“",
+    "rdquo" to "”",
+)
 
 private val TAG = Regex("<[^>]*>")
 private val WHITESPACE = Regex("\\s+")

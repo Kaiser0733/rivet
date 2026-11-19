@@ -1658,14 +1658,47 @@ private fun BrowserImage(image: ChatMarkdownBlock.Image, unavailable: String = "
 }
 
 @Composable
+private fun MarkdownTableCell(text: String, header: Boolean) {
+    Text(displaySafeText(text),
+        modifier = Modifier.widthIn(min = 88.dp, max = 160.dp)
+            .padding(horizontal = 8.dp, vertical = 6.dp),
+        style = MaterialTheme.typography.bodySmall.copy(
+            fontFamily = FontFamily.Monospace,
+            fontWeight = if (header) FontWeight.SemiBold else null,
+        ))
+}
+
+@Composable
+private fun MarkdownTable(table: ChatMarkdownBlock.Table) {
+    Surface(
+        color = MaterialTheme.colorScheme.surfaceContainer,
+        shape = RoundedCornerShape(6.dp),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(alpha = 0.5f)),
+    ) {
+        Column(Modifier.fillMaxWidth().horizontalScroll(rememberScrollState())) {
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                table.header.forEach { MarkdownTableCell(it, header = true) }
+            }
+            HorizontalDivider(color = MaterialTheme.colorScheme.outline.copy(alpha = 0.35f))
+            table.rows.forEach { row ->
+                Row(verticalAlignment = Alignment.CenterVertically) {
+                    row.forEach { MarkdownTableCell(it, header = false) }
+                }
+            }
+        }
+    }
+}
+
+@Composable
 private fun AssistantMessage(text: String, streaming: Boolean) {
+    val decoded = remember(text) { com.kaiser.rivet.chat.decodeEntities(text) }
     Column(
         modifier = Modifier.fillMaxWidth(),
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (streaming) {
-            Text(text, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
-        } else AssistantMarkdown(text)
+            Text(decoded, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
+        } else AssistantMarkdown(decoded)
     }
 }
 
@@ -1704,6 +1737,7 @@ private fun AssistantMarkdown(text: String) {
                     }
                 }
                 is ChatMarkdownBlock.Image -> BrowserImage(block)
+                is ChatMarkdownBlock.Table -> MarkdownTable(block)
                 is ChatMarkdownBlock.Code -> Column(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         if (block.language.isNotBlank()) Text(displaySafeText(block.language),

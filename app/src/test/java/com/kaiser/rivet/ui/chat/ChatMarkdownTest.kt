@@ -27,6 +27,23 @@ class ChatMarkdownTest {
         )
     }
 
+    @Test fun pipeTablesBecomeGridRows() {
+        assertEquals(
+            listOf(ChatMarkdownBlock.Table(
+                header = listOf("Name", "Value"),
+                rows = listOf(listOf("alpha", "1"), listOf("beta", "2")),
+            )),
+            parseAssistantMarkdown("| Name | Value |\n| --- | :---: |\n| alpha | 1 |\n| beta | 2 |"),
+        )
+        assertEquals(
+            listOf(ChatMarkdownBlock.Table(
+                header = listOf("Name", "Value"),
+                rows = listOf(listOf("alpha", "1")),
+            )),
+            parseAssistantMarkdown("Name | Value\n--- | ---\nalpha | 1"),
+        )
+    }
+
     @Test fun inlineEmphasisAndCodeBecomeStyledRuns() {
         val runs = parseInlineMarkdown("a **bold** and *italic* with `code`")
 
@@ -76,6 +93,10 @@ class ChatMarkdownTest {
                     is ChatMarkdownBlock.ListItems -> block.items.forEach(::parseInlineMarkdown)
                     is ChatMarkdownBlock.Code -> Unit
                     is ChatMarkdownBlock.Image -> Unit
+                    is ChatMarkdownBlock.Table -> {
+                        block.header.forEach(::parseInlineMarkdown)
+                        block.rows.flatten().forEach(::parseInlineMarkdown)
+                    }
                 }
             }
         }
@@ -97,6 +118,8 @@ class ChatMarkdownTest {
             "\n\n\n",
             "para\r\nwith crlf\r\n\r\n- x\r\n",
             "```\nopen fence\n\n# not a heading inside\n```\nafter\n\n## heading\n",
+            "| Name | Value |\n| --- | --- |\n| alpha | 1 |\n| beta | 2 |\n",
+            "Name | Value\n--- | ---\nalpha | 1\n",
         )
         for (document in documents) {
             val parser = MarkdownBlocks()

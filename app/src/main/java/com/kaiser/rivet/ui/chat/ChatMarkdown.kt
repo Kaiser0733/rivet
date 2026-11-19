@@ -7,6 +7,7 @@ internal sealed interface ChatMarkdownBlock {
     data class ListItems(val ordered: Boolean, val start: Int, val items: List<String>) : ChatMarkdownBlock
     data class Code(val language: String, val text: String) : ChatMarkdownBlock
     data class Image(val alt: String, val source: String) : ChatMarkdownBlock
+    data class Table(val header: List<String>, val rows: List<List<String>>) : ChatMarkdownBlock
 }
 
 internal data class InlineRun(
@@ -77,6 +78,13 @@ private fun parseBlocks(source: String): Pair<List<ChatMarkdownBlock>, IntArray>
             blocks += ChatMarkdownBlock.Quote(quote.joinToString("\n"))
             continue
         }
+        val table = tableBlock(lines, line)
+        if (table != null) {
+            blockStarts += lineStarts[line]
+            blocks += table.first
+            line = table.second
+            continue
+        }
         val firstItem = listItem(trimmed)
         if (firstItem != null) {
             blockStarts += lineStarts[line]
@@ -97,7 +105,8 @@ private fun parseBlocks(source: String): Pair<List<ChatMarkdownBlock>, IntArray>
         while (line < lines.size && lines[line].isNotBlank()) {
             val value = lines[line].trimStart()
             if (paragraph.isNotEmpty() && (value.startsWith("```") || heading(value) != null ||
-                    value.startsWith(">") || listItem(value) != null || image(value) != null)) break
+                    value.startsWith(">") || listItem(value) != null || image(value) != null ||
+                    tableBlock(lines, line) != null)) break
             paragraph += lines[line]
             line++
         }
@@ -171,6 +180,32 @@ private fun heading(line: String): ChatMarkdownBlock.Heading? {
     return if (level in 1..3 && line.length > level && line[level].isWhitespace()) {
         ChatMarkdownBlock.Heading(level, line.drop(level).trimStart())
     } else null
+}
+
+private val TABLE_SEPARATOR = Regex("^:?-{3,}:?$")
+
+private fun tableCells(line: String): List<String>? {
+    if ('|' !in line) return null
+    val body = line.trim().removePrefix("|").removeSuffix("|")
+    return body.split('|').map { it.trim() }
+}
+
+private fun tableBlock(lines: List<String>, start: Int): Pair<ChatMarkdownBlock.Table, Int>? {
+    if (start + 1 >= lines.size) return null
+    val header = tableCells(lines[start]) ?: return null
+    val separator = tableCells(lines[start + 1]) ?: return null
+    if (header.size != separator.size || header.isEmpty()) return null
+    if (separator.any { !TABLE_SEPARATOR.matches(it) }) return null
+    val rows = ArrayList<List<String>>()
+    var line = start + 2
+    while (line < lines.size) {
+        if (lines[line].isBlank()) break
+        val row = tableCells(lines[line]) ?: break
+        if (row.size != header.size) break
+        rows += row
+        line++
+    }
+    return ChatMarkdownBlock.Table(header, rows) to line
 }
 
 private data class ListMarker(val ordered: Boolean, val number: Int, val text: String)
