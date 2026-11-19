@@ -2,7 +2,9 @@ package com.kaiser.rivet.workspace
 
 import com.kaiser.rivet.agent.AgentWorkspaceFailure
 import com.kaiser.rivet.agent.RoutedAgentWorkspace
+import com.kaiser.rivet.subagent.BriefParse
 import com.kaiser.rivet.subagent.FileScopeRegistry
+import com.kaiser.rivet.subagent.WorkerBrief
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.*
 import org.junit.Rule
@@ -25,6 +27,11 @@ class InboxRoutingTest {
         assertEquals("missing", (runCatching { router.read("inbox/private.txt") }.exceptionOrNull() as AgentWorkspaceFailure).code)
         assertEquals("inbox_read_only",
             (runCatching { router.createFile("inbox/new") }.exceptionOrNull() as AgentWorkspaceFailure).code)
+    }
+
+    @Test fun workerBriefRejectsAnExternalScopeBeforeRegistration() {
+        val brief = WorkerBrief.parse("""{"job":"review","brief":"read a file","write_scope":["grants/Downloads"]}""")
+        assertTrue(brief is BriefParse.Invalid)
     }
 
     @Test fun workerScopeCannotAuthorizeGrantWrites() {

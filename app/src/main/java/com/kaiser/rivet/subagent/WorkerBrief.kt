@@ -1,5 +1,6 @@
 package com.kaiser.rivet.subagent
 
+import com.kaiser.rivet.workspace.GrantPath
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
 import kotlinx.serialization.json.Json
@@ -55,6 +56,7 @@ data class WorkerBrief(
         if (brief.toByteArray(Charsets.UTF_8).size > MAX_BRIEF_BYTES) {
             return "brief must be at most $MAX_BRIEF_BYTES UTF-8 bytes"
         }
+        if (writeScope.any { GrantPath.isExternal(it.value) }) return "write_scope must use project paths"
         if (writeScope.size > MAX_SCOPE_PATHS) {
             return "write_scope must contain at most $MAX_SCOPE_PATHS paths"
         }
