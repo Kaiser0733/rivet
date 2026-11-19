@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from zipfile import ZipFile
 from release_identity import verify_release_identity
-from runtime_manifest import verify_apk_runtime_manifest
+from runtime_manifest import ALLOWED_PERMISSIONS, verify_apk_runtime_manifest
 
 if len(sys.argv) not in (5, 7):
     sys.exit(__doc__)
@@ -62,18 +62,8 @@ requested = {
     for line in badging_lines
     if (match := re.search(r"uses-permission(?:-sdk-\d+)?: name='([^']+)'", line))
 }
-allowed_permissions = {
-    "android.permission.INTERNET",
-    "android.permission.FOREGROUND_SERVICE",
-    "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
-    "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
-    "android.permission.POST_NOTIFICATIONS",
-    "android.permission.ACCESS_NETWORK_STATE",
-    # AndroidX adds its signature-protected helper for non-exported receivers.
-    "com.kaiser.rivet.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
-}
 assert "android.permission.INTERNET" in requested, "APK is missing INTERNET"
-assert requested <= allowed_permissions, f"Unexpected APK permissions: {sorted(requested - allowed_permissions)}"
+assert requested <= ALLOWED_PERMISSIONS, f"Unexpected APK permissions: {sorted(requested - ALLOWED_PERMISSIONS)}"
 manifest = run(str(tools / "aapt"), "dump", "xmltree", apk, "AndroidManifest.xml")
 verify_apk_runtime_manifest(manifest, requested)
 for forbidden in (

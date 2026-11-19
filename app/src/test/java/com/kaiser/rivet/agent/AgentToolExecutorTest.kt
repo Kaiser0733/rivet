@@ -413,7 +413,8 @@ class AgentToolExecutorTest {
         assertEquals(listOf("git_status", "git_diff", "list_directory", "read_file", "search_files", "skill", "remember", "write_file", "apply_patch",
             "create_file", "create_directory", "rename_path", "move_path", "delete_path", "run_command",
             "spawn_process", "process_output", "list_processes", "stop_process", "start_preview", "download_file",
-            "open_app", "open_url", "open_file", "share_out", "compose_intent"), names)
+            "open_app", "open_url", "open_file", "share_out", "compose_intent",
+            "termux_command", "phone_shot"), names)
         assertTrue(names.none { it in setOf("shell", "terminal", "exec", "bash") })
     }
 

@@ -3,8 +3,10 @@ package com.kaiser.rivet
 import android.app.Application
 import com.kaiser.rivet.local.LocalRuntime
 import com.kaiser.rivet.runtime.ManagedProcesses
+import com.kaiser.rivet.ui.phone.PhoneCaptureCoordinator
 
 class RivetApplication : Application() {
+    internal val phoneCapture by lazy { PhoneCaptureCoordinator(this) }
     val managedProcesses by lazy(LazyThreadSafetyMode.SYNCHRONIZED) { ManagedProcesses() }
 
     override fun onCreate() {

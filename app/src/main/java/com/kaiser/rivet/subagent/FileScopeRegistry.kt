@@ -1,6 +1,7 @@
 package com.kaiser.rivet.subagent
 
 import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.workspace.GrantPath
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
 import kotlinx.serialization.json.Json
@@ -61,7 +62,7 @@ class FileScopeRegistry {
         return synchronized(lock) {
             if (writer != COORDINATOR) {
                 val own = scopes[writer] ?: return@synchronized OUTSIDE_FILE_SCOPE
-                if (paths.any { target -> own.paths.none { target.isWithin(it) } }) {
+                if (paths.any { target -> GrantPath.isExternal(target.value) || own.paths.none { target.isWithin(it) } }) {
                     return@synchronized OUTSIDE_FILE_SCOPE
                 }
             }

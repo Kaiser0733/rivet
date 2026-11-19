@@ -15,11 +15,16 @@ import com.kaiser.rivet.runtime.PreviewPaths
 import com.kaiser.rivet.runtime.PreviewLaunch
 import com.kaiser.rivet.runtime.ProjectDownloader
 import com.kaiser.rivet.runtime.DownloadFailure
+import com.kaiser.rivet.workspace.GrantPath
+import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
 import java.io.InputStream
 import java.io.FileInputStream
 import kotlinx.coroutines.CancellationException
+import com.kaiser.rivet.runtime.PhoneCaptureTool
 import com.kaiser.rivet.runtime.PhoneIntents
+import com.kaiser.rivet.runtime.TermuxBridge
+import com.kaiser.rivet.subagent.FileScopeRegistry
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
@@ -111,6 +116,9 @@ class AgentToolExecutor(
     private val readCommandOutput: (suspend (String, String?) -> CommandOutputCache.CachedOutput?)? = null,
     private val readProcessOutput: (suspend (String, String?, Int?, Int?, String?, Int?) -> ProcessOutputSnapshot?)? = null,
     private val spawnProcess: (suspend (String, String, Long, Long, String?) -> BackgroundLaunch)? = null,
+    private val worker: Boolean = false,
+    private val preparePhoneShot: ((AgentToolCall) -> PreparedAgentTool)? = null,
+    private val prepareTermuxCommand: ((AgentToolCall) -> PreparedAgentTool)? = null,
     private val preparePhoneIntent: ((AgentToolCall) -> PreparedAgentTool?)? = null,
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
@@ -119,9 +127,13 @@ class AgentToolExecutor(
         return try {
             when (call.name) {
                 "git_status" -> {
-                    json.decodeFromString<GitStatusArgs>(call.arguments)
+                    val args = json.decodeFromString<GitStatusArgs>(call.arguments)
+                    val path = path(args.path, root = true)
                     readOnly(call) {
-                        val status = gitStatus?.invoke() ?: throw AgentWorkspaceFailure("runtime_unavailable")
+                        val status = if (workspace is RoutedAgentWorkspace && GrantPath.isExternal(path)) {
+                            GrantPath.parse(path)
+                            RepositoryStatus(present = false)
+                        } else gitStatus?.invoke() ?: throw AgentWorkspaceFailure("runtime_unavailable")
                         success(call, boundedGitStatus(status), "Git status")
                     }
                 }
@@ -129,7 +141,10 @@ class AgentToolExecutor(
                     val args = json.decodeFromString<GitDiffArgs>(call.arguments)
                     val path = path(args.path, root = true)
                     readOnly(call) {
-                        val diff = gitDiff?.invoke(path) ?: throw AgentWorkspaceFailure("runtime_unavailable")
+                        val diff = if (workspace is RoutedAgentWorkspace && GrantPath.isExternal(path)) {
+                            GrantPath.parse(path)
+                            RepositoryDiff(present = false, text = "", limited = false, files = 0)
+                        } else gitDiff?.invoke(path) ?: throw AgentWorkspaceFailure("runtime_unavailable")
                         var text = diff.text
                         var value = gitDiffValue(diff, text)
                         while (value.toString().toByteArray(Charsets.UTF_8).size > AgentLoop.MAX_TOOL_RESULT_BYTES) {
@@ -279,6 +294,7 @@ class AgentToolExecutor(
                 "move_path" -> {
                     val args = json.decodeFromString<MoveArgs>(call.arguments)
                     val path = path(args.path); val destination = path(args.destination, root = true)
+                    externalTargets(call)
                     val approvedSource = workspace.observeStructural(path, recursive = true)
                     val approvedDestination = workspace.observeStructural(destination, recursive = false)
                     mutation(call, "Move", "$path\n→ ${destination.ifEmpty { "." }}",
@@ -510,18 +526,20 @@ class AgentToolExecutor(
                     val contentHash = args.contentSha256?.also {
                         if (!CONTENT_SHA.matches(it)) throw AgentWorkspaceFailure("invalid_checksum")
                     }
+                    val external = externalTargets(call)
                     val client = downloader ?: throw AgentWorkspaceFailure("runtime_unavailable")
                     val host = client.hostForDisplay(args.url)
                     PreparedAgentTool(call,
-                        AgentApprovalRequest(call, "Download project file", "$target\nFrom $host over HTTPS"),
+                        AgentApprovalRequest(call, if (external) "Download file" else "Download project file",
+                            "$target\nFrom $host over HTTPS" + if (external) NO_EXTERNAL_UNDO else ""),
                         resultContentLimitBytes = DOWNLOAD_RESULT_BYTES,
-                        effect = AgentToolEffect.Download,
+                        effect = if (external) AgentToolEffect.WorkspaceMutation else AgentToolEffect.Download,
                         modelRequestsApproval = args.askUser,
                     ) {
                         execute(call) {
-                            requireSafCurrent()
+                            requireFileState(call)
                             client.download(args.url, contentHash).use { staged ->
-                                requireSafCurrent()
+                                requireFileState(call)
                                 val saved = FileInputStream(staged.file).use { input ->
                                     workspace.writeDownloaded(target, input, overwriteHash)
                                 }
@@ -538,6 +556,8 @@ class AgentToolExecutor(
                         }
                     }
                 }
+                "phone_shot" -> preparePhoneShot?.invoke(call) ?: invalid(call, "unknown_tool")
+                "termux_command" -> prepareTermuxCommand?.invoke(call) ?: invalid(call, "unknown_tool")
                 "open_app", "open_url", "open_file", "share_out", "compose_intent" ->
                     preparePhoneIntent?.invoke(call) ?: invalid(call, "unknown_tool")
                 else -> invalid(call, "unknown_tool")
@@ -548,6 +568,8 @@ class AgentToolExecutor(
             invalid(call, "invalid_arguments")
         } catch (_: InvalidPath) {
             invalid(call, "invalid_path")
+        } catch (e: WorkspaceFailure) {
+            invalid(call, e.reason.name.lowercase())
         } catch (e: AgentWorkspaceFailure) {
             invalid(call, e.code)
         } catch (e: DownloadFailure) {
@@ -555,12 +577,18 @@ class AgentToolExecutor(
         }
     }
 
+    private suspend fun requireFileState(call: AgentToolCall) {
+        if (workspace !is RoutedAgentWorkspace || FileScopeRegistry.mutationPaths(call).none { GrantPath.isExternal(it.value) }) {
+            requireSafCurrent()
+        }
+    }
+
     private fun readOnly(call: AgentToolCall, action: suspend () -> AgentToolResult) =
         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
-            execute(call) { requireSafCurrent(); action() }
+            execute(call) { requireFileState(call); action() }
         }
 
-    private fun mutation(
+    private suspend fun mutation(
         call: AgentToolCall,
         title: String,
         detail: String,
@@ -568,17 +596,32 @@ class AgentToolExecutor(
         destructivePath: String? = null,
         modelRequestsApproval: Boolean = false,
         action: suspend () -> AgentToolResult,
-    ) = PreparedAgentTool(
-        call, AgentApprovalRequest(call, title, detail, destructivePath),
-        // Paths contain no controls: three UTF-8 bytes per UTF-16 unit covers
-        // their JSON representation. Fixed fields, hashes and numbers fit in 512.
-        resultContentLimitBytes = minOf(AgentLoop.MAX_TOOL_RESULT_BYTES, 512 + resultPathChars * 3),
-        effect = if (destructivePath == null) AgentToolEffect.WorkspaceMutation
-            else AgentToolEffect.DestructiveWorkspaceMutation,
-        basicAutonomyRisk = if (destructivePath == null) BasicAutonomyRisk.Routine
-            else BasicAutonomyRisk.Elevated,
-        modelRequestsApproval = modelRequestsApproval,
-    ) { execute(call) { requireSafCurrent(); action() } }
+    ): PreparedAgentTool {
+        val external = externalTargets(call)
+        return PreparedAgentTool(
+            call, AgentApprovalRequest(call, title, detail + if (external) NO_EXTERNAL_UNDO else "", destructivePath),
+            // Paths contain no controls: three UTF-8 bytes per UTF-16 unit covers
+            // their JSON representation. Fixed fields, hashes and numbers fit in 512.
+            resultContentLimitBytes = minOf(AgentLoop.MAX_TOOL_RESULT_BYTES, 512 + resultPathChars * 3),
+            effect = if (external || destructivePath == null) AgentToolEffect.WorkspaceMutation
+                else AgentToolEffect.DestructiveWorkspaceMutation,
+            basicAutonomyRisk = if (destructivePath == null && !external) BasicAutonomyRisk.Routine
+                else BasicAutonomyRisk.Elevated,
+            modelRequestsApproval = modelRequestsApproval,
+        ) { execute(call) { requireFileState(call); action() } }
+    }
+
+    private suspend fun externalTargets(call: AgentToolCall): Boolean {
+        val router = workspace as? RoutedAgentWorkspace ?: return false
+        val targets = FileScopeRegistry.mutationPaths(call)
+        val external = targets.filter { GrantPath.isExternal(it.value) }
+        if (external.isEmpty()) return false
+        if (call.name == "move_path" && targets.map { GrantPath.parse(it.value).prefix }.distinct().size > 1) {
+            throw AgentWorkspaceFailure("cross_folder_move")
+        }
+        external.forEach { router.checkWrite(it.value) }
+        return true
+    }
 
     suspend fun describeDestructive(request: AgentApprovalRequest): AgentApprovalRequest {
         val target = request.destructivePath ?: return request
@@ -602,6 +645,8 @@ class AgentToolExecutor(
         action()
     } catch (e: CancellationException) {
         throw e
+    } catch (e: WorkspaceFailure) {
+        failure(call, e.reason.name.lowercase())
     } catch (e: AgentWorkspaceFailure) {
         failure(call, e.code)
     } catch (e: MirrorFailure) {
@@ -766,6 +811,7 @@ class AgentToolExecutor(
             if (root) return value
             throw InvalidPath()
         }
+        if (worker && GrantPath.isExternal(value)) throw AgentWorkspaceFailure("outside_file_scope")
         if (value.length > 4096) throw InvalidPath()
         val segments = value.split('/')
         if (segments.size > 64 || segments.any { it.isBlank() || it == "." || it == ".." || it.endsWith('.') || it.length > 255 ||
@@ -859,7 +905,7 @@ class AgentToolExecutor(
     )
     @Serializable private data class MoveArgs(val path: String, val destination: String,
         @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false)
-    @Serializable private class GitStatusArgs
+    @Serializable private data class GitStatusArgs(val path: String = "")
     @Serializable private class NoArgs
     @Serializable private data class StopProcessArgs(
         @kotlinx.serialization.SerialName("process_id") val processId: String,
@@ -924,6 +970,7 @@ class AgentToolExecutor(
             put("required", JsonArray(required.map(::JsonPrimitive)))
             put("additionalProperties", false)
         }
+        private const val NO_EXTERNAL_UNDO = "\nFiles outside the project have no checkpoint or Undo."
         private val string = buildJsonObject { put("type", "string") }
         private val nonNegativeInteger = buildJsonObject { put("type", "integer"); put("minimum", 0) }
         private val boolean = buildJsonObject {
@@ -939,8 +986,10 @@ class AgentToolExecutor(
         private val contentSha = "content_sha256" to string
         private val path = "path" to string
 
+        internal val phoneOnlyNames = PhoneIntents.names + setOf("termux_command", "phone_shot")
+
         val definitions = listOf(
-            AgentToolDefinition("git_status", "Inspect the selected workspace's Git branch, staged, modified, deleted, untracked, and conflicting paths without changing its repository. A non-Git workspace returns repository=false.", schema(emptyList())),
+            AgentToolDefinition("git_status", "Inspect the selected workspace's Git branch, staged, modified, deleted, untracked, and conflicting paths without changing its repository. A non-Git workspace or a grants/<label> path returns repository=false.", schema(emptyList(), path)),
             AgentToolDefinition("git_diff", "Inspect a bounded Git diff of tracked changes. Supply a workspace-relative path to focus on one file; empty path covers the repository. Staged and unstaged changes are labeled. Untracked files are listed by git_status, not diffed.", schema(emptyList(), path)),
             AgentToolDefinition("list_directory", "List a workspace directory. Empty path means workspace root.", schema(emptyList(), path)),
             AgentToolDefinition(
@@ -989,6 +1038,6 @@ class AgentToolExecutor(
             AgentToolDefinition("stop_process", "Stop one active Rivet-owned command, background process, or preview by its opaque process_id. This does not accept operating-system PIDs. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("process_id"), processId, askUser)),
             AgentToolDefinition("start_preview", "Serve static project files from the selected workspace on this device's 127.0.0.1 loopback address. It stays available after this tool returns; use the returned URL. It is visible and stoppable in Processes. root is the static directory relative to the selected project (empty means project root). entry may be relative to root, such as index.html, or equivalent project-relative site/index.html. Example: {\"root\":\"site\",\"entry\":\"index.html\"}. / serves entry and relative assets resolve under root. GET and HEAD only; no execution, directory listing, LAN access, or uploads. Ask mode requires approval. Basic YOLO may start this read-only loopback preview automatically. In Basic YOLO set ask_user=true to request confirmation.", schema(listOf("entry"), entry, root, askUser)),
             AgentToolDefinition("download_file", "Download one HTTPS file into the selected project. The streamed temporary copy is limited to 64 MiB and at most five revalidated HTTPS redirects; Rivet uses no provider credentials or cookies and never executes or installs the file. For an existing destination, provide expected_sha256 with its current hash before replacing it. content_sha256 optionally verifies the downloaded bytes. Ask mode and Basic YOLO require approval; YOLO skips the prompt but keeps scheme, path, size, hash, and workspace checks. In Basic YOLO, ask_user=true requests confirmation.", schema(listOf("url", "path"), url, path, expectedSha, contentSha, askUser)),
-        ) + PhoneIntents.definitions
+        ) + PhoneIntents.definitions + TermuxBridge.definition + PhoneCaptureTool.definition
     }
 }

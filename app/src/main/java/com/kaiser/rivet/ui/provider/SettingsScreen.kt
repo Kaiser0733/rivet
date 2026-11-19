@@ -1,6 +1,9 @@
 package com.kaiser.rivet.ui.provider
 
+import android.app.Activity
 import androidx.activity.compose.BackHandler
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.annotation.DrawableRes
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
@@ -41,6 +44,8 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -51,7 +56,12 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalView
 import androidx.compose.ui.res.painterResource
+import androidx.lifecycle.Lifecycle
+import androidx.lifecycle.LifecycleEventObserver
+import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.text.font.FontFamily
@@ -70,6 +80,12 @@ import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.RivetThemeMode
 import com.kaiser.rivet.ui.chat.displaySafeText
+import com.kaiser.rivet.runtime.TermuxBridge
+import com.kaiser.rivet.runtime.TermuxCommand
+import com.kaiser.rivet.workspace.AndroidGrantedFolders
+import com.kaiser.rivet.workspace.FolderGrant
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.launch
 
 private val MAX_WIDTH = 680.dp
 
@@ -629,6 +645,9 @@ private fun PhoneAccessDetail() {
             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
             style = MaterialTheme.typography.bodyMedium)
 
+        GrantedFoldersSettings()
+        TermuxSettings()
+
         SectionHeading("Advanced")
         SectionListItem(
             iconRes = R.drawable.ic_settings,
@@ -657,6 +676,98 @@ private fun PhoneAccessDetail() {
             }
         }
     }
+}
+
+@Composable
+private fun GrantedFoldersSettings() {
+    val context = LocalContext.current
+    val owner = LocalView.current.findViewTreeLifecycleOwner()
+    val registry = remember(context) { AndroidGrantedFolders(context) }
+    val scope = rememberCoroutineScope()
+    var folders by remember { mutableStateOf<List<FolderGrant>>(emptyList()) }
+    var feedback by remember { mutableStateOf<String?>(null) }
+    suspend fun update(error: String, action: suspend () -> Unit = {}) {
+        try {
+            action()
+            folders = registry.list()
+            feedback = null
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            feedback = error
+        }
+    }
+
+    LaunchedEffect(registry) { update("Couldn't read folder access.") }
+    DisposableEffect(owner, registry) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) scope.launch { update("Couldn't read folder access.") }
+        }
+        owner?.lifecycle?.addObserver(observer)
+        onDispose { owner?.lifecycle?.removeObserver(observer) }
+    }
+    val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val data = result.data
+        val uri = data?.data
+        if (result.resultCode == Activity.RESULT_OK && data != null && uri != null) {
+            scope.launch { update("Couldn't keep access to that folder. Choose it again.") { registry.add(uri, data.flags) } }
+        }
+    }
+    SectionHeading("Granted folders")
+    if (folders.isEmpty()) Text("No folders added.", style = MaterialTheme.typography.bodyMedium)
+    folders.forEach { grant ->
+        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+            Column(Modifier.weight(1f)) {
+                Text("grants/${grant.id}", style = MaterialTheme.typography.bodyMedium)
+                Text(when {
+                    grant.revoked -> "Revoked — add the folder again to restore access"
+                    grant.write -> "Read and write"
+                    else -> "Read-only"
+                }, style = MaterialTheme.typography.bodySmall)
+            }
+            TextButton(onClick = {
+                scope.launch { update("Couldn't remove that folder.") { registry.remove(grant.id) } }
+            }) { Text("Remove") }
+        }
+    }
+    TextButton(onClick = {
+        try { picker.launch(AndroidGrantedFolders.pickerIntent()) }
+        catch (_: Exception) { feedback = "Couldn't open the folder picker." }
+    }) { Text("Add folder") }
+    feedback?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    Spacer(Modifier.height(24.dp))
+}
+
+@Composable
+private fun TermuxSettings() {
+    val context = LocalContext.current
+    val owner = LocalView.current.findViewTreeLifecycleOwner()
+    val bridge = remember(context) { TermuxBridge(context) }
+    val scope = rememberCoroutineScope()
+    var installed by remember(bridge) { mutableStateOf(bridge.installed()) }
+    var testing by remember { mutableStateOf(false) }
+    var output by remember { mutableStateOf<String?>(null) }
+    DisposableEffect(owner, bridge) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) installed = bridge.installed()
+        }
+        owner?.lifecycle?.addObserver(observer)
+        onDispose { owner?.lifecycle?.removeObserver(observer) }
+    }
+    SectionHeading("Termux bridge")
+    Text(if (installed) "Installed" else "Not installed", style = MaterialTheme.typography.bodyMedium)
+    Text(TermuxCommand.SETUP, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium)
+    TextButton(enabled = installed && !testing, onClick = {
+        testing = true
+        output = null
+        scope.launch {
+            try { output = bridge.test() } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { output = "Couldn't start the Termux bridge. Try again while Rivet is open." }
+            finally { testing = false }
+        }
+    }) { Text(if (testing) "Testing…" else "Test bridge") }
+    output?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    Spacer(Modifier.height(24.dp))
 }
 
 @Composable

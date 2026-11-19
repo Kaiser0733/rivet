@@ -7,7 +7,6 @@ import android.provider.DocumentsContract
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
-import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -17,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
 class WorkspaceSelection(context: Context) {
-    private val persistence = Mutex()
+    private val persistence = AndroidGrantedFolders.permissionLock
     private val app = context.applicationContext
     private val preferences by lazy { app.getSharedPreferences("workspace", Context.MODE_PRIVATE) }
     private val resolver get() = app.contentResolver
@@ -66,16 +65,16 @@ class WorkspaceSelection(context: Context) {
         }
         val flags = returnedFlags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         try {
-            resolver.takePersistableUriPermission(uri, flags)
-            val candidate = SafWorkspace(resolver, uri)
-            if (!candidate.stat(WorkspacePath.ROOT).directory) throw WorkspaceFailure(WorkspaceFailure.Reason.NOT_DIRECTORY)
-            withContext(NonCancellable) {
-                persistence.withLock {
+            persistence.withLock {
+                resolver.takePersistableUriPermission(uri, flags)
+                val candidate = SafWorkspace(resolver, uri)
+                if (!candidate.stat(WorkspacePath.ROOT).directory) throw WorkspaceFailure(WorkspaceFailure.Reason.NOT_DIRECTORY)
+                withContext(NonCancellable) {
                     val previous = preferences.getString("tree", null)
                     if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").remove("file").commit()) {
                         throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
                     }
-                    if (previous != null && previous != uri.toString()) {
+                    if (previous != null && previous != uri.toString() && !AndroidGrantedFolders(app).owns(previous)) {
                         try {
                             resolver.persistedUriPermissions.firstOrNull { it.uri.toString() == previous }?.let {
                                 val previousFlags = (if (it.isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
@@ -85,8 +84,8 @@ class WorkspaceSelection(context: Context) {
                         } catch (_: Exception) { /* Releasing an obsolete grant cannot undo the new selection. */ }
                     }
                 }
+                candidate
             }
-            candidate
         } catch (e: CancellationException) { throw e
         } catch (e: WorkspaceFailure) { throw e
         } catch (_: Exception) { throw WorkspaceFailure(WorkspaceFailure.Reason.PERMISSION) }

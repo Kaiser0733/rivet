@@ -6,7 +6,9 @@ import android.os.Build
 import android.os.Bundle
 import androidx.activity.ComponentActivity
 import androidx.activity.compose.setContent
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.core.view.WindowCompat
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.ViewModelProvider
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.chat.SharedContent
@@ -20,9 +22,18 @@ import androidx.compose.runtime.getValue
 class MainActivity : ComponentActivity() {
     private lateinit var chatViewModel: ChatViewModel
     private val processNavigationRequest = MutableStateFlow(0)
+    private val phoneCapture get() = (application as RivetApplication).phoneCapture
+    private val capturePermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
+        phoneCapture.consent(it.resultCode, it.data)
+    }
+    private val openCapturePermission: (Intent) -> Boolean = { intent ->
+        lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED) &&
+            runCatching { capturePermission.launch(intent) }.isSuccess
+    }
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+        phoneCapture.consentLauncher = openCapturePermission
         if (Build.VERSION.SDK_INT >= 33 &&
             checkSelfPermission(android.Manifest.permission.POST_NOTIFICATIONS) !=
             android.content.pm.PackageManager.PERMISSION_GRANTED) {
@@ -52,13 +63,20 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onStop() {
+        phoneCapture.rivetVisible = false
         super.onStop()
         if (::chatViewModel.isInitialized) chatViewModel.browser.onAppBackground()
     }
 
     override fun onStart() {
         super.onStart()
+        phoneCapture.rivetVisible = true
         if (::chatViewModel.isInitialized) chatViewModel.browser.onAppForeground()
+    }
+
+    override fun onDestroy() {
+        if (phoneCapture.consentLauncher === openCapturePermission) phoneCapture.consentLauncher = null
+        super.onDestroy()
     }
 
     override fun onNewIntent(intent: android.content.Intent) {

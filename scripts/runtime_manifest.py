@@ -10,14 +10,17 @@ EXISTING_STARTUP_PROVIDER = "androidx.startup.InitializationProvider"
 EXISTING_PROFILE_RECEIVER = "androidx.profileinstaller.ProfileInstallReceiver"
 FILE_PROVIDER = "androidx.core.content.FileProvider"
 SHARED_FILES_SUFFIX = ".shared-files"
+PHONE_CAPTURE_SERVICE = "com.kaiser.rivet.ui.phone.PhoneCaptureService"
 ALLOWED_PERMISSIONS = {
     "android.permission.INTERNET",
     "android.permission.FOREGROUND_SERVICE",
     "android.permission.FOREGROUND_SERVICE_SPECIAL_USE",
     "android.permission.FOREGROUND_SERVICE_DATA_SYNC",
+    "android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION",
     "android.permission.POST_NOTIFICATIONS",
     "android.permission.ACCESS_NETWORK_STATE",
     "com.kaiser.rivet.DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION",
+    "com.termux.permission.RUN_COMMAND",
 }
 REQUIRED_PERMISSIONS = {
     "android.permission.INTERNET",
@@ -110,10 +113,26 @@ def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
     services = _elements(xmltree, "service")
     matches = [service for service in services if EXPECTED_SERVICE in service]
     downloads = [service for service in services if MODEL_DOWNLOAD_SERVICE in service]
-    assert len(matches) == 1 and len(downloads) == 1 and len(services) == 2, (
-        "APK must declare only Rivet's process and model-download services")
+    assert len(matches) == 1 and len(downloads) == 1 and len(services) in (2, 3), (
+        "APK must declare only Rivet's process, model-download, and phone-capture services")
     service = matches[0]
     download = downloads[0]
+    optional = [item for item in services if item != service and item != download]
+    if optional:
+        capture = optional[0]
+        name = (_own_attribute(capture, "android:name") or "").strip('"')
+        assert name == PHONE_CAPTURE_SERVICE, (
+            "only Rivet's process, model-download, and phone-capture services may be present")
+        assert _is_false(_own_attribute(capture, "android:exported")), (
+            "phone capture service must be explicitly non-exported")
+        capture_type = _own_attribute(capture, "android:foregroundServiceType") or ""
+        encoded = re.search(r"0x([0-9a-fA-F]+)$", capture_type)
+        if encoded:
+            capture_ok = int(encoded.group(1), 16) == 0x00000020
+        else:
+            names = {piece.strip() for piece in capture_type.split("|") if piece.strip()}
+            capture_ok = names == {"mediaProjection"}
+        assert capture_ok, "phone capture service must use foregroundServiceType=mediaProjection"
     assert _is_false(_attribute(download, "android:exported")), (
         "model download service must be explicitly non-exported")
     download_type = _attribute(download, "android:foregroundServiceType") or ""
@@ -187,7 +206,8 @@ def verify_release_runtime_manifest(manifest_xml: str) -> None:
     application = manifest.find("application")
     assert application is not None
     services = application.findall("service")
-    assert len(services) == 2, "release must declare only Rivet's process and model-download services"
+    assert len(services) in (2, 3), (
+        "release must declare only Rivet's process, model-download, and phone-capture services")
     service = next((item for item in services if item.get(ANDROID + "name", "").endswith(
         ".runtime.PersistentProcessService")), None)
     assert service is not None, "release process service identity changed"
@@ -197,6 +217,16 @@ def verify_release_runtime_manifest(manifest_xml: str) -> None:
         "release model-download service must be non-exported")
     assert download.get(ANDROID + "foregroundServiceType") == "dataSync", (
         "release model-download service must use dataSync")
+    optional = [item for item in services if item is not service and item is not download]
+    if optional:
+        capture = optional[0]
+        assert capture.get(ANDROID + "name", "") in (
+            PHONE_CAPTURE_SERVICE, ".ui.phone.PhoneCaptureService"), (
+            "release may declare only Rivet's process, model-download, and phone-capture services")
+        assert capture.get(ANDROID + "exported") == "false", (
+            "release phone capture service must be non-exported")
+        assert capture.get(ANDROID + "foregroundServiceType") == "mediaProjection", (
+            "release phone capture service must use mediaProjection")
     assert service.get(ANDROID + "exported") == "false", "release process service must be non-exported"
     release_type = service.get(ANDROID + "foregroundServiceType") or ""
     release_types = {piece.strip() for piece in release_type.split("|") if piece.strip()}

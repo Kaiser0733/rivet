@@ -6,13 +6,9 @@ import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
-import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.FileNotFoundException
-import java.nio.ByteBuffer
-import java.nio.charset.CharacterCodingException
-import java.nio.charset.CodingErrorAction
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
@@ -75,50 +71,8 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
                 ?: fail(WorkspaceFailure.Reason.PROVIDER)
             ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
                 activeInput.set(input)
-                val digest = MessageDigest.getInstance("SHA-256")
-                val buffer = ByteArray(64 * 1024)
-                val slice = ByteArrayOutputStream(minOf(maxBytes, 8192))
-                var position = 0L
-                while (true) {
-                    context.ensureActive()
-                    val count = input.read(buffer)
-                    if (count < 0) break
-                    digest.update(buffer, 0, count)
-                    val from = position
-                    val to = position + count
-                    if (to > offset && slice.size() < maxBytes) {
-                        val first = maxOf(offset, from)
-                        val last = minOf(offset + maxBytes, to)
-                        if (last > first) slice.write(buffer, (first - from).toInt(), (last - first).toInt())
-                    }
-                    position = to
-                }
-                val bytes = slice.toByteArray()
-                if (WorkspaceText.isBinaryText(bytes)) fail(WorkspaceFailure.Reason.BINARY)
-                // A slice can start or end inside a character. Move the edges in by at
-                // most three bytes rather than emitting half of one.
-                var begin = 0
-                while (begin < bytes.size && (bytes[begin].toInt() and 0xC0) == 0x80) begin++
-                var end = bytes.size
-                var trimmed = 0
-                var text: String? = null
-                while (end > begin && trimmed < 4) {
-                    text = try {
-                        Charsets.UTF_8.newDecoder()
-                            .onMalformedInput(CodingErrorAction.REPORT)
-                            .onUnmappableCharacter(CodingErrorAction.REPORT)
-                            .decode(ByteBuffer.wrap(bytes, begin, end - begin)).toString()
-                    } catch (_: CharacterCodingException) {
-                        end--; trimmed++; null
-                    }
-                    if (text != null) break
-                }
-                // Nothing usable left after snapping to a character edge is an empty
-                // window, not unreadable content.
-                val body: String = text ?: if (end == begin) "" else fail(WorkspaceFailure.Reason.BINARY)
-                val start = minOf(offset, position) + begin
-                TextRegion(body, digest.digest().toHex(), position, start,
-                    start + (end - begin), entry.modifiedTime)
+                val region = readWorkspaceTextRegion(input, offset, maxBytes) { context.ensureActive() }
+                TextRegion(region.text, region.sha256, region.size, region.start, region.end, entry.modifiedTime)
             }
         }
     }

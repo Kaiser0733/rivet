@@ -42,7 +42,9 @@ class WorkspaceLimitInstructionTest {
 
     @Test fun theNoWorkspaceBriefingClaimsNoProjectAccess() {
         val text = ChatViewModel.systemInstruction(workspace = false)
-        assertTrue(text.contains("no file, terminal, shell, Git, build, or test access"))
+        // The denial is project-scoped: grants, the session inbox, and the separate
+        // Termux app are user-granted phone access, not project access.
+        assertTrue(text.contains("project files, the project terminal, and project Git are unavailable"))
         assertFalse(text.contains("16 MiB"))
     }
 }

@@ -11,6 +11,7 @@ import com.kaiser.rivet.agent.AgentToolDefinition
 import com.kaiser.rivet.agent.AgentToolEffect
 import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentToolResult
+import com.kaiser.rivet.agent.AgentWorkspaceFailure
 import com.kaiser.rivet.agent.PreparedAgentTool
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -120,6 +121,8 @@ internal class PhoneIntents(
                     summary = launch.title.removeSuffix("?"))
             } catch (e: CancellationException) {
                 throw e
+            } catch (e: AgentWorkspaceFailure) {
+                failed(call, e.code)
             } catch (_: Exception) {
                 failed(call, launch.failure)
             }

@@ -1,4 +1,5 @@
 import unittest
+from pathlib import Path
 
 from runtime_manifest import (
     ALLOWED_PERMISSIONS,
@@ -84,6 +85,31 @@ RELEASE_FILE_PROVIDER = """        <provider android:name="androidx.core.content
 def release_with_provider(provider: str) -> str:
     return RELEASE_MANIFEST.replace(
         RELEASE_STARTUP_PROVIDER, RELEASE_STARTUP_PROVIDER + "\n" + provider)
+
+
+DEBUG_PHONE_CAPTURE_SERVICE = """    E: service
+      A: android:name(0x01010003)="com.kaiser.rivet.ui.phone.PhoneCaptureService"
+      A: android:exported(0x01010010)=(type 0x12)0x00000000
+      A: android:foregroundServiceType(0x010105e9)=(type 0x11)0x00000020
+"""
+
+RELEASE_PHONE_CAPTURE_SERVICE = """        <service android:name=".ui.phone.PhoneCaptureService"
+            android:exported="false" android:foregroundServiceType="mediaProjection" />"""
+
+RELEASE_PHONE_PERMISSIONS = (
+    '    <uses-permission android:name="com.termux.permission.RUN_COMMAND" />\n'
+    '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />'
+)
+
+
+def release_with_capture(service: str) -> str:
+    return RELEASE_MANIFEST.replace(
+        RELEASE_STARTUP_PROVIDER, service + "\n" + RELEASE_STARTUP_PROVIDER)
+
+
+def release_with_phone_permissions() -> str:
+    return RELEASE_MANIFEST.replace(
+        "<application>", RELEASE_PHONE_PERMISSIONS + "\n    <application>")
 
 
 class RuntimeManifestTest(unittest.TestCase):
@@ -192,6 +218,79 @@ class RuntimeManifestTest(unittest.TestCase):
         no_grant = RELEASE_FILE_PROVIDER.replace(' android:grantUriPermissions="true"', "")
         with self.assertRaisesRegex(AssertionError, "grantUriPermissions"):
             verify_release_runtime_manifest(release_with_provider(no_grant))
+
+    def test_debug_apk_allows_phone_projection_and_termux_permissions(self):
+        self.assertIn("android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION", ALLOWED_PERMISSIONS)
+        self.assertIn("com.termux.permission.RUN_COMMAND", ALLOWED_PERMISSIONS)
+        verify_apk_runtime_manifest(DEBUG_TREE, ALLOWED_PERMISSIONS)
+
+    def test_debug_apk_rejects_third_unexpected_permission(self):
+        with self.assertRaisesRegex(AssertionError, "unexpected APK permissions"):
+            verify_apk_runtime_manifest(DEBUG_TREE,
+                ALLOWED_PERMISSIONS | {"android.permission.CAMERA"})
+
+    def test_verify_apk_permission_gate_uses_the_shared_allowlist(self):
+        source = (Path(__file__).resolve().parent / "verify_apk.py").read_text()
+        self.assertIn("requested <= ALLOWED_PERMISSIONS", source)
+        self.assertNotIn("allowed_permissions = {", source)
+
+    def test_release_merged_manifest_allows_phone_permissions(self):
+        verify_release_runtime_manifest(release_with_phone_permissions())
+
+    def test_release_merged_manifest_rejects_third_unexpected_permission(self):
+        extra = '<uses-permission android:name="android.permission.CAMERA" />'
+        with self.assertRaisesRegex(AssertionError, "unexpected release permissions"):
+            verify_release_runtime_manifest(release_with_phone_permissions().replace(
+                "<application>", extra + "<application>"))
+
+    def test_debug_apk_allows_locked_down_phone_capture_service(self):
+        verify_apk_runtime_manifest(DEBUG_TREE + DEBUG_PHONE_CAPTURE_SERVICE, ALLOWED_PERMISSIONS)
+
+    def test_debug_apk_rejects_phone_capture_service_regressions(self):
+        exported = DEBUG_PHONE_CAPTURE_SERVICE.replace(
+            "A: android:exported(0x01010010)=(type 0x12)0x00000000",
+            "A: android:exported(0x01010010)=(type 0x12)0xffffffff")
+        with self.assertRaisesRegex(AssertionError, "non-exported"):
+            verify_apk_runtime_manifest(DEBUG_TREE + exported, ALLOWED_PERMISSIONS)
+
+        wrong_type = DEBUG_PHONE_CAPTURE_SERVICE.replace("0x00000020", "0x00000021")
+        with self.assertRaisesRegex(AssertionError, "mediaProjection"):
+            verify_apk_runtime_manifest(DEBUG_TREE + wrong_type, ALLOWED_PERMISSIONS)
+
+        wrong_name = DEBUG_PHONE_CAPTURE_SERVICE.replace(
+            "com.kaiser.rivet.ui.phone.PhoneCaptureService", "example.UnexpectedCaptureService")
+        with self.assertRaisesRegex(AssertionError, "phone-capture services"):
+            verify_apk_runtime_manifest(DEBUG_TREE + wrong_name, ALLOWED_PERMISSIONS)
+
+    def test_debug_apk_rejects_unexpected_third_service(self):
+        extra = '    E: service\n      A: android:name(0x01010003)="example.UnexpectedService"\n'
+        with self.assertRaisesRegex(AssertionError, "phone-capture services"):
+            verify_apk_runtime_manifest(DEBUG_TREE + extra, ALLOWED_PERMISSIONS)
+
+    def test_release_merged_manifest_allows_locked_down_phone_capture_service(self):
+        verify_release_runtime_manifest(release_with_capture(RELEASE_PHONE_CAPTURE_SERVICE))
+
+    def test_release_merged_manifest_allows_full_phone_surface(self):
+        manifest = release_with_capture(RELEASE_PHONE_CAPTURE_SERVICE).replace(
+            "<application>", RELEASE_PHONE_PERMISSIONS + "\n    <application>")
+        verify_release_runtime_manifest(manifest)
+
+    def test_release_merged_manifest_rejects_phone_capture_service_regressions(self):
+        exported = RELEASE_PHONE_CAPTURE_SERVICE.replace(
+            'android:exported="false"', 'android:exported="true"')
+        with self.assertRaisesRegex(AssertionError, "non-exported"):
+            verify_release_runtime_manifest(release_with_capture(exported))
+
+        wrong_type = RELEASE_PHONE_CAPTURE_SERVICE.replace(
+            'android:foregroundServiceType="mediaProjection"',
+            'android:foregroundServiceType="dataSync"')
+        with self.assertRaisesRegex(AssertionError, "mediaProjection"):
+            verify_release_runtime_manifest(release_with_capture(wrong_type))
+
+        wrong_name = RELEASE_PHONE_CAPTURE_SERVICE.replace(
+            '.ui.phone.PhoneCaptureService', '.ui.phone.OtherCaptureService')
+        with self.assertRaisesRegex(AssertionError, "phone-capture services"):
+            verify_release_runtime_manifest(release_with_capture(wrong_name))
 
 
 if __name__ == "__main__":
