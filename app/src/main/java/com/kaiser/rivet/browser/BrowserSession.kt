@@ -74,6 +74,16 @@ data class BrowserDownloadPrompt(
     val metered: Boolean,
 )
 
+internal const val PAINT_WATCHDOG_ERROR =
+    "The page stopped rendering. Close the browser to recover."
+
+internal fun shouldClearPaintError(
+    state: BrowserUiState,
+    sampledUrl: String,
+    verdict: PaintVerdict,
+): Boolean = verdict == PaintVerdict.Painted && state.error == PAINT_WATCHDOG_ERROR &&
+    state.url == sampledUrl
+
 data class BrowserUiState(
     /** The full-screen visual browser is on screen. */
     val visible: Boolean = false,
@@ -1548,10 +1558,28 @@ class BrowserSession(
             }
             when (paintWatchdog.onSample(url, verdict)) {
                 PaintWatchdog.Directive.Restart -> restartForPaintWedge(url)
-                PaintWatchdog.Directive.Stop -> _state.update {
-                    it.copy(error = "The page stopped rendering. Close the browser to recover.")
+                PaintWatchdog.Directive.Stop -> {
+                    _state.update { it.copy(error = PAINT_WATCHDOG_ERROR) }
+                    waitForPaintRecovery(url)
                 }
                 else -> Unit
+            }
+        }
+    }
+
+    private suspend fun waitForPaintRecovery(url: String) {
+        while (true) {
+            delay(2_000)
+            val current = _state.value
+            if (!current.visible || current.readerMode || current.url != url ||
+                !current.pageReady || current.error != PAINT_WATCHDOG_ERROR) return
+            val verdict = samplePaint(url) ?: continue
+            if (shouldClearPaintError(current, url, verdict)) {
+                _state.update { state ->
+                    if (shouldClearPaintError(state, url, verdict)) state.copy(error = null)
+                    else state
+                }
+                return
             }
         }
     }

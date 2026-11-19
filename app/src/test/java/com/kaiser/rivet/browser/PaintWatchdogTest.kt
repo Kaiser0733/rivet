@@ -1,6 +1,8 @@
 package com.kaiser.rivet.browser
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PaintWatchdogTest {
@@ -38,6 +40,15 @@ class PaintWatchdogTest {
         watchdog.onPageFinished("https://example.com/b")
         assertEquals(PaintWatchdog.Directive.Restart,
             watchdog.onSample("https://example.com/b", PaintVerdict.BlankNoDom))
+    }
+
+    @Test fun aHealthySampleClearsOnlyTheWatchdogErrorForTheSamePage() {
+        val failed = BrowserUiState(url = "https://example.com/a", error = PAINT_WATCHDOG_ERROR)
+        assertTrue(shouldClearPaintError(failed, "https://example.com/a", PaintVerdict.Painted))
+        assertFalse(shouldClearPaintError(failed, "https://example.com/a", PaintVerdict.Stale))
+        assertFalse(shouldClearPaintError(failed.copy(error = "Navigation failed"),
+            "https://example.com/a", PaintVerdict.Painted))
+        assertFalse(shouldClearPaintError(failed, "https://example.com/b", PaintVerdict.Painted))
     }
 
     @Test fun aBlankSampleForAPageThatWasNeverArmedIsIgnored() {
