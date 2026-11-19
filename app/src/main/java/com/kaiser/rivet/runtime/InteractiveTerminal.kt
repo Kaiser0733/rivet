@@ -54,9 +54,13 @@ internal interface TerminalEngine {
     val emulator: TerminalEmulator?
     fun write(text: String)
     fun interrupt() = Unit
+    fun rawInputMode(): Boolean = false
     fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int)
     fun close()
 }
+
+/** Canonical mode is the shell's line editor; raw/cbreak means the program owns the keys. */
+internal fun immediateTerminalInput(canonical: Int): Boolean = canonical == 0
 
 internal interface TerminalObserver {
     fun changed()
@@ -275,6 +279,8 @@ internal class InteractiveTerminalSession(
     fun interrupt() {
         if (!finished) engine?.interrupt()
     }
+
+    fun rawInputMode(): Boolean = engine?.rawInputMode() ?: false
 
     fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) {
         this.columns = columns.coerceAtLeast(2)
@@ -503,6 +509,7 @@ internal class PtyTerminalEngine(
     }
 
     override fun interrupt() = session.interrupt()
+    override fun rawInputMode() = immediateTerminalInput(session.ptyCanonical())
 
     override fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) {
         session.updateSize(columns, rows, cellWidthPx, cellHeightPx)

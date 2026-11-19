@@ -212,6 +212,16 @@ public final class TerminalSession extends TerminalOutput {
         if (mTerminalFileDescriptor >= 0) JNI.signalForegroundProcessGroup(mTerminalFileDescriptor, 2);
     }
 
+    /** 1 canonical, 0 raw, or -1 when the pty is unavailable. */
+    public int ptyCanonical() {
+        return mTerminalFileDescriptor >= 0 ? JNI.ptyCanonical(mTerminalFileDescriptor) : -1;
+    }
+
+    /** True when the foreground program has turned off canonical input. */
+    public boolean isRawInputMode() {
+        return ptyCanonical() == 0;
+    }
+
     /** Write the Unicode code point to the terminal encoded in UTF-8. */
     public void writeCodePoint(boolean prependEscape, int codePoint) {
         if (codePoint > 1114111 || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) {

@@ -221,6 +221,13 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_waitFor(JNIEnv* TERMUX_UNUSE
     }
 }
 
+JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_ptyCanonical(JNIEnv* TERMUX_UNUSED(env), jclass TERMUX_UNUSED(clazz), jint fd)
+{
+    struct termios tios;
+    if (tcgetattr(fd, &tios) != 0) return -1;
+    return (tios.c_lflag & ICANON) != 0 ? 1 : 0;
+}
+
 JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_signalForegroundProcessGroup(JNIEnv* TERMUX_UNUSED(env), jclass TERMUX_UNUSED(clazz), jint fd, jint signal)
 {
     pid_t foreground = tcgetpgrp(fd);

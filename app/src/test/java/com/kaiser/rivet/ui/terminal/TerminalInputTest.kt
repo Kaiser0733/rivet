@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.terminal
 
+import com.kaiser.rivet.runtime.immediateTerminalInput
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -32,10 +33,32 @@ class TerminalInputTest {
         assertEquals('\u007f', controlCode('?'))
     }
 
+    @Test fun rawInputIsCanonicalModeOff() {
+        assertTrue(immediateTerminalInput(canonical = 0))
+        assertFalse(immediateTerminalInput(canonical = 1))
+        assertFalse(immediateTerminalInput(canonical = -1))
+    }
+
     @Test fun theJumpChipNeedsBothAnUnfollowedViewAndNewOutput() {
         assertFalse(showJumpToBottom(follow = true, unseenOutput = false))
         assertFalse(showJumpToBottom(follow = false, unseenOutput = false))
         assertTrue(showJumpToBottom(follow = false, unseenOutput = true))
+    }
+
+    @Test fun canonicalImeDiffsAgainstTheAnchoredText() {
+        assertEquals(TerminalImeEdit(deletes = 2, insert = "c", keepText = "abc"),
+            terminalImeEdit("ab", "abc", raw = false))
+        assertEquals(TerminalImeEdit(deletes = 1, insert = "", keepText = "ab"),
+            terminalImeEdit("abc", "ab", raw = false))
+    }
+
+    @Test fun rawImeSendsOnlyTheNewBytesAndNeverDelDiffs() {
+        assertEquals(TerminalImeEdit(deletes = 0, insert = "u", keepText = ""),
+            terminalImeEdit("q", "qu", raw = true))
+        assertEquals(TerminalImeEdit(deletes = 0, insert = "", keepText = ""),
+            terminalImeEdit("q", "", raw = true))
+        assertEquals(TerminalImeEdit(deletes = 0, insert = "w", keepText = ""),
+            terminalImeEdit("q", "w", raw = true))
     }
 
     @Test fun gridSizeUsesTheCellSizeAndRespectsTheEmulatorMinimum() {

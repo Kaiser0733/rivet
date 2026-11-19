@@ -205,6 +205,18 @@ private fun EndedTerminal(
 internal fun showJumpToBottom(follow: Boolean, unseenOutput: Boolean): Boolean =
     !follow && unseenOutput
 
+internal data class TerminalImeEdit(val deletes: Int, val insert: String, val keepText: String)
+
+internal fun terminalImeEdit(old: String, new: String, raw: Boolean): TerminalImeEdit {
+    if (raw) {
+        val inserted = if (new.startsWith(old)) new.substring(old.length) else new
+        return TerminalImeEdit(deletes = 0, insert = inserted, keepText = "")
+    }
+    val common = old.commonPrefixWith(new).length
+    return TerminalImeEdit(deletes = old.length - common, insert = new.substring(common),
+        keepText = new)
+}
+
 private fun terminalErrorMessage(code: String?): String? = when (code) {
     null -> null
     "workspace_unavailable" -> "No workspace is selected. Choose a project in the chat first."
@@ -325,6 +337,7 @@ private fun TerminalGrid(
     keyboard: androidx.compose.ui.platform.SoftwareKeyboardController?,
 ) {
     val revision by session.revision.collectAsState()
+    val rawInput = remember(revision) { session.rawInputMode() }
     val buffer = emulator.screen
     val columns = requestedColumns.coerceAtMost(emulator.columns).coerceAtLeast(1)
     val transcriptRows = buffer.activeTranscriptRows
@@ -341,20 +354,18 @@ private fun TerminalGrid(
     fun applyIme(new: String) {
         follow = true
         unseenOutput = false
-        val old = imeText
-        val common = old.commonPrefixWith(new).length
-        repeat((old.length - common).coerceAtLeast(0)) { session.write("\u007f") }
-        val added = new.substring(common)
+        val edit = terminalImeEdit(imeText, new, rawInput)
+        repeat(edit.deletes) { session.write("\u007f") }
         val usedModifier = ctrl || alt
-        if (added.isNotEmpty()) {
-            session.write(terminalText(added, ctrl, alt))
+        if (edit.insert.isNotEmpty()) {
+            session.write(terminalText(edit.insert, ctrl, alt))
             if (usedModifier) {
                 onCtrl(false)
                 onAlt(false)
             }
         }
-        val submitted = added.any { it == '\n' || it == '\r' }
-        onImeText(if (submitted || usedModifier) "" else new)
+        val submitted = edit.insert.any { it == '\n' || it == '\r' }
+        onImeText(if (rawInput || submitted || usedModifier) "" else edit.keepText)
     }
 
     LaunchedEffect(listState) {

@@ -39,6 +39,9 @@ final class JNI {
     /** Send a signal to the foreground process group attached to the pty master. */
     public static native int signalForegroundProcessGroup(int fd, int signal);
 
+    /** 1 when the pty is canonical, 0 when raw/cbreak, -1 when the fd is unavailable. */
+    public static native int ptyCanonical(int fd);
+
     public static native void close(int fd);
 
 }
