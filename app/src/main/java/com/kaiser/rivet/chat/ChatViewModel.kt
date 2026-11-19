@@ -1206,6 +1206,20 @@ class ChatViewModel private constructor(
         }
     }
 
+    /**
+     * The terminal pane carries the restore line while it is on screen; this durable
+     * transcript row keeps it visible when the pane is closed.
+     */
+    private suspend fun recordTerminalRestoreNotice() {
+        val notice = InternalContext.restoreNotice(_uiState.value.currentSessionWorkspaceId)
+        activeMessages = activeMessages + notice
+        _uiState.update { it.copy(messages = (it.messages + notice).takeLast(100)) }
+        val sessionId = _uiState.value.currentSessionId
+        val sql = sessions
+        if (sessionId != null && sql != null) sql.save(activeMessages, false, sessionId)
+        else sessionStore.save(activeMessages, false)
+    }
+
     fun restoreRunCheckpoint(id: String, undoRun: Boolean = false) {
         if (_uiState.value.streaming || activeSupervisor?.hasLiveWorkers() == true) {
             _uiState.update { it.copy(runCheckpointNotice = "Not restored. Cannot restore while a run or subagent is active.",
@@ -1224,7 +1238,7 @@ class ChatViewModel private constructor(
             try {
                 val result = runtimeController.restoreRunCheckpoint(record, undoRun = undoRun)
                 if (result.conflicts.isEmpty()) {
-                    terminalSession.recoverAfterRestore()
+                    if (terminalSession.recoverAfterRestore()) recordTerminalRestoreNotice()
                     pendingRollback = "The user rolled back the project to checkpoint " +
                         "${record.summary}. Do not assume later file changes are present."
                 }
@@ -2768,7 +2782,7 @@ class ChatViewModel private constructor(
                 }
                 val outcome = controller.undoLastCheckpoint()
                 if (outcome.state == MirrorSync.Ok || outcome.state == MirrorSync.NoChanges) {
-                    terminalSession.recoverAfterRestore()
+                    if (terminalSession.recoverAfterRestore()) recordTerminalRestoreNotice()
                     _uiState.update { it.copy(undoing = false, undoCheckpointId = null,
                         lastTurnFiles = emptyList(), lastTurnFileCount = 0, notice = "Changes undone.") }
                 } else {

@@ -173,6 +173,14 @@ class InternalContextTest {
         assertEquals(listOf(user), modelMessages(listOf(user, notice)))
     }
 
+    @Test fun restoreNoticeIsValidWithoutAWorkspaceAndStaysOffTheWire() {
+        val notice = InternalContext.restoreNotice(null)
+        assertNotNull(notice.validatedContext())
+        assertEquals(CompactionNotice.RESTORE_TEXT, notice.validatedContext()!!.content)
+        val user = AgentMessage.user("hello")
+        assertEquals(listOf(user), modelMessages(listOf(user, notice)))
+    }
+
     @Test fun projectionRetainsSkillCatalogEvenWithoutProjectInstructions() {
         val content = "<available_skills><skill><name>notes</name></skill></available_skills>"
         val skillCatalog = InternalContext(

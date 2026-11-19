@@ -46,6 +46,7 @@ internal data class InteractiveTerminalState(
     val error: String? = null,
     val exitCode: Int? = null,
     val pid: Int = 0,
+    val notice: String? = null,
 )
 
 /** The small surface the lifecycle owner needs from a PTY, fakeable in JVM tests. */
@@ -273,7 +274,10 @@ internal class InteractiveTerminalSession(
     }
 
     fun write(text: String) {
-        if (text.isNotEmpty()) engine?.write(text)
+        if (text.isNotEmpty()) {
+            if (mutableState.value.notice != null) mutableState.update { it.copy(notice = null) }
+            engine?.write(text)
+        }
     }
 
     fun interrupt() {
@@ -345,10 +349,13 @@ internal class InteractiveTerminalSession(
      * A checkpoint restore replaces the worktree under a live shell, so its cwd can
      * point at a deleted directory even though the path exists again. Recreate the
      * shell in the current worktree instead of trying to cd out of a dead inode.
+     * Returns whether a session was actually replaced, so the caller can say so.
      */
-    fun recoverAfterRestore() {
-        if (!requested && engine == null) return
+    fun recoverAfterRestore(): Boolean {
+        if (!requested && engine == null) return false
         restart()
+        mutableState.update { it.copy(notice = com.kaiser.rivet.agent.CompactionNotice.RESTORE_TEXT) }
+        return true
     }
 
     private val observer = object : TerminalObserver {

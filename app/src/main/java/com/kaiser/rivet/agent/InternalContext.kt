@@ -30,14 +30,16 @@ data class InternalContext(
         if (version != 1 || kind !in setOf("project", "project_notice", "project_snapshot", "summary",
                 SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND, ToolchainContext.KIND,
                 GoalMemoryContext.KIND, RunContext.KIND, "rollback",
-                SubagentContext.POOL_KIND, SubagentContext.RESULT_KIND, CompactionNotice.KIND) ||
+                SubagentContext.POOL_KIND, SubagentContext.RESULT_KIND, CompactionNotice.KIND,
+                CompactionNotice.RESTORE_KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
         if (kind == "project" && content.toByteArray(Charsets.UTF_8).size > ProjectInstructions.PER_FILE_BYTES) return false
         if (kind == "summary" && content.toByteArray(Charsets.UTF_8).size > TaskState.MAX_BYTES) return false
         if (workspaceId != null && workspaceId.isBlank()) return false
-        if (kind !in setOf("summary", GoalMemoryContext.KIND, CompactionNotice.KIND) && workspaceId == null) return false
+        if (kind !in setOf("summary", GoalMemoryContext.KIND, CompactionNotice.KIND,
+                CompactionNotice.RESTORE_KIND) && workspaceId == null) return false
         if (removed && content.isNotEmpty()) return false
         if (kind == "project_snapshot") {
             if (projectFiles.size > ProjectInstructions.MAX_FILES || content.isNotEmpty() ||
@@ -81,7 +83,7 @@ data class InternalContext(
             GoalMemoryContext.KIND -> append(content)
             RunContext.KIND -> append(content)
             "rollback" -> append(content)
-            CompactionNotice.KIND -> append(content)
+            CompactionNotice.KIND, CompactionNotice.RESTORE_KIND -> append(content)
             SubagentContext.POOL_KIND -> append(content)
             SubagentContext.RESULT_KIND -> append(content)
             SKILL_INVOCATION_KIND -> {
@@ -139,6 +141,12 @@ data class InternalContext(
         fun compactionNotice(workspace: String?): AgentMessage = InternalContext(
             kind = CompactionNotice.KIND, workspaceId = workspace,
             content = CompactionNotice.TEXT, digest = digest(CompactionNotice.TEXT),
+        ).event()
+
+        /** The restore replacement notice, shown in the transcript when the terminal is not on screen. */
+        fun restoreNotice(workspace: String?): AgentMessage = InternalContext(
+            kind = CompactionNotice.RESTORE_KIND, workspaceId = workspace,
+            content = CompactionNotice.RESTORE_TEXT, digest = digest(CompactionNotice.RESTORE_TEXT),
         ).event()
     }
 }

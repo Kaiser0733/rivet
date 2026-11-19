@@ -15,4 +15,10 @@ class CompactionNoticeTest {
         assertFalse(CompactionNotice.isNotice("summary"))
         assertFalse(CompactionNotice.isNotice(null))
     }
+
+    @Test fun theRestoreNoticeSaysTheScrollbackWasCleared() {
+        assertEquals("Terminal restarted by restore — earlier scrollback was cleared.",
+            CompactionNotice.RESTORE_TEXT)
+        assertTrue(CompactionNotice.isNotice(CompactionNotice.RESTORE_KIND))
+    }
 }

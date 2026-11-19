@@ -1,11 +1,13 @@
 package com.kaiser.rivet.runtime
 
+import com.kaiser.rivet.agent.CompactionNotice
 import com.termux.terminal.TerminalEmulator
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -290,6 +292,22 @@ class InteractiveTerminalTest {
         assertEquals(2, harness.launches())
         assertTrue(old.closed)
         root.deleteRecursively()
+    }
+
+    @Test fun restoreNoticeMarksAReplacedSessionAndClearsOnWrite() = runTest {
+        val harness = harness(this)
+        assertFalse(harness.holder.recoverAfterRestore())
+        assertNull(harness.holder.state.value.notice)
+
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+        assertTrue(harness.holder.recoverAfterRestore())
+        settle()
+        assertEquals(CompactionNotice.RESTORE_TEXT, harness.holder.state.value.notice)
+
+        harness.holder.write("ls\r")
+        assertNull(harness.holder.state.value.notice)
     }
 
     @Test fun interruptOnlyReachesTheLiveEngine() = runTest {

@@ -165,6 +165,15 @@ internal fun TerminalPane(
             }
         }
         HorizontalDivider(color = PaneLine)
+        state.notice?.let {
+            Text(
+                it,
+                modifier = Modifier.fillMaxWidth().background(PaneRaised)
+                    .padding(horizontal = 10.dp, vertical = 6.dp),
+                color = Muted,
+                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+            )
+        }
         if (state.ended) {
             EndedTerminal(session, state, Modifier.weight(1f))
         } else {
