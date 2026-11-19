@@ -293,7 +293,7 @@ internal class WorkerRunner(
                 prepareTool = { call ->
                     // Structural depth-1 enforcement: workers can never call spawn_subagent or await_subagents.
                     if (call.name == SubagentTools.SPAWN_TOOL || call.name == SubagentTools.AWAIT_TOOL ||
-                        call.name in PhoneIntents.names) {
+                        call.name in AgentToolExecutor.phoneOnlyNames) {
                         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
                             AgentToolResult(
                                 call.id,
