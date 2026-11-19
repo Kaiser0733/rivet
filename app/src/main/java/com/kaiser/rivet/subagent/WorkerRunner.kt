@@ -328,6 +328,23 @@ internal class WorkerRunner(
                                 )
                             }
 
+                        // A worker write outside its scope (or with no scope at all) is
+                        // refused here, before the loop can build a user approval card.
+                        val scopeRefusal = if (basePrepared.effect.changesWorkspace) {
+                            services.checkpointGate.scopeBlocker(currentWorker.id, call)
+                        } else null
+                        if (scopeRefusal != null) {
+                            return@prepareTool PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
+                                AgentToolResult(
+                                    call.id,
+                                    call.name,
+                                    AgentToolError.content(scopeRefusal),
+                                    error = true,
+                                    summary = AgentToolError.action(scopeRefusal) ?: "Write refused",
+                                )
+                            }
+                        }
+
                         val wrappedPrepared = if (call.name == "run_command") {
                             wrapCommandExecution(call, basePrepared, observedCommands) { activityLine ->
                                 publishUpdate { it.copy(activity = activityLine, updatedAt = System.currentTimeMillis()) }

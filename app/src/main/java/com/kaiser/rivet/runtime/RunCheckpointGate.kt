@@ -203,6 +203,13 @@ class RunCheckpointGate(
         onBoundaryChanged()
     }
 
+    /**
+     * The structural scope refusal on its own, so a worker loop can refuse a write
+     * before it builds any user approval. No lease, no mutation counting.
+     */
+    fun scopeBlocker(writer: String, call: AgentToolCall): String? =
+        synchronized(attributionLock) { scopeRegistry.checkWrite(writer, call) }
+
     suspend fun beforeMutation(writer: String = COORDINATOR, call: AgentToolCall): String? {
         var locked = false
         writeLease.lock()

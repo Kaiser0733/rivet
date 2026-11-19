@@ -68,6 +68,15 @@ class AgentToolErrorTest {
             AgentToolError.deterministicCode(failure("output_unavailable")))
     }
 
+    @Test fun aReadOnlyWorkerWriteIsRefusedWithAScopeMessage() {
+        val action = requiredAction(AgentToolError.content("worker_read_only"))
+        assertNotNull(action)
+        assertTrue(action!!.contains("read-only"))
+        assertTrue(action.contains("without asking"))
+        assertEquals("worker_read_only",
+            AgentToolError.deterministicCode(failure("worker_read_only")))
+    }
+
     @Test fun phoneShotFailuresSayWhatActuallyHappened() {
         assertEquals("Rivet needs to be on screen to ask for capture permission — bring Rivet to the front and retry",
             requiredAction(AgentToolError.content("phone_shot_needs_foreground")))

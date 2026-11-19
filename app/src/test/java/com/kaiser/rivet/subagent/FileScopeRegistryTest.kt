@@ -29,7 +29,7 @@ class FileScopeRegistryTest {
     @Test fun emptyScopeIsAReadOnlyWorker() {
         val registry = FileScopeRegistry()
         registry.register("w1", "research", emptyList())
-        assertEquals(FileScopeRegistry.OUTSIDE_FILE_SCOPE,
+        assertEquals(FileScopeRegistry.READ_ONLY_WORKER,
             registry.checkWrite("w1", listOf(path("README.md"))))
         assertNull(registry.checkWrite("w1", emptyList()))
     }

@@ -61,10 +61,15 @@ class FileScopeRegistry {
         if (paths.isEmpty()) return null
         return synchronized(lock) {
             if (writer != COORDINATOR) {
-                val own = scopes[writer] ?: return@synchronized OUTSIDE_FILE_SCOPE
-                if (paths.any { target -> GrantPath.isExternal(target.value) || own.paths.none { target.isWithin(it) } }) {
-                    return@synchronized OUTSIDE_FILE_SCOPE
-                }
+                val own = scopes[writer]
+                val refusal = WorkerWritePolicy.refusal(
+                    registered = own != null,
+                    scopeEmpty = own != null && own.paths.isEmpty(),
+                    outsideScope = own != null && paths.any { target ->
+                        GrantPath.isExternal(target.value) || own.paths.none { target.isWithin(it) }
+                    },
+                )
+                if (refusal != null) return@synchronized refusal
             }
             for (scope in scopes.values) {
                 if (scope.writer == writer || scope.paths.isEmpty()) continue
@@ -83,6 +88,7 @@ class FileScopeRegistry {
     companion object {
         const val COORDINATOR = "coordinator"
         const val OUTSIDE_FILE_SCOPE = "outside_file_scope"
+        const val READ_ONLY_WORKER = WorkerWritePolicy.READ_ONLY
         const val OWNED_BY_WORKER_PREFIX = "owned_by_worker:"
 
         fun overlaps(scopeA: Collection<WorkspacePath>, scopeB: Collection<WorkspacePath>): Boolean =
