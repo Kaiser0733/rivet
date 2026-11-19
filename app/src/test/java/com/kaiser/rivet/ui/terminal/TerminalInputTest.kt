@@ -46,7 +46,7 @@ class TerminalInputTest {
     }
 
     @Test fun canonicalImeDiffsAgainstTheAnchoredText() {
-        assertEquals(TerminalImeEdit(deletes = 2, insert = "c", keepText = "abc"),
+        assertEquals(TerminalImeEdit(deletes = 0, insert = "c", keepText = "abc"),
             terminalImeEdit("ab", "abc", raw = false))
         assertEquals(TerminalImeEdit(deletes = 1, insert = "", keepText = "ab"),
             terminalImeEdit("abc", "ab", raw = false))
