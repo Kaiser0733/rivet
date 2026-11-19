@@ -22,6 +22,7 @@ import java.io.InputStream
 import java.io.FileInputStream
 import kotlinx.coroutines.CancellationException
 import com.kaiser.rivet.runtime.PhoneIntents
+import com.kaiser.rivet.runtime.TermuxBridge
 import com.kaiser.rivet.subagent.FileScopeRegistry
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.SerializationException
@@ -115,6 +116,7 @@ class AgentToolExecutor(
     private val readProcessOutput: (suspend (String, String?, Int?, Int?, String?, Int?) -> ProcessOutputSnapshot?)? = null,
     private val spawnProcess: (suspend (String, String, Long, Long, String?) -> BackgroundLaunch)? = null,
     private val worker: Boolean = false,
+    private val prepareTermuxCommand: ((AgentToolCall) -> PreparedAgentTool)? = null,
     private val preparePhoneIntent: ((AgentToolCall) -> PreparedAgentTool?)? = null,
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
@@ -552,6 +554,7 @@ class AgentToolExecutor(
                         }
                     }
                 }
+                "termux_command" -> prepareTermuxCommand?.invoke(call) ?: invalid(call, "unknown_tool")
                 "open_app", "open_url", "open_file", "share_out", "compose_intent" ->
                     preparePhoneIntent?.invoke(call) ?: invalid(call, "unknown_tool")
                 else -> invalid(call, "unknown_tool")
@@ -980,6 +983,8 @@ class AgentToolExecutor(
         private val contentSha = "content_sha256" to string
         private val path = "path" to string
 
+        internal val phoneOnlyNames = PhoneIntents.names + "termux_command"
+
         val definitions = listOf(
             AgentToolDefinition("git_status", "Inspect the selected workspace's Git branch, staged, modified, deleted, untracked, and conflicting paths without changing its repository. A non-Git workspace or a grants/<label> path returns repository=false.", schema(emptyList(), path)),
             AgentToolDefinition("git_diff", "Inspect a bounded Git diff of tracked changes. Supply a workspace-relative path to focus on one file; empty path covers the repository. Staged and unstaged changes are labeled. Untracked files are listed by git_status, not diffed.", schema(emptyList(), path)),
@@ -1030,6 +1035,6 @@ class AgentToolExecutor(
             AgentToolDefinition("stop_process", "Stop one active Rivet-owned command, background process, or preview by its opaque process_id. This does not accept operating-system PIDs. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("process_id"), processId, askUser)),
             AgentToolDefinition("start_preview", "Serve static project files from the selected workspace on this device's 127.0.0.1 loopback address. It stays available after this tool returns; use the returned URL. It is visible and stoppable in Processes. root is the static directory relative to the selected project (empty means project root). entry may be relative to root, such as index.html, or equivalent project-relative site/index.html. Example: {\"root\":\"site\",\"entry\":\"index.html\"}. / serves entry and relative assets resolve under root. GET and HEAD only; no execution, directory listing, LAN access, or uploads. Ask mode requires approval. Basic YOLO may start this read-only loopback preview automatically. In Basic YOLO set ask_user=true to request confirmation.", schema(listOf("entry"), entry, root, askUser)),
             AgentToolDefinition("download_file", "Download one HTTPS file into the selected project. The streamed temporary copy is limited to 64 MiB and at most five revalidated HTTPS redirects; Rivet uses no provider credentials or cookies and never executes or installs the file. For an existing destination, provide expected_sha256 with its current hash before replacing it. content_sha256 optionally verifies the downloaded bytes. Ask mode and Basic YOLO require approval; YOLO skips the prompt but keeps scheme, path, size, hash, and workspace checks. In Basic YOLO, ask_user=true requests confirmation.", schema(listOf("url", "path"), url, path, expectedSha, contentSha, askUser)),
-        ) + PhoneIntents.definitions
+        ) + PhoneIntents.definitions + TermuxBridge.definition
     }
 }

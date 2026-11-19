@@ -80,6 +80,8 @@ import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.RivetThemeMode
 import com.kaiser.rivet.ui.chat.displaySafeText
+import com.kaiser.rivet.runtime.TermuxBridge
+import com.kaiser.rivet.runtime.TermuxCommand
 import com.kaiser.rivet.workspace.AndroidGrantedFolders
 import com.kaiser.rivet.workspace.FolderGrant
 import kotlinx.coroutines.CancellationException
@@ -644,6 +646,7 @@ private fun PhoneAccessDetail() {
             style = MaterialTheme.typography.bodyMedium)
 
         GrantedFoldersSettings()
+        TermuxSettings()
 
         SectionHeading("Advanced")
         SectionListItem(
@@ -732,6 +735,38 @@ private fun GrantedFoldersSettings() {
         catch (_: Exception) { feedback = "Couldn't open the folder picker." }
     }) { Text("Add folder") }
     feedback?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
+    Spacer(Modifier.height(24.dp))
+}
+
+@Composable
+private fun TermuxSettings() {
+    val context = LocalContext.current
+    val owner = LocalView.current.findViewTreeLifecycleOwner()
+    val bridge = remember(context) { TermuxBridge(context) }
+    val scope = rememberCoroutineScope()
+    var installed by remember(bridge) { mutableStateOf(bridge.installed()) }
+    var testing by remember { mutableStateOf(false) }
+    var output by remember { mutableStateOf<String?>(null) }
+    DisposableEffect(owner, bridge) {
+        val observer = LifecycleEventObserver { _, event ->
+            if (event == Lifecycle.Event.ON_RESUME) installed = bridge.installed()
+        }
+        owner?.lifecycle?.addObserver(observer)
+        onDispose { owner?.lifecycle?.removeObserver(observer) }
+    }
+    SectionHeading("Termux bridge")
+    Text(if (installed) "Installed" else "Not installed", style = MaterialTheme.typography.bodyMedium)
+    Text(TermuxCommand.SETUP, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium)
+    TextButton(enabled = installed && !testing, onClick = {
+        testing = true
+        output = null
+        scope.launch {
+            try { output = bridge.test() } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { output = "Couldn't start the Termux bridge. Try again while Rivet is open." }
+            finally { testing = false }
+        }
+    }) { Text(if (testing) "Testing…" else "Test bridge") }
+    output?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     Spacer(Modifier.height(24.dp))
 }
 

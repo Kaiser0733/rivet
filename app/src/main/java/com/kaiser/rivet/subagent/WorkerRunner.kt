@@ -48,7 +48,6 @@ import com.kaiser.rivet.workspace.WorkspacePath
 import java.util.Collections
 import java.util.Locale
 import java.util.UUID
-import com.kaiser.rivet.runtime.PhoneIntents
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
@@ -135,7 +134,7 @@ internal class WorkerRunner(
         val executor = services.createExecutor(loadedSkills)
         val tools = buildList {
             if (services.browserTools != null) addAll(BrowserTools.definitions)
-            if (executor != null) addAll(AgentToolExecutor.definitions.filterNot { it.name in PhoneIntents.names })
+            if (executor != null) addAll(AgentToolExecutor.definitions.filterNot { it.name in AgentToolExecutor.phoneOnlyNames })
             addAll(services.extraTools)
         }.filterNot {
             it.name == SubagentTools.SPAWN_TOOL || it.name == SubagentTools.AWAIT_TOOL

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.runtime.TermuxCommand
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
@@ -57,6 +58,13 @@ internal object AgentToolError {
         "share_unavailable" to "Android couldn't show the share sheet. Check the file or try sharing text from Rivet.",
         "compose_unavailable" to "Android couldn't open a draft. Choose or install an email, messaging, or calendar app.",
         "invalid_arguments" to "The tool arguments did not match this tool's JSON contract. Re-read the argument names and send one complete JSON object.",
+        "termux_missing" to "Install the Termux app, then follow the setup in Settings → Phone access.",
+        "termux_external_apps_off" to "Termux didn't return a result. " + TermuxCommand.SETUP,
+        "termux_permission_required" to TermuxCommand.SETUP,
+        "termux_cwd_unavailable" to "Termux can't use that working directory. Choose a shared-storage folder or pass an absolute Termux directory.",
+        "termux_unavailable" to "Rivet couldn't start the Termux service. Open Termux once, then try again while Rivet is open.",
+        "termux_timeout" to "Timed out waiting for Termux. The command may still be running. Read the output file for more.",
+        "termux_command_failed" to "Termux couldn't run that command. Check the command and working directory in Termux.",
         "grant_missing" to "Choose a folder in Settings → Phone access, then use its exact grants/ path.",
         "grant_revoked" to "Grant revoked — re-grant in Settings → Phone access.",
         "grant_read_only" to "This grant is read-only. Choose a folder that allows write access in Settings → Phone access.",
@@ -107,6 +115,8 @@ internal object AgentToolError {
         "destination_exists", "invalid_checksum", "skill_not_found", "skill_manual_only",
         "secret", "garden_first", "empty", "too_long", "reserved_goal",
         "outside_file_scope", "owned_by_worker", "browser_busy", "page_modal_blocked",
+        "termux_missing", "termux_permission_required", "termux_external_apps_off", "termux_cwd_unavailable",
+        "grant_missing", "grant_revoked", "grant_read_only", "inbox_read_only", "cross_folder_move",
         "browser_eval_exception", "browser_origin_mismatch", "browser_js_disabled",
         "browser_sensitive_field", "browser_target",
         "browser_cleartext_blocked", "browser_loopback_unreachable",

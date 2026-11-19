@@ -20,6 +20,15 @@ class PhoneApprovalTest {
         assertEquals(ApprovalDecision.AutoAuthorize, ApprovalPolicy.decide(AutonomyMode.Ask, tool))
     }
 
+    @Test fun termuxCommandsAreElevatedForegroundCommands() {
+        val tool = tool("termux_command")
+        assertEquals(AgentToolEffect.ForegroundCommand, tool.effect)
+        assertEquals(BasicAutonomyRisk.Elevated, tool.basicAutonomyRisk)
+        assertEquals(ApprovalDecision.AskUser, ApprovalPolicy.decide(AutonomyMode.Ask, tool))
+        assertEquals(ApprovalDecision.AskUser, ApprovalPolicy.decide(AutonomyMode.BasicYolo, tool))
+        assertEquals(ApprovalDecision.AutoAuthorize, ApprovalPolicy.decide(AutonomyMode.Yolo, tool))
+    }
+
     private fun tool(name: String): PreparedAgentTool {
         val call = AgentToolCall(name, name, "{}")
         return PreparedAgentTool(call, AgentApprovalRequest(call, "Open", "Phone")) {
