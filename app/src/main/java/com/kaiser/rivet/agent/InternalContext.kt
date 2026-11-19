@@ -194,7 +194,7 @@ fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
     return messages.mapNotNull { message ->
         if (message.role != AgentRole.Context) message.takeIf { it.internalContext == null }
         else message.validatedContext()?.takeIf { !enforceWorkspace || it.workspaceId == workspace }
-            ?.takeIf { it.kind != CompactionNotice.KIND &&
+            ?.takeIf { !CompactionNotice.isNotice(it.kind) &&
                 (it.kind != SKILL_CATALOG_KIND || message === lastCatalog) &&
                 (it.kind != ToolchainContext.KIND || message === lastToolchain) &&
                 (it.kind != GoalMemoryContext.KIND || message === lastGoalMemory) &&
