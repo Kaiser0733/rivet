@@ -2058,7 +2058,11 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                     placeholder = { Text("Ask Rivet…") },
                     minLines = 1,
                     maxLines = 6,
-                    keyboardOptions = KeyboardOptions(
+                    keyboardOptions = if (draft.startsWith("/")) KeyboardOptions(
+                        capitalization = KeyboardCapitalization.None,
+                        autoCorrect = false,
+                        imeAction = ImeAction.Send,
+                    ) else KeyboardOptions(
                         capitalization = KeyboardCapitalization.Sentences,
                         imeAction = ImeAction.Send,
                     ),

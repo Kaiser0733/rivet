@@ -72,6 +72,8 @@ import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.semantics.clearAndSetSemantics
 import androidx.compose.ui.text.TextRange
 import androidx.compose.ui.text.input.ImeAction
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.input.TextFieldValue
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -173,7 +175,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                             singleLine = true,
                             textStyle = MaterialTheme.typography.bodyMedium,
                             label = { Text("URL") },
-                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go),
+                            keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go, keyboardType = KeyboardType.Uri,
+                                capitalization = KeyboardCapitalization.None),
                             keyboardActions = KeyboardActions(onGo = { submitUrl() }),
                         )
                         if (!isUrlFocused) {

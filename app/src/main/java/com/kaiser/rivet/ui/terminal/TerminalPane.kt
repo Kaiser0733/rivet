@@ -68,6 +68,8 @@ import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.rememberTextMeasurer
 import androidx.compose.ui.text.style.TextDecoration
+import androidx.compose.ui.text.input.KeyboardCapitalization
+import androidx.compose.ui.text.input.KeyboardType
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
@@ -427,6 +429,7 @@ private fun TerminalGrid(
             textStyle = terminalStyle.copy(color = Color.Transparent),
             cursorBrush = SolidColor(Color.Transparent),
             keyboardOptions = KeyboardOptions(autoCorrect = false,
+                capitalization = KeyboardCapitalization.None, keyboardType = KeyboardType.Ascii,
                 imeAction = androidx.compose.ui.text.input.ImeAction.Default),
         )
     }
