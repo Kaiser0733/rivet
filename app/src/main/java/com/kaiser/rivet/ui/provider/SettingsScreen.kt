@@ -28,6 +28,9 @@ import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -72,7 +75,7 @@ private val MAX_WIDTH = 680.dp
 
 // The section that is open at level 2. Remembered by RivetApp, so Android Back can step
 // detail -> list -> dismiss instead of closing the sheet in one go.
-internal enum class SettingsSection { Providers, Models, Appearance, Agent, Subagents, Memory, GitHub, Skills, Updates, About }
+internal enum class SettingsSection { Providers, Models, Appearance, Agent, Phone, Subagents, Memory, GitHub, Skills, Updates, About }
 
 /**
  * The body of the settings modal sheet: a two-level page — a section list, and one
@@ -234,7 +237,7 @@ fun SettingsScreen(
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
             when (section) {
-                null -> Column {
+                null -> Column(Modifier.verticalScroll(rememberScrollState())) {
                     SectionList(
                     providerSummary = when {
                         state.loadError != null -> "Problem loading providers"
@@ -299,6 +302,7 @@ fun SettingsScreen(
                     subagentSummary = subagentSummary(subagentState, state.configs),
                     onOpenSubagents = { section = SettingsSection.Subagents },
                 )
+                SettingsSection.Phone -> PhoneAccessDetail()
                 SettingsSection.Subagents -> SubagentsSettings(
                     state = subagentState,
                     configs = state.configs,
@@ -363,11 +367,12 @@ private fun SheetTopBar(
     }
 }
 
-private fun SettingsSection.title(): String = when (this) {
+internal fun SettingsSection.title(): String = when (this) {
     SettingsSection.Providers -> "Providers"
     SettingsSection.Models -> "Models"
     SettingsSection.Appearance -> "Appearance"
     SettingsSection.Agent -> "Agent"
+    SettingsSection.Phone -> "Phone access"
     SettingsSection.Subagents -> "Subagents"
     SettingsSection.Memory -> "Memory"
     SettingsSection.GitHub -> "GitHub"
@@ -401,6 +406,7 @@ private fun SectionList(
                 SettingsSection.Models -> "Models" to "Download and run a model on this phone"
                 SettingsSection.Appearance -> "Appearance" to themeSummary
                 SettingsSection.Agent -> "Agent" to autonomySummary
+                SettingsSection.Phone -> section.title() to "Share and open on your phone"
                 SettingsSection.Subagents -> "Subagents" to subagentSummary
                 SettingsSection.Memory -> "Memory" to memorySummary
                 SettingsSection.GitHub -> "GitHub" to gitHubSummary
@@ -413,6 +419,7 @@ private fun SectionList(
                 SettingsSection.Models -> R.drawable.ic_processes // local inference
                 SettingsSection.Appearance -> R.drawable.ic_visibility // sun/moon for theme
                 SettingsSection.Agent -> R.drawable.ic_processes // robot/processes for agent
+                SettingsSection.Phone -> R.drawable.ic_files
                 SettingsSection.Subagents -> R.drawable.ic_processes // delegated model pool
                 SettingsSection.Memory -> R.drawable.ic_files // durable project facts
                 SettingsSection.GitHub -> R.drawable.ic_files // repository and token settings
@@ -605,6 +612,51 @@ internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable Co
             .padding(horizontal = 16.dp, vertical = 16.dp),
         content = content,
     )
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PhoneAccessDetail() {
+    var addOnOpen by rememberSaveable { mutableStateOf(false) }
+    DetailScroll {
+        SectionHeading("Share target")
+        Text("On — Rivet appears in the share sheet",
+            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
+            style = MaterialTheme.typography.bodyMedium)
+
+        SectionHeading("Screen capture")
+        Text("Rivet asks every time it captures your screen",
+            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
+            style = MaterialTheme.typography.bodyMedium)
+
+        SectionHeading("Advanced")
+        SectionListItem(
+            iconRes = R.drawable.ic_settings,
+            title = "Phone access add-on",
+            summary = "Not installed",
+            onClick = { addOnOpen = true },
+            showDivider = false,
+        )
+    }
+    if (addOnOpen) {
+        ModalBottomSheet(
+            onDismissRequest = { addOnOpen = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            Column(
+                Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
+                    .padding(horizontal = 24.dp, vertical = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp),
+            ) {
+                Text("Phone access add-on", style = MaterialTheme.typography.titleLarge)
+                Text("Not installed", style = MaterialTheme.typography.labelLarge)
+                Text("The separate add-on would let Rivet read notifications and read or tap in other apps with your permission.")
+                Text("On Android 13 and later, if Android blocks a setting, open Settings → Apps → the add-on → More → Allow restricted settings. Follow the on-screen instructions and grant access only if you trust the add-on.")
+                Text("Google Play Protect may scan, warn about, or block apps installed outside Google Play. Keep Play Protect on and review any warning before proceeding.")
+                TextButton(onClick = { addOnOpen = false }) { Text("Close") }
+            }
+        }
+    }
 }
 
 @Composable

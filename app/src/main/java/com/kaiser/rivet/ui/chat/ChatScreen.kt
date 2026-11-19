@@ -54,6 +54,9 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
@@ -118,6 +121,8 @@ import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
+import com.kaiser.rivet.chat.SharedDraft
+import com.kaiser.rivet.chat.appendClipboardText
 import com.kaiser.rivet.chat.draftFor
 import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
@@ -696,7 +701,11 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     if (providers.configs.isNotEmpty()) {
                         { ModelSelector(providersViewModel) { modelSheetVisible = true } }
                     } else null
+                val sharedContent by chatViewModel.sharedContent.collectAsState()
                 InputBar(streaming = state.streaming,
+                    sharedDraft = sharedContent[state.currentSessionId],
+                    phoneAvailable = providers.configs.any { it.id == providers.activeId &&
+                        it.type != com.kaiser.rivet.provider.ProviderType.Local },
                     ready = state.ready && !state.projectLoading && !state.undoing &&
                         !state.recoveringProjectChanges,
                     hasProject = state.projectName != null &&
@@ -1469,11 +1478,14 @@ internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messag
                         color = MaterialTheme.colorScheme.surfaceContainer,
                         shape = RoundedCornerShape(20.dp),
                     ) {
-                        Text(
-                            message.text,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(message.text, style = MaterialTheme.typography.bodyMedium)
+                            message.userImagePath?.let { path ->
+                                BrowserImage(ChatMarkdownBlock.Image("Shared image", path),
+                                    unavailable = "Shared image no longer available.")
+                            }
+                        }
                     }
                 }
             } else {
@@ -1616,13 +1628,21 @@ private fun ReasoningRow(
 }
 
 @Composable
-private fun BrowserImage(image: ChatMarkdownBlock.Image) {
+private fun BrowserImage(image: ChatMarkdownBlock.Image, unavailable: String = "Browser screenshot unavailable.") {
     val context = LocalContext.current
     val bitmap = remember(image.source) {
         val file = java.io.File(image.source.removePrefix("file://"))
-        val allowed = file.canonicalPath.startsWith(context.filesDir.canonicalPath + "/") ||
-            file.canonicalPath.startsWith(context.cacheDir.canonicalPath + "/")
-        if (allowed) BitmapFactory.decodeFile(file.absolutePath) else null
+        runCatching {
+            val allowed = file.canonicalPath.startsWith(context.filesDir.canonicalPath + "/") ||
+                file.canonicalPath.startsWith(context.cacheDir.canonicalPath + "/")
+            if (!allowed || !file.isFile) return@runCatching null
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, options)
+            val edge = maxOf(options.outWidth, options.outHeight)
+            options.inSampleSize = Integer.highestOneBit((edge / 1024).coerceAtLeast(1))
+            options.inJustDecodeBounds = false
+            BitmapFactory.decodeFile(file.absolutePath, options)
+        }.getOrNull()
     }
     if (bitmap != null) {
         Image(
@@ -1632,7 +1652,7 @@ private fun BrowserImage(image: ChatMarkdownBlock.Image) {
             contentScale = ContentScale.FillWidth,
         )
     } else {
-        Text("Browser screenshot unavailable.", style = MaterialTheme.typography.bodySmall,
+        Text(unavailable, style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
@@ -1901,11 +1921,14 @@ internal fun isGoalCommand(text: String): Boolean {
     return trimmed == "/goal" || trimmed.startsWith("/goal ")
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
                      commandAckCount: Long = 0,
                      hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
+                     sharedDraft: SharedDraft? = null,
+                     phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
                      selector: (@Composable () -> Unit)? = null,
@@ -1920,6 +1943,53 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         mutableStateOf(emptyMap<String, String>())
     }
     val draft = draftFor(drafts, sessionId)
+    var attachmentsOpen by rememberSaveable(sessionId) { mutableStateOf(false) }
+    if (attachmentsOpen) {
+        val context = LocalContext.current
+        val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
+        var hasClipboardText by remember { mutableStateOf(false) }
+        DisposableEffect(clipboard) {
+            fun refresh() {
+                hasClipboardText = clipboard?.hasPrimaryClip() == true &&
+                    clipboard.primaryClipDescription?.hasMimeType("text/*") == true
+            }
+            val listener = ClipboardManager.OnPrimaryClipChangedListener { refresh() }
+            refresh()
+            clipboard?.addPrimaryClipChangedListener(listener)
+            onDispose { clipboard?.removePrimaryClipChangedListener(listener) }
+        }
+        ModalBottomSheet(
+            onDismissRequest = { attachmentsOpen = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            TextButton(
+                enabled = hasClipboardText,
+                onClick = {
+                    val clip = clipboard?.primaryClip
+                    val text = if (clip != null && clip.itemCount != 0) clip.getItemAt(0).text?.toString() else null
+                    if (text.isNullOrBlank()) {
+                        hasClipboardText = false
+                    } else {
+                        val current = draftFor(drafts, sessionId)
+                        drafts = withDraft(drafts, sessionId, appendClipboardText(current, text))
+                        attachmentsOpen = false
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            ) { Text("Include clipboard text") }
+        }
+    }
+    var appliedShares by rememberSaveable(stateSaver = DRAFT_SAVER) {
+        mutableStateOf(emptyMap<String, String>())
+    }
+    LaunchedEffect(sharedDraft?.id) {
+        if (sharedDraft != null && sharedDraft.id != draftFor(appliedShares, sessionId)) {
+            val current = draftFor(drafts, sessionId)
+            drafts = withDraft(drafts, sessionId,
+                if (current.isBlank()) sharedDraft.text else "$current\n\n${sharedDraft.text}")
+            appliedShares = withDraft(appliedShares, sessionId, sharedDraft.id)
+        }
+    }
     var pendingText by rememberSaveable { mutableStateOf<String?>(null) }
     var submittedAt by rememberSaveable { mutableStateOf(0L) }
     val ackCount = acceptedMessageCount + commandAckCount
@@ -1940,7 +2010,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // button silently refusing the tap.
     val goalCommand = isGoalCommand(draft)
     val canSend = ready && !streaming && draft.isNotBlank() && pendingText == null &&
-        (goalCommand || (hasProject && hasProvider) || !hasProvider)
+        (goalCommand || ((hasProject || sharedDraft != null || phoneAvailable) && hasProvider) || !hasProvider)
     // Trailing newlines and spaces are noise; the model never wanted them.
     val submit = {
         val text = draftToSend(draft, canSend)
@@ -1977,6 +2047,10 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
         ) {
             Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
+                sharedDraft?.imageName?.let { name ->
+                    Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelMedium)
+                }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { drafts = withDraft(drafts, sessionId, it) },
@@ -1998,6 +2072,9 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                     ),
                 )
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
+                        Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+                    }
                     Box(Modifier.weight(1f).padding(end = 4.dp)) {
                         selector?.invoke()
                     }

@@ -56,6 +56,35 @@ RELEASE_MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/re
     </application>
 </manifest>"""
 
+DEBUG_FILE_PROVIDER = """    E: provider
+      A: android:name(0x01010003)="androidx.core.content.FileProvider" (Raw: "androidx.core.content.FileProvider")
+      A: android:exported(0x01010010)=(type 0x12)0x00000000
+      A: android:grantUriPermissions(0x0101001b)=(type 0x12)0xffffffff
+      A: android:authorities(0x01010018)="com.kaiser.rivet.shared-files" (Raw: "com.kaiser.rivet.shared-files")
+"""
+
+DEBUG_FILE_PROVIDER_WITH_METADATA = """    E: provider
+      A: android:name(0x01010003)="androidx.core.content.FileProvider" (Raw: "androidx.core.content.FileProvider")
+      A: android:exported(0x01010010)=(type 0x12)0x00000000
+      A: android:grantUriPermissions(0x0101001b)=(type 0x12)0xffffffff
+      A: android:authorities(0x01010018)="com.kaiser.rivet.shared-files" (Raw: "com.kaiser.rivet.shared-files")
+      E: meta-data
+        A: android:name(0x01010003)="android.support.FILE_PROVIDER_PATHS" (Raw: "android.support.FILE_PROVIDER_PATHS")
+        A: android:resource(0x01010025)=@xml/shared_file_paths (Raw: "@xml/shared_file_paths")
+"""
+
+RELEASE_STARTUP_PROVIDER = (
+    '        <provider android:name="androidx.startup.InitializationProvider" android:exported="false" />'
+)
+RELEASE_FILE_PROVIDER = """        <provider android:name="androidx.core.content.FileProvider"
+            android:exported="false" android:grantUriPermissions="true"
+            android:authorities="com.kaiser.rivet.shared-files" />"""
+
+
+def release_with_provider(provider: str) -> str:
+    return RELEASE_MANIFEST.replace(
+        RELEASE_STARTUP_PROVIDER, RELEASE_STARTUP_PROVIDER + "\n" + provider)
+
 
 class RuntimeManifestTest(unittest.TestCase):
     def test_debug_apk_has_nonexported_special_use_process_service(self):
@@ -113,6 +142,56 @@ class RuntimeManifestTest(unittest.TestCase):
         with self.assertRaisesRegex(AssertionError, "unexpected release permissions"):
             verify_release_runtime_manifest(RELEASE_MANIFEST.replace("<application>",
                 '<uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" /><application>'))
+
+    def test_debug_apk_allows_locked_down_file_provider(self):
+        verify_apk_runtime_manifest(DEBUG_TREE + DEBUG_FILE_PROVIDER, ALLOWED_PERMISSIONS)
+
+    def test_debug_apk_allows_file_provider_with_nested_metadata(self):
+        verify_apk_runtime_manifest(
+            DEBUG_TREE + DEBUG_FILE_PROVIDER_WITH_METADATA, ALLOWED_PERMISSIONS)
+
+    def test_debug_apk_rejects_file_provider_property_regressions(self):
+        exported = DEBUG_FILE_PROVIDER_WITH_METADATA.replace(
+            'A: android:exported(0x01010010)=(type 0x12)0x00000000',
+            'A: android:exported(0x01010010)=(type 0x12)0xffffffff')
+        with self.assertRaisesRegex(AssertionError, "non-exported"):
+            verify_apk_runtime_manifest(DEBUG_TREE + exported, ALLOWED_PERMISSIONS)
+
+        wrong_authority = DEBUG_FILE_PROVIDER_WITH_METADATA.replace(".shared-files", ".other-files")
+        with self.assertRaisesRegex(AssertionError, "authorities"):
+            verify_apk_runtime_manifest(DEBUG_TREE + wrong_authority, ALLOWED_PERMISSIONS)
+
+        grant_false = DEBUG_FILE_PROVIDER_WITH_METADATA.replace(
+            'A: android:grantUriPermissions(0x0101001b)=(type 0x12)0xffffffff',
+            'A: android:grantUriPermissions(0x0101001b)=(type 0x12)0x00000000')
+        with self.assertRaisesRegex(AssertionError, "grantUriPermissions"):
+            verify_apk_runtime_manifest(DEBUG_TREE + grant_false, ALLOWED_PERMISSIONS)
+
+        no_grant = DEBUG_FILE_PROVIDER_WITH_METADATA.replace(
+            '      A: android:grantUriPermissions(0x0101001b)=(type 0x12)0xffffffff\n', "")
+        with self.assertRaisesRegex(AssertionError, "grantUriPermissions"):
+            verify_apk_runtime_manifest(DEBUG_TREE + no_grant, ALLOWED_PERMISSIONS)
+
+    def test_release_merged_manifest_allows_locked_down_file_provider(self):
+        verify_release_runtime_manifest(release_with_provider(RELEASE_FILE_PROVIDER))
+
+    def test_release_merged_manifest_rejects_file_provider_property_regressions(self):
+        exported = RELEASE_FILE_PROVIDER.replace('android:exported="false"', 'android:exported="true"')
+        with self.assertRaisesRegex(AssertionError, "non-exported"):
+            verify_release_runtime_manifest(release_with_provider(exported))
+
+        wrong_authority = RELEASE_FILE_PROVIDER.replace(".shared-files", ".other-files")
+        with self.assertRaisesRegex(AssertionError, "authorities"):
+            verify_release_runtime_manifest(release_with_provider(wrong_authority))
+
+        grant_false = RELEASE_FILE_PROVIDER.replace(
+            'android:grantUriPermissions="true"', 'android:grantUriPermissions="false"')
+        with self.assertRaisesRegex(AssertionError, "grantUriPermissions"):
+            verify_release_runtime_manifest(release_with_provider(grant_false))
+
+        no_grant = RELEASE_FILE_PROVIDER.replace(' android:grantUriPermissions="true"', "")
+        with self.assertRaisesRegex(AssertionError, "grantUriPermissions"):
+            verify_release_runtime_manifest(release_with_provider(no_grant))
 
 
 if __name__ == "__main__":

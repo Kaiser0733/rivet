@@ -138,7 +138,7 @@ data class InternalContext(
 
 internal fun AgentMessage.validatedContext(): InternalContext? = internalContext?.takeIf {
     role == AgentRole.Context && it.valid() && text.isEmpty() && toolCalls.isEmpty() &&
-        toolResults.isEmpty() && transportState == null
+        toolResults.isEmpty() && transportState == null && userImagePath == null
 }
 
 /** Adapters see only native messages. Persistent metadata is never sent as wire fields. */

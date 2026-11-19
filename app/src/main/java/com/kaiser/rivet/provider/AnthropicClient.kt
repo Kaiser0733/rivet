@@ -99,11 +99,13 @@ internal class AnthropicClient(
         onReasoning: (String) -> Unit,
         onDelta: (String) -> Unit,
     ): AgentResponse {
-        val messages = modelMessages(request.messages)
-        val images = if (ProviderVisionAttachments.hasTrailingImages(messages)) {
-            withContext(Dispatchers.IO) { ProviderVisionAttachments.trailingImages(messages) }
-        } else emptyMap()
-        val body = requestBody(request, images)
+        val source = modelMessages(request.messages)
+        val (messages, images) = if (ProviderVisionAttachments.needsPreparation(source)) {
+            withContext(Dispatchers.IO) {
+                ProviderVisionAttachments.prepare(source, VisionCapability.assess(config))
+            }
+        } else source to emptyMap()
+        val body = requestBody(request.copy(messages = messages), images)
         val httpRequest = base(Endpoints.anthropicChat(config.baseUrl))
             .post(body.toString().toRequestBody("application/json".toMediaType()))
             .build()
@@ -189,7 +191,19 @@ internal fun anthropicMessage(
     images: Map<String, EncodedImage> = emptyMap(),
 ): JsonObject = when (message.role) {
     AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
-    AgentRole.User -> buildJsonObject { put("role", "user"); put("content", message.text) }
+    AgentRole.User -> buildJsonObject {
+        put("role", "user")
+        val image = ProviderVisionAttachments.userImage(message, images)
+        if (image == null) put("content", message.text) else put("content", buildJsonArray {
+            add(buildJsonObject { put("type", "text"); put("text", message.text) })
+            add(buildJsonObject {
+                put("type", "image")
+                put("source", buildJsonObject {
+                    put("type", "base64"); put("media_type", image.mime); put("data", image.base64)
+                })
+            })
+        })
+    }
     AgentRole.Assistant -> buildJsonObject {
         put("role", "assistant")
         put("content", buildJsonArray {

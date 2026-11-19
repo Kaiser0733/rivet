@@ -22,7 +22,12 @@ internal object ImageAttachmentEncoder {
         val file = File(path)
         if (!file.isFile) return null
         val source = try {
-            BitmapFactory.decodeFile(path)
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(path, options)
+            val edge = maxOf(options.outWidth, options.outHeight)
+            options.inSampleSize = Integer.highestOneBit((edge / MAX_EDGE).coerceAtLeast(1))
+            options.inJustDecodeBounds = false
+            BitmapFactory.decodeFile(path, options)
         } catch (_: Exception) {
             null
         } catch (_: OutOfMemoryError) {

@@ -8,6 +8,8 @@ EXPECTED_SERVICE = "com.kaiser.rivet.runtime.PersistentProcessService"
 MODEL_DOWNLOAD_SERVICE = "com.kaiser.rivet.local.ModelDownloadService"
 EXISTING_STARTUP_PROVIDER = "androidx.startup.InitializationProvider"
 EXISTING_PROFILE_RECEIVER = "androidx.profileinstaller.ProfileInstallReceiver"
+FILE_PROVIDER = "androidx.core.content.FileProvider"
+SHARED_FILES_SUFFIX = ".shared-files"
 ALLOWED_PERMISSIONS = {
     "android.permission.INTERNET",
     "android.permission.FOREGROUND_SERVICE",
@@ -65,11 +67,39 @@ def _attribute(section: str, name: str) -> str | None:
     return values[0]
 
 
+def _own_attribute(section: str, name: str) -> str | None:
+    """Read an attribute from the section root, not a nested child element."""
+    lines = section.splitlines()
+    root = re.match(r"^( *)E: [\w-]+", lines[0]) if lines else None
+    if not root:
+        return None
+    values = []
+    for line in lines[1:]:
+        stripped = line.lstrip()
+        if stripped.startswith("E:"):
+            break
+        if stripped.startswith("A:") and name in line:
+            raw = line.split("=", 1)[1].strip()
+            quoted = re.search(r'="([^"]*)"', line)
+            values.append(quoted.group(1) if quoted else raw)
+    if not values:
+        return None
+    assert len(values) == 1, f"expected one {name} attribute"
+    return values[0]
+
+
 def _is_false(value: str | None) -> bool:
     if value == "false":
         return True
     encoded = re.fullmatch(r"\(type 0x12\)0x([0-9a-fA-F]+)", value or "")
     return encoded is not None and int(encoded.group(1), 16) == 0
+
+
+def _is_true(value: str | None) -> bool:
+    if value == "true":
+        return True
+    encoded = re.fullmatch(r"\(type 0x12\)0x([0-9a-fA-F]+)", value or "")
+    return encoded is not None and int(encoded.group(1), 16) != 0
 
 
 def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
@@ -122,9 +152,26 @@ def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
     assert "android.permission.DUMP" in receiver_permission, (
         "the existing AndroidX profile receiver must remain protected by DUMP"
     )
-    assert len(providers) == 1 and EXISTING_STARTUP_PROVIDER in providers[0], (
+    assert len(providers) in (1, 2), (
         "only the existing AndroidX startup provider may be present"
     )
+    startup = [provider for provider in providers if EXISTING_STARTUP_PROVIDER in provider]
+    assert len(startup) == 1, (
+        "only the existing AndroidX startup provider may be present"
+    )
+    optional = [provider for provider in providers if provider != startup[0]]
+    if optional:
+        file_provider = optional[0]
+        name = (_own_attribute(file_provider, "android:name") or "").strip('"')
+        assert name == FILE_PROVIDER, (
+            "only the existing AndroidX startup provider and the AndroidX FileProvider may be present")
+        exported = _own_attribute(file_provider, "android:exported")
+        assert _is_false(exported), "AndroidX FileProvider must be non-exported"
+        assert _is_true(_own_attribute(file_provider, "android:grantUriPermissions")), (
+            "AndroidX FileProvider must set grantUriPermissions=true")
+        authorities = (_own_attribute(file_provider, "android:authorities") or "").strip('"')
+        assert authorities.endswith(SHARED_FILES_SUFFIX), (
+            "AndroidX FileProvider authorities must end with .shared-files")
 
 
 def verify_release_runtime_manifest(manifest_xml: str) -> None:
@@ -168,5 +215,20 @@ def verify_release_runtime_manifest(manifest_xml: str) -> None:
     assert len(receivers) == 1 and receivers[0].get(ANDROID + "name", "").endswith(
         ".profileinstaller.ProfileInstallReceiver"), "release may contain only the existing AndroidX profile receiver"
     assert receivers[0].get(ANDROID + "permission") == "android.permission.DUMP"
-    assert len(providers) == 1 and providers[0].get(ANDROID + "name", "").endswith(
-        ".startup.InitializationProvider"), "release may contain only the existing AndroidX startup provider"
+    assert len(providers) in (1, 2), (
+        "release may contain only the existing AndroidX startup provider")
+    startup = [provider for provider in providers if provider.get(ANDROID + "name", "").endswith(
+        ".startup.InitializationProvider")]
+    assert len(startup) == 1, (
+        "release may contain only the existing AndroidX startup provider")
+    optional = [provider for provider in providers if provider is not startup[0]]
+    if optional:
+        file_provider = optional[0]
+        assert file_provider.get(ANDROID + "name") == FILE_PROVIDER, (
+            "release may contain only the existing AndroidX startup provider and the AndroidX FileProvider")
+        assert file_provider.get(ANDROID + "exported") == "false", (
+            "release AndroidX FileProvider must be non-exported")
+        assert file_provider.get(ANDROID + "grantUriPermissions") == "true", (
+            "release AndroidX FileProvider must set grantUriPermissions=true")
+        assert (file_provider.get(ANDROID + "authorities") or "").endswith(SHARED_FILES_SUFFIX), (
+            "release AndroidX FileProvider authorities must end with .shared-files")

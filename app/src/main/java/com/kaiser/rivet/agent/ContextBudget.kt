@@ -55,10 +55,14 @@ internal object ContextBudget {
     private const val GUESSED_INPUT_TOKENS = 220_000
     private const val IMAGE_TOKEN_ESTIMATE = 1_024L
 
-    /** Only the trailing tool result can receive image bytes in a request. */
+    /** Only the trailing user message or tool result can receive image bytes in a request. */
     fun attachedImageCount(messages: List<AgentMessage>): Int {
-        val trailing = messages.lastOrNull()?.takeIf { it.role == AgentRole.Tool } ?: return 0
-        return trailing.toolResults.count { !it.imagePath.isNullOrBlank() }
+        val trailing = messages.lastOrNull() ?: return 0
+        return when (trailing.role) {
+            AgentRole.User -> if (trailing.userImagePath == null) 0 else 1
+            AgentRole.Tool -> trailing.toolResults.count { !it.imagePath.isNullOrBlank() }
+            else -> 0
+        }
     }
 
     fun estimateRequestTokens(request: AgentRequest): Long {
