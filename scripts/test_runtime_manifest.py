@@ -57,20 +57,20 @@ RELEASE_MANIFEST = """<manifest xmlns:android="http://schemas.android.com/apk/re
 </manifest>"""
 
 DEBUG_FILE_PROVIDER = """    E: provider
-      A: android:name(0x01010003)="androidx.core.content.FileProvider"
+      A: android:name(0x01010003)="androidx.core.content.FileProvider" (Raw: "androidx.core.content.FileProvider")
       A: android:exported(0x01010010)=(type 0x12)0x00000000
       A: android:grantUriPermissions(0x0101001b)=(type 0x12)0xffffffff
-      A: android:authorities(0x01010018)="com.kaiser.rivet.shared-files"
+      A: android:authorities(0x01010018)="com.kaiser.rivet.shared-files" (Raw: "com.kaiser.rivet.shared-files")
 """
 
 DEBUG_FILE_PROVIDER_WITH_METADATA = """    E: provider
-      A: android:name(0x01010003)="androidx.core.content.FileProvider"
+      A: android:name(0x01010003)="androidx.core.content.FileProvider" (Raw: "androidx.core.content.FileProvider")
       A: android:exported(0x01010010)=(type 0x12)0x00000000
       A: android:grantUriPermissions(0x0101001b)=(type 0x12)0xffffffff
-      A: android:authorities(0x01010018)="com.kaiser.rivet.shared-files"
+      A: android:authorities(0x01010018)="com.kaiser.rivet.shared-files" (Raw: "com.kaiser.rivet.shared-files")
       E: meta-data
-        A: android:name(0x01010003)="android.support.FILE_PROVIDER_PATHS"
-        A: android:resource(0x01010025)=@xml/shared_file_paths
+        A: android:name(0x01010003)="android.support.FILE_PROVIDER_PATHS" (Raw: "android.support.FILE_PROVIDER_PATHS")
+        A: android:resource(0x01010025)=@xml/shared_file_paths (Raw: "@xml/shared_file_paths")
 """
 
 RELEASE_STARTUP_PROVIDER = (

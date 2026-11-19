@@ -79,7 +79,9 @@ def _own_attribute(section: str, name: str) -> str | None:
         if stripped.startswith("E:"):
             break
         if stripped.startswith("A:") and name in line:
-            values.append(line.split("=", 1)[1].strip())
+            raw = line.split("=", 1)[1].strip()
+            quoted = re.search(r'="([^"]*)"', line)
+            values.append(quoted.group(1) if quoted else raw)
     if not values:
         return None
     assert len(values) == 1, f"expected one {name} attribute"
