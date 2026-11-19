@@ -3,9 +3,6 @@ package com.kaiser.rivet.ui.browser
 import android.app.Activity
 import android.content.Context
 import android.content.ContextWrapper
-import android.content.Intent
-import android.net.Uri
-import androidx.browser.customtabs.CustomTabsIntent
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.detectTapGestures
@@ -102,7 +99,6 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                       BrowserHost(session, hostModifier, onPageInteraction)
                   }) {
     val state by session.state.collectAsState()
-    val context = androidx.compose.ui.platform.LocalContext.current
     val scope = rememberCoroutineScope()
     val focusRequester = remember { FocusRequester() }
     val focusManager = LocalFocusManager.current
@@ -138,17 +134,6 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
     var settingsOpen by remember { mutableStateOf(false) }
     var domainsOpen by remember { mutableStateOf(false) }
     var windowsOpen by remember { mutableStateOf(false) }
-
-    LaunchedEffect(Unit) {
-        session.customTabOpener = { url ->
-            val activity = context.findActivity()
-            runCatching {
-                if (activity != null) CustomTabsIntent.Builder().build().launchUrl(activity, Uri.parse(url))
-                else context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-            }
-        }
-    }
 
     Column(modifier.fillMaxSize().then(
         if (state.visible) Modifier.background(MaterialTheme.colorScheme.surface) else Modifier)) {
@@ -642,7 +627,7 @@ private fun InlineSpans(block: ReaderBlock, onLink: (String) -> Unit) {
 
 private fun spansText(block: ReaderBlock): String = block.spans.joinToString(" ") { it.text }
 
-private fun Context.findActivity(): Activity? {
+internal fun Context.findActivity(): Activity? {
     var current: Context? = this
     while (current is ContextWrapper) {
         if (current is Activity) return current

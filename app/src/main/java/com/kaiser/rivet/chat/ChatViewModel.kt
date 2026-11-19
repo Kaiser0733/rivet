@@ -4,6 +4,8 @@ import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.Uri
+import android.provider.DocumentsContract
+import androidx.core.content.FileProvider
 import android.os.SystemClock
 import android.util.Log
 import com.kaiser.rivet.RivetApplication
@@ -91,6 +93,7 @@ import com.kaiser.rivet.runtime.ManagedProcesses
 import com.kaiser.rivet.runtime.PersistentProcessService
 import com.kaiser.rivet.runtime.ManagedProcessStatus
 import com.kaiser.rivet.runtime.ProjectDownloader
+import com.kaiser.rivet.runtime.PhoneIntents
 import com.kaiser.rivet.runtime.CheckpointFailure
 import com.kaiser.rivet.runtime.CheckpointRecord
 import com.kaiser.rivet.runtime.InteractiveTerminalSession
@@ -332,6 +335,26 @@ class ChatViewModel private constructor(
                 _uiState.update { it.copy(notice = "Rivet couldn't read this attachment. Try sharing it again.") }
             }
         }
+    }
+
+    private suspend fun resolvePhoneFile(rawPath: String, workspace: SafWorkspace?): PhoneIntents.ContentFile? {
+        val path = WorkspacePath.parse(rawPath)
+        val relative = path.value
+        if (relative.startsWith("inbox/")) {
+            return withContext(Dispatchers.IO) {
+                val app = getApplication<Application>()
+                val directory = SharedFileCopy.inbox(app).canonicalFile
+                val file = File(directory, relative.removePrefix("inbox/")).canonicalFile
+                if (file.parentFile != directory || !file.isFile) return@withContext null
+                val uri = FileProvider.getUriForFile(app, "${app.packageName}.shared-files", file)
+                PhoneIntents.ContentFile(uri, app.contentResolver.getType(uri) ?: "application/octet-stream")
+            }
+        }
+        val project = workspace ?: return null
+        val entry = project.stat(path)
+        if (entry.directory) return null
+        val uri = DocumentsContract.buildDocumentUriUsingTree(project.tree, entry.documentId)
+        return PhoneIntents.ContentFile(uri, entry.mimeType, projectFile = true)
     }
 
     private fun putSharedDraft(draft: SharedDraft) {
@@ -1484,9 +1507,15 @@ class ChatViewModel private constructor(
                     add(SkillContext.invocation(gesture.skill, workspaceId))
                 }
             }
-            fun createExecutor(loadedSkills: Set<String>): AgentToolExecutor? = workspace?.let { selectedWorkspace ->
+            val phone = if (snapshot.config.type == ProviderType.Local) null else PhoneIntents(
+                app = getApplication<Application>(),
+                resolveFile = { rawPath -> resolvePhoneFile(rawPath, workspace) },
+                customTabOpener = { url -> browser.customTabOpener?.invoke(url) == true },
+            )
+            fun createExecutor(loadedSkills: Set<String>, phoneTools: PhoneIntents? = null): AgentToolExecutor? {
+                val selectedWorkspace = workspace ?: return null
                 val boundWorkspaceId = workspaceId ?: selectedWorkspace.tree.toString()
-                AgentToolExecutor(
+                return AgentToolExecutor(
                     SafAgentWorkspace(selectedWorkspace),
                     runCommand = runtime::runCommand,
                     requireSafCurrent = runtime::requireSafCurrent,
@@ -1506,6 +1535,7 @@ class ChatViewModel private constructor(
                         identity?.let { runtime.outputFor(id, it) }
                     },
                     spawnProcess = runtime::spawnProcess,
+                    preparePhoneIntent = phoneTools?.let { it::prepare },
                     rememberMemory = { fact ->
                         val files = ProjectStateFiles(selectedWorkspace)
                         val result = MemoryFormat.append(files.loadMemory(), fact)
@@ -1525,7 +1555,7 @@ class ChatViewModel private constructor(
                     },
                 )
             }
-            val executor = createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty())
+            val executor = createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty(), phone)
             val subagentTools: SubagentTools?
             var supervisorScopeJob: Job? = null
             var supervisorCollector: Job? = null
@@ -1536,7 +1566,7 @@ class ChatViewModel private constructor(
                     parentSessionId = _uiState.value.currentSessionId, workerStore = workerStore,
                     providerSource = providerSource, clientFactory = clientFactory, approvals = approvals,
                     checkpointGate = checkpointGate, coordinatorConfig = { snapshot.config },
-                    browserTools = browserTools, browserLease = browserLease, createExecutor = ::createExecutor,
+                    browserTools = browserTools, browserLease = browserLease, createExecutor = { createExecutor(it) },
                     projectInstructions = project, skills = { skills }, workspace = workspace, runtime = runtime,
                     managedProcesses = managedProcesses, browser = browser, workspaceSelection = workspaceSelection,
                     approvedSkillScripts = { approvedSkillScripts }, skillScriptApprovals = skillScriptApprovals,
@@ -1568,8 +1598,10 @@ class ChatViewModel private constructor(
                 val identity = workspaceId ?: selected.tree.toString()
                 runtime.startPreview(selected, identity, _uiState.value.projectName, root, entry).url
             }
-            val tools = BrowserTools.definitions +
-                (if (executor == null) emptyList() else AgentToolExecutor.definitions) +
+            val workspaceTools = if (executor == null) emptyList() else
+                AgentToolExecutor.definitions.filterNot { it.name in PhoneIntents.names }
+            val tools = BrowserTools.definitions + workspaceTools +
+                (if (phone == null) emptyList() else PhoneIntents.definitions) +
                 (subagentTools?.let { SubagentTools.definitions }.orEmpty())
             val client = clientFactory(snapshot.config, snapshot.apiKey)
             val sessionId = _uiState.value.currentSessionId
@@ -1737,7 +1769,7 @@ class ChatViewModel private constructor(
                             lease = browserLease,
                             visionSupport = { VisionCapability.assess(snapshot.config) },
                         )
-                        ?: executor?.prepare(call) ?: PreparedAgentTool(
+                        ?: executor?.prepare(call) ?: phone?.prepare(call) ?: PreparedAgentTool(
                         call,
                         null,
                         blockedReason = "workspace_unavailable",

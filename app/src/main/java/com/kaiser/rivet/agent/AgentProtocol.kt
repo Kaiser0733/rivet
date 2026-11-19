@@ -159,5 +159,6 @@ private fun defaultEffect(name: String): AgentToolEffect = when (name) {
     "download_file" -> AgentToolEffect.Download
     "start_preview" -> AgentToolEffect.Preview
     "spawn_process", "stop_process" -> AgentToolEffect.PersistentProcess
+    "open_app", "open_url", "open_file", "compose_intent" -> AgentToolEffect.BrowserAction
     else -> AgentToolEffect.ReadOnly
 }

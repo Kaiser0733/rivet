@@ -24,7 +24,7 @@ internal object SharedFileCopy {
             resolver.query(source, arrayOf(OpenableColumns.DISPLAY_NAME), null, null, null)
                 ?.use { if (it.moveToFirst()) it.getString(0) else null }
         }.getOrNull()
-        val name = displayName?.substringAfterLast('/')?.replace(Regex("[\\\\\\p{Cntrl}]"), "_")?.take(120)
+        val name = displayName?.substringAfterLast('/')?.replace(Regex("[\\\\\\p{Cntrl}]"), "_")?.take(120)?.trimEnd('.')
             ?.takeIf { it.isNotBlank() && it !in setOf(".", "..") } ?: fallback
         val dir = inbox(context)
         dir.mkdirs()

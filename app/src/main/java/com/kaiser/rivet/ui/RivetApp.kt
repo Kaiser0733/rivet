@@ -1,6 +1,8 @@
 package com.kaiser.rivet.ui
 
 import android.app.Activity
+import android.net.Uri
+import androidx.browser.customtabs.CustomTabsIntent
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
@@ -15,6 +17,7 @@ import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -38,6 +41,7 @@ import com.kaiser.rivet.local.ModelsViewModel
 import com.kaiser.rivet.storage.AutonomyStore
 import com.kaiser.rivet.ui.browser.BrowserHost
 import com.kaiser.rivet.ui.browser.BrowserScreen
+import com.kaiser.rivet.ui.browser.findActivity
 import com.kaiser.rivet.ui.terminal.TerminalPane
 import com.kaiser.rivet.ui.chat.ChatScreen
 import com.kaiser.rivet.ui.history.HistoryPane
@@ -55,7 +59,16 @@ import kotlinx.coroutines.launch
 fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
              providersViewModel: ProvidersViewModel, modelsViewModel: ModelsViewModel,
              processNavigationRequest: Int = 0) {
+    val activity = LocalContext.current.findActivity()
     val context = LocalContext.current.applicationContext
+    DisposableEffect(chatViewModel.browser, activity) {
+        chatViewModel.browser.customTabOpener = { url ->
+            activity != null && runCatching {
+                CustomTabsIntent.Builder().build().launchUrl(activity, Uri.parse(url))
+            }.isSuccess
+        }
+        onDispose { chatViewModel.browser.customTabOpener = null }
+    }
     val appearanceStore = remember(context) { AppearanceStore(context) }
     val autonomyStore = remember(context) { AutonomyStore(context) }
     val storedAppearance by appearanceStore.appearance.collectAsState(initial = RivetAppearance())

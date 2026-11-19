@@ -700,6 +700,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 val sharedContent by chatViewModel.sharedContent.collectAsState()
                 InputBar(streaming = state.streaming,
                     sharedDraft = sharedContent[state.currentSessionId],
+                    phoneAvailable = providers.configs.any { it.id == providers.activeId &&
+                        it.type != com.kaiser.rivet.provider.ProviderType.Local },
                     ready = state.ready && !state.projectLoading && !state.undoing &&
                         !state.recoveringProjectChanges,
                     hasProject = state.projectName != null &&
@@ -1921,6 +1923,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
                      sharedDraft: SharedDraft? = null,
+                     phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
                      selector: (@Composable () -> Unit)? = null,
@@ -1966,7 +1969,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // button silently refusing the tap.
     val goalCommand = isGoalCommand(draft)
     val canSend = ready && !streaming && draft.isNotBlank() && pendingText == null &&
-        (goalCommand || ((hasProject || sharedDraft != null) && hasProvider) || !hasProvider)
+        (goalCommand || ((hasProject || sharedDraft != null || phoneAvailable) && hasProvider) || !hasProvider)
     // Trailing newlines and spaces are noise; the model never wanted them.
     val submit = {
         val text = draftToSend(draft, canSend)

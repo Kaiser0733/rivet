@@ -327,7 +327,7 @@ class BrowserSession(
 
     var bookmarkWriter: (suspend (String, String) -> String?)? = null
     var previewStarter: (suspend (String, String) -> String?)? = null
-    var customTabOpener: ((String) -> Unit)? = null
+    var customTabOpener: ((String) -> Boolean)? = null
 
     init {
         app.registerComponentCallbacks(this)
@@ -2148,8 +2148,8 @@ class BrowserSession(
     }
 
     fun openExternal(url: String) {
-        if (customTabOpener != null) customTabOpener!!.invoke(url)
-        else runCatching {
+        if (customTabOpener?.invoke(url) == true) return
+        runCatching {
             app.startActivity(android.content.Intent(android.content.Intent.ACTION_VIEW, Uri.parse(url))
                 .addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK))
         }
