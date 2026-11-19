@@ -202,6 +202,9 @@ private fun EndedTerminal(
     }
 }
 
+internal fun showJumpToBottom(follow: Boolean, unseenOutput: Boolean): Boolean =
+    !follow && unseenOutput
+
 private fun terminalErrorMessage(code: String?): String? = when (code) {
     null -> null
     "workspace_unavailable" -> "No workspace is selected. Choose a project in the chat first."
@@ -330,11 +333,14 @@ private fun TerminalGrid(
     val colors = emulator.mColors.mCurrentColors
     val listState = rememberLazyListState()
     var follow by remember { mutableStateOf(true) }
+    var unseenOutput by remember { mutableStateOf(false) }
     fun focusInput() {
         focusRequester.requestFocus()
         keyboard?.show()
     }
     fun applyIme(new: String) {
+        follow = true
+        unseenOutput = false
         val old = imeText
         val common = old.commonPrefixWith(new).length
         repeat((old.length - common).coerceAtLeast(0)) { session.write("\u007f") }
@@ -355,10 +361,13 @@ private fun TerminalGrid(
         snapshotFlow { listState.isScrollInProgress to listState.canScrollForward }
             .collect { (scrolling, canForward) ->
                 if (scrolling) follow = !canForward
-                else if (!canForward) follow = true
+                else if (!canForward) { follow = true; unseenOutput = false }
             }
     }
-    LaunchedEffect(revision, totalRows, cursorIndex, visibleRows) {
+    LaunchedEffect(revision, totalRows) {
+        if (!follow) unseenOutput = true
+    }
+    LaunchedEffect(revision, totalRows, cursorIndex, visibleRows, follow) {
         // The screen already fits the viewport unless the IME shrinks visibleRows below cursorIndex.
         TerminalScrollPolicy.cursorScrollTargetRow(
             follow = follow,
@@ -392,6 +401,18 @@ private fun TerminalGrid(
                 )
             }
         }
+        if (showJumpToBottom(follow, unseenOutput)) {
+            Surface(
+                onClick = { follow = true; unseenOutput = false },
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 12.dp),
+                color = PaneRaised,
+                shape = RoundedCornerShape(16.dp),
+                border = androidx.compose.foundation.BorderStroke(1.dp, PaneLine),
+            ) {
+                Text("Jump to latest", modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                    color = Ink, style = MaterialTheme.typography.labelMedium)
+            }
+        }
         BasicTextField(
             value = imeText,
             onValueChange = { new -> applyIme(new) },
@@ -409,6 +430,8 @@ private fun TerminalGrid(
                     val special = KeyHandler.getCode(native.keyCode, keyMode,
                         emulator.isCursorKeysApplicationMode, emulator.isKeypadApplicationMode)
                     if (special != null) {
+                        follow = true
+                        unseenOutput = false
                         session.write(special)
                         onCtrl(false)
                         onAlt(false)
@@ -418,6 +441,8 @@ private fun TerminalGrid(
                     val printable = native.unicodeChar.takeIf { it != 0 }?.toChar()
                         ?: printableKey(native.keyCode)
                     if ((ctrlNow || altNow) && printable != null) {
+                        follow = true
+                        unseenOutput = false
                         session.write(terminalText(printable.toString(), ctrlNow, altNow))
                         onCtrl(false)
                         onAlt(false)

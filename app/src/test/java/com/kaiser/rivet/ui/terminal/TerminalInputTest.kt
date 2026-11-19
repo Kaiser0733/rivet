@@ -1,6 +1,8 @@
 package com.kaiser.rivet.ui.terminal
 
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TerminalInputTest {
@@ -28,6 +30,12 @@ class TerminalInputTest {
         assertEquals('\u001e', controlCode('^'))
         assertEquals('\u001f', controlCode('_'))
         assertEquals('\u007f', controlCode('?'))
+    }
+
+    @Test fun theJumpChipNeedsBothAnUnfollowedViewAndNewOutput() {
+        assertFalse(showJumpToBottom(follow = true, unseenOutput = false))
+        assertFalse(showJumpToBottom(follow = false, unseenOutput = false))
+        assertTrue(showJumpToBottom(follow = false, unseenOutput = true))
     }
 
     @Test fun gridSizeUsesTheCellSizeAndRespectsTheEmulatorMinimum() {
