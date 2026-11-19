@@ -36,6 +36,9 @@ final class JNI {
      */
     public static native int waitFor(int processId);
 
+    /** Send a signal to the foreground process group attached to the pty master. */
+    public static native int signalForegroundProcessGroup(int fd, int signal);
+
     public static native void close(int fd);
 
 }

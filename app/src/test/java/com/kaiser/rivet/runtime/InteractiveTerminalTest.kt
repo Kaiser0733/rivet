@@ -22,8 +22,11 @@ class InteractiveTerminalTest {
             private set
         var lastSize: Triple<Int, Int, Int>? = null
             private set
+        var interrupts = 0
+            private set
 
         override fun write(text: String) = Unit
+        override fun interrupt() { interrupts++ }
         override fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) {
             resizes++
             lastSize = Triple(columns, rows, cellWidthPx)
@@ -287,6 +290,21 @@ class InteractiveTerminalTest {
         assertEquals(2, harness.launches())
         assertTrue(old.closed)
         root.deleteRecursively()
+    }
+
+    @Test fun interruptOnlyReachesTheLiveEngine() = runTest {
+        val harness = harness(this)
+        harness.holder.open("A")
+        harness.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+        val engine = harness.engines.single()
+
+        harness.holder.interrupt()
+        assertEquals(1, engine.interrupts)
+
+        harness.holder.close()
+        harness.holder.interrupt()
+        assertEquals(1, engine.interrupts)
     }
 
     @Test fun rowOnlyImeChangesDoNotReprintTheShellPrompt() = runTest {

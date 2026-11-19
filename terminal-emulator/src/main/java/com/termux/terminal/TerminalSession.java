@@ -207,6 +207,11 @@ public final class TerminalSession extends TerminalOutput {
         if (mShellPid > 0) mTerminalToProcessIOQueue.tryWrite(data, offset, count);
     }
 
+    /** Send SIGINT to the pty's foreground process group. */
+    public void interrupt() {
+        if (mTerminalFileDescriptor >= 0) JNI.signalForegroundProcessGroup(mTerminalFileDescriptor, 2);
+    }
+
     /** Write the Unicode code point to the terminal encoded in UTF-8. */
     public void writeCodePoint(boolean prependEscape, int codePoint) {
         if (codePoint > 1114111 || (codePoint >= 0xD800 && codePoint <= 0xDFFF)) {

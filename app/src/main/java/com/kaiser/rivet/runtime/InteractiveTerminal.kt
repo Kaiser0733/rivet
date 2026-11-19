@@ -53,6 +53,7 @@ internal interface TerminalEngine {
     val pid: Int
     val emulator: TerminalEmulator?
     fun write(text: String)
+    fun interrupt() = Unit
     fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int)
     fun close()
 }
@@ -269,6 +270,10 @@ internal class InteractiveTerminalSession(
 
     fun write(text: String) {
         if (text.isNotEmpty()) engine?.write(text)
+    }
+
+    fun interrupt() {
+        if (!finished) engine?.interrupt()
     }
 
     fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) {
@@ -496,6 +501,8 @@ internal class PtyTerminalEngine(
         // Input comes from Compose's main thread; never park it on a full 4 KiB queue.
         session.writeNonBlocking(bytes, 0, bytes.size)
     }
+
+    override fun interrupt() = session.interrupt()
 
     override fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) {
         session.updateSize(columns, rows, cellWidthPx, cellHeightPx)

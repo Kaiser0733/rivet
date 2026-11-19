@@ -9,6 +9,7 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -134,6 +135,24 @@ internal fun TerminalPane(
                         maxLines = 1,
                         overflow = TextOverflow.Ellipsis,
                     )
+                }
+            }
+            if (state.running) {
+                TextButton(
+                    onClick = { session.interrupt() },
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
+                    Text("Interrupt", color = Muted,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace))
+                }
+                TextButton(
+                    onClick = { session.close() },
+                    contentPadding = PaddingValues(horizontal = 8.dp),
+                ) {
+                    Text("Kill", color = Muted,
+                        style = MaterialTheme.typography.labelSmall.copy(
+                            fontFamily = FontFamily.Monospace))
                 }
             }
             IconButton(

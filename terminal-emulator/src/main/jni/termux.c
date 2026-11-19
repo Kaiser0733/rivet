@@ -221,6 +221,13 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_waitFor(JNIEnv* TERMUX_UNUSE
     }
 }
 
+JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_signalForegroundProcessGroup(JNIEnv* TERMUX_UNUSED(env), jclass TERMUX_UNUSED(clazz), jint fd, jint signal)
+{
+    pid_t foreground = tcgetpgrp(fd);
+    if (foreground <= 0) return -1;
+    return kill(-foreground, signal) == 0 ? foreground : -1;
+}
+
 JNIEXPORT void JNICALL Java_com_termux_terminal_JNI_close(JNIEnv* TERMUX_UNUSED(env), jclass TERMUX_UNUSED(clazz), jint fd)
 {
     if (fd >= 0) close(fd);
