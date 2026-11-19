@@ -84,6 +84,7 @@ import com.kaiser.rivet.runtime.TermuxBridge
 import com.kaiser.rivet.runtime.TermuxCommand
 import com.kaiser.rivet.workspace.AndroidGrantedFolders
 import com.kaiser.rivet.workspace.FolderGrant
+import com.kaiser.rivet.workspace.grantDisplayPath
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -718,7 +719,8 @@ private fun GrantedFoldersSettings() {
     folders.forEach { grant ->
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
             Column(Modifier.weight(1f)) {
-                Text("grants/${grant.id}", style = MaterialTheme.typography.bodyMedium)
+                Text(grantDisplayPath(grant.treeUri, grant.label),
+                    style = MaterialTheme.typography.bodyMedium)
                 Text(when {
                     grant.revoked -> "Revoked — add the folder again to restore access"
                     grant.write -> "Read and write"
