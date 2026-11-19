@@ -17,6 +17,8 @@ enum class RunPhase { Queued, Running, Paused, Done, Failed, Stopped }
 enum class RunPauseReason(val plain: String) {
     User("paused by you"),
     Approval("waiting for approval"),
+    ScreenCaptureDeclined("screen capture was declined"),
+    ScreenCaptureCancelled("screen capture was cancelled"),
     Budget("budget reached — raise or stop"),
     Thermal("device too hot"),
     Battery("battery low"),

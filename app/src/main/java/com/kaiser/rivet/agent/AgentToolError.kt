@@ -58,6 +58,11 @@ internal object AgentToolError {
         "share_unavailable" to "Android couldn't show the share sheet. Check the file or try sharing text from Rivet.",
         "compose_unavailable" to "Android couldn't open a draft. Choose or install an email, messaging, or calendar app.",
         "invalid_arguments" to "The tool arguments did not match this tool's JSON contract. Re-read the argument names and send one complete JSON object.",
+        "phone_shot_denied" to "Screen capture was declined.",
+        "phone_shot_cancelled" to "Screen capture was cancelled.",
+        "phone_shot_unavailable" to "Rivet couldn't capture the screen. Open Rivet and try again.",
+        "phone_shot_notifications_off" to "Turn on Rivet's Screen capture notifications, then try again.",
+        "phone_shot_busy" to "Finish or cancel the current screen capture, then try again.",
         "termux_missing" to "Install the Termux app, then follow the setup in Settings → Phone access.",
         "termux_external_apps_off" to "Termux didn't return a result. " + TermuxCommand.SETUP,
         "termux_permission_required" to TermuxCommand.SETUP,
@@ -125,7 +130,7 @@ internal object AgentToolError {
     private val runtimeStops = setOf("sync_required", "workspace_unavailable",
         "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
         "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",
-        "foreground_service_unavailable", "preview_unavailable")
+        "foreground_service_unavailable", "preview_unavailable", "phone_shot_denied", "phone_shot_cancelled")
 
     fun content(code: String, statusCode: Int? = null, subject: String? = null): String {
         val baseCode = if (code.startsWith("owned_by_worker:")) "owned_by_worker" else code

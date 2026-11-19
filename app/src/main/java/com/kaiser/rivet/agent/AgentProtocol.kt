@@ -155,6 +155,7 @@ class PreparedAgentTool(
 private fun defaultEffect(name: String): AgentToolEffect = when (name) {
     "write_file", "apply_patch", "create_file", "create_directory" -> AgentToolEffect.WorkspaceMutation
     "rename_path", "move_path", "delete_path" -> AgentToolEffect.DestructiveWorkspaceMutation
+    "phone_shot" -> AgentToolEffect.ReadOnly
     "run_command", "termux_command" -> AgentToolEffect.ForegroundCommand
     "download_file" -> AgentToolEffect.Download
     "start_preview" -> AgentToolEffect.Preview

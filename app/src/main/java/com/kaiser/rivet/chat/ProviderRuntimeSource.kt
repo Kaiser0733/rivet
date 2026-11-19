@@ -25,6 +25,8 @@ internal fun undoFailureMessage(error: Throwable?): String = when {
 }
 
 internal fun runtimeFailureMessage(code: String?): String = when (code) {
+    "phone_shot_denied" -> "Screen capture was declined. Rivet paused the run."
+    "phone_shot_cancelled" -> "Screen capture was cancelled. Rivet paused the run."
     "process_limit" -> "Rivet already has several project operations running. Stop one in Processes, then try again."
     "foreground_service_unavailable" -> "Rivet couldn't keep the local preview running. Try again while Rivet is open."
     "preview_unavailable" -> "Rivet couldn't start a local preview for this project. Check the selected files and try again."

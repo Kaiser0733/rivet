@@ -1,5 +1,7 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.provider.VisionSupport
+import com.kaiser.rivet.runtime.PhoneCaptureTool
 import org.junit.Assert.assertEquals
 import org.junit.Test
 
@@ -27,6 +29,13 @@ class PhoneApprovalTest {
         assertEquals(ApprovalDecision.AskUser, ApprovalPolicy.decide(AutonomyMode.Ask, tool))
         assertEquals(ApprovalDecision.AskUser, ApprovalPolicy.decide(AutonomyMode.BasicYolo, tool))
         assertEquals(ApprovalDecision.AutoAuthorize, ApprovalPolicy.decide(AutonomyMode.Yolo, tool))
+    }
+
+    @Test fun phoneShotUsesTheSystemConsentWithoutAnApprovalCard() {
+        val call = AgentToolCall("shot", "phone_shot", "{}")
+        val tool = PhoneCaptureTool.prepare(call, { VisionSupport.Supported }) { error("No capture is executed") }
+        assertEquals(AgentToolEffect.ReadOnly, tool.effect)
+        assertEquals(ApprovalDecision.AutoAuthorize, ApprovalPolicy.decide(AutonomyMode.Ask, tool))
     }
 
     private fun tool(name: String): PreparedAgentTool {

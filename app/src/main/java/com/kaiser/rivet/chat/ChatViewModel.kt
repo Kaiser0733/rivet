@@ -18,6 +18,7 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentRunResult
 import com.kaiser.rivet.agent.AgentStopReason
+import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolExecutor
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentToolEffect
@@ -93,6 +94,7 @@ import com.kaiser.rivet.runtime.ManagedProcesses
 import com.kaiser.rivet.runtime.interactiveTerminalCount
 import com.kaiser.rivet.runtime.PersistentProcessService
 import com.kaiser.rivet.runtime.ProjectDownloader
+import com.kaiser.rivet.runtime.PhoneCaptureTool
 import com.kaiser.rivet.runtime.PhoneIntents
 import com.kaiser.rivet.runtime.TermuxBridge
 import com.kaiser.rivet.agent.RoutedAgentWorkspace
@@ -1531,6 +1533,18 @@ class ChatViewModel private constructor(
             val prepareTermux = termux?.let { bridge ->
                 { call: AgentToolCall -> bridge.prepare(call, workspace) { id -> liveGrant(id) } }
             }
+            val capture = if (phone == null) null else (getApplication<Application>() as? RivetApplication)?.phoneCapture
+            val prepareCapture = capture?.let { coordinator ->
+                { call: AgentToolCall ->
+                    PhoneCaptureTool.prepare(call, { VisionCapability.assess(snapshot.config) }) {
+                        coordinator.capture { status ->
+                            if (status == "phone_shot_armed") _uiState.update {
+                                it.copy(activity = "Switch apps, then tap Capture now in Rivet’s notification.")
+                            }
+                        }
+                    }
+                }
+            }
             fun createExecutor(loadedSkills: Set<String>, coordinator: Boolean = false): AgentToolExecutor? {
                 val selectedWorkspace = workspace
                 val projectFiles = selectedWorkspace?.let(::SafAgentWorkspace)
@@ -1542,6 +1556,7 @@ class ChatViewModel private constructor(
                 if (selectedWorkspace == null) return AgentToolExecutor(
                     files, downloader = projectDownloader, preparePhoneIntent = phone?.let { it::prepare },
                     prepareTermuxCommand = prepareTermux,
+                    preparePhoneShot = prepareCapture,
                 )
                 val boundWorkspaceId = workspaceId ?: selectedWorkspace.tree.toString()
                 return AgentToolExecutor(
@@ -1566,6 +1581,7 @@ class ChatViewModel private constructor(
                     spawnProcess = runtime::spawnProcess,
                     worker = !coordinator,
                     prepareTermuxCommand = if (coordinator) prepareTermux else null,
+                    preparePhoneShot = if (coordinator) prepareCapture else null,
                     preparePhoneIntent = if (coordinator) phone?.let { it::prepare } else null,
                     rememberMemory = { fact ->
                         val files = ProjectStateFiles(selectedWorkspace)
@@ -2183,7 +2199,7 @@ class ChatViewModel private constructor(
                 }
                 withContext(NonCancellable) {
                     val live = currentRun
-                    if (live != null && live.phase !in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped)) {
+                    if (live != null && live.phase !in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped, RunPhase.Paused)) {
                         try {
                             if (pauseRequestedTicket == ticket && live.phase == RunPhase.Running) {
                                 val paused = RunMachine.pause(live, pauseReason)
@@ -2307,7 +2323,22 @@ class ChatViewModel private constructor(
                 else -> "Rivet stopped because this operation isn't available."
             }
         }
-        when (result.stopReason) {
+        val capturePause = when (result.failureCode) {
+            "phone_shot_denied" -> RunPauseReason.ScreenCaptureDeclined
+            "phone_shot_cancelled" -> RunPauseReason.ScreenCaptureCancelled
+            else -> null
+        }
+        if (capturePause != null) {
+            currentRun?.takeIf { it.phase == RunPhase.Running }?.let { run ->
+                val paused = RunMachine.pause(run, capturePause)
+                currentRun = paused
+                runResumeContext = true
+                checkpointGate.finishRunCheckpoint(run.workspaceId)
+                try { runJournal?.save(paused) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+                managedProcesses.updateRunStatus(null, null, 0)
+                _uiState.update { it.copy(run = paused) }
+            }
+        } else when (result.stopReason) {
             AgentStopReason.Completed -> finishRun(RunPhase.Done)
             AgentStopReason.WorkspaceChanged, AgentStopReason.SessionLimit,
             AgentStopReason.CheckpointUnavailable, AgentStopReason.ContextUnavailable,
@@ -2317,7 +2348,7 @@ class ChatViewModel private constructor(
                 finishRun(RunPhase.Failed, result.failureCode ?: error)
         }
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
-        persistTurn(persisted, interrupted = false)
+        persistTurn(persisted, interrupted = capturePause != null)
         activeMessages = persisted
         val progressNote = result.messages.lastOrNull {
             it.role == AgentRole.Assistant && it.text.isNotBlank() && it.toolCalls.isEmpty()
@@ -2377,8 +2408,9 @@ class ChatViewModel private constructor(
                 currentSessionTitle = if (unchanged && history != null) history.firstOrNull {
                     it.id == state.currentSessionId }?.title ?: state.currentSessionTitle
                 else state.currentSessionTitle,
-                usage = usage, error = error,
-                errorAction = errorAction, activity = null)
+                usage = usage, error = if (capturePause == null) error else null,
+                errorAction = if (capturePause == null) errorAction else null, activity = null,
+                interruptedTurn = capturePause != null, runRecovery = if (capturePause != null) error else state.runRecovery)
         }
 
         val duration = completedDuration
@@ -2930,6 +2962,7 @@ class ChatViewModel private constructor(
             tool == "spawn_process" || tool == "process_output" -> "Managing project processes…"
             tool in setOf("read_file", "list_directory", "search_files", "git_status", "git_diff") ->
                 "Looking through the project…"
+            tool == "phone_shot" -> "Capturing your screen…"
             tool == "termux_command" -> "Running in Termux…"
             tool == "run_command" -> "Running a project command…"
             else -> "Updating the project…"
@@ -2967,7 +3000,8 @@ class ChatViewModel private constructor(
                     "Use grants/<label>/<path> for folders added in Settings → Phone access; writes there have no Undo. " +
                     "Shared files in inbox/ are read-only. termux_command uses the separate Termux app and has no Rivet Undo. " +
                     "You can show Android's share sheet and prepare email, message, or calendar drafts. The user sends or saves them. " +
-                    "If the task requires reading notifications, reading another app's screen, or tapping in another app, " +
+                    "Use phone_shot for a one-time screen capture with the user's consent. If declined or cancelled, wait for the user. " +
+                    "If the task requires reading notifications, continuously reading another app's screen, or tapping in another app, " +
                     "say once which capability is missing and point to Settings → Phone access → Advanced. " +
                     "For a shared GitHub link followed by “Want a summary of this repo?”, wait for the user to explicitly agree before fetching it."
             } else "")
