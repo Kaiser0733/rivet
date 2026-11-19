@@ -30,7 +30,7 @@ internal object LocalPrompt {
         } else {
             baseSystem + LocalToolProtocol.systemSuffix(sentTools)
         }
-        return LocalWireRequest(system, sentTools)
+        return LocalWireRequest(system + "\nPhone tools need a cloud model.", sentTools)
     }
 
     /** True when [system] was assembled by [wire] and must not be appended to twice. */
