@@ -334,7 +334,7 @@ internal class WorkerRunner(
                             services.checkpointGate.scopeBlocker(currentWorker.id, call)
                         } else null
                         if (scopeRefusal != null) {
-                            return@prepareTool PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
+                            return@AgentLoop PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
                                 AgentToolResult(
                                     call.id,
                                     call.name,
