@@ -54,6 +54,9 @@ import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.ExperimentalMaterial3Api
+import androidx.compose.material3.ModalBottomSheet
+import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
@@ -119,6 +122,7 @@ import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
 import com.kaiser.rivet.chat.SharedDraft
+import com.kaiser.rivet.chat.appendClipboardText
 import com.kaiser.rivet.chat.draftFor
 import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
@@ -1917,6 +1921,7 @@ internal fun isGoalCommand(text: String): Boolean {
     return trimmed == "/goal" || trimmed.startsWith("/goal ")
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
                      commandAckCount: Long = 0,
@@ -1938,6 +1943,42 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         mutableStateOf(emptyMap<String, String>())
     }
     val draft = draftFor(drafts, sessionId)
+    var attachmentsOpen by rememberSaveable(sessionId) { mutableStateOf(false) }
+    if (attachmentsOpen) {
+        val context = LocalContext.current
+        val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
+        var hasClipboardText by remember { mutableStateOf(false) }
+        DisposableEffect(clipboard) {
+            fun refresh() {
+                hasClipboardText = clipboard?.hasPrimaryClip() == true &&
+                    clipboard.primaryClipDescription?.hasMimeType("text/*") == true
+            }
+            val listener = ClipboardManager.OnPrimaryClipChangedListener { refresh() }
+            refresh()
+            clipboard?.addPrimaryClipChangedListener(listener)
+            onDispose { clipboard?.removePrimaryClipChangedListener(listener) }
+        }
+        ModalBottomSheet(
+            onDismissRequest = { attachmentsOpen = false },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+        ) {
+            TextButton(
+                enabled = hasClipboardText,
+                onClick = {
+                    val clip = clipboard?.primaryClip
+                    val text = if (clip != null && clip.itemCount != 0) clip.getItemAt(0).text?.toString() else null
+                    if (text.isNullOrBlank()) {
+                        hasClipboardText = false
+                    } else {
+                        val current = draftFor(drafts, sessionId)
+                        drafts = withDraft(drafts, sessionId, appendClipboardText(current, text))
+                        attachmentsOpen = false
+                    }
+                },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            ) { Text("Include clipboard text") }
+        }
+    }
     var appliedShares by rememberSaveable(stateSaver = DRAFT_SAVER) {
         mutableStateOf(emptyMap<String, String>())
     }
@@ -2031,6 +2072,9 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                     ),
                 )
                 Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
+                        Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+                    }
                     Box(Modifier.weight(1f).padding(end = 4.dp)) {
                         selector?.invoke()
                     }
