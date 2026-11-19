@@ -105,4 +105,32 @@ final class ByteQueue {
         }
         return true;
     }
+
+    /**
+     * Try to write the whole buffer without waiting. Returns false when the queue is
+     * closed or cannot fit the whole write; in that case nothing is queued.
+     */
+    public synchronized boolean tryWrite(byte[] buffer, int offset, int lengthToWrite) {
+        if (lengthToWrite + offset > buffer.length) {
+            throw new IllegalArgumentException("length + offset > buffer.length");
+        } else if (lengthToWrite <= 0) {
+            throw new IllegalArgumentException("length <= 0");
+        }
+        if (!mOpen || lengthToWrite > mBuffer.length - mStoredBytes) return false;
+
+        final int bufferLength = mBuffer.length;
+        final boolean wasEmpty = mStoredBytes == 0;
+        int remaining = lengthToWrite;
+        while (remaining > 0) {
+            int tail = mHead + mStoredBytes;
+            if (tail >= bufferLength) tail -= bufferLength;
+            int bytesToCopy = Math.min(remaining, bufferLength - tail);
+            System.arraycopy(buffer, offset, mBuffer, tail, bytesToCopy);
+            offset += bytesToCopy;
+            remaining -= bytesToCopy;
+            mStoredBytes += bytesToCopy;
+        }
+        if (wasEmpty) notify();
+        return true;
+    }
 }

@@ -493,7 +493,8 @@ internal class PtyTerminalEngine(
 
     override fun write(text: String) {
         val bytes = text.toByteArray(StandardCharsets.UTF_8)
-        session.write(bytes, 0, bytes.size)
+        // Input comes from Compose's main thread; never park it on a full 4 KiB queue.
+        session.writeNonBlocking(bytes, 0, bytes.size)
     }
 
     override fun resize(columns: Int, rows: Int, cellWidthPx: Int, cellHeightPx: Int) {
