@@ -873,8 +873,8 @@ internal fun terminalEnvironment(base: List<String>): List<String> {
     // Git defaults to a pager when stdout is a TTY; Android has no less(1), so pin cat.
     val kept = base.filterNot {
         it.startsWith("TERM=") || it.startsWith("PS1=") || it.startsWith("ENV=") ||
-            it.startsWith("PAGER=") || it.startsWith("GIT_PAGER=")
+            it.startsWith("PAGER=") || it.startsWith("GIT_PAGER=") || it.startsWith("MANPAGER=")
     }
-    return kept + "PAGER=cat" + "GIT_PAGER=cat" + "ENV=/dev/null" +
+    return kept + "PAGER=cat" + "GIT_PAGER=cat" + "MANPAGER=cat" + "ENV=/dev/null" +
         "TERM=xterm-256color" + "PS1=${TerminalPrompt.PS1}"
 }
