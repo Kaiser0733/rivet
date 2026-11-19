@@ -17,6 +17,18 @@ internal object SharedFileCopy {
 
     fun inbox(context: Context) = File(context.cacheDir, "shared-in/inbox")
 
+    fun sessionInbox(context: Context, sessionId: String?): File =
+        File(inbox(context), "session-" + (sessionId ?: "current"))
+
+    fun moveToSession(context: Context, file: File, sessionId: String?): File {
+        val directory = sessionInbox(context, sessionId)
+        directory.mkdirs()
+        val preferred = File(directory, file.name)
+        val destination = if (preferred.exists()) File(directory, "${UUID.randomUUID()}-${file.name}") else preferred
+        if (!file.renameTo(destination)) throw IOException("Could not save the shared file in the session")
+        return destination
+    }
+
     suspend fun copy(context: Context, source: Uri, fallback: String): File = withContext(Dispatchers.IO) {
         if (source.scheme != "content") throw IOException("Rivet couldn't open this attachment. Share it from its app.")
         val resolver = context.contentResolver

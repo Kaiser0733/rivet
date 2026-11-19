@@ -94,6 +94,10 @@ import com.kaiser.rivet.runtime.interactiveTerminalCount
 import com.kaiser.rivet.runtime.PersistentProcessService
 import com.kaiser.rivet.runtime.ProjectDownloader
 import com.kaiser.rivet.runtime.PhoneIntents
+import com.kaiser.rivet.agent.RoutedAgentWorkspace
+import com.kaiser.rivet.workspace.AndroidGrantedFolders
+import com.kaiser.rivet.workspace.GrantPath
+import com.kaiser.rivet.subagent.FileScopeRegistry
 import com.kaiser.rivet.runtime.CheckpointFailure
 import com.kaiser.rivet.runtime.CheckpointRecord
 import com.kaiser.rivet.runtime.InteractiveTerminalSession
@@ -286,6 +290,7 @@ class ChatViewModel private constructor(
 
     private val _uiState = MutableStateFlow(ChatUiState())
     private val shareLanding = Mutex()
+    private val grantedFolders = AndroidGrantedFolders(app)
     private val _sharedZip = MutableStateFlow<Uri?>(null)
     internal val sharedZip = _sharedZip.asStateFlow()
     private val _sharedContent = MutableStateFlow<Map<String?, SharedDraft>>(emptyMap())
@@ -297,32 +302,36 @@ class ChatViewModel private constructor(
         viewModelScope.launch {
             try {
                 val app = getApplication<Application>()
-                val draft = when (content) {
-                    is SharedContent.Text -> SharedDraft(UUID.randomUUID().toString(), content.text)
-                    is SharedContent.GitHubLink -> SharedDraft(UUID.randomUUID().toString(),
-                        "${content.url}\n\nWant a summary of this repo?")
-                    is SharedContent.Image -> {
-                        val file = SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared image")
-                        SharedDraft(UUID.randomUUID().toString(), "what's wrong here?", file.name)
-                    }
-                    is SharedContent.File -> {
-                        val file = SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared file")
-                        val text = withContext(Dispatchers.IO) { SharedFileCopy.draft(file, content.mime) }
-                        SharedDraft(UUID.randomUUID().toString(), text)
-                    }
+                val file = when (content) {
+                    is SharedContent.Image -> SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared image")
+                    is SharedContent.File -> SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared file")
                     is SharedContent.Zip -> {
-                        val file = SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared zip.zip")
-                        _sharedZip.value = Uri.fromFile(file)
+                        val zip = SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared zip.zip")
+                        _sharedZip.value = Uri.fromFile(zip)
                         return@launch
                     }
+                    else -> null
+                }
+                fun land() {
+                    val id = _uiState.value.currentSessionId
+                    val saved = file?.let { SharedFileCopy.moveToSession(app, it, id) }
+                    val draftId = UUID.randomUUID().toString()
+                    val draft = when (content) {
+                        is SharedContent.Text -> SharedDraft(draftId, content.text)
+                        is SharedContent.GitHubLink -> SharedDraft(draftId, "${content.url}\n\nWant a summary of this repo?")
+                        is SharedContent.Image -> SharedDraft(draftId, "what's wrong here?", requireNotNull(saved).name)
+                        is SharedContent.File -> SharedDraft(draftId, SharedFileCopy.draft(requireNotNull(saved), content.mime))
+                        is SharedContent.Zip -> return
+                    }
+                    putSharedDraft(draft)
                 }
                 shareLanding.withLock {
                     uiState.first { it.ready && !it.streaming && !it.undoing && !it.recoveringProjectChanges }
                     if (_uiState.value.messages.isEmpty() && _uiState.value.currentSessionId !in _sharedContent.value ||
                         sessions == null) {
-                        putSharedDraft(draft)
+                        land()
                     } else {
-                        changeSession(onSelected = { putSharedDraft(draft) }) { store ->
+                        changeSession(onSelected = ::land) { store ->
                             store.create(workspaceSelection.currentIdentity())
                         }?.join()
                     }
@@ -338,19 +347,19 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun resolvePhoneFile(rawPath: String, workspace: SafWorkspace?): PhoneIntents.ContentFile? {
-        val path = WorkspacePath.parse(rawPath)
-        val relative = path.value
-        if (relative.startsWith("inbox/")) {
+        val route = GrantPath.parse(rawPath)
+        val path = route.path
+        if (route.readOnly) {
             return withContext(Dispatchers.IO) {
                 val app = getApplication<Application>()
-                val directory = SharedFileCopy.inbox(app).canonicalFile
-                val file = File(directory, relative.removePrefix("inbox/")).canonicalFile
+                val directory = SharedFileCopy.sessionInbox(app, _uiState.value.currentSessionId).canonicalFile
+                val file = File(directory, path.value).canonicalFile
                 if (file.parentFile != directory || !file.isFile) return@withContext null
                 val uri = FileProvider.getUriForFile(app, "${app.packageName}.shared-files", file)
                 PhoneIntents.ContentFile(uri, app.contentResolver.getType(uri) ?: "application/octet-stream")
             }
         }
-        val project = workspace ?: return null
+        val project = if (route.grantId != null) grantedFolders.resolve(route.grantId) else workspace ?: return null
         val entry = project.stat(path)
         if (entry.directory) return null
         val uri = DocumentsContract.buildDocumentUriUsingTree(project.tree, entry.documentId)
@@ -812,7 +821,7 @@ class ChatViewModel private constructor(
         // this same message object for its durable copy; retries do not pass through here.
         val imageName = _sharedContent.value[_uiState.value.currentSessionId]?.imageName
         val accepted = AgentMessage.user(text).copy(userImagePath = imageName?.let {
-            File(SharedFileCopy.inbox(getApplication<Application>()), it).absolutePath
+            File(SharedFileCopy.sessionInbox(getApplication<Application>(), _uiState.value.currentSessionId), it).absolutePath
         })
         _sharedContent.update { it - _uiState.value.currentSessionId }
         _uiState.update { state ->
@@ -1512,11 +1521,26 @@ class ChatViewModel private constructor(
                 resolveFile = { rawPath -> resolvePhoneFile(rawPath, workspace) },
                 customTabOpener = { url -> browser.customTabOpener?.invoke(url) == true },
             )
-            fun createExecutor(loadedSkills: Set<String>, phoneTools: PhoneIntents? = null): AgentToolExecutor? {
-                val selectedWorkspace = workspace ?: return null
+            val grantTrees = if (phone == null) emptyMap() else grantedFolders.list().associate { it.id to it.treeUri }
+            fun createExecutor(loadedSkills: Set<String>, coordinator: Boolean = false): AgentToolExecutor? {
+                val selectedWorkspace = workspace
+                val projectFiles = selectedWorkspace?.let(::SafAgentWorkspace)
+                val files = if (coordinator && phone != null) RoutedAgentWorkspace(
+                    projectFiles,
+                    grant = { id, write ->
+                        val expected = grantTrees[id]
+                            ?: throw com.kaiser.rivet.agent.AgentWorkspaceFailure("grant_missing")
+                        val granted = grantedFolders.resolve(id, write, expected)
+                        SafAgentWorkspace(granted)
+                    },
+                    inbox = SharedFileCopy.sessionInbox(getApplication<Application>(), _uiState.value.currentSessionId),
+                ) else projectFiles ?: return null
+                if (selectedWorkspace == null) return AgentToolExecutor(
+                    files, downloader = projectDownloader, preparePhoneIntent = phone?.let { it::prepare },
+                )
                 val boundWorkspaceId = workspaceId ?: selectedWorkspace.tree.toString()
                 return AgentToolExecutor(
-                    SafAgentWorkspace(selectedWorkspace),
+                    files,
                     runCommand = runtime::runCommand,
                     requireSafCurrent = runtime::requireSafCurrent,
                     gitStatus = runtime::gitStatus,
@@ -1535,7 +1559,8 @@ class ChatViewModel private constructor(
                         identity?.let { runtime.outputFor(id, it) }
                     },
                     spawnProcess = runtime::spawnProcess,
-                    preparePhoneIntent = phoneTools?.let { it::prepare },
+                    worker = !coordinator,
+                    preparePhoneIntent = if (coordinator) phone?.let { it::prepare } else null,
                     rememberMemory = { fact ->
                         val files = ProjectStateFiles(selectedWorkspace)
                         val result = MemoryFormat.append(files.loadMemory(), fact)
@@ -1555,7 +1580,7 @@ class ChatViewModel private constructor(
                     },
                 )
             }
-            val executor = createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty(), phone)
+            val executor = createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty(), coordinator = true)
             val subagentTools: SubagentTools?
             var supervisorScopeJob: Job? = null
             var supervisorCollector: Job? = null
@@ -1602,7 +1627,9 @@ class ChatViewModel private constructor(
                 runtime.startPreview(selected, identity, _uiState.value.projectName, root, entry).url
             }
             val workspaceTools = if (executor == null) emptyList() else
-                AgentToolExecutor.definitions.filterNot { it.name in PhoneIntents.names }
+                AgentToolExecutor.definitions.filter {
+                    it.name !in PhoneIntents.names && (workspace != null || it.name in UNBOUND_FILE_TOOLS)
+                }
             val tools = BrowserTools.definitions + workspaceTools +
                 (if (phone == null) emptyList() else PhoneIntents.definitions) +
                 (subagentTools?.let { SubagentTools.definitions }.orEmpty())
@@ -1764,7 +1791,9 @@ class ChatViewModel private constructor(
                     response
                 },
                 prepareTool = { call ->
-                    if (call.name == "delete_path") checkpointGate.beginRunBoundary("Before deleting a file")
+                    if (call.name == "delete_path" && !(phone != null && externalFileMutation(call))) {
+                        checkpointGate.beginRunBoundary("Before deleting a file")
+                    }
                     val prepared = subagentTools?.prepare(call)
                         ?: browserTools.prepare(
                             call = call,
@@ -1786,7 +1815,7 @@ class ChatViewModel private constructor(
                         )
                     }
                     if (project == null) prepared else {
-                        val additions = project.targets(call)
+                        val additions = project.targets(call).filterKeys { phone == null || !GrantPath.isExternal(it.value) }
                         additions.forEach { (path, directory) ->
                             if (path != WorkspacePath.ROOT) {
                                 observedPaths.remove(path)
@@ -1830,10 +1859,10 @@ class ChatViewModel private constructor(
                     }
                 },
                 beforeMutation = { call ->
-                    checkpointGate.beforeMutation(RunCheckpointGate.COORDINATOR, call)
+                    if (phone != null && externalFileMutation(call)) null else checkpointGate.beforeMutation(RunCheckpointGate.COORDINATOR, call)
                 },
                 afterMutation = { call, result ->
-                    checkpointGate.afterMutation(RunCheckpointGate.COORDINATOR, call, result)
+                    if (!(phone != null && externalFileMutation(call))) checkpointGate.afterMutation(RunCheckpointGate.COORDINATOR, call, result)
                 },
                 beforeCompletion = {
                     if (workspaceId != null) {
@@ -2902,6 +2931,13 @@ class ChatViewModel private constructor(
         // Undo keeps a copy of the project per turn, so its ceiling is the project's
         // size. Say the real numbers and the way out, the same ones the model is told.
         internal const val CHECKPOINT_LIMITS_HINT = " Undo covers up to 50,000 items and 500 MB per project. Adding generated folders to .rivetignore can bring a large project under that."
+        private val UNBOUND_FILE_TOOLS = setOf("list_directory", "read_file", "search_files", "git_status", "git_diff",
+            "write_file", "apply_patch", "create_file", "create_directory", "delete_path", "rename_path", "move_path", "download_file")
+
+        private fun externalFileMutation(call: AgentToolCall): Boolean =
+            call.name in UNBOUND_FILE_TOOLS && call.name in MUTATION_TOOLS &&
+                FileScopeRegistry.mutationPaths(call).any { GrantPath.isExternal(it.value) }
+
         private val MUTATION_TOOLS = setOf("write_file", "apply_patch", "create_file", "create_directory",
             "rename_path", "move_path", "delete_path", "run_command", "download_file", "remember")
         internal fun systemInstruction(
@@ -2919,6 +2955,8 @@ class ChatViewModel private constructor(
             (browserState?.takeIf { it.isNotBlank() }?.let { " $it" } ?: "") +
             (if (phoneAccess) {
                 "\n\nPhone access\nYou can open apps, HTTPS links in the user's browser, and available files. " +
+                    "Use grants/<label>/<path> for folders added in Settings → Phone access; writes there have no Undo. " +
+                    "Shared files in inbox/ are read-only. " +
                     "You can show Android's share sheet and prepare email, message, or calendar drafts. The user sends or saves them. " +
                     "If the task requires reading notifications, reading another app's screen, or tapping in another app, " +
                     "say once which capability is missing and point to Settings → Phone access → Advanced. " +
