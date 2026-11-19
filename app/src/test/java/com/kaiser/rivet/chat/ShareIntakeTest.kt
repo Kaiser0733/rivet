@@ -10,7 +10,7 @@ class ShareIntakeTest {
     private val uri = "content://sender/attachment"
 
     @Test fun imageUsesItsStreamEvenWithACaption() {
-        assertEquals(SharedContent.Image(uri, "image/png"), SharedContent.classify(send, "image/png", "Caption", uri))
+        assertEquals(SharedContent.Image(uri), SharedContent.classify(send, "image/png", "Caption", uri))
     }
 
     @Test fun githubLinkKeepsExactOwnerAndRepoFromSharedText() {

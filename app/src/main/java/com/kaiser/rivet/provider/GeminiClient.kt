@@ -84,10 +84,12 @@ internal class GeminiClient(
         onReasoning: (String) -> Unit,
         onDelta: (String) -> Unit,
     ): AgentResponse {
-        val messages = modelMessages(request.messages)
-        val images = if (ProviderVisionAttachments.hasTrailingImages(messages)) {
-            withContext(Dispatchers.IO) { ProviderVisionAttachments.trailingImages(messages) }
-        } else emptyMap()
+        val source = modelMessages(request.messages)
+        val (messages, images) = if (ProviderVisionAttachments.needsPreparation(source)) {
+            withContext(Dispatchers.IO) {
+                ProviderVisionAttachments.prepare(source, VisionCapability.assess(config))
+            }
+        } else source to emptyMap()
         val body = buildJsonObject {
             put("contents", buildJsonArray {
                 messages.forEach { m ->
@@ -147,7 +149,15 @@ internal fun geminiMessage(
     return when (message.role) {
         AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
         AgentRole.User -> buildJsonObject {
-            put("role", "user"); put("parts", buildJsonArray { add(buildJsonObject { put("text", message.text) }) })
+            put("role", "user")
+            put("parts", buildJsonArray {
+                add(buildJsonObject { put("text", message.text) })
+                ProviderVisionAttachments.userImage(message, images)?.let { image ->
+                    add(buildJsonObject { put("inlineData", buildJsonObject {
+                        put("mimeType", image.mime); put("data", image.base64)
+                    }) })
+                }
+            })
         }
         AgentRole.Assistant -> buildJsonObject {
             put("role", "model")

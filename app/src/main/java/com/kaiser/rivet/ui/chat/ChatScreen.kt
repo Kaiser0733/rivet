@@ -1472,11 +1472,14 @@ internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messag
                         color = MaterialTheme.colorScheme.surfaceContainer,
                         shape = RoundedCornerShape(20.dp),
                     ) {
-                        Text(
-                            message.text,
-                            modifier = Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            style = MaterialTheme.typography.bodyMedium,
-                        )
+                        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text(message.text, style = MaterialTheme.typography.bodyMedium)
+                            message.userImagePath?.let { path ->
+                                BrowserImage(ChatMarkdownBlock.Image("Shared image", path),
+                                    unavailable = "Shared image no longer available.")
+                            }
+                        }
                     }
                 }
             } else {
@@ -1619,13 +1622,21 @@ private fun ReasoningRow(
 }
 
 @Composable
-private fun BrowserImage(image: ChatMarkdownBlock.Image) {
+private fun BrowserImage(image: ChatMarkdownBlock.Image, unavailable: String = "Browser screenshot unavailable.") {
     val context = LocalContext.current
     val bitmap = remember(image.source) {
         val file = java.io.File(image.source.removePrefix("file://"))
-        val allowed = file.canonicalPath.startsWith(context.filesDir.canonicalPath + "/") ||
-            file.canonicalPath.startsWith(context.cacheDir.canonicalPath + "/")
-        if (allowed) BitmapFactory.decodeFile(file.absolutePath) else null
+        runCatching {
+            val allowed = file.canonicalPath.startsWith(context.filesDir.canonicalPath + "/") ||
+                file.canonicalPath.startsWith(context.cacheDir.canonicalPath + "/")
+            if (!allowed || !file.isFile) return@runCatching null
+            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
+            BitmapFactory.decodeFile(file.absolutePath, options)
+            val edge = maxOf(options.outWidth, options.outHeight)
+            options.inSampleSize = Integer.highestOneBit((edge / 1024).coerceAtLeast(1))
+            options.inJustDecodeBounds = false
+            BitmapFactory.decodeFile(file.absolutePath, options)
+        }.getOrNull()
     }
     if (bitmap != null) {
         Image(
@@ -1635,7 +1646,7 @@ private fun BrowserImage(image: ChatMarkdownBlock.Image) {
             contentScale = ContentScale.FillWidth,
         )
     } else {
-        Text("Browser screenshot unavailable.", style = MaterialTheme.typography.bodySmall,
+        Text(unavailable, style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

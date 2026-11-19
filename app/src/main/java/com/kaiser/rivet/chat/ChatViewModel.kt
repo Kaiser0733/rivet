@@ -76,6 +76,7 @@ import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.VisionCapability
+import com.kaiser.rivet.provider.ProviderVisionAttachments
 import com.kaiser.rivet.local.LocalPrompt
 import com.kaiser.rivet.provider.isUnsupportedReasoningError
 import com.kaiser.rivet.provider.offeredReasoning
@@ -299,7 +300,7 @@ class ChatViewModel private constructor(
                         "${content.url}\n\nWant a summary of this repo?")
                     is SharedContent.Image -> {
                         val file = SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared image")
-                        SharedDraft(UUID.randomUUID().toString(), "what's wrong here?", file.name, content.mime)
+                        SharedDraft(UUID.randomUUID().toString(), "what's wrong here?", file.name)
                     }
                     is SharedContent.File -> {
                         val file = SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared file")
@@ -786,7 +787,10 @@ class ChatViewModel private constructor(
         // Acceptance is the tap: the bubble appears and the composer clears before the
         // transcript load, SAF stat, provider snapshot or persistence can block. Prep uses
         // this same message object for its durable copy; retries do not pass through here.
-        val accepted = AgentMessage.user(text)
+        val imageName = _sharedContent.value[_uiState.value.currentSessionId]?.imageName
+        val accepted = AgentMessage.user(text).copy(userImagePath = imageName?.let {
+            File(SharedFileCopy.inbox(getApplication<Application>()), it).absolutePath
+        })
         _sharedContent.update { it - _uiState.value.currentSessionId }
         _uiState.update { state ->
             val appended = state.messages + accepted
@@ -1586,9 +1590,14 @@ class ChatViewModel private constructor(
                     LocalPrompt.wire(baseSystem, tools, snapshot.config.resolvedContextWindowTokens(),
                         workspace != null)
                 } else null
+                val projected = modelMessages(messages, workspaceId, enforceWorkspace = true)
+                val requestMessages = if (snapshot.config.type == ProviderType.Local &&
+                    ProviderVisionAttachments.needsPreparation(projected)) {
+                    ProviderVisionAttachments.prepare(projected, VisionCapability.assess(snapshot.config)) { null }.first
+                } else projected
                 AgentRequest(
                     model = snapshot.config.model,
-                    messages = modelMessages(messages, workspaceId, enforceWorkspace = true),
+                    messages = requestMessages,
                     system = wire?.system ?: baseSystem,
                     reasoning = snapshot.config.reasoning,
                     tools = wire?.tools ?: tools,

@@ -40,6 +40,7 @@ data class AgentMessage(
     val toolResults: List<AgentToolResult> = emptyList(),
     val transportState: String? = null,
     val internalContext: InternalContext? = null,
+    val userImagePath: String? = null,
 ) {
     companion object {
         fun user(text: String) = AgentMessage(AgentRole.User, text = text)

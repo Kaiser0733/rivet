@@ -27,6 +27,43 @@ internal object ProviderVisionAttachments {
         }
     }
 
+    fun prepare(
+        messages: List<AgentMessage>,
+        support: VisionSupport,
+        encode: (String) -> EncodedImage? = ImageAttachmentEncoder::encodeForWire,
+    ): Pair<List<AgentMessage>, Map<String, EncodedImage>> {
+        if (support != VisionSupport.Supported) {
+            return messages.map { message ->
+                val path = message.userImagePath
+                if (message.role != AgentRole.User || path == null) message else {
+                    val note = if (support is VisionSupport.Unsupported) "This model cannot view images."
+                        else "Rivet could not confirm that this model accepts images."
+                    withoutUserImage(message, path, note)
+                }
+            } to trailingImages(messages, encode)
+        }
+        val last = messages.lastOrNull()
+        val path = last?.takeIf { it.role == AgentRole.User }?.userImagePath
+            ?: return messages to trailingImages(messages, encode)
+        val image = encode(path)
+        return if (image != null) messages to mapOf(userKey(path) to image)
+        else (messages.dropLast(1) + withoutUserImage(last, path, "Shared image no longer available.")) to emptyMap()
+    }
+
+    private fun withoutUserImage(message: AgentMessage, path: String, note: String) = message.copy(
+        text = "${message.text}\n\nShared image: inbox/${path.substringAfterLast('/')}. $note",
+        userImagePath = null,
+    )
+
+    private fun userKey(path: String) = "\u0000shared-image:$path"
+
+    fun userImage(message: AgentMessage, images: Map<String, EncodedImage>): EncodedImage? =
+        message.userImagePath?.let { images[userKey(it)] }
+
     fun hasTrailingImages(messages: List<AgentMessage>): Boolean =
-        trailingImageResults(messages).isNotEmpty()
+        messages.lastOrNull()?.let { it.role == AgentRole.User && it.userImagePath != null } == true ||
+            trailingImageResults(messages).isNotEmpty()
+
+    fun needsPreparation(messages: List<AgentMessage>) =
+        hasTrailingImages(messages) || messages.any { it.userImagePath != null }
 }

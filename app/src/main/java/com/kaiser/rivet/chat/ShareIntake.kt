@@ -5,7 +5,7 @@ import java.util.Locale
 
 internal sealed interface SharedContent {
     data class Text(val text: String) : SharedContent
-    data class Image(val uri: String, val mime: String) : SharedContent
+    data class Image(val uri: String) : SharedContent
     data class File(val uri: String, val mime: String) : SharedContent
     data class Zip(val uri: String) : SharedContent
     data class GitHubLink(val owner: String, val repo: String, val url: String) : SharedContent
@@ -24,7 +24,7 @@ internal sealed interface SharedContent {
                 if (source.scheme !in setOf("content", "file")) return null
                 if (mime == "application/zip" || mime == "application/x-zip-compressed" ||
                     action == VIEW && source.path?.endsWith(".zip", ignoreCase = true) == true) return Zip(uri)
-                if (mime?.startsWith("image/") == true) return Image(uri, mime)
+                if (mime?.startsWith("image/") == true) return Image(uri)
                 return File(uri, mime ?: "application/octet-stream")
             }
             if (action != SEND || text.isNullOrBlank()) return null
@@ -44,4 +44,4 @@ internal sealed interface SharedContent {
     }
 }
 
-data class SharedDraft(val id: String, val text: String, val imageName: String? = null, val imageMime: String? = null)
+data class SharedDraft(val id: String, val text: String, val imageName: String? = null)
