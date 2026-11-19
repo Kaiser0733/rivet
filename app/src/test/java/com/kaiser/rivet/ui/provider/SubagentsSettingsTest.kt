@@ -27,9 +27,24 @@ class SubagentsSettingsTest {
             PoolEntry("c", "beta-1"),
         ))
         assertEquals("3 models · agent chooses", subagentSummary(state, configs))
-        assertEquals("Off", subagentSummary(SubagentPoolState(), configs))
+        assertEquals("No models selected", subagentSummary(SubagentPoolState(), configs))
         assertEquals("1 model · fixed", subagentSummary(
             SubagentPoolState(allowAgentChoice = false, fixed = PoolEntry("c", "beta-1")), configs))
+    }
+
+    @Test fun stalePicksAreCountedAndExplained() {
+        val state = SubagentPoolState(entries = listOf(
+            PoolEntry("a", "alpha-1"),
+            PoolEntry("b", "old-alpha-2"),
+            PoolEntry("deleted", "alpha-1"),
+        ))
+
+        assertEquals(2, droppedSubagentPicks(state, configs))
+        assertEquals("2 saved picks no longer match their provider's model",
+            droppedSubagentNotice(2))
+        assertEquals("1 saved pick no longer matches its provider's model",
+            droppedSubagentNotice(1))
+        assertEquals(null, droppedSubagentNotice(0))
     }
 
     @Test fun rowsGroupLocalModelsFirstAndReflectTheTickState() {

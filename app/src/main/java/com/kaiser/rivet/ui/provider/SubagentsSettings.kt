@@ -57,9 +57,23 @@ private fun subagentModelGroups(configs: List<ProviderConfig>): List<SubagentMod
 internal fun subagentSummary(state: SubagentPoolState, configs: List<ProviderConfig>): String {
     val pool = SubagentPool.resolve(state, configs)
     val count = if (state.allowAgentChoice) pool.entries.size else if (pool.fixed != null) 1 else 0
-    if (count == 0) return "Off"
+    if (count == 0) return "No models selected"
     val models = if (count == 1) "1 model" else "$count models"
     return "$models · ${if (state.allowAgentChoice) "agent chooses" else "fixed"}"
+}
+
+internal fun droppedSubagentPicks(
+    state: SubagentPoolState,
+    configs: List<ProviderConfig>,
+): Int {
+    val byId = configs.associateBy { it.id }
+    return state.entries.count { entry -> byId[entry.configId]?.model != entry.model }
+}
+
+internal fun droppedSubagentNotice(count: Int): String? = when {
+    count <= 0 -> null
+    count == 1 -> "1 saved pick no longer matches its provider's model"
+    else -> "$count saved picks no longer match their provider's model"
 }
 
 internal fun subagentModelRows(
@@ -94,6 +108,12 @@ internal fun SubagentsSettings(
                 color = MaterialTheme.colorScheme.error,
                 modifier = Modifier.padding(bottom = 8.dp),
             )
+        }
+        droppedSubagentNotice(droppedSubagentPicks(state, configs))?.let { notice ->
+            Text(notice,
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                modifier = Modifier.padding(bottom = 8.dp))
         }
         Row(Modifier.fillMaxWidth().heightIn(min = 56.dp),
             verticalAlignment = Alignment.CenterVertically) {
@@ -134,7 +154,7 @@ internal fun SubagentsSettings(
                 HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             }
             if (pool.entries.isEmpty()) {
-                Text("No models ticked. Subagents are off.",
+                Text("No models selected. Tick at least one below.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
                     modifier = Modifier.padding(top = 8.dp))
@@ -161,7 +181,7 @@ internal fun SubagentsSettings(
                 }
             }
             if (pool.fixed == null) {
-                Text("No fixed model chosen. Subagents are off.",
+                Text("No models selected. Choose a fixed model.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
