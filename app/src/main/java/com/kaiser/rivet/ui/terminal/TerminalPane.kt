@@ -475,7 +475,7 @@ private fun TerminalLine(
     }
     Text(
         line,
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().padding(horizontal = 8.dp),
         style = terminalStyle,
         maxLines = 1,
         softWrap = false,
