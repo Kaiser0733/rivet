@@ -76,6 +76,13 @@ private fun storageMegabytes(bytes: Long): Long = bytes / 1_000_000L
  * Plan §5 rule 14: the one plain state sentence shown in the Tools/Processes surface and
  * given to the agent. Priorities are device safety, then the last governor stop, then work.
  */
+internal fun interactiveTerminalCount(processes: List<ManagedProcessInfo>): Int =
+    processes.count {
+        it.kind == ManagedProcessKind.Command && it.label == "Terminal" &&
+            it.status in setOf(ManagedProcessStatus.Starting, ManagedProcessStatus.Running,
+                ManagedProcessStatus.Stopping)
+    }
+
 internal fun terminalStateLine(
     readings: GateReadings,
     activeCount: Int,

@@ -90,8 +90,8 @@ import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.runtime.TurnCheckpointOutcome
 import com.kaiser.rivet.runtime.ManagedProcesses
+import com.kaiser.rivet.runtime.interactiveTerminalCount
 import com.kaiser.rivet.runtime.PersistentProcessService
-import com.kaiser.rivet.runtime.ManagedProcessStatus
 import com.kaiser.rivet.runtime.ProjectDownloader
 import com.kaiser.rivet.runtime.PhoneIntents
 import com.kaiser.rivet.runtime.CheckpointFailure
@@ -481,14 +481,14 @@ class ChatViewModel private constructor(
     // and battery readings are current whenever the Tools slide is open.
     val terminalStatusLine: StateFlow<String> = combine(
         managedProcesses.processes
-            .map { processes -> processes.count { it.status in ACTIVE_PROCESS_STATUSES } }
+            .map { processes -> interactiveTerminalCount(processes) }
             .distinctUntilChanged(),
         flow { while (true) { emit(Unit); delay(5_000) } },
     ) { activeCount, _ ->
         runtimeController.terminalStateLine(activeCount)
     }.flowOn(kotlinx.coroutines.Dispatchers.IO)
         .stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000),
-            runtimeController.terminalStateLine(managedProcesses.activeCount()))
+            runtimeController.terminalStateLine(interactiveTerminalCount(managedProcesses.processes.value)))
 
     /** The mode at the decision, not the mode when this turn began. */
     private suspend fun readAutonomyMode(): AutonomyMode = try {
@@ -1618,7 +1618,7 @@ class ChatViewModel private constructor(
             val context = ContextPreparation(sessions, sessionId, client, snapshot.config,
                 turnId, activeSummary, workspaceId, currentRequest = acceptedUser?.text) { messages, _ ->
                 val baseSystem = systemInstruction(workspace != null,
-                    runtime.terminalStateLine(managedProcesses.activeCount())
+                    runtime.terminalStateLine(interactiveTerminalCount(managedProcesses.processes.value))
                         .takeIf { it != "Terminal: ready" },
                     browser.contextLine(), phoneAccess = phone != null)
                 val wire = if (snapshot.config.type == ProviderType.Local) {
@@ -2868,8 +2868,6 @@ class ChatViewModel private constructor(
     }
 
     companion object {
-        private val ACTIVE_PROCESS_STATUSES = setOf(ManagedProcessStatus.Starting,
-            ManagedProcessStatus.Running, ManagedProcessStatus.Stopping)
         internal const val UNSUPPORTED_REASONING_ERROR =
             "This model does not support that reasoning effort. Choose another level to send the same message again."
 

@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.AlertDialog
@@ -70,7 +71,9 @@ internal fun ToolsPane(
     checkpointNotice: String? = null,
     modifier: Modifier = Modifier,
 ) {
+    val terminalState by terminal.state.collectAsState()
     ProcessesContent(processes, modifier, null, stateLine = stateLine,
+        terminalRunning = terminalState.running,
         onOpenTerminal = {
             terminal.open()
             onOpenTerminal()
@@ -87,6 +90,7 @@ internal fun restorePrimaryLabel(undoRun: Boolean): String =
 @Composable
 private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, onBack: (() -> Unit)?,
                              stateLine: String? = null,
+                             terminalRunning: Boolean = false,
                              onOpenTerminal: (() -> Unit)? = null,
                              checkpoints: List<RunCheckpointInfo> = emptyList(),
                              onRestoreCheckpoint: (String, Boolean) -> Unit = { _, _ -> },
@@ -105,7 +109,9 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
     if (onBack != null) BackHandler(onBack = onBack)
 
     Column(modifier) {
-        Row(Modifier.fillMaxWidth().padding(end = 16.dp),
+        Row(Modifier.fillMaxWidth().padding(end = 16.dp).then(
+                if (terminalRunning && onOpenTerminal != null) Modifier.clickable(onClick = onOpenTerminal)
+                else Modifier),
             verticalAlignment = Alignment.CenterVertically) {
             if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
                 Icon(painterResource(R.drawable.ic_back), "Back to chat",
@@ -132,8 +138,10 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
             ) {
                 Column(Modifier.fillMaxWidth().padding(14.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                    Text("New terminal", style = MaterialTheme.typography.titleMedium)
-                    Text("Run commands in the Session workspace",
+                    Text(if (terminalRunning) "Open terminal" else "New terminal",
+                        style = MaterialTheme.typography.titleMedium)
+                    Text(if (terminalRunning) "Return to the running session"
+                        else "Run commands in the Session workspace",
                         style = MaterialTheme.typography.bodySmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }

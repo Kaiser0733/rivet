@@ -31,6 +31,19 @@ class TerminalGovernorTest {
         assertEquals(0, memoryBreachSamples(1, 99, cap))
     }
 
+    @Test fun busyCountTracksOnlyTheInteractiveTerminal() {
+        val terminal = ManagedProcessInfo("1", ManagedProcessKind.Command, "p", "Terminal",
+            ManagedProcessStatus.Running, 0)
+        val agent = ManagedProcessInfo("2", ManagedProcessKind.Command, "p", "Agent turn",
+            ManagedProcessStatus.Running, 0)
+        val preview = ManagedProcessInfo("3", ManagedProcessKind.Preview, "p", "Preview",
+            ManagedProcessStatus.Running, 0)
+        val finished = ManagedProcessInfo("4", ManagedProcessKind.Command, "p", "Terminal",
+            ManagedProcessStatus.Completed, 0)
+
+        assertEquals(1, interactiveTerminalCount(listOf(terminal, agent, preview, finished)))
+    }
+
     @Test fun severeThermalAndLowBatteryBlockOnlyLongCommands() {
         val severe = GateReadings(thermalStatus = THERMAL_SEVERE, batteryPercent = 80)
         assertEquals("thermal_blocked", commandGate(LONG_COMMAND_MS + 1, severe))
