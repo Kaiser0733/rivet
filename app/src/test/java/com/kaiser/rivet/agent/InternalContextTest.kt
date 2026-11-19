@@ -165,6 +165,14 @@ class InternalContextTest {
         assertTrue(msg.internalContext!!.content.toByteArray(Charsets.UTF_8).size <= ProjectInstructions.PER_FILE_BYTES)
     }
 
+    @Test fun compactionNoticeIsValidWithoutAWorkspaceAndStaysOffTheWire() {
+        val notice = InternalContext.compactionNotice(null)
+        assertNotNull(notice.validatedContext())
+        assertEquals(CompactionNotice.TEXT, notice.validatedContext()!!.content)
+        val user = AgentMessage.user("hello")
+        assertEquals(listOf(user), modelMessages(listOf(user, notice)))
+    }
+
     @Test fun projectionRetainsSkillCatalogEvenWithoutProjectInstructions() {
         val content = "<available_skills><skill><name>notes</name></skill></available_skills>"
         val skillCatalog = InternalContext(

@@ -1900,12 +1900,15 @@ class ChatViewModel private constructor(
                 compactContext = { candidate, force ->
                     val compacted = context.prepare(candidate, force)
                     if (compacted != candidate) {
+                        // A completed compaction leaves one visible, persisted marker row;
+                        // modelMessages keeps it off the wire and the next compaction retires it.
+                        val noticed = compacted + InternalContext.compactionNotice(workspaceId)
                         durable.clear()
-                        durable.addAll(compacted)
-                        activeMessages = compacted
+                        durable.addAll(noticed)
+                        activeMessages = noticed
                         activeSummary = context.summary
-                    }
-                    compacted
+                        noticed
+                    } else compacted
                 },
                 contextFootprint = { candidate -> context.footprint(candidate) },
                 contextUpdates = { candidate ->

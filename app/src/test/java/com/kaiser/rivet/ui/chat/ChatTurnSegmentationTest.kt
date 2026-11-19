@@ -2,6 +2,7 @@ package com.kaiser.rivet.ui.chat
 
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ChatTurnSegmentationTest {
@@ -31,6 +32,29 @@ class ChatTurnSegmentationTest {
         assertEquals(4200L, turns[1].spec.durationMs)
     }
 
+
+    @Test
+    fun aNoticeRowIsItsOwnPartOutsideTheProcessFold() {
+        val items = listOf(
+            TurnItem("u", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem("p", isUser = false, isAnswer = false, isProcess = true),
+            TurnItem("n", isUser = false, isAnswer = false, isProcess = false, isNotice = true),
+            TurnItem("a", isUser = false, isAnswer = true, isProcess = false),
+        )
+        val turns = segmentTurnItems(
+            items = items,
+            isStreaming = false,
+            turnDurationsMs = emptyMap(),
+            isInterruptedTurn = false,
+            hasError = false,
+        )
+        val parts = turns.single().parts
+        assertEquals(3, parts.size)
+        assertTrue(parts[0] is TurnPart.Process<*>)
+        assertTrue(parts[1] is TurnPart.Notice<*>)
+        assertEquals("n", (parts[1] as TurnPart.Notice<String>).item)
+        assertTrue(parts[2] is TurnPart.Answer<*>)
+    }
 
     @Test
     fun storedCompletedTurnRendersCompactDurationAndStoppedTurnDoesNot() {

@@ -28,6 +28,7 @@ data class AgentActivityGroup(
 sealed interface AgentConversationItem {
     data class Message(val message: AgentMessage) : AgentConversationItem
     data class Activity(val group: AgentActivityGroup) : AgentConversationItem
+    data class SystemNotice(val text: String) : AgentConversationItem
 }
 
 /** Projects correlated transcript events and temporary lifecycle telemetry into display-only activity. */
@@ -67,7 +68,13 @@ object AgentActivityProjection {
                         ))
                     }
                 }
-                AgentRole.Tool, AgentRole.Context -> Unit
+                AgentRole.Tool -> Unit
+                AgentRole.Context -> {
+                    val context = message.validatedContext()
+                    if (context != null && CompactionNotice.isNotice(context.kind)) {
+                        items += AgentConversationItem.SystemNotice(context.content)
+                    }
+                }
             }
         }
         return items

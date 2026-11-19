@@ -194,6 +194,14 @@ class AgentActivityProjectionTest {
         assertTrue(rendered.contains("network_idle"))
         assertFalse(rendered.contains("Project operation"))
     }
+    @Test fun aCompactionNoticeBecomesAVisibleSystemRow() {
+        val items = AgentActivityProjection.conversation(listOf(
+            AgentMessage.user("hi"), InternalContext.compactionNotice(null)))
+        assertEquals(2, items.size)
+        val notice = items[1] as AgentConversationItem.SystemNotice
+        assertEquals(CompactionNotice.TEXT, notice.text)
+    }
+
     @Test fun backgroundProcessToolsGetRealTitlesAndDetails() {
         val calls = listOf(
             AgentToolCall("spawn", "spawn_process", """{"command":"npm run dev"}"""),

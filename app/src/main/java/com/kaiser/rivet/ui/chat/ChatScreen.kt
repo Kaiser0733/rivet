@@ -875,6 +875,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                     }
                     TimelineDisplayEntry(item, matched, standalone)
                 }
+                is AgentConversationItem.SystemNotice -> TimelineDisplayEntry(item)
             }
         }
     }
@@ -915,6 +916,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 isUser = isUser,
                 isAnswer = isAnswer,
                 isProcess = isProcess,
+                isNotice = entry.item is AgentConversationItem.SystemNotice,
             )
         }
     }
@@ -1258,6 +1260,11 @@ private fun TurnBlockView(
                             )
                         }
                     }
+                    is TurnPart.Notice -> {
+                        (part.item.item as? AgentConversationItem.SystemNotice)?.let {
+                            SystemNoticeRow(it.text)
+                        }
+                    }
                 }
             }
         } else {
@@ -1276,9 +1283,25 @@ private fun TurnBlockView(
                         )
                     }
                 }
+                if (part is TurnPart.Notice) {
+                    (part.item.item as? AgentConversationItem.SystemNotice)?.let {
+                        SystemNoticeRow(it.text)
+                    }
+                }
             }
         }
     }
+}
+
+@Composable
+private fun SystemNoticeRow(text: String) {
+    Text(
+        displaySafeText(text),
+        modifier = Modifier.fillMaxWidth().padding(vertical = 2.dp),
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant,
+        textAlign = TextAlign.Center,
+    )
 }
 
 @Composable

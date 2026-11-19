@@ -38,11 +38,13 @@ data class TurnItem<T>(
     val isUser: Boolean,
     val isAnswer: Boolean,
     val isProcess: Boolean,
+    val isNotice: Boolean = false,
 )
 
 sealed interface TurnPart<out T> {
     data class Process<T>(val items: List<T>) : TurnPart<T>
     data class Answer<T>(val item: T) : TurnPart<T>
+    data class Notice<T>(val item: T) : TurnPart<T>
 }
 
 data class SegmentedTurn<T>(
@@ -124,6 +126,9 @@ fun <T> segmentTurnItems(
             currentParts += TurnPart.Answer(item.data)
         } else if (item.isProcess) {
             pendingProcess += item.data
+        } else if (item.isNotice) {
+            flushProcess()
+            currentParts += TurnPart.Notice(item.data)
         }
     }
     flushTurn(isLast = true)
