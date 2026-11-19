@@ -118,6 +118,7 @@ import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
+import com.kaiser.rivet.chat.SharedDraft
 import com.kaiser.rivet.chat.draftFor
 import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
@@ -696,7 +697,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     if (providers.configs.isNotEmpty()) {
                         { ModelSelector(providersViewModel) { modelSheetVisible = true } }
                     } else null
+                val sharedContent by chatViewModel.sharedContent.collectAsState()
                 InputBar(streaming = state.streaming,
+                    sharedDraft = sharedContent[state.currentSessionId],
                     ready = state.ready && !state.projectLoading && !state.undoing &&
                         !state.recoveringProjectChanges,
                     hasProject = state.projectName != null &&
@@ -1906,6 +1909,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      commandAckCount: Long = 0,
                      hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
+                     sharedDraft: SharedDraft? = null,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
                      selector: (@Composable () -> Unit)? = null,
@@ -1920,6 +1924,17 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         mutableStateOf(emptyMap<String, String>())
     }
     val draft = draftFor(drafts, sessionId)
+    var appliedShares by rememberSaveable(stateSaver = DRAFT_SAVER) {
+        mutableStateOf(emptyMap<String, String>())
+    }
+    LaunchedEffect(sharedDraft?.id) {
+        if (sharedDraft != null && sharedDraft.id != draftFor(appliedShares, sessionId)) {
+            val current = draftFor(drafts, sessionId)
+            drafts = withDraft(drafts, sessionId,
+                if (current.isBlank()) sharedDraft.text else "$current\n\n${sharedDraft.text}")
+            appliedShares = withDraft(appliedShares, sessionId, sharedDraft.id)
+        }
+    }
     var pendingText by rememberSaveable { mutableStateOf<String?>(null) }
     var submittedAt by rememberSaveable { mutableStateOf(0L) }
     val ackCount = acceptedMessageCount + commandAckCount
@@ -1940,7 +1955,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // button silently refusing the tap.
     val goalCommand = isGoalCommand(draft)
     val canSend = ready && !streaming && draft.isNotBlank() && pendingText == null &&
-        (goalCommand || (hasProject && hasProvider) || !hasProvider)
+        (goalCommand || ((hasProject || sharedDraft != null) && hasProvider) || !hasProvider)
     // Trailing newlines and spaces are noise; the model never wanted them.
     val submit = {
         val text = draftToSend(draft, canSend)
@@ -1977,6 +1992,10 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
         ) {
             Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
+                sharedDraft?.imageName?.let { name ->
+                    Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.labelMedium)
+                }
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { drafts = withDraft(drafts, sessionId, it) },

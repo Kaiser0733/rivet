@@ -54,8 +54,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
              providersViewModel: ProvidersViewModel, modelsViewModel: ModelsViewModel,
-             processNavigationRequest: Int = 0,
-             sharedZip: android.net.Uri? = null, onSharedZipConsumed: () -> Unit = {}) {
+             processNavigationRequest: Int = 0) {
     val context = LocalContext.current.applicationContext
     val appearanceStore = remember(context) { AppearanceStore(context) }
     val autonomyStore = remember(context) { AutonomyStore(context) }
@@ -126,11 +125,25 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
         // A zip shared to Rivet lands on the same review sheet as the GitHub route.
+        val sharedZip by chatViewModel.sharedZip.collectAsState()
+        val sharedContent by chatViewModel.sharedContent.collectAsState()
+        LaunchedEffect(sharedContent.values.lastOrNull()?.id) {
+            if (sharedContent.isNotEmpty()) {
+                if (drawerState.isOpen) drawerState.close()
+                settingsOpen = false
+                editing = false
+                modelsOpen = false
+                terminalOpen = false
+                processesOpen = false
+                installOpen = false
+                if (browserState.visible) chatViewModel.browser.close()
+            }
+        }
         LaunchedEffect(sharedZip) {
             if (sharedZip != null) {
                 installZip = sharedZip
                 installOpen = true
-                onSharedZipConsumed()
+                chatViewModel.clearSharedZip()
             }
         }
         val editor by providersViewModel.editorState.collectAsState()

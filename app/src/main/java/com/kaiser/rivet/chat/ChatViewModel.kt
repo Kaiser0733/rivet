@@ -139,6 +139,9 @@ import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.sync.Mutex
+import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
 
@@ -278,6 +281,61 @@ class ChatViewModel private constructor(
     }
 
     private val _uiState = MutableStateFlow(ChatUiState())
+    private val shareLanding = Mutex()
+    private val _sharedZip = MutableStateFlow<Uri?>(null)
+    internal val sharedZip = _sharedZip.asStateFlow()
+    private val _sharedContent = MutableStateFlow<Map<String?, SharedDraft>>(emptyMap())
+    internal val sharedContent = _sharedContent.asStateFlow()
+
+    internal fun clearSharedZip() { _sharedZip.value = null }
+
+    internal fun receiveSharedContent(content: SharedContent) {
+        viewModelScope.launch {
+            try {
+                val app = getApplication<Application>()
+                val draft = when (content) {
+                    is SharedContent.Text -> SharedDraft(UUID.randomUUID().toString(), content.text)
+                    is SharedContent.GitHubLink -> SharedDraft(UUID.randomUUID().toString(),
+                        "${content.url}\n\nWant a summary of this repo?")
+                    is SharedContent.Image -> {
+                        val file = SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared image")
+                        SharedDraft(UUID.randomUUID().toString(), "what's wrong here?", file.name, content.mime)
+                    }
+                    is SharedContent.File -> {
+                        val file = SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared file")
+                        val text = withContext(Dispatchers.IO) { SharedFileCopy.draft(file, content.mime) }
+                        SharedDraft(UUID.randomUUID().toString(), text)
+                    }
+                    is SharedContent.Zip -> {
+                        val file = SharedFileCopy.copy(app, Uri.parse(content.uri), "Shared zip.zip")
+                        _sharedZip.value = Uri.fromFile(file)
+                        return@launch
+                    }
+                }
+                shareLanding.withLock {
+                    uiState.first { it.ready && !it.streaming && !it.undoing && !it.recoveringProjectChanges }
+                    if (_uiState.value.messages.isEmpty() && _uiState.value.currentSessionId !in _sharedContent.value ||
+                        sessions == null) {
+                        putSharedDraft(draft)
+                    } else {
+                        changeSession(onSelected = { putSharedDraft(draft) }) { store ->
+                            store.create(workspaceSelection.currentIdentity())
+                        }?.join()
+                    }
+                }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SharedFileCopy.TooLarge) {
+                _uiState.update { it.copy(notice = e.message) }
+            } catch (_: Exception) {
+                _uiState.update { it.copy(notice = "Rivet couldn't read this attachment. Try sharing it again.") }
+            }
+        }
+    }
+
+    private fun putSharedDraft(draft: SharedDraft) {
+        _sharedContent.update { it + (_uiState.value.currentSessionId to draft) }
+    }
     val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
 
     // The right slide's workspace line. Derived in the view model so the panel reads no
@@ -729,6 +787,7 @@ class ChatViewModel private constructor(
         // transcript load, SAF stat, provider snapshot or persistence can block. Prep uses
         // this same message object for its durable copy; retries do not pass through here.
         val accepted = AgentMessage.user(text)
+        _sharedContent.update { it - _uiState.value.currentSessionId }
         _uiState.update { state ->
             val appended = state.messages + accepted
             val dropCount = (appended.size - 100).coerceAtLeast(0)
@@ -2636,8 +2695,8 @@ class ChatViewModel private constructor(
         }
     }
 
-    fun newSession() = changeSession { store ->
-        store.create(workspaceSelection.currentIdentity())
+    fun newSession() {
+        changeSession { store -> store.create(workspaceSelection.currentIdentity()) }
     }
 
     fun resumeSession(id: String) {
@@ -2703,14 +2762,15 @@ class ChatViewModel private constructor(
     // The bar belongs to the session that made the change, not the workspace around it.
     internal fun undoSurvivesSwitch(previous: String?, next: String?): Boolean = previous == next
 
-    private fun changeSession(action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession) {
-        val store = sessions ?: return
-        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
+    private fun changeSession(onSelected: () -> Unit = {},
+                              action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession): Job? {
+        val store = sessions ?: return null
+        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges) return null
         closeWorker()
         _subagents.value = emptyList()
         val ticket = ++generation
         approvals.cancel()
-        viewModelScope.launch {
+        return viewModelScope.launch {
             try {
                 sendJob?.join()
                 if (ticket != generation) return@launch
@@ -2748,6 +2808,7 @@ class ChatViewModel private constructor(
                 refreshGoalMemory(
                     try { workspaceSelection.restore()?.first } catch (_: Exception) { null }, selected.id)
                 rehydrateUndo(selected.workspaceId)
+                if (ticket == generation) onSelected()
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
                 if (ticket == generation) _uiState.update { it.copy(error = "Could not open the session.") }
