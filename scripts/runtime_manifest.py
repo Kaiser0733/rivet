@@ -67,6 +67,25 @@ def _attribute(section: str, name: str) -> str | None:
     return values[0]
 
 
+def _own_attribute(section: str, name: str) -> str | None:
+    """Read an attribute from the section root, not a nested child element."""
+    lines = section.splitlines()
+    root = re.match(r"^( *)E: [\w-]+", lines[0]) if lines else None
+    if not root:
+        return None
+    values = []
+    for line in lines[1:]:
+        stripped = line.lstrip()
+        if stripped.startswith("E:"):
+            break
+        if stripped.startswith("A:") and name in line:
+            values.append(line.split("=", 1)[1].strip())
+    if not values:
+        return None
+    assert len(values) == 1, f"expected one {name} attribute"
+    return values[0]
+
+
 def _is_false(value: str | None) -> bool:
     if value == "false":
         return True
@@ -141,14 +160,14 @@ def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
     optional = [provider for provider in providers if provider != startup[0]]
     if optional:
         file_provider = optional[0]
-        name = (_attribute(file_provider, "android:name") or "").strip('"')
+        name = (_own_attribute(file_provider, "android:name") or "").strip('"')
         assert name == FILE_PROVIDER, (
             "only the existing AndroidX startup provider and the AndroidX FileProvider may be present")
-        exported = _attribute(file_provider, "android:exported")
+        exported = _own_attribute(file_provider, "android:exported")
         assert _is_false(exported), "AndroidX FileProvider must be non-exported"
-        assert _is_true(_attribute(file_provider, "android:grantUriPermissions")), (
+        assert _is_true(_own_attribute(file_provider, "android:grantUriPermissions")), (
             "AndroidX FileProvider must set grantUriPermissions=true")
-        authorities = (_attribute(file_provider, "android:authorities") or "").strip('"')
+        authorities = (_own_attribute(file_provider, "android:authorities") or "").strip('"')
         assert authorities.endswith(SHARED_FILES_SUFFIX), (
             "AndroidX FileProvider authorities must end with .shared-files")
 

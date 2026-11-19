@@ -63,6 +63,16 @@ DEBUG_FILE_PROVIDER = """    E: provider
       A: android:authorities(0x01010018)="com.kaiser.rivet.shared-files"
 """
 
+DEBUG_FILE_PROVIDER_WITH_METADATA = """    E: provider
+      A: android:name(0x01010003)="androidx.core.content.FileProvider"
+      A: android:exported(0x01010010)=(type 0x12)0x00000000
+      A: android:grantUriPermissions(0x0101001b)=(type 0x12)0xffffffff
+      A: android:authorities(0x01010018)="com.kaiser.rivet.shared-files"
+      E: meta-data
+        A: android:name(0x01010003)="android.support.FILE_PROVIDER_PATHS"
+        A: android:resource(0x01010025)=@xml/shared_file_paths
+"""
+
 RELEASE_STARTUP_PROVIDER = (
     '        <provider android:name="androidx.startup.InitializationProvider" android:exported="false" />'
 )
@@ -136,24 +146,28 @@ class RuntimeManifestTest(unittest.TestCase):
     def test_debug_apk_allows_locked_down_file_provider(self):
         verify_apk_runtime_manifest(DEBUG_TREE + DEBUG_FILE_PROVIDER, ALLOWED_PERMISSIONS)
 
+    def test_debug_apk_allows_file_provider_with_nested_metadata(self):
+        verify_apk_runtime_manifest(
+            DEBUG_TREE + DEBUG_FILE_PROVIDER_WITH_METADATA, ALLOWED_PERMISSIONS)
+
     def test_debug_apk_rejects_file_provider_property_regressions(self):
-        exported = DEBUG_FILE_PROVIDER.replace(
+        exported = DEBUG_FILE_PROVIDER_WITH_METADATA.replace(
             'A: android:exported(0x01010010)=(type 0x12)0x00000000',
             'A: android:exported(0x01010010)=(type 0x12)0xffffffff')
         with self.assertRaisesRegex(AssertionError, "non-exported"):
             verify_apk_runtime_manifest(DEBUG_TREE + exported, ALLOWED_PERMISSIONS)
 
-        wrong_authority = DEBUG_FILE_PROVIDER.replace(".shared-files", ".other-files")
+        wrong_authority = DEBUG_FILE_PROVIDER_WITH_METADATA.replace(".shared-files", ".other-files")
         with self.assertRaisesRegex(AssertionError, "authorities"):
             verify_apk_runtime_manifest(DEBUG_TREE + wrong_authority, ALLOWED_PERMISSIONS)
 
-        grant_false = DEBUG_FILE_PROVIDER.replace(
+        grant_false = DEBUG_FILE_PROVIDER_WITH_METADATA.replace(
             'A: android:grantUriPermissions(0x0101001b)=(type 0x12)0xffffffff',
             'A: android:grantUriPermissions(0x0101001b)=(type 0x12)0x00000000')
         with self.assertRaisesRegex(AssertionError, "grantUriPermissions"):
             verify_apk_runtime_manifest(DEBUG_TREE + grant_false, ALLOWED_PERMISSIONS)
 
-        no_grant = DEBUG_FILE_PROVIDER.replace(
+        no_grant = DEBUG_FILE_PROVIDER_WITH_METADATA.replace(
             '      A: android:grantUriPermissions(0x0101001b)=(type 0x12)0xffffffff\n', "")
         with self.assertRaisesRegex(AssertionError, "grantUriPermissions"):
             verify_apk_runtime_manifest(DEBUG_TREE + no_grant, ALLOWED_PERMISSIONS)
