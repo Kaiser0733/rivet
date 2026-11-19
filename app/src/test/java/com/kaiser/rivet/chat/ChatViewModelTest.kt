@@ -880,7 +880,10 @@ class ChatViewModelTest {
             AgentContext.serializedBytes(history) / 2)
         assertTrue(provider.requests.single().messages.flatMap { it.toolResults }
             .any { it.content.contains("output_pruned") })
-        assertEquals(69, sessions.recent(id, 100).size)
+        // recent() is the visible transcript: context rows, including the compaction
+        // notice, are hidden there even though the notice is a persisted event.
+        assertEquals(68, sessions.recent(id, 100).size)
+        assertTrue(sessions.recent(id, 100).none { it.internalContext != null })
 
         val switchedProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "After switch"))))
         val switched = newChatViewModel(app, sessions,
