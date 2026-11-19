@@ -736,6 +736,9 @@ private fun GrantedFoldersSettings() {
         try { picker.launch(AndroidGrantedFolders.pickerIntent()) }
         catch (_: Exception) { feedback = "Couldn't open the folder picker." }
     }) { Text("Add folder") }
+    Text("Some system folders can't be shared directly — pick or create a subfolder instead.",
+        style = MaterialTheme.typography.bodySmall,
+        color = MaterialTheme.colorScheme.onSurfaceVariant)
     feedback?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     Spacer(Modifier.height(24.dp))
 }
