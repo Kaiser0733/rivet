@@ -11,6 +11,7 @@ EXISTING_PROFILE_RECEIVER = "androidx.profileinstaller.ProfileInstallReceiver"
 FILE_PROVIDER = "androidx.core.content.FileProvider"
 SHARED_FILES_SUFFIX = ".shared-files"
 PHONE_CAPTURE_SERVICE = "com.kaiser.rivet.ui.phone.PhoneCaptureService"
+TERMUX_PACKAGE = "com.termux"
 ALLOWED_PERMISSIONS = {
     "android.permission.INTERNET",
     "android.permission.FOREGROUND_SERVICE",
@@ -191,6 +192,12 @@ def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
         authorities = (_own_attribute(file_provider, "android:authorities") or "").strip('"')
         assert authorities.endswith(SHARED_FILES_SUFFIX), (
             "AndroidX FileProvider authorities must end with .shared-files")
+    queries = _elements(xmltree, "queries")
+    assert len(queries) <= 1, "only one queries block may be present"
+    packages = [(_own_attribute(item, "android:name") or "").strip('"')
+                for item in (_elements(queries[0], "package") if queries else [])]
+    assert len(packages) <= 1 and all(name == TERMUX_PACKAGE for name in packages), (
+        "only the Termux package may be declared in queries")
 
 
 def verify_release_runtime_manifest(manifest_xml: str) -> None:
@@ -262,3 +269,9 @@ def verify_release_runtime_manifest(manifest_xml: str) -> None:
             "release AndroidX FileProvider must set grantUriPermissions=true")
         assert (file_provider.get(ANDROID + "authorities") or "").endswith(SHARED_FILES_SUFFIX), (
             "release AndroidX FileProvider authorities must end with .shared-files")
+    queries = manifest.findall("queries")
+    assert len(queries) <= 1, "release may contain only one queries block"
+    packages = [node.get(ANDROID + "name")
+                for node in (queries[0].findall("package") if queries else [])]
+    assert len(packages) <= 1 and all(name == TERMUX_PACKAGE for name in packages), (
+        "release may declare only the Termux package in queries")

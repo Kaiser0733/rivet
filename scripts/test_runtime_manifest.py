@@ -101,6 +101,26 @@ RELEASE_PHONE_PERMISSIONS = (
     '    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_MEDIA_PROJECTION" />'
 )
 
+DEBUG_QUERIES = """  E: queries
+    E: intent
+      E: action
+        A: android:name(0x01010003)="android.intent.action.VIEW" (Raw: "android.intent.action.VIEW")
+    E: package
+      A: android:name(0x01010003)="com.termux" (Raw: "com.termux")
+"""
+
+RELEASE_QUERIES = """    <queries>
+        <intent>
+            <action android:name="android.intent.action.VIEW" />
+            <data android:mimeType="*/*" />
+        </intent>
+        <package android:name="com.termux" />
+    </queries>"""
+
+
+def release_with_queries(queries: str) -> str:
+    return RELEASE_MANIFEST.replace("<application>", queries + "\n    <application>")
+
 
 def release_with_capture(service: str) -> str:
     return RELEASE_MANIFEST.replace(
@@ -291,6 +311,29 @@ class RuntimeManifestTest(unittest.TestCase):
             '.ui.phone.PhoneCaptureService', '.ui.phone.OtherCaptureService')
         with self.assertRaisesRegex(AssertionError, "phone-capture services"):
             verify_release_runtime_manifest(release_with_capture(wrong_name))
+
+    def test_queries_allow_only_the_termux_package(self):
+        verify_apk_runtime_manifest(DEBUG_TREE + DEBUG_QUERIES, ALLOWED_PERMISSIONS)
+        verify_release_runtime_manifest(release_with_queries(RELEASE_QUERIES))
+
+    def test_queries_reject_undeclared_or_duplicate_packages(self):
+        extra = DEBUG_QUERIES + (
+            '    E: package\n'
+            '      A: android:name(0x01010003)="com.example.other" (Raw: "com.example.other")\n')
+        with self.assertRaisesRegex(AssertionError, "only the Termux package"):
+            verify_apk_runtime_manifest(DEBUG_TREE + extra, ALLOWED_PERMISSIONS)
+        wrong = DEBUG_QUERIES.replace('"com.termux"', '"com.example.other"')
+        with self.assertRaisesRegex(AssertionError, "only the Termux package"):
+            verify_apk_runtime_manifest(DEBUG_TREE + wrong, ALLOWED_PERMISSIONS)
+
+        release_extra = RELEASE_QUERIES.replace(
+            '<package android:name="com.termux" />',
+            '<package android:name="com.termux" />\n        <package android:name="com.example.other" />')
+        with self.assertRaisesRegex(AssertionError, "only the Termux package"):
+            verify_release_runtime_manifest(release_with_queries(release_extra))
+        release_wrong = RELEASE_QUERIES.replace('com.termux', 'com.example.other')
+        with self.assertRaisesRegex(AssertionError, "only the Termux package"):
+            verify_release_runtime_manifest(release_with_queries(release_wrong))
 
 
 if __name__ == "__main__":

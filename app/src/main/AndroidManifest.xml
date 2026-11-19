@@ -20,6 +20,7 @@
             <action android:name="android.intent.action.SEND" />
             <data android:mimeType="*/*" />
         </intent>
+        <package android:name="com.termux" />
     </queries>
 
     <application
