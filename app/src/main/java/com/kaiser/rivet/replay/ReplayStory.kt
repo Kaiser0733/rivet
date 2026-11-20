@@ -33,6 +33,7 @@ internal data class ReplayStory(
             projectName: String,
             handle: String? = null,
             availableShots: Set<String> = emptySet(),
+            outcomeSaved: Boolean = true,
         ): ReplayStory {
             val visible = transcript.filter { it.internalContext == null && it.role != AgentRole.Context }
             val prompt = visible.firstOrNull { it.role == AgentRole.User }?.text
@@ -56,10 +57,13 @@ internal data class ReplayStory(
                     }
                 }
             }
-            val result = when (run.phase) {
-                RunPhase.Done -> visible.lastOrNull {
-                    it.role == AgentRole.Assistant && it.toolCalls.isEmpty() && it.text.isNotBlank()
-                }?.text?.let { excerpt(it, 440) } ?: "Run finished."
+            val answer = visible.lastOrNull {
+                it.role == AgentRole.Assistant && it.toolCalls.isEmpty() && it.text.isNotBlank()
+            }?.text?.let { excerpt(it, 390) }
+            val result = if (!outcomeSaved) {
+                if (answer == null) "Run outcome wasn't saved." else "Run outcome wasn't saved.\n\nLast reply\n$answer"
+            } else when (run.phase) {
+                RunPhase.Done -> answer ?: "Run finished."
                 RunPhase.Failed -> "The run failed."
                 RunPhase.Stopped -> "The run was stopped."
                 RunPhase.Paused -> "The run paused."

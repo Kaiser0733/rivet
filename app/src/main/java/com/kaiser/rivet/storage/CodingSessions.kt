@@ -17,6 +17,8 @@ import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
+import com.kaiser.rivet.agent.RunPhase
+import com.kaiser.rivet.agent.RunRecord
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderType
@@ -194,6 +196,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             db.delete("context_attempts", "session_id=?", arrayOf(id))
             db.delete("usage", "session_id=?", arrayOf(id))
             db.delete("metadata", "key=?", arrayOf(turnMetricsKey(id)))
+            db.delete("metadata", "key GLOB ?", arrayOf("replay-run-$id-*"))
             db.execSQL("UPDATE sessions SET interrupted=0, summary='', active_generation=active_generation+1, updated_at=? WHERE id=?",
                 arrayOf(System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
@@ -362,6 +365,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         try {
             db.delete("metadata", "key=?", arrayOf("auto_title-$id"))
             db.delete("metadata", "key=?", arrayOf(turnMetricsKey(id)))
+            db.delete("metadata", "key GLOB ?", arrayOf("replay-run-$id-*"))
             if (db.delete("sessions", "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
             val next = db.rawQuery("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1", null).use {
                 if (it.moveToFirst()) it.getString(0) else null
@@ -386,7 +390,50 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     suspend fun recent(id: String, limit: Int = 100): List<AgentMessage> = onDatabase { db ->
         require(limit in 1..500)
-        val visible = mutableListOf<AgentMessage>()
+        recentEvents(db, id, limit).map { it.message }
+    }
+
+    internal suspend fun latestReplayUserEvent(id: String): Long? = onDatabase { db ->
+        previousUserEvent(db, id, Long.MAX_VALUE)?.id
+    }
+
+    internal suspend fun recordReplayRun(id: String, userEventId: Long, run: RunRecord) = onDatabase { db ->
+        require(run.phase in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped))
+        val user = previousUserEvent(db, id, userEventId + 1)
+        if (user?.id == userEventId) {
+            val snapshot = run.copy(steps = run.steps.takeLast(10))
+            putMeta(db, replayRunKey(id, userEventId), json.encodeToString(RunRecord.serializer(), snapshot))
+        }
+        Unit
+    }
+
+    internal suspend fun replayTurn(
+        id: String, snapshot: List<AgentMessage>, startIndex: Int,
+    ): ReplayTranscript? = onDatabase { db ->
+        if (startIndex !in snapshot.indices) return@onDatabase null
+        val events = recentEvents(db, id, snapshot.size)
+        if (events.map { it.message } != snapshot) return@onDatabase null
+        val first = events[startIndex]
+        val opening = if (first.message.role == AgentRole.User) first
+            else previousUserEvent(db, id, first.id) ?: return@onDatabase null
+        val rest = events.drop(startIndex + if (opening == first) 1 else 0)
+            .takeWhile { it.message.role != AgentRole.User }
+        val run = meta(db, replayRunKey(id, opening.id))?.let { raw ->
+            try { json.decodeFromString(RunRecord.serializer(), raw) }
+            catch (_: IllegalArgumentException) { null }
+        }
+        ReplayTranscript(opening.id, listOf(opening.message) + rest.map { it.message }, run)
+    }
+
+    internal data class ReplayTranscript(
+        val openingEventId: Long,
+        val messages: List<AgentMessage>,
+        val run: RunRecord?,
+    )
+    private data class VisibleEvent(val id: Long, val message: AgentMessage)
+
+    private fun recentEvents(db: SQLiteDatabase, id: String, limit: Int): List<VisibleEvent> {
+        val visible = mutableListOf<VisibleEvent>()
         var before = Long.MAX_VALUE
         while (visible.size < limit) {
             var read = 0
@@ -396,13 +443,30 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                     read++
                     before = cursor.getLong(0)
                     val message = decode(cursor.getString(1))
-                    if (message.role != AgentRole.Context && message.internalContext == null) visible += message
+                    if (message.role != AgentRole.Context && message.internalContext == null) {
+                        visible += VisibleEvent(before, message)
+                    }
                 }
             }
             if (read == 0) break
         }
-        visible.asReversed()
+        return visible.asReversed()
     }
+
+    private fun previousUserEvent(db: SQLiteDatabase, id: String, before: Long): VisibleEvent? {
+        db.rawQuery("SELECT id,payload FROM events WHERE session_id=? AND id<? ORDER BY id DESC",
+            arrayOf(id, before.toString())).use { cursor ->
+            while (cursor.moveToNext()) {
+                val message = decode(cursor.getString(1))
+                if (message.role == AgentRole.User && message.internalContext == null) {
+                    return VisibleEvent(cursor.getLong(0), message)
+                }
+            }
+        }
+        return null
+    }
+
+    private fun replayRunKey(id: String, userEventId: Long) = "replay-run-$id-$userEventId"
 
     override suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String,
                         attempt: ContextAttempt?,

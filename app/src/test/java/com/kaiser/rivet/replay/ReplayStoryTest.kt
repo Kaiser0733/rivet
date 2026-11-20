@@ -66,6 +66,13 @@ class ReplayStoryTest {
         assertEquals(60_000L, ReplayStory.from(run.copy(updatedAt = 600_000), emptyList(), "Demo").totalMs)
     }
 
+    @Test fun legacyTranscriptShowsTheLastReplyWithoutClaimingSuccess() {
+        val messages = listOf(AgentMessage.user("Fix it"), AgentMessage.assistant("One edit is ready."))
+        val story = ReplayStory.from(run, messages, "Demo", outcomeSaved = false)
+        assertEquals("Run outcome wasn't saved.\n\nLast reply\nOne edit is ready.",
+            (story.beats.last() as ReplayBeat.ResultCard).text)
+    }
+
     @Test fun failedAndStoppedRunsKeepHonestOutcomesDespiteAssistantText() {
         val messages = listOf(AgentMessage.user("Fix it"), AgentMessage.assistant("All done."))
         val failed = ReplayStory.from(run.copy(phase = RunPhase.Failed,
