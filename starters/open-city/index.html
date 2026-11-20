@@ -1,0 +1,89 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Marigold Motor Club</title>
+<style>
+  :root{font:16px system-ui;color:#23312b;background:#efe9da}
+  *{box-sizing:border-box}body{max-width:960px;margin:auto;padding:clamp(12px,3vw,26px)}
+  h1{font:700 clamp(25px,6vw,44px) Georgia,serif;margin:0 0 8px}
+  p{margin:8px 0;color:#475954}canvas{display:block;width:100%;height:auto;border-radius:8px;background:#33433f}
+  .controls{display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;margin:12px 0}
+  button{touch-action:none;user-select:none;margin:0 5px 5px 0;border:1px solid #40554b;border-radius:6px;
+    padding:0 14px;min-height:44px;background:#fff9ec;color:#23312b;font:inherit}
+  button:active{background:#d9c393}
+</style>
+<h1>Marigold Motor Club</h1>
+<canvas width="840" height="540" aria-label="Top-down city driving game"></canvas>
+<div class="controls">
+  <div><button data-drive="left">Left</button><button data-drive="right">Right</button></div>
+  <div><button data-drive="reverse">Brake / reverse</button><button data-drive="forward">Drive</button></div>
+</div>
+<p>Drive the grid with the controls or WASD and the arrow keys.</p>
+<script>
+const canvas=document.querySelector('canvas'), ctx=canvas.getContext('2d');
+const grid=150, curb=24, width=900, height=600, radius=10;
+const city=[];
+for(let y=0;y<height;y+=grid) for(let x=0;x<width;x+=grid) {
+  const i=x/grid,yard=y/grid, roof=['#9a7164','#c29b72','#738c82','#a9806d'][(i+yard*3)%4];
+  if ((i+yard*2)%9!==4) city.push({x:x+curb+3,y:y+curb+3,w:grid-2*curb-6,h:grid-2*curb-6,roof});
+}
+const car={x:80,y:0,angle:0,speed:0};
+car.y=14;
+const keyMap={ArrowUp:'forward',KeyW:'forward',ArrowDown:'reverse',KeyS:'reverse',
+  ArrowLeft:'left',KeyA:'left',ArrowRight:'right',KeyD:'right'};
+const keys=new Set(), pointers=new Map();
+addEventListener('keydown',e=>{ if(keyMap[e.code]){e.preventDefault();keys.add(e.code)} });
+addEventListener('keyup',e=>keys.delete(e.code));
+addEventListener('blur',()=>{keys.clear();pointers.clear()});
+document.querySelectorAll('[data-drive]').forEach(button=>{
+  button.addEventListener('pointerdown',e=>{
+    pointers.set(e.pointerId,button.dataset.drive);button.setPointerCapture(e.pointerId);
+  });
+  for(const type of ['pointerup','pointercancel','lostpointercapture'])
+    button.addEventListener(type,e=>pointers.delete(e.pointerId));
+});
+function blocked(x,y) {
+  if(x<radius||x>width-radius||y<radius||y>height-radius) return true;
+  return city.some(b=>{
+    const dx=x-Math.max(b.x,Math.min(b.x+b.w,x)),dy=y-Math.max(b.y,Math.min(b.y+b.h,y));
+    return dx*dx+dy*dy<radius*radius;
+  });
+}
+function update(dt) {
+  const held=action=>[...keys].some(key=>keyMap[key]===action)||[...pointers.values()].includes(action);
+  const throttle=Number(held('forward'))-Number(held('reverse'));
+  const steer=Number(held('right'))-Number(held('left'));
+  car.speed=throttle ? Math.max(-75,Math.min(180,car.speed+throttle*dt*130)) : car.speed*Math.exp(-dt*1.8);
+  car.angle+=steer*Math.min(1,Math.abs(car.speed)/52)*Math.sign(car.speed)*dt*2.65;
+  const x=car.x+Math.cos(car.angle)*car.speed*dt, y=car.y+Math.sin(car.angle)*car.speed*dt;
+  if(blocked(x,y)) car.speed=0; else { car.x=x; car.y=y; }
+}
+function draw() {
+  ctx.save();
+  ctx.scale(canvas.width/width,canvas.height/height);
+  ctx.fillStyle='#374541';ctx.fillRect(0,0,width,height);
+  ctx.fillStyle='#c2a36d';
+  for(let x=0;x<width;x+=grid) for(let y=32;y<height;y+=18) if(y%grid>28&&y%grid<125) ctx.fillRect(x-1,y,2,9);
+  for(let y=0;y<height;y+=grid) for(let x=32;x<width;x+=18) if(x%grid>28&&x%grid<125) ctx.fillRect(x,y-1,9,2);
+  for(let x=0;x<width;x+=grid) for(let y=0;y<height;y+=grid) {
+    ctx.fillStyle='#93a083';ctx.fillRect(x+curb,y+curb,grid-curb*2,grid-curb*2);
+  }
+  for(const b of city) {
+    ctx.fillStyle='#526252';ctx.fillRect(b.x+5,b.y+5,b.w,b.h);
+    ctx.fillStyle=b.roof;ctx.fillRect(b.x,b.y,b.w-2,b.h-2);
+    ctx.strokeStyle='#584e45';ctx.lineWidth=2;ctx.strokeRect(b.x+8,b.y+8,b.w-18,b.h-18);
+    ctx.fillStyle='#dac2a1';ctx.fillRect(b.x+17,b.y+17,18,5);ctx.fillRect(b.x+44,b.y+17,18,5);
+  }
+  ctx.translate(car.x,car.y);ctx.rotate(car.angle);
+  ctx.fillStyle='#232c2b';ctx.fillRect(-11,-8,18,16);
+  ctx.fillStyle='#f4bd59';ctx.fillRect(-14,-6,28,12);
+  ctx.fillStyle='#315752';ctx.fillRect(-2,-5,7,10);
+  ctx.fillStyle='#fff5c0';ctx.fillRect(12,-5,3,3);ctx.fillRect(12,2,3,3);
+  ctx.restore();
+}
+let last=performance.now();
+function tick(now){update(Math.min(.035,(now-last)/1000));last=now;draw();requestAnimationFrame(tick)}
+requestAnimationFrame(tick);
+</script>
+</html>

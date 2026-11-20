@@ -1,0 +1,177 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Juniper Basin</title>
+<style>
+  :root { color-scheme:dark; font:16px system-ui; background:#142523; color:#f5ede0 }
+  * { box-sizing:border-box }
+  body { margin:0 auto; max-width:980px; padding:clamp(12px,3vw,28px) }
+  header { display:flex; align-items:baseline; justify-content:space-between; flex-wrap:wrap; gap:6px 20px }
+  h1 { font:700 clamp(24px,6vw,42px) Georgia,serif; margin:0 0 10px }
+  p { color:#c0c9b6; margin:6px 0 12px }
+  canvas { display:block; width:100%; aspect-ratio:16/9; image-rendering:pixelated;
+    border:1px solid #769388; border-radius:8px; touch-action:none; cursor:grab }
+  .controls { display:flex; justify-content:space-between; align-items:center; gap:10px;
+    margin-top:10px; flex-wrap:wrap }
+  .pad,.actions { display:flex; gap:6px; flex-wrap:wrap }
+  button { background:#28423c; border:1px solid #769388; border-radius:6px; color:inherit;
+    padding:10px 12px; min-width:42px; min-height:42px; font:inherit; touch-action:none; user-select:none }
+  button:active { background:#4c6d57 }
+</style>
+<header><h1>Juniper Basin</h1><p>A small voxel world</p></header>
+<canvas width="240" height="135" aria-label="First-person voxel world. Drag to look."></canvas>
+<div class="controls">
+  <div class="pad" aria-label="Move">
+    <button data-key="KeyW" aria-label="Walk forward">↑</button>
+    <button data-key="KeyA" aria-label="Step left">←</button>
+    <button data-key="KeyS" aria-label="Walk back">↓</button>
+    <button data-key="KeyD" aria-label="Step right">→</button>
+    <button data-key="Space">Jump</button>
+  </div>
+  <div class="actions">
+    <button id="break">Break</button><button id="place">Place</button>
+  </div>
+</div>
+<p>WASD to walk, arrows or drag to look, Space to jump. Aim at a block, then use Break (E) or Place (Q).</p>
+<script>
+const canvas = document.querySelector('canvas');
+const ctx = canvas.getContext('2d', {alpha:false});
+const frame = ctx.createImageData(canvas.width, canvas.height);
+const size = 26, depth = 12;
+const blocks = new Uint8Array(size * size * depth);
+const colors = [[0,0,0],[117,149,76],[129,105,80],[108,133,122],[227,170,111],[66,108,81]];
+function inside(x,y,z) { return x>=0 && x<size && z>=0 && z<size && y>=0 && y<depth; }
+function index(x,y,z) { return (y * size + z) * size + x; }
+function read(x,y,z) { return inside(x,y,z) ? blocks[index(x,y,z)] : 0; }
+function set(x,y,z,value) { if (inside(x,y,z)) blocks[index(x,y,z)] = value; }
+for (let x=0; x<size; x++) for (let z=0; z<size; z++) {
+  const hill = Math.max(1, Math.floor(2.4 + 1.2*Math.sin(x*.23) + .8*Math.cos(z*.31)));
+  for (let y=0; y<=hill; y++) set(x,y,z,y===hill ? 1 : y===0 ? 3 : 2);
+  if ((x*17 + z*31)%53===0 && hill+3<depth && z>5) {
+    set(x,hill+1,z,2); set(x,hill+2,z,2);
+    for (let dx=-1; dx<=1; dx++) for (let dz=-1; dz<=1; dz++) set(x+dx,hill+3,z+dz,5);
+    set(x,hill+4,z,5);
+  }
+}
+for (let x=11; x<=14; x++) {
+  set(x,4,13,4); set(x,5,13,4);
+  if (x===11 || x===14) set(x,6,13,4);
+}
+set(11,7,13,4); set(12,7,13,4); set(13,7,13,4); set(14,7,13,4);
+const player = {x:12.5, y:6, z:6.5, yaw:0, pitch:-.085, vy:0, grounded:false};
+let bx, by, bz, side, priorX, priorY, priorZ, range;
+function ray(ox,oy,oz,dx,dy,dz,max) {
+  bx=Math.floor(ox); by=Math.floor(oy); bz=Math.floor(oz);
+  const sx=dx<0?-1:1, sy=dy<0?-1:1, sz=dz<0?-1:1;
+  const ax=Math.abs(1/dx), ay=Math.abs(1/dy), az=Math.abs(1/dz);
+  let tx=(sx<0?ox-bx:bx+1-ox)*ax, ty=(sy<0?oy-by:by+1-oy)*ay, tz=(sz<0?oz-bz:bz+1-oz)*az;
+  if (!dx) tx=Infinity;
+  if (!dy) ty=Infinity;
+  if (!dz) tz=Infinity;
+  range=0; side=1;
+  while (range<max && by>=0) {
+    const value=read(bx,by,bz);
+    if (value) return value;
+    priorX=bx; priorY=by; priorZ=bz;
+    if (tx<ty && tx<tz) { bx+=sx; range=tx; tx+=ax; side=0; }
+    else if (ty<tz) { by+=sy; range=ty; ty+=ay; side=1; }
+    else { bz+=sz; range=tz; tz+=az; side=2; }
+  }
+  return 0;
+}
+function solid(x,y,z) {
+  for (const dx of [-.22,.22]) for (const dz of [-.22,.22]) {
+    const i=Math.floor(x+dx), j=Math.floor(z+dz);
+    if (read(i,Math.floor(y+.04),j) || read(i,Math.floor(y+1.3),j)) return true;
+  }
+  return false;
+}
+function edit(place) {
+  const p=player, cp=Math.cos(p.pitch);
+  if (!ray(p.x,p.y+1.36,p.z,Math.sin(p.yaw)*cp,Math.sin(p.pitch),Math.cos(p.yaw)*cp,6)) return;
+  if (!place) { if (by>0) set(bx,by,bz,0); return; }
+  if (range<=0 || !inside(priorX,priorY,priorZ)) return;
+  set(priorX,priorY,priorZ,4);
+  if (solid(p.x,p.y,p.z)) set(priorX,priorY,priorZ,0);
+}
+const keys = new Set();
+const press = new Set(['KeyW','KeyA','KeyS','KeyD','ArrowUp','ArrowDown','ArrowLeft','ArrowRight','Space','KeyQ','KeyE']);
+addEventListener('keydown', e => {
+  if (!press.has(e.code) || (e.code==='Space' && e.target instanceof HTMLButtonElement)) return;
+  e.preventDefault(); keys.add(e.code);
+  if (!e.repeat && (e.code==='KeyQ' || e.code==='KeyE')) edit(e.code==='KeyQ');
+});
+addEventListener('keyup', e => keys.delete(e.code));
+addEventListener('blur', () => { keys.clear(); touches.clear(); drag=null; });
+const touches = new Map();
+document.querySelectorAll('[data-key]').forEach(button => {
+  let pointer;
+  button.addEventListener('pointerdown', e => {
+    pointer=e.pointerId; touches.set(pointer,button.dataset.key); button.setPointerCapture(pointer);
+  });
+  for (const type of ['pointerup','pointercancel','lostpointercapture']) {
+    button.addEventListener(type,e => touches.delete(e.pointerId));
+  }
+});
+document.querySelector('#break').onclick=()=>edit(false);
+document.querySelector('#place').onclick=()=>edit(true);
+let drag=null;
+canvas.addEventListener('pointerdown', e => {
+  if (drag) return;
+  drag={id:e.pointerId,x:e.clientX,y:e.clientY}; canvas.setPointerCapture(e.pointerId);
+});
+canvas.addEventListener('pointermove', e => {
+  if (drag?.id!==e.pointerId) return;
+  player.yaw+=(e.clientX-drag.x)*.008;
+  player.pitch=Math.max(-1.35,Math.min(1.35,player.pitch-(e.clientY-drag.y)*.008));
+  drag.x=e.clientX; drag.y=e.clientY;
+});
+for (const type of ['pointerup','pointercancel','lostpointercapture']) {
+  canvas.addEventListener(type,e=>{ if(drag?.id===e.pointerId) drag=null; });
+}
+function move(dt) {
+  const down=k=>keys.has(k)||[...touches.values()].includes(k);
+  const p=player;
+  p.yaw+=(Number(down('ArrowRight'))-Number(down('ArrowLeft')))*dt*1.9;
+  p.pitch=Math.max(-1.35,Math.min(1.35,p.pitch+(Number(down('ArrowUp'))-Number(down('ArrowDown')))*dt*1.35));
+  const f=Number(down('KeyW'))-Number(down('KeyS')), r=Number(down('KeyD'))-Number(down('KeyA'));
+  const speed=dt*4/(f&&r?Math.SQRT2:1), sin=Math.sin(p.yaw), cos=Math.cos(p.yaw);
+  const nx=Math.max(.25,Math.min(size-.25,p.x+(f*sin+r*cos)*speed));
+  const nz=Math.max(.25,Math.min(size-.25,p.z+(f*cos-r*sin)*speed));
+  if (!solid(nx,p.y,p.z)) p.x=nx;
+  if (!solid(p.x,p.y,nz)) p.z=nz;
+  if (p.grounded && down('Space')) p.vy=5.3;
+  p.vy-=dt*15;
+  const ny=p.y+p.vy*dt;
+  p.grounded=ny<0 || (p.vy<0 && solid(p.x,ny,p.z));
+  if (ny>=0 && !solid(p.x,ny,p.z)) p.y=ny;
+  else p.vy=0;
+}
+function render() {
+  const p=player, w=canvas.width, h=canvas.height, sin=Math.sin(p.yaw), cos=Math.cos(p.yaw);
+  const sp=Math.sin(p.pitch), cp=Math.cos(p.pitch);
+  let i=0;
+  for (let y=0;y<h;y++) {
+    const v=(.5-y/h)*1.18;
+    for (let x=0;x<w;x++) {
+      const u=(x/w-.5)*2.1, f=cp-v*sp;
+      const value=ray(p.x,p.y+1.36,p.z,sin*f+cos*u,sp+v*cp,cos*f-sin*u,28);
+      const fog=value?Math.min(.78,range*.027):1;
+      const shade=side===1?1:side===0?.8:.66;
+      const [r,g,b]=colors[value];
+      frame.data[i++]=r*shade*(1-fog)+(134+v*42)*fog;
+      frame.data[i++]=g*shade*(1-fog)+(179+v*38)*fog;
+      frame.data[i++]=b*shade*(1-fog)+(179+v*50)*fog;
+      frame.data[i++]=255;
+    }
+  }
+  ctx.putImageData(frame,0,0);
+  ctx.fillStyle='#fff8e5';
+  ctx.fillRect(w/2-4,h/2,9,1); ctx.fillRect(w/2,h/2-4,1,9);
+}
+let last=performance.now();
+function tick(now) { move(Math.min(.033,(now-last)/1000)); last=now; render(); requestAnimationFrame(tick); }
+requestAnimationFrame(tick);
+</script>
+</html>

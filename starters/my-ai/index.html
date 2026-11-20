@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Fieldnote Assistant</title>
+<link rel="stylesheet" href="style.css">
+<main>
+  <header><h1>Fieldnote Assistant</h1><p id="mode">Demo mode</p></header>
+  <details>
+    <summary>Model settings</summary>
+    <label><input id="demo" type="checkbox" checked> Use offline demo replies</label>
+    <label>Endpoint <input id="endpoint" type="url" placeholder="https://api.example.com/v1"></label>
+    <label>Model <input id="model" type="text" placeholder="Model name"></label>
+    <label>API key <input id="key" type="password" autocomplete="off"></label>
+    <p>Live mode sends this chat and your key to the endpoint you enter. The key stays in this tab until you reload.</p>
+  </details>
+  <section id="chat" role="log" aria-label="Conversation" aria-live="polite">
+    <div class="assistant"><strong>Fieldnote</strong><p>Hi. What would you like to think through?</p></div>
+  </section>
+  <form>
+    <label for="message">Your message</label>
+    <textarea id="message" rows="2" maxlength="4000" required></textarea>
+    <button>Send</button>
+  </form>
+  <p id="status" role="status"></p>
+</main>
+<script src="app.js" defer></script>
+</html>

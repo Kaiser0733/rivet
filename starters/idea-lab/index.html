@@ -1,0 +1,35 @@
+<!doctype html>
+<html lang="en">
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>One Good Idea</title>
+<style>
+  :root{color:#241d18;background:#f7f0df;font:16px system-ui;line-height:1.6}
+  *{box-sizing:border-box}body{margin:0}main{max-width:880px;padding:clamp(20px,6vw,70px);margin:auto}
+  header{padding:clamp(28px,8vw,90px) 0;border-bottom:2px solid #241d18}
+  h1,h2{font-family:Georgia,serif;line-height:1.05;margin:0 0 12px}
+  h1{font-size:clamp(44px,10vw,94px);letter-spacing:-.045em;max-width:9ch}
+  h2{font-size:clamp(26px,5vw,44px)}p{max-width:54ch}header p{font-size:clamp(17px,2.8vw,24px)}
+  section{border-bottom:1px solid #8f796b;padding:28px 0}
+  a,button{color:#fff9f0;background:#743d27;border:0;border-radius:4px;padding:10px 14px;display:inline-block;font:inherit;cursor:pointer}
+  form div{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+  input{border:1px solid #8f796b;border-radius:4px;padding:10px;font:inherit;max-width:100%;min-width:0;flex:1}
+  #status{min-height:1.6em;color:#5b493d}
+</style>
+<main>
+  <header><h1>One good idea.</h1><p>Find the everyday problem worth solving. Give the people who feel it a place to follow along.</p>
+    <a href="#waitlist">Join the waitlist</a></header>
+  <section><h2>The problem</h2><p>Describe one frustrating moment a specific group of people runs into over and over.</p></section>
+  <section><h2>The solution</h2><p>Show what changes when your idea exists. Start with one thing people can imagine using next week.</p></section>
+  <section id="waitlist"><h2>Follow the idea</h2><p>Add a line about what early supporters will hear from you.</p>
+    <form><label for="email">Email address</label><div><input id="email" type="email" autocomplete="email" required>
+    <button>Join the waitlist</button></div></form><p id="status" role="status"></p></section>
+</main>
+<script>
+document.querySelector('form').addEventListener('submit', event => {
+  event.preventDefault();
+  event.currentTarget.reset();
+  document.getElementById('status').textContent = 'This is a demo. No address was saved.';
+});
+</script>
+</html>
