@@ -86,6 +86,11 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     private val database = SessionDatabase(context)
     private val lock = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
+    // RunRecord's timestamps default to the clock at (de)serialization time. With
+    // encodeDefaults off, a snapshot recorded in the same millisecond as the run's
+    // construction drops them and reads back with NEW timestamps, so replay bindings
+    // must round-trip every field (same rule as RunJournal's own Json).
+    private val replayJson = Json { ignoreUnknownKeys = true; encodeDefaults = true }
     private var initialized = false
     @Volatile private var summaryBytes = 0
 
@@ -402,7 +407,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val user = previousUserEvent(db, id, userEventId + 1)
         if (user?.id == userEventId) {
             val snapshot = run.copy(steps = run.steps.takeLast(10))
-            putMeta(db, replayRunKey(id, userEventId), json.encodeToString(RunRecord.serializer(), snapshot))
+            putMeta(db, replayRunKey(id, userEventId), replayJson.encodeToString(RunRecord.serializer(), snapshot))
         }
         Unit
     }
@@ -419,7 +424,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val rest = events.drop(startIndex + if (opening == first) 1 else 0)
             .takeWhile { it.message.role != AgentRole.User }
         val run = meta(db, replayRunKey(id, opening.id))?.let { raw ->
-            try { json.decodeFromString(RunRecord.serializer(), raw) }
+            try { replayJson.decodeFromString(RunRecord.serializer(), raw) }
             catch (_: IllegalArgumentException) { null }
         }
         ReplayTranscript(opening.id, listOf(opening.message) + rest.map { it.message }, run)
