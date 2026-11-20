@@ -78,21 +78,9 @@ internal class PhoneIntents(
                     val text = string("text")?.takeIf { it.isNotBlank() }
                     if ((path == null) == (text == null)) return invalid(call)
                     Launch("Share", "", "share_sheet_shown", "share_unavailable") {
-                        val send = Intent(Intent.ACTION_SEND)
-                        if (path != null) {
-                            val file = resolveFile(path) ?: error("File unavailable")
-                            send.type = file.mime
-                            send.putExtra(Intent.EXTRA_STREAM, file.uri)
-                            send.clipData = ClipData.newRawUri("Shared file", file.uri)
-                            send.addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-                        } else {
-                            send.type = "text/plain"
-                            send.putExtra(Intent.EXTRA_TEXT, text)
-                        }
-                        if (app.packageManager.resolveActivity(send, PackageManager.MATCH_DEFAULT_ONLY) == null) {
-                            error("No share target")
-                        }
-                        start(Intent.createChooser(send, null))
+                        if (path != null) shareFile(resolveFile(path) ?: error("File unavailable"))
+                        else showShareSheet(Intent(Intent.ACTION_SEND).setType("text/plain")
+                            .putExtra(Intent.EXTRA_TEXT, text))
                     }
                 }
                 else -> {
@@ -127,6 +115,15 @@ internal class PhoneIntents(
                 failed(call, launch.failure)
             }
         }
+    }
+
+    suspend fun shareFile(file: ContentFile) = showShareSheet(sharedFileIntent(file))
+
+    private suspend fun showShareSheet(send: Intent) {
+        if (app.packageManager.resolveActivity(send, PackageManager.MATCH_DEFAULT_ONLY) == null) {
+            error("No share target")
+        }
+        start(Intent.createChooser(send, null))
     }
 
     private suspend fun openFile(file: ContentFile) = withContext(Dispatchers.Main.immediate) {
@@ -170,6 +167,12 @@ internal class PhoneIntents(
         AgentToolResult(call.id, call.name, AgentToolError.content(code), error = true, summary = "Could not open phone action")
 
     companion object {
+        internal fun sharedFileIntent(file: ContentFile): Intent =
+            Intent(Intent.ACTION_SEND).setType(file.mime)
+                .putExtra(Intent.EXTRA_STREAM, file.uri)
+                .apply { clipData = ClipData.newRawUri("Shared file", file.uri) }
+                .addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+
         private val string = buildJsonObject { put("type", "string") }
         private val integer = buildJsonObject { put("type", "integer") }
         private val boolean = buildJsonObject { put("type", "boolean") }

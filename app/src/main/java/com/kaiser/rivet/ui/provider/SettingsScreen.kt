@@ -41,6 +41,7 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Surface
+import androidx.compose.material3.Switch
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -64,10 +65,13 @@ import androidx.lifecycle.LifecycleEventObserver
 import androidx.lifecycle.findViewTreeLifecycleOwner
 import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
+import com.kaiser.rivet.storage.ReplaySettingsStore
 import com.kaiser.rivet.storage.SessionUsage
 import com.kaiser.rivet.storage.diagnostics
 import com.kaiser.rivet.R
@@ -641,6 +645,8 @@ private fun PhoneAccessDetail() {
             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
             style = MaterialTheme.typography.bodyMedium)
 
+        ReplayWatermarkSetting()
+
         SectionHeading("Screen capture")
         Text("Rivet asks every time it captures your screen",
             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
@@ -677,6 +683,37 @@ private fun PhoneAccessDetail() {
             }
         }
     }
+}
+
+@Composable
+private fun ReplayWatermarkSetting() {
+    val context = LocalContext.current
+    val store = remember(context) { ReplaySettingsStore(context) }
+    val enabled by store.watermark.collectAsState(initial = null)
+    val scope = rememberCoroutineScope()
+    var failure by remember { mutableStateOf(false) }
+    Row(Modifier.fillMaxWidth().padding(bottom = 12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        Column(Modifier.weight(1f)) {
+            Text("Replay watermark", style = MaterialTheme.typography.bodyLarge)
+            Text("Show 'built with Rivet' on exported replays.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
+        Switch(checked = enabled != false, enabled = enabled != null,
+            modifier = Modifier.semantics { contentDescription = "Replay watermark" },
+            onCheckedChange = { checked ->
+            scope.launch {
+                try {
+                    store.setWatermark(checked)
+                    failure = false
+                } catch (cancelled: CancellationException) {
+                    throw cancelled
+                } catch (_: Exception) { failure = true }
+            }
+        })
+    }
+    if (failure) Text("Couldn't save the watermark setting.", style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable

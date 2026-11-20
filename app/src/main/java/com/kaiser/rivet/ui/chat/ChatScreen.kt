@@ -188,6 +188,13 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val projectBinding = projectBindingState(state.currentSessionId, state.currentSessionWorkspaceId,
         state.projectIdentity, state.projectLoading)
     val wrongProject = projectBinding == ProjectBindingState.Mismatch
+    var replayTurn by remember { mutableStateOf<Pair<ChatUiState, Int>?>(null) }
+    replayTurn?.let { (turnState, index) ->
+        ReplayExportSheet(
+            loadStory = { chatViewModel.replayStory(turnState, index) },
+            onDismiss = { replayTurn = null },
+        )
+    }
     var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
     var showKeyInput by remember { mutableStateOf(false) }
     var keyInput by remember { mutableStateOf("") }
@@ -694,6 +701,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                             onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
                             onRetryTurn = chatViewModel::retryFailedTurn,
                             onChooseReasoning = chatViewModel::chooseReasoningLevel,
+                            onExportReplay = { index -> replayTurn = visibleState to index },
                             modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
                     }
                 }
@@ -832,6 +840,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onRaiseBudget: () -> Unit,
                         onRetryTurn: () -> Unit,
                         onChooseReasoning: (ReasoningLevel) -> Unit,
+                        onExportReplay: (Int) -> Unit,
                         modifier: Modifier = Modifier) {
     val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning) {
         val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
@@ -1026,6 +1035,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 turn = turn,
                 state = state,
                 isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
+                onExportReplay = onExportReplay,
             )
         }
         if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
@@ -1119,6 +1129,7 @@ private fun TurnProcessRow(
     spec: ChatTurnProcessSpec,
     open: Boolean,
     onToggle: () -> Unit,
+    onExportReplay: (() -> Unit)? = null,
     modifier: Modifier = Modifier,
 ) {
     val rotation = foldChevronRotation(open)
@@ -1127,7 +1138,7 @@ private fun TurnProcessRow(
     Row(
         modifier = modifier
             .fillMaxWidth()
-            .height(33.dp)
+            .heightIn(min = if (onExportReplay == null) 33.dp else 44.dp)
             .drawBehind {
                 val strokeWidth = 0.5.dp.toPx()
                 val y = size.height - strokeWidth / 2
@@ -1178,6 +1189,7 @@ private fun TurnProcessRow(
                 )
             }
         }
+        if (onExportReplay != null) ReplayAction(onExportReplay)
         if (spec.canFold) {
             Icon(
                 painter = painterResource(R.drawable.ic_chevron_down),
@@ -1192,10 +1204,20 @@ private fun TurnProcessRow(
 }
 
 @Composable
+private fun ReplayAction(onClick: () -> Unit, modifier: Modifier = Modifier) {
+    Text("Export replay",
+        modifier = modifier.clickable(role = Role.Button, onClick = onClick)
+            .padding(horizontal = 8.dp, vertical = 10.dp),
+        style = MaterialTheme.typography.labelMedium,
+        color = MaterialTheme.colorScheme.tertiary)
+}
+
+@Composable
 private fun TurnBlockView(
     turn: SegmentedTurn<TimelineDisplayEntry>,
     state: ChatUiState,
     isLastTurn: Boolean,
+    onExportReplay: (Int) -> Unit,
 ) {
     var turnOpen by rememberSaveable(turn.turnIndex) {
         mutableStateOf(initialFoldOpen(turn.spec.canFold))
@@ -1204,6 +1226,17 @@ private fun TurnBlockView(
         turnOpen = nextFoldOpenAfterState(turnOpen, turn.spec.canFold, turn.spec.isLive)
     }
     val isOpen = !turn.spec.canFold || turnOpen
+
+    val replayIndex = turn.userItem?.messageIndex ?: turn.parts.firstNotNullOfOrNull { part ->
+        when (part) {
+            is TurnPart.Process -> part.items.firstNotNullOfOrNull { it.messageIndex }
+            is TurnPart.Answer -> part.item.messageIndex
+            is TurnPart.Notice -> null
+        }
+    }
+    val exportAction: (() -> Unit)? = if (replayIndex != null && state.currentSessionId != null &&
+        !state.streaming && !turn.spec.isStopped
+    ) ({ onExportReplay(replayIndex) }) else null
 
     Column(
         modifier = Modifier.fillMaxWidth(),
@@ -1224,7 +1257,8 @@ private fun TurnBlockView(
                 TurnProcessRow(
                     spec = turn.spec,
                     open = isOpen,
-                    onToggle = { if (turn.spec.canFold) turnOpen = !turnOpen }
+                    onToggle = { if (turn.spec.canFold) turnOpen = !turnOpen },
+                    onExportReplay = exportAction,
                 )
             }
             val lastProcess = turn.parts.lastOrNull { it is TurnPart.Process }
@@ -1268,6 +1302,7 @@ private fun TurnBlockView(
                 }
             }
         } else {
+            if (exportAction != null) ReplayAction(exportAction, Modifier.align(Alignment.End))
             turn.parts.forEach { part ->
                 if (part is TurnPart.Answer) {
                     val item = part.item.item

@@ -87,6 +87,7 @@ import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.provider.recommendedFallbackReasoning
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
+import com.kaiser.rivet.replay.ReplayStory
 import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.runtime.TurnCheckpointOutcome
@@ -1343,7 +1344,8 @@ class ChatViewModel private constructor(
     }
 
     fun dismissInterruptedTurn() {
-        if (_uiState.value.streaming) return
+        val dismissed = _uiState.value
+        if (dismissed.streaming) return
         _uiState.update { state ->
             state.copy(interruptedTurn = false, runRecovery = null)
         }
@@ -1354,6 +1356,16 @@ class ChatViewModel private constructor(
                 }
                 if (currentRun?.resumable == true) finishRun(RunPhase.Stopped)
                 sessionStore.markInterrupted(false)
+                if (dismissed.interruptedTurn) {
+                    val session = dismissed.currentSessionId
+                    val start = dismissed.messages.indexOfLast { it.role == AgentRole.User }.coerceAtLeast(0)
+                    val event = replayTranscript(dismissed, start)?.openingEventId
+                    if (session != null && event != null) {
+                        sessions?.recordReplayRun(session, event, RunRecord(
+                            "turn-$event", dismissed.currentSessionWorkspaceId, "", RunPhase.Stopped,
+                        ))
+                    }
+                }
                 val history = sessions?.list()
                 if (history != null) _uiState.update { it.copy(sessions = history) }
             } catch (e: CancellationException) { throw e
@@ -1364,6 +1376,7 @@ class ChatViewModel private constructor(
     private fun startTurn(trimmed: String, retryingInterrupted: Boolean,
                          acceptedUser: AgentMessage? = null) {
         val wasInterrupted = _uiState.value.interruptedTurn
+        val replayStartedAt = System.currentTimeMillis()
         val ticket = ++generation
         _uiState.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
             turnStartedWallClock = System.currentTimeMillis(),
@@ -1376,6 +1389,26 @@ class ChatViewModel private constructor(
             var turnToken: String? = null
             var acceptedPersisted = false
             var persistAcceptedOnExit = true
+            var replayUserEvent: Long? = null
+            var replayJournalId: String? = null
+            var replaySaved = false
+            suspend fun closeReplay(phase: RunPhase) {
+                val session = turnSessionId ?: return
+                val event = replayUserEvent ?: return
+                if (replaySaved || ticket != generation) return
+                val journalRecord = currentRun?.takeIf { it.id == replayJournalId }
+                val endedAt = System.currentTimeMillis()
+                val record = journalRecord?.copy(phase = phase, pause = null,
+                    updatedAt = if (journalRecord.phase == phase) journalRecord.updatedAt else endedAt)
+                    ?: RunRecord("turn-$event", _uiState.value.currentSessionWorkspaceId, "",
+                        phase, startedAt = replayStartedAt, updatedAt = endedAt)
+                try {
+                    sessions?.recordReplayRun(session, event, record)
+                    replaySaved = true
+                } catch (error: CancellationException) {
+                    throw error
+                } catch (_: Exception) { }
+            }
             fun releaseTurn() {
                 turnToken?.let {
                     runtimeController.finishTurn(it)
@@ -1508,7 +1541,9 @@ class ChatViewModel private constructor(
             val gesture = if (retryingInterrupted) null else skillGesture(trimmed, skills)
             val prompt = gesture?.task ?: trimmed
             updateSpendEstimate(snapshot.config)
-            if (workspaceId != null) startRun(workspaceId, prompt, retryingInterrupted)
+            if (workspaceId != null) {
+                replayJournalId = startRun(workspaceId, prompt, retryingInterrupted)?.id
+            }
             suspend fun initialContext(messages: List<AgentMessage>): List<AgentMessage> = buildList {
                 if (activeSummary.isNotBlank() && messages.none { it.role == AgentRole.Context &&
                         it.internalContext?.kind == "summary" }) add(InternalContext.summary(activeSummary, workspaceId))
@@ -1733,6 +1768,11 @@ class ChatViewModel private constructor(
             try {
                 persistTurn(durable, interrupted = true)
                 acceptedPersisted = true
+                if (sessionId != null && durable.any { it.role == AgentRole.User }) {
+                    replayUserEvent = try { sessions?.latestReplayUserEvent(sessionId) }
+                    catch (cancelled: CancellationException) { throw cancelled }
+                    catch (_: Exception) { null }
+                }
             } catch (_: AgentSessionLimitException) {
                 persistAcceptedOnExit = false
                 rollbackAcceptedUser(acceptedUser)
@@ -2050,7 +2090,7 @@ class ChatViewModel private constructor(
                 }
                 if (ticket == generation) {
                     releaseTurn()
-                    finish(result, durable, snapshot.config)
+                    finish(result, durable, snapshot.config, ::closeReplay)
                     if (titleEligible && result.stopReason == AgentStopReason.Completed &&
                         _uiState.value.error == null) {
                         val firstUser = durable.firstOrNull {
@@ -2096,6 +2136,7 @@ class ChatViewModel private constructor(
                             try { sessions?.clearAutoTitle(sessionId) } catch (_: Exception) { }
                         }
                         persistTurn(durable, interrupted = !userCancelled)
+                        if (userCancelled) closeReplay(RunPhase.Stopped)
                         val blocker = try { runtimeController.commandBlocker() }
                             catch (error: CancellationException) { throw error }
                             catch (error: MirrorFailure) { error.code }
@@ -2244,6 +2285,9 @@ class ChatViewModel private constructor(
                             }
                         } catch (_: Exception) { }
                     }
+                    if (pauseRequestedTicket != ticket && !_uiState.value.interruptedTurn) {
+                        closeReplay(if (userCancelledTicket == ticket) RunPhase.Stopped else RunPhase.Failed)
+                    }
                     turnSessionId = null
                     releaseTurn()
                     if (ticket == generation && _uiState.value.streaming) {
@@ -2316,7 +2360,10 @@ class ChatViewModel private constructor(
         }
     }
 
-    private suspend fun finish(result: AgentRunResult, durable: List<AgentMessage>, config: ProviderConfig) {
+    private suspend fun finish(
+        result: AgentRunResult, durable: List<AgentMessage>, config: ProviderConfig,
+        closeReplay: suspend (RunPhase) -> Unit,
+    ) {
         val error = when (result.stopReason) {
             AgentStopReason.Completed -> {
                 val last = result.messages.lastOrNull()
@@ -2369,6 +2416,7 @@ class ChatViewModel private constructor(
         }
         val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
         persistTurn(persisted, interrupted = capturePause != null)
+        if (capturePause == null) closeReplay(if (error == null) RunPhase.Done else RunPhase.Failed)
         activeMessages = persisted
         val progressNote = result.messages.lastOrNull {
             it.role == AgentRole.Assistant && it.text.isNotBlank() && it.toolCalls.isEmpty()
@@ -2545,6 +2593,41 @@ class ChatViewModel private constructor(
             else state.copy(messages = (state.messages + accepted).takeLast(100))
         }
     }
+
+    private suspend fun replayTranscript(state: ChatUiState, startIndex: Int): CodingSessions.ReplayTranscript? {
+        val session = state.currentSessionId ?: return null
+        val window = state.messages.filter { it.role != AgentRole.Context && it.internalContext == null }
+        val anchor = state.messages.take(startIndex).count {
+            it.role != AgentRole.Context && it.internalContext == null
+        }
+        return sessions?.replayTurn(session, window, anchor)
+    }
+
+    internal suspend fun replayStory(state: ChatUiState, startIndex: Int): ReplayStory? =
+        withContext(Dispatchers.IO) {
+            val source = replayTranscript(state, startIndex) ?: return@withContext null
+            val run = source.run ?: RunRecord("legacy-turn", state.currentSessionWorkspaceId, "", RunPhase.Done)
+            val app = getApplication<Application>()
+            val shots = source.messages.asSequence().flatMap { it.toolResults.asSequence() }
+                .mapNotNull { result ->
+                    val path = result.imagePath ?: return@mapNotNull null
+                    val root = when (result.name) {
+                        "browser_shot" -> File(app.filesDir, "browser-shots")
+                        "phone_shot" -> File(app.cacheDir, "phone-shots")
+                        else -> return@mapNotNull null
+                    }
+                    val valid = runCatching {
+                        val file = File(path).canonicalFile
+                        file.isFile && file.toPath().startsWith(root.canonicalFile.toPath())
+                    }.getOrDefault(false)
+                    path.takeIf { valid }
+                }.toSet()
+            val projectName = state.projectName?.takeIf {
+                state.projectIdentity == state.currentSessionWorkspaceId
+            } ?: "Chat"
+            ReplayStory.from(run, source.messages, projectName,
+                availableShots = shots, outcomeSaved = source.run != null)
+        }
 
     private suspend fun persistTurn(messages: List<AgentMessage>, interrupted: Boolean) {
         val bound = turnSessionId
