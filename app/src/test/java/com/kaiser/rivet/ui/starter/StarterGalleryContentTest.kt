@@ -4,6 +4,7 @@ import com.kaiser.rivet.starter.Starter
 import com.kaiser.rivet.starter.StarterOption
 import java.io.File
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertNull
 import org.junit.Test
 
 class StarterGalleryContentTest {
@@ -21,6 +22,12 @@ class StarterGalleryContentTest {
         assertEquals("512 B", starterSize(512))
         assertEquals("1.5 KB", starterSize(1500))
         assertEquals("150.0 KB", starterSize(150000))
+    }
+
+    @Test fun showsTheExactFootnoteOnlyWhenNoProviderKeyIsConfigured() {
+        assertEquals("Starters work with a model on this phone — no account needed.", starterFootnote(false))
+        assertNull(starterFootnote(true))
+        assertNull(starterFootnote(null))
     }
 
     private fun option(id: String) = StarterOption(Starter(id, id, "Try it", "$id.zip", 500, "Ask first"))

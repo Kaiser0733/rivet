@@ -16,3 +16,6 @@ internal fun starterGalleryEntries(
 
 internal fun starterSize(bytes: Int): String =
     if (bytes < 1000) "$bytes B" else String.format(Locale.ROOT, "%.1f KB", bytes / 1000.0)
+
+internal fun starterFootnote(hasProviderKey: Boolean?): String? =
+    if (hasProviderKey == false) "Starters work with a model on this phone — no account needed." else null

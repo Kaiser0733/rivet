@@ -28,6 +28,7 @@ import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.starter.StarterCatalog
 import com.kaiser.rivet.starter.StarterChannel
 import com.kaiser.rivet.starter.StarterOption
+import com.kaiser.rivet.storage.SecretStore
 import java.io.File
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -35,11 +36,24 @@ import kotlinx.coroutines.withContext
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-internal fun StarterGallery(onDismiss: () -> Unit, onPick: (StarterOption) -> Unit) {
+internal fun StarterGallery(providerIds: List<String>, onDismiss: () -> Unit, onPick: (StarterOption) -> Unit) {
     val app = LocalContext.current.applicationContext
     var bundled by remember(app) { mutableStateOf<List<StarterOption>>(emptyList()) }
     var loaded by remember(app) { mutableStateOf<List<StarterOption>>(emptyList()) }
     var failed by remember(app) { mutableStateOf(false) }
+    var hasProviderKey by remember(app, providerIds) {
+        mutableStateOf<Boolean?>(if (providerIds.isEmpty()) false else null)
+    }
+    LaunchedEffect(app, providerIds) {
+        if (providerIds.isNotEmpty()) {
+            hasProviderKey = withContext(Dispatchers.IO) {
+                runCatching {
+                    val secrets = SecretStore(app)
+                    providerIds.any(secrets::hasApiKey)
+                }.getOrNull()
+            }
+        }
+    }
     LaunchedEffect(app) {
         try {
             val entries = withContext(Dispatchers.IO) {
@@ -80,6 +94,13 @@ internal fun StarterGallery(onDismiss: () -> Unit, onPick: (StarterOption) -> Un
                         supportingContent = { Text(option.starter.blurb) },
                         trailingContent = { Text(starterSize(option.starter.bytes)) },
                     )
+                }
+                starterFootnote(hasProviderKey)?.let { footnote ->
+                    item {
+                        Text(footnote, modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall)
+                    }
                 }
             }
         }

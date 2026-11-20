@@ -275,10 +275,15 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     }
     fun chooseProject() = launchProjectPicker(starter = null)
     if (showStarterGallery) {
-        StarterGallery(onDismiss = { showStarterGallery = false }, onPick = { option ->
-            showStarterGallery = false
-            launchProjectPicker(option)
-        })
+        StarterGallery(
+            providerIds = providers.configs.filter { it.type != ProviderType.Local && it.type != ProviderType.ChatGptPlan }
+                .map { it.id },
+            onDismiss = { showStarterGallery = false },
+            onPick = { option ->
+                showStarterGallery = false
+                launchProjectPicker(option)
+            },
+        )
     }
     state.starterError?.let { message ->
         AlertDialog(onDismissRequest = chatViewModel::dismissStarterError,
