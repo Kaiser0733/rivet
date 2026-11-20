@@ -164,6 +164,7 @@ import com.kaiser.rivet.ui.browser.BrowserWatchCard
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.history.HistoryPane
 import com.kaiser.rivet.runtime.ManagedProcessStatus
+import com.kaiser.rivet.starter.StarterOption
 import com.kaiser.rivet.ui.starter.STARTER_CHIP_LABEL
 import com.kaiser.rivet.ui.starter.StarterGallery
 import kotlinx.coroutines.delay
@@ -198,9 +199,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         )
     }
     var showStarterGallery by rememberSaveable { mutableStateOf(false) }
-    if (showStarterGallery) {
-        StarterGallery(onDismiss = { showStarterGallery = false },
-            onPick = { showStarterGallery = false })
+    LaunchedEffect(state.ready, state.currentSessionId, state.projectIdentity, state.projectLoading, providers.activeId) {
+        if (providers.activeId != null) chatViewModel.openPendingStarter()
     }
     val offerStarters = state.ready && state.projectName == null && state.messages.isEmpty() && !state.projectLoading
     var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
@@ -236,22 +236,59 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     var confirmDiscard by remember { mutableStateOf<String?>(null) }
     var selectedWorkerId by remember { mutableStateOf<String?>(null) }
     val selectedWorker = subagents.firstOrNull { it.id == selectedWorkerId } ?: workerSheet.worker
+    var pickingStarter by rememberSaveable { mutableStateOf(false) }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
+        val starterPick = pickingStarter
+        pickingStarter = false
+        val starter = chatViewModel.takePendingStarter()
         val uri = result.data?.data
         if (result.resultCode == Activity.RESULT_OK && uri != null) {
-            if (state.currentSessionWorkspaceId != uri.toString() && state.messages.isNotEmpty())
-                pendingProject = uri to (result.data?.flags ?: 0)
-            else chatViewModel.selectProject(uri, result.data?.flags ?: 0)
+            val flags = result.data?.flags ?: 0
+            if (starterPick) {
+                if (starter != null) chatViewModel.installStarter(uri, flags, starter)
+                else chatViewModel.starterPickerInterrupted()
+            } else if (state.currentSessionWorkspaceId != uri.toString() && state.messages.isNotEmpty()) {
+                pendingProject = uri to flags
+            } else {
+                chatViewModel.selectProject(uri, flags)
+            }
+        } else if (starterPick) {
+            showStarterGallery = true
         }
     }
-    fun chooseProject() {
-        if (!state.ready) return
+    fun launchProjectPicker(starter: StarterOption?) {
+        if (!state.ready || state.streaming || state.projectLoading) return
         val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
                 Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-        try { picker.launch(intent) }
-        catch (_: android.content.ActivityNotFoundException) { chatViewModel.projectPickerUnavailable() }
-        catch (_: SecurityException) { chatViewModel.projectPickerUnavailable() }
+        chatViewModel.setPendingStarter(starter)
+        pickingStarter = starter != null
+        try {
+            picker.launch(intent)
+        } catch (failure: RuntimeException) {
+            if (failure !is android.content.ActivityNotFoundException && failure !is SecurityException) throw failure
+            chatViewModel.takePendingStarter()
+            pickingStarter = false
+            if (starter == null) chatViewModel.projectPickerUnavailable()
+            else chatViewModel.starterPickerInterrupted()
+        }
+    }
+    fun chooseProject() = launchProjectPicker(starter = null)
+    if (showStarterGallery) {
+        StarterGallery(onDismiss = { showStarterGallery = false }, onPick = { option ->
+            showStarterGallery = false
+            launchProjectPicker(option)
+        })
+    }
+    state.starterError?.let { message ->
+        AlertDialog(onDismissRequest = chatViewModel::dismissStarterError,
+            title = { Text("Couldn't install starter") },
+            text = { Text(message) },
+            confirmButton = { TextButton(onClick = {
+                chatViewModel.dismissStarterError()
+                showStarterGallery = true
+            }) { Text("Choose again") } },
+            dismissButton = { TextButton(onClick = chatViewModel::dismissStarterError) { Text("Close") } })
     }
 
     pendingProject?.let { selected ->

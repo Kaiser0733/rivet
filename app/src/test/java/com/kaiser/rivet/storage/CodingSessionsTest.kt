@@ -5,6 +5,8 @@ import android.content.Context
 import androidx.datastore.preferences.core.edit
 import androidx.datastore.preferences.core.booleanPreferencesKey
 import androidx.datastore.preferences.core.stringPreferencesKey
+import com.kaiser.rivet.agent.StarterBrief
+import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentToolCall
@@ -41,6 +43,21 @@ class CodingSessionsTest {
         app.deleteDatabase("coding-sessions.db")
         app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
         AgentSessionStore(app).clear()
+    }
+
+    @Test fun starterSessionKeepsItsBriefOffTheReloadedTranscript() = runBlocking {
+        val store = CodingSessions(app)
+        store.load()
+        val workspace = "content://example/tree/starter"
+        val brief = "Ask which problem the user wants to solve."
+        val event = StarterBrief.event(workspace, brief)
+        val session = store.create(workspace, "Find a billion-dollar idea", event)
+
+        val reopened = CodingSessions(app)
+        val selected = reopened.select(requireNotNull(session.id))
+        assertEquals(listOf(event), selected.messages)
+        assertEquals(emptyList<AgentMessage>(), reopened.recent(requireNotNull(session.id)))
+        assertTrue(modelMessages(selected.messages, workspace, enforceWorkspace = true).single().text.contains(brief))
     }
 
     @Test fun replaySelectionKeepsIdenticalPromptsBoundToTheirOwnOutcomes() = runBlocking {

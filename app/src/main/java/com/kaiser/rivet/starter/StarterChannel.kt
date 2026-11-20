@@ -61,31 +61,26 @@ internal class StarterChannel(
     private fun cached(starter: Starter): File {
         val digest = checkNotNull(starter.sha256).lowercase()
         val destination = File(cache, "$digest.zip")
-        if (destination.isFile && destination.length() == starter.bytes.toLong() &&
-            destination.inputStream().use { starterSha256(it.readStarterBytes(starter.bytes)) } == digest) {
-            validateArchive(destination)
-            return destination
+        if (destination.isFile && destination.length() == starter.bytes.toLong()) {
+            val cachedBytes = destination.inputStream().use { it.readStarterBytes(starter.bytes) }
+            if (starterSha256(cachedBytes) == digest) {
+                StarterInstall.read(cachedBytes)
+                ZipFile(destination).use { require(it.size() > 0) }
+                return destination
+            }
         }
         val bytes = fetch(checkNotNull(starter.zipUrl), starter.bytes)
         require(bytes.size == starter.bytes && starterSha256(bytes) == digest)
+        StarterInstall.read(bytes)
         check(cache.isDirectory || cache.mkdirs() || cache.isDirectory)
         val temporary = File.createTempFile("starter-", ".tmp", cache)
         try {
             temporary.writeBytes(bytes)
-            validateArchive(temporary)
+            ZipFile(temporary).use { require(it.size() > 0) }
             check(temporary.renameTo(destination))
             return destination
         } finally {
             temporary.delete()
-        }
-    }
-
-    private fun validateArchive(file: File) {
-        ZipFile(file).use { zip ->
-            for (name in listOf("index.html", "README.md")) {
-                val entry = zip.getEntry(name)
-                require(entry != null && !entry.isDirectory && entry.size > 0)
-            }
         }
     }
 

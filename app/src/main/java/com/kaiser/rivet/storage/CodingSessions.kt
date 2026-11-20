@@ -19,6 +19,7 @@ import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.agent.RunRecord
+import com.kaiser.rivet.agent.StarterBrief
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderType
@@ -244,17 +245,34 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.header()) } }
     }
 
-    suspend fun create(workspaceId: String?): AgentSession = onDatabase { db ->
+    suspend fun create(
+        workspaceId: String?, starterTitle: String? = null, starterBrief: AgentMessage? = null,
+    ): AgentSession = onDatabase { db ->
+        require((starterTitle == null) == (starterBrief == null))
+        if (starterBrief != null) {
+            val row = starterBrief.validatedContext()
+            require(row != null && row.kind == StarterBrief.KIND && row.workspaceId == workspaceId)
+        }
+        val title = starterTitle ?: "New session"
         val id = UUID.randomUUID().toString()
         db.beginTransaction()
         try {
-            insertSession(db, id, "New session", workspaceId, false)
-            putMeta(db, "auto_title-$id", "eligible")
+            insertSession(db, id, title, workspaceId, false)
+            if (starterBrief == null) {
+                putMeta(db, "auto_title-$id", "eligible")
+            } else {
+                val payload = json.encodeToString(AgentMessage.serializer(), starterBrief)
+                for (table in listOf("events", "active_events")) {
+                    db.insertOrThrow(table, null, ContentValues().apply {
+                        put("session_id", id); put("payload", payload)
+                    })
+                }
+            }
             setActive(db, id)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         summaryBytes = 0
-        AgentSession(id = id, title = "New session", workspaceId = workspaceId)
+        AgentSession(messages = listOfNotNull(starterBrief), id = id, title = title, workspaceId = workspaceId)
     }
 
     /**

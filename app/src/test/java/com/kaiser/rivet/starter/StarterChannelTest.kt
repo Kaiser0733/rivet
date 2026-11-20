@@ -67,6 +67,21 @@ class StarterChannelTest {
         assertEquals(bundled, retried.map { it.starter })
     }
 
+    @Test fun checksumVerifiedArchiveWithAnEscapingMemberFallsBack() {
+        val unsafe = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { archive ->
+                for (path in listOf("README.md", "index.html", "../outside")) {
+                    archive.putNextEntry(ZipEntry(path))
+                    archive.write("starter".encodeToByteArray())
+                    archive.closeEntry()
+                }
+            }
+        }.toByteArray()
+        val gallery = channel(index(row("world", sha = starterSha256(unsafe), bytes = unsafe.size))) { unsafe }
+            .resolve(bundled)
+        assertEquals(bundled, gallery.map { it.starter })
+    }
+
     private fun channel(json: String, archive: (String) -> ByteArray) =
         StarterChannel(temp.root, 11) { url, _ ->
             if (url == StarterChannel.REMOTE_URL) json.encodeToByteArray() else archive(url)
