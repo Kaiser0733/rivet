@@ -11,6 +11,9 @@ internal data class Starter(
     val zip: String,
     val bytes: Int,
     val brief: String,
+    val zipUrl: String? = null,
+    val sha256: String? = null,
+    val minAppVersion: Int? = null,
 )
 
 @Serializable
