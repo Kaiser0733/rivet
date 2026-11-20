@@ -164,6 +164,8 @@ import com.kaiser.rivet.ui.browser.BrowserWatchCard
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.history.HistoryPane
 import com.kaiser.rivet.runtime.ManagedProcessStatus
+import com.kaiser.rivet.ui.starter.STARTER_CHIP_LABEL
+import com.kaiser.rivet.ui.starter.StarterGallery
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -195,6 +197,12 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             onDismiss = { replayTurn = null },
         )
     }
+    var showStarterGallery by rememberSaveable { mutableStateOf(false) }
+    if (showStarterGallery) {
+        StarterGallery(onDismiss = { showStarterGallery = false },
+            onPick = { showStarterGallery = false })
+    }
+    val offerStarters = state.ready && state.projectName == null && state.messages.isEmpty() && !state.projectLoading
     var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
     var showKeyInput by remember { mutableStateOf(false) }
     var keyInput by remember { mutableStateOf("") }
@@ -614,6 +622,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         tertiaryAction = stringResource(R.string.continue_with_chatgpt),
                         offlineAction = "Start offline",
                         onOfflineAction = onStartOffline,
+                        starterAction = if (offerStarters) ({ showStarterGallery = true }) else null,
                         onTertiaryAction = {
                             // Cancel any in-flight attempt first: no orphaned
                             // loopback listeners from repeated taps.
@@ -680,7 +689,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 } else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading) {
                     EmptyState(RivetDoodle.Project, "What do you want to work on?",
                         "Choose the folder that contains your project, then tell Rivet what you want to change.",
-                        "Choose project", ::chooseProject, Modifier.weight(1f))
+                        "Choose project", ::chooseProject, Modifier.weight(1f),
+                        starterAction = if (offerStarters) ({ showStarterGallery = true }) else null)
                 } else if (state.projectLoading) {
                     EmptyState(RivetDoodle.Project, "Opening your project…",
                         "Rivet is restoring access to the folder you selected.",
@@ -767,7 +777,8 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
                        onAction: () -> Unit, modifier: Modifier = Modifier,
                       secondaryAction: String? = null, onSecondaryAction: (() -> Unit)? = null,
                       tertiaryAction: String? = null, onTertiaryAction: (() -> Unit)? = null,
-                      offlineAction: String? = null, onOfflineAction: (() -> Unit)? = null) {
+                      offlineAction: String? = null, onOfflineAction: (() -> Unit)? = null,
+                      starterAction: (() -> Unit)? = null) {
     Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
         Column(Modifier.widthIn(max = 390.dp).verticalScroll(rememberScrollState())
             .padding(horizontal = 24.dp, vertical = 20.dp),
@@ -780,7 +791,7 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
             Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant,
                 textAlign = TextAlign.Center,
                 style = MaterialTheme.typography.bodyMedium)
-            if (action != null || secondaryAction != null || tertiaryAction != null) {
+            if (action != null || secondaryAction != null || tertiaryAction != null || starterAction != null) {
                 // Chips, not buttons: a choice offered quietly. FlowRow because three
                 // labels do not fit one 360dp row ("Continue with ChatGPT" wrapped
                 // mid-word when this was a fixed row).
@@ -795,6 +806,8 @@ private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action:
                         AssistChip(onClick = onTertiaryAction, label = { Text(tertiaryAction) })
                     if (offlineAction != null && onOfflineAction != null)
                         AssistChip(onClick = onOfflineAction, label = { Text(offlineAction) })
+                    if (starterAction != null)
+                        AssistChip(onClick = starterAction, label = { Text(STARTER_CHIP_LABEL) })
                 }
             }
         }
