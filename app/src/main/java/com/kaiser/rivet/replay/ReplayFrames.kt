@@ -24,7 +24,7 @@ internal class ReplayFrames(
     private val story: ReplayStory,
     private val palette: ReplayFramePalette,
 ) {
-    /** The caller owns the returned frame. The source shot is released before returning. */
+    /** The caller owns the returned frame. Screenshot decoding finishes before allocation. */
     fun render(
         beat: ReplayBeat,
         watermark: Boolean,
@@ -32,6 +32,7 @@ internal class ReplayFrames(
         height: Int = HEIGHT,
     ): Bitmap {
         require(width > 0 && width * 16 == height * 9)
+        val shot = (beat as? ReplayBeat.PreviewCard)?.let { decodeShot(it.shotPath, width, height) }
         val bitmap = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
         try {
             val canvas = Canvas(bitmap)
@@ -47,9 +48,9 @@ internal class ReplayFrames(
                 is ReplayBeat.PromptCard -> textCard(canvas, "Prompt", beat.text)
                 is ReplayBeat.StepCard -> textCard(canvas, "Work", beat.title, beat.detail)
                 is ReplayBeat.ResultCard -> textCard(canvas, "Result", beat.text)
-                is ReplayBeat.PreviewCard -> if (!shotCard(canvas, beat, width, height)) {
-                    textCard(canvas, "Work", beat.caption, "Screenshot unavailable.")
-                }
+                is ReplayBeat.PreviewCard ->
+                    if (shot == null) textCard(canvas, "Work", beat.caption, "Screenshot unavailable.")
+                    else shotCard(canvas, shot, beat.caption)
             }
             if (watermark) {
                 line(canvas, "built with Rivet", 72f, 1795f, 936, 27f, palette.muted, mono = true,
@@ -78,28 +79,38 @@ internal class ReplayFrames(
         if (description != null) draw(canvas, description, 136f, headingY + heading.height + 32f)
     }
 
-    private fun shotCard(canvas: Canvas, beat: ReplayBeat.PreviewCard, width: Int, height: Int): Boolean {
+    private data class ShotPixels(val width: Int, val height: Int, val colors: IntArray)
+
+    private fun decodeShot(path: String, width: Int, height: Int): ShotPixels? {
         val bounds = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-        BitmapFactory.decodeFile(beat.shotPath, bounds)
-        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return false
+        BitmapFactory.decodeFile(path, bounds)
+        if (bounds.outWidth <= 0 || bounds.outHeight <= 0) return null
         var sample = 1
         while (bounds.outWidth / sample / 2 >= width || bounds.outHeight / sample / 2 >= height) sample *= 2
-        val shot = BitmapFactory.decodeFile(beat.shotPath,
-            BitmapFactory.Options().apply { inSampleSize = sample }) ?: return false
+        val shot = BitmapFactory.decodeFile(path,
+            BitmapFactory.Options().apply { inSampleSize = sample }) ?: return null
         try {
-            val viewport = RectF(88f, 330f, 992f, 1530f)
-            val scale = minOf(viewport.width() / shot.width, viewport.height() / shot.height)
-            val halfWidth = shot.width * scale / 2
-            val halfHeight = shot.height * scale / 2
-            val target = RectF(
-                viewport.centerX() - halfWidth, viewport.centerY() - halfHeight,
-                viewport.centerX() + halfWidth, viewport.centerY() + halfHeight,
-            )
-            panel(canvas, RectF(72f, 314f, 1008f, 1546f))
-            canvas.drawBitmap(shot, null, target, Paint(Paint.FILTER_BITMAP_FLAG))
-            line(canvas, beat.caption, 72f, 1582f, 936, 32f, palette.muted, mono = true)
-            return true
+            val pixels = IntArray(shot.width * shot.height)
+            shot.getPixels(pixels, 0, shot.width, 0, 0, shot.width, shot.height)
+            return ShotPixels(shot.width, shot.height, pixels)
         } finally { shot.recycle() }
+    }
+
+    // The pixel-array overload keeps the decoded Bitmap and output Bitmap from overlapping.
+    @Suppress("DEPRECATION")
+    private fun shotCard(canvas: Canvas, shot: ShotPixels, caption: String) {
+        val viewport = RectF(88f, 330f, 992f, 1530f)
+        val scale = minOf(viewport.width() / shot.width, viewport.height() / shot.height)
+        val left = viewport.centerX() - shot.width * scale / 2
+        val top = viewport.centerY() - shot.height * scale / 2
+        panel(canvas, RectF(72f, 314f, 1008f, 1546f))
+        canvas.save()
+        canvas.translate(left, top)
+        canvas.scale(scale, scale)
+        canvas.drawBitmap(shot.colors, 0, shot.width, 0f, 0f, shot.width, shot.height, true,
+            Paint(Paint.FILTER_BITMAP_FLAG))
+        canvas.restore()
+        line(canvas, caption, 72f, 1582f, 936, 32f, palette.muted, mono = true)
     }
 
     private fun panel(canvas: Canvas, rect: RectF) {

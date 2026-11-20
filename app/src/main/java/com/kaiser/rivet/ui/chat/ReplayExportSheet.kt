@@ -25,7 +25,6 @@ import com.kaiser.rivet.replay.GifTooLarge
 import com.kaiser.rivet.replay.ReplayChoice
 import com.kaiser.rivet.replay.ReplayExporter
 import com.kaiser.rivet.replay.ReplayFile
-import com.kaiser.rivet.replay.ReplayFormat
 import com.kaiser.rivet.replay.ReplayFramePalette
 import com.kaiser.rivet.replay.ReplayStory
 import com.kaiser.rivet.replay.ReplayVideoUnavailable
@@ -84,7 +83,14 @@ internal fun ReplayExportSheet(
                                 it.format == format && it.watermark == watermarkEnabled && it.file.isFile
                             } ?: exporter.render(source, palette, format, watermarkEnabled)
                             prepared = file
-                            feedback = if (format == ReplayFormat.Video) "Video ready." else "GIF ready."
+                            feedback = try {
+                                exporter.distribute(file, choice)
+                            } catch (cancelled: CancellationException) {
+                                throw cancelled
+                            } catch (_: Exception) {
+                                if (choice == ReplayChoice.ShareSheet) "Couldn't open the share sheet."
+                                else "Couldn't finish exporting. Try the share sheet."
+                            }
                         } catch (cancelled: CancellationException) {
                             throw cancelled
                         } catch (error: ReplayVideoUnavailable) {
