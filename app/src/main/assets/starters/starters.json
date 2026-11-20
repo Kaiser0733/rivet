@@ -1,0 +1,37 @@
+{
+  "schema": 1,
+  "starters": [
+    {
+      "id": "voxel-world",
+      "name": "Build a voxel world",
+      "blurb": "A blocky sandbox on your phone. Walk around, break and place blocks.",
+      "zip": "voxel-world.zip",
+      "bytes": 3758,
+      "brief": "This is the Build a voxel world starter. Ask what they want to change first."
+    },
+    {
+      "id": "open-city",
+      "name": "Build an open-city game",
+      "blurb": "A little city, a car, open streets. Drive it, then make it yours.",
+      "zip": "open-city.zip",
+      "bytes": 2536,
+      "brief": "This is the Build an open-city game starter. Ask what they want to change first."
+    },
+    {
+      "id": "my-ai",
+      "name": "Build your own AI assistant",
+      "blurb": "A chat app with your name on it. Point it at a model and it's alive.",
+      "zip": "my-ai.zip",
+      "bytes": 3449,
+      "brief": "This is the Build your own AI assistant starter. Ask what they want to change first."
+    },
+    {
+      "id": "idea-lab",
+      "name": "Find a billion-dollar idea",
+      "blurb": "The agent grills you, picks a lane with you, then builds the pitch page.",
+      "zip": "idea-lab.zip",
+      "bytes": 1573,
+      "brief": "This is the idea-lab starter. Interview the user about problems they see and things they love, propose three business ideas grounded in what they said, let them pick one, then fill the landing-page template in this project for the chosen idea."
+    }
+  ]
+}

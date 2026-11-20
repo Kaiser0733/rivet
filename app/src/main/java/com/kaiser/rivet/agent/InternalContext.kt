@@ -31,7 +31,7 @@ data class InternalContext(
                 SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND, ToolchainContext.KIND,
                 GoalMemoryContext.KIND, RunContext.KIND, "rollback",
                 SubagentContext.POOL_KIND, SubagentContext.RESULT_KIND, CompactionNotice.KIND,
-                CompactionNotice.RESTORE_KIND) ||
+                CompactionNotice.RESTORE_KIND, StarterBrief.KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
@@ -82,6 +82,11 @@ data class InternalContext(
             ToolchainContext.KIND -> append(content)
             GoalMemoryContext.KIND -> append(content)
             RunContext.KIND -> append(content)
+            StarterBrief.KIND -> {
+                append("The user chose this starter in Rivet. Use the brief to open the conversation. ")
+                append("Continue from any replies already in the conversation.\n")
+                append(content)
+            }
             "rollback" -> append(content)
             CompactionNotice.KIND, CompactionNotice.RESTORE_KIND -> append(content)
             SubagentContext.POOL_KIND -> append(content)
@@ -148,6 +153,21 @@ data class InternalContext(
             kind = CompactionNotice.RESTORE_KIND, workspaceId = workspace,
             content = CompactionNotice.RESTORE_TEXT, digest = digest(CompactionNotice.RESTORE_TEXT),
         ).event()
+    }
+}
+
+internal object StarterBrief {
+    const val KIND = "starter_brief"
+
+    fun event(workspace: String, brief: String): AgentMessage = InternalContext(
+        kind = KIND, workspaceId = workspace, content = brief, digest = InternalContext.digest(brief),
+    ).event()
+
+    fun pending(messages: List<AgentMessage>, workspace: String): InternalContext? {
+        if (messages.any { it.role != AgentRole.Context }) return null
+        return messages.firstNotNullOfOrNull { message ->
+            message.validatedContext()?.takeIf { it.workspaceId == workspace && it.kind == KIND }
+        }
     }
 }
 
@@ -231,7 +251,7 @@ internal object ProjectContext {
         val latestRetained = source.lastOrNull { message ->
             val data = message.validatedContext()
             data != null && data.kind in setOf(SKILL_CATALOG_KIND, ToolchainContext.KIND,
-                GoalMemoryContext.KIND, RunContext.KIND, "rollback", SubagentContext.POOL_KIND)
+                GoalMemoryContext.KIND, RunContext.KIND, "rollback", SubagentContext.POOL_KIND, StarterBrief.KIND)
         }?.validatedContext()
         val prefix = mutableListOf<AgentMessage>()
         val workspace = workspaceOverride ?: latestProject?.workspaceId ?: priorSummary?.workspaceId
@@ -247,7 +267,8 @@ internal object ProjectContext {
         }
         // Skills, goal, memory, run journal, subagent pool and availability are snapshots, not deltas; keep
         // the newest of each through compaction even when a project has no AGENTS.md file.
-        for (kind in listOf(SKILL_CATALOG_KIND, GoalMemoryContext.KIND, RunContext.KIND, "rollback", ToolchainContext.KIND, SubagentContext.POOL_KIND)) {
+        for (kind in listOf(StarterBrief.KIND, SKILL_CATALOG_KIND, GoalMemoryContext.KIND,
+            RunContext.KIND, "rollback", ToolchainContext.KIND, SubagentContext.POOL_KIND)) {
             source.lastOrNull { it.validatedContext()?.let { data ->
                 data.workspaceId == workspace && data.kind == kind } == true }
                 ?.let { prefix += it }

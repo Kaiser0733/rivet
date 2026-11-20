@@ -11,6 +11,11 @@ import android.util.Log
 import com.kaiser.rivet.RivetApplication
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kaiser.rivet.agent.StarterBrief
+import com.kaiser.rivet.starter.StarterInstall
+import com.kaiser.rivet.starter.StarterInstallFailure
+import com.kaiser.rivet.starter.StarterOption
+import com.kaiser.rivet.starter.starterSha256
 import com.kaiser.rivet.agent.AgentApprovalGate
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.AgentLoop
@@ -188,6 +193,7 @@ data class ChatUiState(
     val projectIdentity: String? = null,
     val projectLoading: Boolean = true,
     val projectError: String? = null,
+    val starterError: String? = null,
     val activity: String? = null,
     val toolLifecycle: List<AgentToolLifecycle> = emptyList(),
     val recoveringProjectChanges: Boolean = false,
@@ -740,15 +746,50 @@ class ChatViewModel private constructor(
         if (workspace != null) refreshRunCheckpoints()
     }
 
-    fun selectProject(uri: Uri, flags: Int) {
+    private var pendingStarter: StarterOption? = null
+
+    internal fun setPendingStarter(option: StarterOption?) { pendingStarter = option }
+
+    internal fun takePendingStarter(): StarterOption? = pendingStarter.also { pendingStarter = null }
+
+    internal fun dismissStarterError() { _uiState.update { it.copy(starterError = null) } }
+
+    internal fun starterPickerInterrupted() {
+        _uiState.update { it.copy(starterError = "Choose the starter again to install it.") }
+    }
+
+    fun selectProject(uri: Uri, flags: Int) = openProject(uri, flags, starter = null)
+
+    internal fun installStarter(uri: Uri, flags: Int, starter: StarterOption) =
+        openProject(uri, flags, starter)
+
+    private fun openProject(uri: Uri, flags: Int, starter: StarterOption?) {
         if (!_uiState.value.ready || _uiState.value.streaming || _uiState.value.projectLoading ||
             _uiState.value.recoveringProjectChanges) return
-        _uiState.update { it.copy(projectLoading = true, projectError = null, error = null,
+        _uiState.update { it.copy(projectLoading = true, projectError = null, starterError = null, error = null,
             errorAction = null, activity = null) }
         viewModelScope.launch {
             try {
                 val previousIdentity = _uiState.value.projectIdentity
-                val workspace = workspaceSelection.select(uri, flags)
+                val files = starter?.let { option ->
+                    checkNotNull(sessions)
+                    withContext(Dispatchers.IO) {
+                        StarterInstall.load(option) { name -> getApplication<Application>().assets.open(name) }
+                    }
+                }
+                val prepare: (suspend (SafWorkspace) -> Unit)? = if (files == null) null else { folder ->
+                    val emptyHash = starterSha256(ByteArray(0))
+                    StarterInstall.copy(files, isEmpty = { folder.isRootEmpty() }) { item ->
+                        val bytes = item.bytes
+                        val created = if (bytes == null) folder.createDirectory(item.path)
+                            else folder.createFileWithParents(item.path)
+                        if (created.path != item.path) throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
+                        if (bytes != null) {
+                            bytes.inputStream().use { folder.writeFileFrom(item.path, it, emptyHash, created.documentId) }
+                        }
+                    }
+                }
+                val workspace = workspaceSelection.select(uri, flags, prepare)
                 // An interactive shell belongs to the project it was opened in.
                 terminalSession.close()
                 val name = try { workspace.displayName() }
@@ -763,9 +804,11 @@ class ChatViewModel private constructor(
                 _uiState.update { it.copy(projectName = name, projectIdentity = identity,
                     projectError = null) }
                 val current = _uiState.value
-                if (current.currentSessionWorkspaceId != identity) {
+                if (starter != null || current.currentSessionWorkspaceId != identity) {
                     sessions?.let { store ->
-                        val selected = store.create(identity)
+                        val selected = if (starter == null) store.create(identity) else store.create(
+                            identity, starter.starter.name, StarterBrief.event(identity, starter.starter.brief),
+                        )
                         activeMessages = selected.messages
                         activeSummary = selected.summary
                         _subagents.value = emptyList()
@@ -786,14 +829,24 @@ class ChatViewModel private constructor(
                 // conversation changed, not the workspace.
                 rehydrateUndo(identity)
             } catch (e: CancellationException) { throw e
+            } catch (e: StarterInstallFailure) {
+                _uiState.update { it.copy(projectLoading = false, starterError = e.message) }
             } catch (e: WorkspaceFailure) {
+                if (starter != null) {
+                    _uiState.update { it.copy(projectLoading = false, starterError =
+                        if (e.reason == WorkspaceFailure.Reason.PERMISSION)
+                            "Rivet couldn't open that folder. Choose it again and allow access."
+                        else "Rivet couldn't finish installing. Check the folder before trying again.") }
+                    return@launch
+                }
                 _uiState.update { it.copy(projectLoading = false, projectError = when (e.reason) {
                     WorkspaceFailure.Reason.PERMISSION -> "Rivet couldn't open that folder. Choose it again and allow access."
                     else -> "Rivet couldn't use that folder. Choose another project folder."
                 }) }
             } catch (_: Exception) {
                 _uiState.update { it.copy(projectLoading = false,
-                    projectError = "Rivet couldn't open that project. Try choosing it again.") }
+                    projectError = if (starter == null) "Rivet couldn't open that project. Try choosing it again." else null,
+                    starterError = if (starter != null) "Rivet couldn't finish installing. Check the folder before trying again." else null) }
             }
         }
     }
@@ -1328,7 +1381,10 @@ class ChatViewModel private constructor(
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
         // A compacted transcript can end without a user message; retrying then would send
         // an empty prompt. Match the sibling retry: without a prompt there is nothing to run.
-        if (lastUser.isEmpty()) return
+        if (lastUser.isEmpty()) {
+            openPendingStarter()
+            return
+        }
         startTurn(lastUser, retryingInterrupted = true)
     }
 
@@ -1339,7 +1395,10 @@ class ChatViewModel private constructor(
         val state = _uiState.value
         if (state.streaming || !state.ready || state.recoveringProjectChanges || state.undoing) return
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
-        if (lastUser.isEmpty()) return
+        if (lastUser.isEmpty()) {
+            openPendingStarter()
+            return
+        }
         startTurn(lastUser, retryingInterrupted = true)
     }
 
@@ -1373,8 +1432,17 @@ class ChatViewModel private constructor(
         }
     }
 
+    internal fun openPendingStarter() {
+        val state = _uiState.value
+        val workspace = state.currentSessionWorkspaceId ?: return
+        if (!state.ready || state.streaming || state.projectLoading || state.projectIdentity != workspace ||
+            state.messages.any { it.role != AgentRole.Context }) return
+        val brief = StarterBrief.pending(activeMessages, workspace) ?: return
+        startTurn(brief.content, retryingInterrupted = false, starterOpening = true)
+    }
+
     private fun startTurn(trimmed: String, retryingInterrupted: Boolean,
-                         acceptedUser: AgentMessage? = null) {
+                         acceptedUser: AgentMessage? = null, starterOpening: Boolean = false) {
         val wasInterrupted = _uiState.value.interruptedTurn
         val replayStartedAt = System.currentTimeMillis()
         val ticket = ++generation
@@ -1478,7 +1546,7 @@ class ChatViewModel private constructor(
                 }
             }
             browser.bindProject(workspaceId ?: _uiState.value.currentSessionWorkspaceId ?: "unbound")
-            if (workspaceId != null && snapshot.config.type == ProviderType.Local) {
+            if (!starterOpening && workspaceId != null && snapshot.config.type == ProviderType.Local) {
                 val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
                 val block = local?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)
                 if (block != null) {
@@ -1538,7 +1606,7 @@ class ChatViewModel private constructor(
             }
             // A `/name` gesture loads its skill for this turn; everything after the token
             // stays the task. Retries already carry the stripped task text.
-            val gesture = if (retryingInterrupted) null else skillGesture(trimmed, skills)
+            val gesture = if (retryingInterrupted || starterOpening) null else skillGesture(trimmed, skills)
             val prompt = gesture?.task ?: trimmed
             updateSpendEstimate(snapshot.config)
             if (workspaceId != null) {
@@ -1704,7 +1772,7 @@ class ChatViewModel private constructor(
                 AgentToolExecutor.definitions.filter {
                     it.name !in AgentToolExecutor.phoneOnlyNames && (workspace != null || it.name in UNBOUND_FILE_TOOLS)
                 }
-            val tools = BrowserTools.definitions + workspaceTools +
+            val tools = if (starterOpening) emptyList() else BrowserTools.definitions + workspaceTools +
                 (if (phone == null) emptyList() else AgentToolExecutor.definitions.filter {
                     it.name in AgentToolExecutor.phoneOnlyNames
                 }) +
@@ -1745,7 +1813,7 @@ class ChatViewModel private constructor(
             // request left its user message in it, and a failure after partial output also
             // left the cut-off answer, so appending the prompt again sent it twice.
             val reuseExistingTail = retryingInterrupted
-            val pendingUser = if (reuseExistingTail) emptyList()
+            val pendingUser = if (reuseExistingTail || starterOpening) emptyList()
                 else listOf(acceptedUser ?: AgentMessage.user(prompt))
             if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
                 try {
@@ -1869,7 +1937,7 @@ class ChatViewModel private constructor(
                             response.toolCalls.sumOf { call -> call.arguments.length.toLong() },
                     )
                     recordSpend(snapshot.config, responseUsage, estimated = response.usage == null)
-                    response
+                    if (starterOpening) response.copy(toolCalls = emptyList()) else response
                 },
                 prepareTool = { call ->
                     if (call.name == "delete_path" && !(phone != null && externalFileMutation(call))) {
@@ -2091,7 +2159,7 @@ class ChatViewModel private constructor(
                 if (ticket == generation) {
                     releaseTurn()
                     finish(result, durable, snapshot.config, ::closeReplay)
-                    if (titleEligible && result.stopReason == AgentStopReason.Completed &&
+                    if (!starterOpening && titleEligible && result.stopReason == AgentStopReason.Completed &&
                         _uiState.value.error == null) {
                         val firstUser = durable.firstOrNull {
                             it.role == AgentRole.User && it.text.isNotBlank()

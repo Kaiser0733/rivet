@@ -57,7 +57,9 @@ class WorkspaceSelection(context: Context) {
         }
     }
 
-    suspend fun select(uri: Uri, returnedFlags: Int): SafWorkspace = withContext(Dispatchers.IO) {
+    suspend fun select(
+        uri: Uri, returnedFlags: Int, prepare: (suspend (SafWorkspace) -> Unit)? = null,
+    ): SafWorkspace = withContext(Dispatchers.IO) {
         if (uri.scheme != "content" || !DocumentsContract.isTreeUri(uri) ||
             returnedFlags and Intent.FLAG_GRANT_READ_URI_PERMISSION == 0 ||
             returnedFlags and Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION == 0) {
@@ -66,29 +68,55 @@ class WorkspaceSelection(context: Context) {
         val flags = returnedFlags and (Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         try {
             persistence.withLock {
-                resolver.takePersistableUriPermission(uri, flags)
+                val alreadyGranted = if (prepare == null) 0 else grantFlags(uri)
+                try {
+                    resolver.takePersistableUriPermission(uri, flags)
+                } catch (_: SecurityException) {
+                    throw WorkspaceFailure(WorkspaceFailure.Reason.PERMISSION)
+                }
                 val candidate = SafWorkspace(resolver, uri)
-                if (!candidate.stat(WorkspacePath.ROOT).directory) throw WorkspaceFailure(WorkspaceFailure.Reason.NOT_DIRECTORY)
-                withContext(NonCancellable) {
-                    val previous = preferences.getString("tree", null)
-                    if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").remove("file").commit()) {
-                        throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
+                var selected = false
+                try {
+                    if (!candidate.stat(WorkspacePath.ROOT).directory) {
+                        throw WorkspaceFailure(WorkspaceFailure.Reason.NOT_DIRECTORY)
                     }
-                    if (previous != null && previous != uri.toString() && !AndroidGrantedFolders(app).owns(previous)) {
-                        try {
-                            resolver.persistedUriPermissions.firstOrNull { it.uri.toString() == previous }?.let {
-                                val previousFlags = (if (it.isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
-                                    (if (it.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
-                                resolver.releasePersistableUriPermission(it.uri, previousFlags)
-                            }
-                        } catch (_: Exception) { /* Releasing an obsolete grant cannot undo the new selection. */ }
+                    prepare?.invoke(candidate)
+                    withContext(NonCancellable) {
+                        val previous = preferences.getString("tree", null)
+                        if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").remove("file").commit()) {
+                            throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
+                        }
+                        selected = true
+                        if (previous != null && previous != uri.toString() && !AndroidGrantedFolders(app).owns(previous)) {
+                            try { releaseGrant(Uri.parse(previous), grantFlags(Uri.parse(previous))) }
+                            catch (_: Exception) { /* Releasing an obsolete grant cannot undo the new selection. */ }
+                        }
+                    }
+                    candidate
+                } finally {
+                    if (prepare != null && !selected) {
+                        runCatching { releaseGrant(uri, flags and alreadyGranted.inv()) }
                     }
                 }
-                candidate
             }
-        } catch (e: CancellationException) { throw e
-        } catch (e: WorkspaceFailure) { throw e
-        } catch (_: Exception) { throw WorkspaceFailure(WorkspaceFailure.Reason.PERMISSION) }
+        } catch (e: CancellationException) {
+            throw e
+        } catch (e: WorkspaceFailure) {
+            throw e
+        } catch (e: Exception) {
+            if (prepare != null) throw e
+            throw WorkspaceFailure(WorkspaceFailure.Reason.PERMISSION)
+        }
+    }
+
+    private fun grantFlags(uri: Uri): Int {
+        val grant = resolver.persistedUriPermissions.firstOrNull { it.uri == uri } ?: return 0
+        return (if (grant.isReadPermission) Intent.FLAG_GRANT_READ_URI_PERMISSION else 0) or
+            (if (grant.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
+    }
+
+    private fun releaseGrant(uri: Uri, flags: Int) {
+        if (flags != 0) resolver.releasePersistableUriPermission(uri, flags)
     }
 
     suspend fun rememberLocation(workspace: SafWorkspace, directory: WorkspacePath, file: WorkspacePath? = null) = withContext(Dispatchers.IO) {
