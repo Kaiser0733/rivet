@@ -57,3 +57,8 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("dismissOnEscape(active != null", source("ui/chat/FilePreview.kt"))
         self.assertIn("collectIsHoveredAsState", source("ui/UtilitySurfaces.kt"))
         self.assertIn("collectIsFocusedAsState", source("ui/UtilitySurfaces.kt"))
+
+    def test_sidebar_starts_with_the_real_mark_then_the_wordmark(self):
+        sidebar = source("ui/history/HistoryScreen.kt")
+        self.assertLess(sidebar.index("R.drawable.ic_launcher_foreground"), sidebar.index('Text("RIVET"'))
+        self.assertLess(sidebar.index('Text("RIVET"'), sidebar.index('"Search chats"'))

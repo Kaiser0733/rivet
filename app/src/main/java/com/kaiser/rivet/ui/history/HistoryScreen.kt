@@ -1,5 +1,10 @@
 package com.kaiser.rivet.ui.history
 
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.focusable
 import com.kaiser.rivet.ui.utilityClick
 import android.text.format.DateUtils
@@ -101,7 +106,17 @@ internal fun RivetSidebar(
     Column(Modifier.fillMaxSize().focusRequester(sidebarFocus).focusable()
         .imePadding().padding(horizontal = RivetLayout.pageGutter)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Rivet", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+            Box(Modifier.size(32.dp).clip(CircleShape), contentAlignment = Alignment.Center) {
+                Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null,
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        scaleX = 1.42f
+                        scaleY = 1.42f
+                    })
+            }
+            Spacer(Modifier.size(10.dp))
+            Text("RIVET", Modifier.weight(1f),
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.1.sp))
             IconButton(onClick = {
                 searching = !searching
                 if (!searching) {
