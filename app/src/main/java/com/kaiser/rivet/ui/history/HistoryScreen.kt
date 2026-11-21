@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.history
 
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.Image
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.graphicsLayer
@@ -7,7 +9,6 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.focusable
 import com.kaiser.rivet.ui.utilityClick
-import android.text.format.DateUtils
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -255,6 +256,13 @@ private fun SidebarLink(label: String, icon: Int, onClick: () -> Unit) {
     }
 }
 
-internal fun relativeRecency(updatedAt: Long, now: Long = System.currentTimeMillis()): String =
-    DateUtils.getRelativeTimeSpanString(updatedAt, now, DateUtils.MINUTE_IN_MILLIS,
-        DateUtils.FORMAT_ABBREV_RELATIVE).toString()
+@Composable
+private fun relativeRecency(updatedAt: Long): String {
+    val recency = chatRecency(updatedAt, System.currentTimeMillis())
+    return when (recency.unit) {
+        RecencyUnit.Now -> stringResource(R.string.sidebar_just_now)
+        RecencyUnit.Minute -> pluralStringResource(R.plurals.sidebar_minutes_ago, recency.count, recency.count)
+        RecencyUnit.Hour -> pluralStringResource(R.plurals.sidebar_hours_ago, recency.count, recency.count)
+        RecencyUnit.Day -> pluralStringResource(R.plurals.sidebar_days_ago, recency.count, recency.count)
+    }
+}

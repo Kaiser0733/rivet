@@ -125,3 +125,9 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn('SectionListItem(R.drawable.ic_history, "Updates", "", onOpenUpdates', about)
         self.assertIn('SectionListItem(R.drawable.ic_models, "Conversation usage", "", onShowUsage', about)
         self.assertNotIn("UsageRow(", about)
+
+    def test_every_sidebar_timestamp_uses_the_same_relative_format(self):
+        sidebar = source("ui/history/HistoryScreen.kt")
+        self.assertNotIn("DateUtils", sidebar)
+        self.assertIn("relativeRecency(session.updatedAt)", sidebar)
+        self.assertIn("R.plurals.sidebar_days_ago", sidebar)
