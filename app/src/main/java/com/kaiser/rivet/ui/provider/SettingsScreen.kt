@@ -256,7 +256,7 @@ fun SettingsScreen(
                     if (shownSkill != null) selectedSkill = null else section = null
                 },
             )
-            HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             when (section) {
                 null -> Column(Modifier.verticalScroll(rememberScrollState())) {
                     SectionList(
@@ -483,7 +483,8 @@ private fun SectionListItem(
         )
         Spacer(Modifier.width(12.dp))
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyLarge)
+            Text(title, style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface)
             Text(
                 summary,
                 style = MaterialTheme.typography.bodySmall,
@@ -501,7 +502,7 @@ private fun SectionListItem(
     }
     if (showDivider) {
         HorizontalDivider(
-            color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f),
+            color = MaterialTheme.colorScheme.outlineVariant,
             modifier = Modifier.padding(horizontal = 48.dp)
         )
     }

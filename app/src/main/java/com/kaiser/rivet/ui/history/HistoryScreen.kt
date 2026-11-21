@@ -22,6 +22,8 @@ import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
+import androidx.compose.material3.IconButtonDefaults
+import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -113,7 +115,7 @@ private fun HistoryContent(viewModel: ChatViewModel, modifier: Modifier, onClose
                     tint = MaterialTheme.colorScheme.onBackground)
             }
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
 
         if (state.sessions.isEmpty()) {
             Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
@@ -149,7 +151,7 @@ private fun HistoryContent(viewModel: ChatViewModel, modifier: Modifier, onClose
                         },
                         onDelete = { deleteId = session.id },
                     )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                 }
             }
         }
@@ -191,7 +193,8 @@ private fun HistoryRow(
 private fun HistoryTitle(session: CodingSessionHeader, current: Boolean, modifier: Modifier) {
     Column(modifier.padding(end = 8.dp)) {
         Text(session.title.replace("New session", "New conversation"),
-            style = MaterialTheme.typography.titleMedium,
+            style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface,
             maxLines = 2, overflow = TextOverflow.Ellipsis)
         Text(listOfNotNull(relativeRecency(session.updatedAt), if (current) "Current" else null)
             .joinToString(" · "), style = MaterialTheme.typography.bodySmall,
@@ -202,18 +205,23 @@ private fun HistoryTitle(session: CodingSessionHeader, current: Boolean, modifie
 @Composable
 private fun HistoryActions(pinned: Boolean, enabled: Boolean,
                            onPin: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
-    IconButton(onClick = onPin, enabled = enabled, modifier = Modifier.size(48.dp)) {
+    IconButton(onClick = onPin, enabled = enabled, modifier = Modifier.size(48.dp),
+        colors = IconButtonDefaults.iconButtonColors(
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
         Icon(painterResource(if (pinned) R.drawable.ic_pin_filled else R.drawable.ic_pin),
             if (pinned) "Unpin conversation" else "Pin conversation",
-            tint = if (pinned) MaterialTheme.colorScheme.primary else MaterialTheme.colorScheme.onBackground)
+            tint = if (pinned && enabled) MaterialTheme.colorScheme.primary
+            else LocalContentColor.current)
     }
-    IconButton(onClick = onRename, enabled = enabled, modifier = Modifier.size(48.dp)) {
-        Icon(painterResource(R.drawable.ic_edit), "Rename conversation",
-            tint = MaterialTheme.colorScheme.onBackground)
+    IconButton(onClick = onRename, enabled = enabled, modifier = Modifier.size(48.dp),
+        colors = IconButtonDefaults.iconButtonColors(
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
+        Icon(painterResource(R.drawable.ic_edit), "Rename conversation")
     }
-    IconButton(onClick = onDelete, enabled = enabled, modifier = Modifier.size(48.dp)) {
-        Icon(painterResource(R.drawable.ic_delete), "Delete conversation",
-            tint = MaterialTheme.colorScheme.onBackground)
+    IconButton(onClick = onDelete, enabled = enabled, modifier = Modifier.size(48.dp),
+        colors = IconButtonDefaults.iconButtonColors(
+            contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
+        Icon(painterResource(R.drawable.ic_delete), "Delete conversation")
     }
 }
 

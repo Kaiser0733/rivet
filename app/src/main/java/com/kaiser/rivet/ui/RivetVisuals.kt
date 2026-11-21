@@ -32,7 +32,7 @@ fun RivetBackdrop(content: @Composable BoxScope.() -> Unit) {
 @Composable
 fun RivetChatBackground(modifier: Modifier = Modifier) {
     // S1 retires the chat_background image; the chat sits on a flat themed surface.
-    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface))
+    Box(modifier.fillMaxSize().background(MaterialTheme.colorScheme.background))
 }
 
 @Composable
@@ -53,8 +53,8 @@ fun RivetOutlinedButton(
             disabledContainerColor = MaterialTheme.colorScheme.surfaceVariant,
             disabledContentColor = MaterialTheme.colorScheme.onSurfaceVariant,
         ),
-        border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(
-            alpha = if (enabled) 0.78f else 0.32f)),
+        border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(
+            alpha = if (enabled) 1f else 0.32f)),
         content = content,
     )
 }

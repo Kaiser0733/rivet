@@ -18,7 +18,6 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.replay.GifTooLarge
@@ -32,8 +31,6 @@ import com.kaiser.rivet.replay.ReplayStory
 import com.kaiser.rivet.replay.reusableReplay
 import com.kaiser.rivet.replay.ReplayVideoUnavailable
 import com.kaiser.rivet.storage.ReplaySettingsStore
-import com.kaiser.rivet.ui.RivetThemeMode
-import com.kaiser.rivet.ui.rivetColors
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -51,10 +48,14 @@ internal fun ReplayExportSheet(
     val store = remember(app) { ReplayLastExportStore(java.io.File(app.cacheDir, "run-replays")) }
     var lastExport by remember(runKey) { mutableStateOf(store.load(runKey)) }
     val palette = remember {
-        val colors = rivetColors(RivetThemeMode.Dark, dark = true)
-        ReplayFramePalette(colors.background.toArgb(), colors.surface.toArgb(),
-            colors.onSurface.toArgb(), colors.tertiary.toArgb(), colors.primary.toArgb(),
-            colors.outlineVariant.toArgb())
+        ReplayFramePalette(
+            background = 0xFF151517.toInt(),
+            surface = 0xFF232324.toInt(),
+            text = 0xFFF9FAFB.toInt(),
+            muted = 0xFFADB2B8.toInt(),
+            accent = 0xFF7AAAFF.toInt(),
+            hairline = 0x0FFFFFFF,
+        )
     }
     val scope = rememberCoroutineScope()
     var busy by remember { mutableStateOf(false) }
