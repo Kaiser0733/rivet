@@ -4,6 +4,8 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import com.kaiser.rivet.ui.RivetMotion
+import com.kaiser.rivet.ui.EffortMotion
+import com.kaiser.rivet.ui.effortMotion
 import com.kaiser.rivet.ui.motionDisabled
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border

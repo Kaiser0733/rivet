@@ -1,6 +1,7 @@
 package com.kaiser.rivet.ui.chat
 
 import com.kaiser.rivet.provider.ReasoningLevel
+import com.kaiser.rivet.ui.effortMotion
 import org.junit.Assert.*
 import org.junit.Test
 

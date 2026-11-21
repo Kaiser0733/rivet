@@ -16,6 +16,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import com.kaiser.rivet.provider.ReasoningLevel
 
 private val TextPrimaryDark = Color(0xFFF3F6F9)
 private val TextSecondaryDark = Color(0xFFB8C3CE)
@@ -301,6 +302,22 @@ internal object RivetMotion {
     val messageRise = 10.dp
     val completionStroke = 3.dp
     val completionLength = 78.dp
+    val effortSignalLength = 76.dp
+    val effortSignalStroke = 1.6.dp
     const val drawerScrim = 0.46f
     val easing = androidx.compose.animation.core.FastOutSlowInEasing
+}
+
+internal enum class EffortPattern { Line, Fork, Steps, Cross, Rings, Lattice }
+
+internal data class EffortMotion(val pattern: EffortPattern, val duration: Int, val strength: Float)
+
+internal fun effortMotion(level: ReasoningLevel): EffortMotion? = when (level) {
+    ReasoningLevel.Default -> null
+    ReasoningLevel.Low -> EffortMotion(EffortPattern.Line, 260, 0.48f)
+    ReasoningLevel.Medium -> EffortMotion(EffortPattern.Fork, 300, 0.56f)
+    ReasoningLevel.High -> EffortMotion(EffortPattern.Steps, 345, 0.64f)
+    ReasoningLevel.XHigh -> EffortMotion(EffortPattern.Cross, 390, 0.72f)
+    ReasoningLevel.Max -> EffortMotion(EffortPattern.Rings, 445, 0.80f)
+    ReasoningLevel.Ultra -> EffortMotion(EffortPattern.Lattice, 500, 0.88f)
 }

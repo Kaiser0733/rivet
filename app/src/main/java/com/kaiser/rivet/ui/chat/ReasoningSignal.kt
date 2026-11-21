@@ -8,18 +8,21 @@ import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.graphics.StrokeCap
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.dp
+import com.kaiser.rivet.ui.RivetMotion
+import com.kaiser.rivet.ui.EffortMotion
+import com.kaiser.rivet.ui.EffortPattern
 import kotlin.math.min
 
 @Composable
 internal fun ReasoningSignal(effect: EffortMotion, progress: Float, modifier: Modifier = Modifier) {
     val color = MaterialTheme.colorScheme.primary
     Canvas(modifier) {
-        val length = min(size.width * 0.27f, 76.dp.toPx())
+        val length = min(size.width * 0.27f, RivetMotion.effortSignalLength.toPx())
         val center = Offset(size.width - length * 0.68f, size.height * 0.50f)
         val advance = (progress * 1.55f).coerceAtMost(1f)
         val opacity = effect.strength * (1f - ((progress - 0.68f) / 0.32f).coerceIn(0f, 1f))
         val ink = color.copy(alpha = opacity)
-        val stroke = 1.6.dp.toPx()
+        val stroke = RivetMotion.effortSignalStroke.toPx()
         fun segment(x: Float, y: Float, endX: Float, endY: Float) {
             val start = center + Offset(x * length, y * length)
             val end = center + Offset((x + (endX - x) * advance) * length,
