@@ -58,12 +58,26 @@ class BrowserSourceSafetyTest {
         assertFalse(app.contains("BrowserSheet"))
     }
 
-    @Test fun chatShowsTheWatchCardForVisualSessions() {
+    @Test fun theFullScreenBrowserShowsTheAgentsLiveSession() {
+        // The chat watch card was replaced by the full-screen browser (brief §8): the
+        // live session and the agent-driving banner live on BrowserScreen now.
         val chat = listOf(File("src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt"),
             File("app/src/main/java/com/kaiser/rivet/ui/chat/ChatScreen.kt")).first { it.isFile }.readText()
-        assertTrue(chat.contains("BrowserWatchCard"))
-        assertTrue(chat.contains("BrowserDrivingPolicy.cardVisible"))
-        assertTrue(chat.contains("browserState.agentRunActive"))
+        assertFalse(chat.contains("BrowserWatchCard"))
+
+        val app = listOf(File("src/main/java/com/kaiser/rivet/ui/RivetApp.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/RivetApp.kt")).first { it.isFile }.readText()
+        assertTrue(app.contains("BrowserScreen("))
+        // The screen is composed for the agent's renderer even before the user opens it,
+        // and it hosts the same live session the agent is driving.
+        assertTrue(app.contains("browserState.rendererVisible && !browserState.teardownRequested"))
+        assertTrue(app.contains("BrowserHost(chatViewModel.browser, hostModifier, onPageInteraction)"))
+
+        val screen = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt"),
+            File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt")).first { it.isFile }.readText()
+        assertTrue(screen.contains("BrowserDrivingPolicy.bannerVisible("))
+        assertTrue(screen.contains("state.agentRunActive, state.agentVisualActive, state.driving"))
+        assertTrue(screen.contains("session.takeControl()"))
     }
 
     @Test fun passwordFieldsAreOnTheRefusalPath() {
