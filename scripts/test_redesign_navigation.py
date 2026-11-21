@@ -50,3 +50,17 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertIn("onAutonomyChange = requestAutonomy", app)
         self.assertIn('group = "Skills"', panel)
         self.assertIn("skill.description", panel)
+
+    def test_both_working_folder_controls_open_projects_and_keep_starters_there(self):
+        app = (UI / "RivetApp.kt").read_text()
+        self.assertIn("RivetDestination.Projects ->", app)
+        self.assertGreaterEqual(app.count("onOpenProjects ="), 2)
+        projects = (UI / "workspace/ProjectsScreen.kt").read_text()
+        for phrase in ("Open another folder", "Recent folders", "Starters"):
+            self.assertIn(f'"{phrase}"', projects)
+        self.assertIn("Intent.ACTION_OPEN_DOCUMENT_TREE", projects)
+        self.assertIn("viewModel.selectProject(uri, flags)", projects)
+        self.assertIn("viewModel.installStarter(uri, flags, starter)", projects)
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        self.assertNotIn("ACTION_OPEN_DOCUMENT_TREE", chat)
+        self.assertNotIn("StarterGallery(", chat)

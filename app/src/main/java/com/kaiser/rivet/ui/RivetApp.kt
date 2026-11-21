@@ -58,6 +58,7 @@ import kotlinx.coroutines.withContext
 import androidx.compose.runtime.produceState
 import com.kaiser.rivet.ui.local.ModelsScreen
 import com.kaiser.rivet.ui.processes.ToolsPane
+import com.kaiser.rivet.ui.workspace.ProjectsScreen
 import com.kaiser.rivet.ui.provider.ProviderEditor
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.provider.SettingsScreen
@@ -110,7 +111,6 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 }
             }
         }
-        var projectPickerRequest by rememberSaveable { mutableIntStateOf(0) }
         var editing by rememberSaveable { mutableStateOf(false) }
         // Panels: the left slide's state is the drawer's own; the right slide and the
         // settings sheet are booleans, so a swipe-close or a Back-close cannot disagree
@@ -206,6 +206,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         if (editing && editor.config.id.isEmpty()) editing = false
         // Stable instances so ChatScreen can skip: these only change shell state, which
         // rememberSaveable keeps across recompositions.
+        val openProjects = remember { { destination = RivetDestination.Projects } }
         val openSettings = remember { { destination = RivetDestination.Settings } }
         val openHistory = remember(coroutineScope, drawerState) {
             { coroutineScope.launch { drawerState.open() }; Unit }
@@ -228,7 +229,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
         val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open || processesOpen
-        BackHandler(terminalOpen || editing || destination == RivetDestination.Settings || modelsOpen || browserState.visible || panelOpen) {
+        BackHandler(terminalOpen || editing || destination != RivetDestination.Chat || modelsOpen || browserState.visible || panelOpen) {
             when {
                 terminalOpen -> terminalOpen = false
                 browserState.visible -> chatViewModel.browser.close()
@@ -237,7 +238,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     providersViewModel.closeEditor()
                     editing = false
                 }
-                destination == RivetDestination.Settings -> destination = RivetDestination.Chat
+                destination != RivetDestination.Chat -> destination = RivetDestination.Chat
                 processesOpen -> closeProcesses()
                 else -> closeHistory()
             }
@@ -260,7 +261,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                     viewModel = chatViewModel,
                                     profileInitial = profileInitial,
                                     onNavigate = closeHistory,
-                                    onOpenProjects = { closeSidebarThen { projectPickerRequest++ } },
+                                    onOpenProjects = { closeSidebarThen(openProjects) },
                                     onOpenTools = { closeSidebarThen(openProcesses) },
                                     onOpenBrowser = {
                                         closeSidebarThen {
@@ -285,8 +286,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                     onOpenSidebar = openHistory,
                                     onSendFeedback = sendFeedback,
                                     onAutonomyChange = requestAutonomy,
-                                    projectPickerRequest = projectPickerRequest,
-                                    onProjectPickerHandled = { projectPickerRequest = 0 })
+                                    onOpenProjects = openProjects)
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = closeProcesses) {
@@ -308,6 +308,11 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             }
                         }
                     }
+                }
+                RivetDestination.Projects -> saveableStates.SaveableStateProvider("projects") {
+                    ProjectsScreen(chatViewModel, providerIds = providerList.configs
+                        .filter { it.type != ProviderType.Local && it.type != ProviderType.ChatGptPlan }
+                        .map { it.id }, onBack = { destination = RivetDestination.Chat })
                 }
                 RivetDestination.Settings -> saveableStates.SaveableStateProvider("settings") {
                     Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {

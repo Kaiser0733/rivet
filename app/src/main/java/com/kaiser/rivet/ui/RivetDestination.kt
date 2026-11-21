@@ -1,3 +1,3 @@
 package com.kaiser.rivet.ui
 
-internal enum class RivetDestination { Chat, Settings }
+internal enum class RivetDestination { Chat, Projects, Settings }

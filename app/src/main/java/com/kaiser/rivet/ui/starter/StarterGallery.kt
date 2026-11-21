@@ -3,18 +3,12 @@ package com.kaiser.rivet.ui.starter
 import android.content.Context
 import android.os.Build
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
-import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListScope
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ListItem
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -34,9 +28,14 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 
-@OptIn(ExperimentalMaterial3Api::class)
+internal data class StarterListing(
+    val rows: List<StarterOption>,
+    val emptyMessage: String,
+    val footnote: String?,
+)
+
 @Composable
-internal fun StarterGallery(providerIds: List<String>, onDismiss: () -> Unit, onPick: (StarterOption) -> Unit) {
+internal fun rememberStarterListing(providerIds: List<String>): StarterListing {
     val app = LocalContext.current.applicationContext
     var bundled by remember(app) { mutableStateOf<List<StarterOption>>(emptyList()) }
     var loaded by remember(app) { mutableStateOf<List<StarterOption>>(emptyList()) }
@@ -71,44 +70,30 @@ internal fun StarterGallery(providerIds: List<String>, onDismiss: () -> Unit, on
             failed = bundled.isEmpty()
         }
     }
-    ModalBottomSheet(onDismissRequest = onDismiss,
-        sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)) {
-        Column(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
-            Text("Starters", modifier = Modifier.padding(horizontal = 24.dp),
-                style = MaterialTheme.typography.titleLarge)
-            Text("Choose a starter and an empty folder for its files.",
-                modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                style = MaterialTheme.typography.bodyMedium)
-            val rows = starterGalleryEntries(bundled, loaded)
-            if (rows.isEmpty()) {
-                Text(if (failed) "Couldn't open the starters." else "Loading starters…",
-                    modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                    style = MaterialTheme.typography.bodyMedium)
-            }
-            LazyColumn(Modifier.fillMaxWidth().heightIn(max = 520.dp)) {
-                items(rows, key = { it.starter.id }) { option ->
-                    ListItem(
-                        modifier = Modifier.clickable(role = Role.Button) { onPick(option) },
-                        headlineContent = {
-                            Text(option.starter.name, style = MaterialTheme.typography.titleSmall,
-                                color = MaterialTheme.colorScheme.onSurface)
-                        },
-                        supportingContent = { Text(option.starter.blurb) },
-                        trailingContent = {
-                            Text(starterSize(option.starter.bytes), style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        },
-                    )
-                }
-                starterFootnote(hasProviderKey)?.let { footnote ->
-                    item {
-                        Text(footnote, modifier = Modifier.padding(horizontal = 24.dp, vertical = 12.dp),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            }
+    return StarterListing(starterGalleryEntries(bundled, loaded),
+        if (failed) "Couldn't open the starters." else "Loading starters…", starterFootnote(hasProviderKey))
+}
+
+internal fun LazyListScope.starterRows(listing: StarterListing, enabled: Boolean, onPick: (StarterOption) -> Unit) {
+    if (listing.rows.isEmpty()) item {
+        Text(listing.emptyMessage, modifier = Modifier.padding(vertical = 12.dp),
+            style = MaterialTheme.typography.bodyMedium)
+    }
+    items(listing.rows, key = { "starter:${it.starter.id}" }) { option ->
+        ListItem(
+            modifier = Modifier.clickable(enabled = enabled, role = Role.Button) { onPick(option) },
+            headlineContent = { Text(option.starter.name, style = MaterialTheme.typography.titleSmall) },
+            supportingContent = { Text(option.starter.blurb) },
+            trailingContent = {
+                Text(starterSize(option.starter.bytes), style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            },
+        )
+    }
+    listing.footnote?.let { footnote ->
+        item {
+            Text(footnote, modifier = Modifier.padding(vertical = 12.dp),
+                color = MaterialTheme.colorScheme.onSurfaceVariant, style = MaterialTheme.typography.bodySmall)
         }
     }
 }

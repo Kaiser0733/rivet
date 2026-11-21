@@ -1,6 +1,5 @@
 package com.kaiser.rivet.ui.chat
 
-import android.app.Activity
 import android.graphics.BitmapFactory
 import android.content.ClipData
 import android.content.Context
@@ -11,8 +10,6 @@ import android.net.Uri
 import android.provider.Settings
 import android.os.SystemClock
 import androidx.activity.compose.BackHandler
-import androidx.activity.compose.rememberLauncherForActivityResult
-import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Spacer
@@ -149,8 +146,6 @@ import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
-import com.kaiser.rivet.starter.StarterOption
-import com.kaiser.rivet.ui.starter.StarterGallery
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
@@ -159,8 +154,7 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenSidebar: () -> Unit,
-               onOpenProjects: (() -> Unit)? = null,
-               projectPickerRequest: Int = 0, onProjectPickerHandled: () -> Unit = {},
+               onOpenProjects: () -> Unit,
                onSendFeedback: () -> Unit = {}, onAutonomyChange: (AutonomyMode) -> Unit = {}) {
     val state by chatViewModel.uiState.collectAsState()
     val skillCatalog by chatViewModel.skillCatalog.collectAsState()
@@ -178,11 +172,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             onDismiss = { replayTurn = null },
         )
     }
-    var showStarterGallery by rememberSaveable { mutableStateOf(false) }
     LaunchedEffect(state.ready, state.currentSessionId, state.projectIdentity, state.projectLoading, providers.activeId) {
         if (providers.activeId != null) chatViewModel.openPendingStarter()
     }
-    var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
     var modelSheetVisible by remember { mutableStateOf(false) }
     val context = LocalContext.current
     var usageLimitDialogVisible by remember { mutableStateOf(false) }
@@ -191,83 +183,6 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     var confirmDiscard by remember { mutableStateOf<String?>(null) }
     var selectedWorkerId by remember { mutableStateOf<String?>(null) }
     val selectedWorker = subagents.firstOrNull { it.id == selectedWorkerId } ?: workerSheet.worker
-    var pickingStarter by rememberSaveable { mutableStateOf(false) }
-    val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val starterPick = pickingStarter
-        pickingStarter = false
-        val starter = chatViewModel.takePendingStarter()
-        val uri = result.data?.data
-        if (result.resultCode == Activity.RESULT_OK && uri != null) {
-            val flags = result.data?.flags ?: 0
-            if (starterPick) {
-                if (starter != null) chatViewModel.installStarter(uri, flags, starter)
-                else chatViewModel.starterPickerInterrupted()
-            } else if (state.currentSessionWorkspaceId != uri.toString() && state.messages.isNotEmpty()) {
-                pendingProject = uri to flags
-            } else {
-                chatViewModel.selectProject(uri, flags)
-            }
-        } else if (starterPick) {
-            showStarterGallery = true
-        }
-    }
-    fun launchProjectPicker(starter: StarterOption?) {
-        if (!state.ready || state.streaming || state.projectLoading) return
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-        chatViewModel.setPendingStarter(starter)
-        pickingStarter = starter != null
-        try {
-            picker.launch(intent)
-        } catch (failure: RuntimeException) {
-            if (failure !is android.content.ActivityNotFoundException && failure !is SecurityException) throw failure
-            chatViewModel.takePendingStarter()
-            pickingStarter = false
-            if (starter == null) chatViewModel.projectPickerUnavailable()
-            else chatViewModel.starterPickerInterrupted()
-        }
-    }
-    fun chooseProject() = launchProjectPicker(starter = null)
-    LaunchedEffect(projectPickerRequest) {
-        if (projectPickerRequest != 0) {
-            onProjectPickerHandled()
-            chooseProject()
-        }
-    }
-    if (showStarterGallery) {
-        StarterGallery(
-            providerIds = providers.configs.filter { it.type != ProviderType.Local && it.type != ProviderType.ChatGptPlan }
-                .map { it.id },
-            onDismiss = { showStarterGallery = false },
-            onPick = { option ->
-                showStarterGallery = false
-                launchProjectPicker(option)
-            },
-        )
-    }
-    state.starterError?.let { message ->
-        AlertDialog(onDismissRequest = chatViewModel::dismissStarterError,
-            title = { Text("Couldn't install starter") },
-            text = { Text(message) },
-            confirmButton = { TextButton(onClick = {
-                chatViewModel.dismissStarterError()
-                showStarterGallery = true
-            }) { Text("Choose again") } },
-            dismissButton = { TextButton(onClick = chatViewModel::dismissStarterError) { Text("Close") } })
-    }
-
-    pendingProject?.let { selected ->
-        AlertDialog(onDismissRequest = { pendingProject = null },
-            title = { Text("Start a new conversation?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
-            text = { Text("This conversation is linked to another project. Start a new conversation for the folder you chose?",
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
-            confirmButton = { RivetOutlinedButton(onClick = {
-                pendingProject = null
-                chatViewModel.selectProject(selected.first, selected.second)
-            }) { Text("Start new") } },
-            dismissButton = { TextButton(onClick = { pendingProject = null }) { Text("Cancel") } })
-    }
     if (confirmUndo) {
         AlertDialog(onDismissRequest = { confirmUndo = false },
             title = { Text("Undo Rivet's last changes?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
@@ -350,7 +265,6 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         )
     }
 
-    val openProjects = onOpenProjects ?: ::chooseProject
     val canStartChat = state.ready && !state.projectLoading && !state.streaming &&
         !state.undoing && !state.recoveringProjectChanges
 
@@ -426,7 +340,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             onSendFeedback = onSendFeedback,
             onAutonomyChange = onAutonomyChange,
             folderName = state.projectName,
-            onOpenProjects = openProjects,
+            onOpenProjects = onOpenProjects,
             selector = modelSelector,
             onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
             modifier = Modifier.fillMaxWidth())
