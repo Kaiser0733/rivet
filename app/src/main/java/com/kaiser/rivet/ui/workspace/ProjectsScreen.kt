@@ -48,20 +48,16 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.ChatViewModel
-import com.kaiser.rivet.starter.StarterOption
 import com.kaiser.rivet.ui.RivetPageHeader
-import com.kaiser.rivet.ui.starter.rememberStarterListing
-import com.kaiser.rivet.ui.starter.starterRows
 import com.kaiser.rivet.ui.workspaceFolderPath
 import kotlinx.coroutines.flow.first
 
 @Composable
-internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>, onBack: () -> Unit) {
+internal fun ProjectsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val enabled = state.ready && !state.streaming && !state.projectLoading &&
         !state.undoing && !state.recoveringProjectChanges
-    var pickingStarter by rememberSaveable { mutableStateOf(false) }
     var pendingProject by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingFlags by rememberSaveable { mutableIntStateOf(0) }
     var opening by rememberSaveable { mutableStateOf(false) }
@@ -79,37 +75,18 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>,
         }
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val starterPick = pickingStarter
-        pickingStarter = false
-        val starter = viewModel.takePendingStarter()
         val uri = result.data?.data
         if (result.resultCode == Activity.RESULT_OK && uri != null) {
-            val flags = result.data?.flags ?: 0
-            if (starterPick) {
-                if (starter != null) {
-                    opening = true
-                    viewModel.installStarter(uri, flags, starter)
-                } else viewModel.starterPickerInterrupted()
-            } else {
-                acceptFolder(uri, flags)
-            }
+            acceptFolder(uri, result.data?.flags ?: 0)
         }
     }
-    fun chooseProject(starter: StarterOption? = null, initial: Uri? = null) {
+    fun chooseProject(initial: Uri? = null) {
         if (!enabled) return
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-        if (initial != null) intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial)
-        viewModel.setPendingStarter(starter)
-        pickingStarter = starter != null
         try {
-            picker.launch(intent)
+            picker.launch(projectFolderPickerIntent(initial))
         } catch (failure: RuntimeException) {
             if (failure !is ActivityNotFoundException && failure !is SecurityException) throw failure
-            viewModel.takePendingStarter()
-            pickingStarter = false
-            if (starter == null) viewModel.projectPickerUnavailable() else viewModel.starterPickerInterrupted()
+            viewModel.projectPickerUnavailable()
         }
     }
     fun openRecent(identity: String) {
@@ -132,7 +109,6 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>,
         }
     }
     BackHandler(enabled = pendingProject != null) { pendingProject = null }
-    val starterListing = rememberStarterListing(providerIds)
     val recent = state.sessions.sortedByDescending { it.updatedAt }
         .mapNotNull { it.workspaceId }.distinct().filterNot { it == state.projectIdentity }
 
@@ -174,16 +150,6 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>,
                                 detail = path, onClick = { openRecent(identity) })
                         }
                     }
-                    item {
-                        FolderHeading("Starters")
-                        Text("Choose a starter and an empty folder for its files.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodyMedium)
-                        state.starterError?.let {
-                            Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                    starterRows(starterListing, enabled) { chooseProject(starter = it) }
                 }
             }
         }
@@ -200,3 +166,11 @@ private fun FolderHeading(title: String) {
 private fun FolderRow(title: String, iconRes: Int, enabled: Boolean, detail: String? = null, onClick: () -> Unit) {
     UtilityRow(iconRes, title, detail.orEmpty(), enabled = enabled, onClick = onClick)
 }
+
+internal fun projectFolderPickerIntent(initial: Uri? = null): Intent =
+    Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
+    ).apply {
+        if (initial != null) putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial)
+    }

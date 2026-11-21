@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.ui.starter.HomeStarters
 import android.graphics.BitmapFactory
 import android.content.ClipData
 import android.content.Context
@@ -291,8 +292,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 state.projectName == null && !state.streaming -> "Choose a working folder to start."
                 else -> null
             }
-            if (state.messages.isEmpty() && !state.streaming && state.error == null &&
-                state.notice == null && !state.interruptedTurn && state.goalLine == null) {
+            val emptyConversation = state.messages.isEmpty() && !state.streaming && state.error == null &&
+                state.notice == null && !state.interruptedTurn && state.goalLine == null
+            if (emptyConversation) {
                 Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
                     Text(setupNotice ?: "What do you want to work on?",
                         modifier = Modifier.padding(horizontal = 24.dp),
@@ -333,6 +335,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     { ProtectedControls { ModelSelector(providersViewModel) { modelSheetVisible = true } } }
                 } else null
             val sharedContent by chatViewModel.sharedContent.collectAsState()
+            if (emptyConversation) HomeStarters(chatViewModel, canStartChat, state.starterError)
             InputBar(streaming = state.streaming,
                 sharedDraft = sharedContent[state.currentSessionId],
                 phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },

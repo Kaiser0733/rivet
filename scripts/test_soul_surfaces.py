@@ -56,7 +56,6 @@ class SoulSurfaceTest(unittest.TestCase):
             ("local/ModelsScreen.kt", 'private fun DeviceCard(', "formatParams(ceiling.maxParamsB)"),
             ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', "Available in the Android share sheet"),
             ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', "Rivet asks before each capture. After you allow it, tap Capture now in the notification."),
-            ("workspace/ProjectsScreen.kt", 'FolderHeading("Starters")', "Choose a starter and an empty folder for its files."),
             ("browser/BrowserScreen.kt", 'Text(', "Enter a web address to get started."),
         )
         for path, anchor, expected in cases:

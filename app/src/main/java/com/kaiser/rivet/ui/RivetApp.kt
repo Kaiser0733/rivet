@@ -346,9 +346,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 )
                             }
                             RivetDestination.Projects -> saveableStates.SaveableStateProvider("projects") {
-                                ProjectsScreen(chatViewModel, providerIds = providerList.configs
-                                    .filter { it.type != ProviderType.Local && it.type != ProviderType.ChatGptPlan }
-                                    .map { it.id }, onBack = { destination = RivetDestination.Chat })
+                                ProjectsScreen(chatViewModel, onBack = { destination = RivetDestination.Chat })
                             }
                             RivetDestination.Models -> saveableStates.SaveableStateProvider("models") {
                                 Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {

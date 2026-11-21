@@ -51,19 +51,24 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertIn('group = "Skills"', panel)
         self.assertIn("skill.description", panel)
 
-    def test_both_working_folder_controls_open_projects_and_keep_starters_there(self):
+    def test_folder_controls_open_projects_and_starters_sit_above_home_composer(self):
         app = (UI / "RivetApp.kt").read_text()
         self.assertIn("RivetDestination.Projects ->", app)
         self.assertGreaterEqual(app.count("onOpenProjects ="), 2)
         projects = (UI / "workspace/ProjectsScreen.kt").read_text()
-        for phrase in ("Open another folder", "Recent folders", "Starters"):
+        for phrase in ("Open another folder", "Recent folders"):
             self.assertIn(f'"{phrase}"', projects)
         self.assertIn("Intent.ACTION_OPEN_DOCUMENT_TREE", projects)
         self.assertIn("viewModel.selectProject(uri, flags)", projects)
-        self.assertIn("viewModel.installStarter(uri, flags, starter)", projects)
+        self.assertNotIn("installStarter(", projects)
         chat = (UI / "chat/ChatScreen.kt").read_text()
-        self.assertNotIn("ACTION_OPEN_DOCUMENT_TREE", chat)
-        self.assertNotIn("StarterGallery(", chat)
+        self.assertIn("if (emptyConversation) HomeStarters", chat)
+        self.assertLess(chat.index("if (emptyConversation) HomeStarters"), chat.index("InputBar(streaming"))
+        starters = (UI / "starter/StarterGallery.kt").read_text()
+        self.assertIn("picker.launch(projectFolderPickerIntent())", starters)
+        self.assertIn("viewModel.installStarter(uri, result.data?.flags ?: 0, starter)", starters)
+        for starter_id in ("voxel-world", "open-city", "my-ai", "idea-lab"):
+            self.assertIn(f'"{starter_id}" to R.drawable.ic_starter_', starters)
 
     def test_tools_is_a_running_first_full_screen_and_terminal_returns_to_tools(self):
         app = (UI / "RivetApp.kt").read_text()
