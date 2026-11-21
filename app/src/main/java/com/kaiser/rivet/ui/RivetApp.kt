@@ -218,11 +218,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 RivetChatBackground()
                                 ChatScreen(chatViewModel, providersViewModel,
                                     onOpenSettings = openSettings,
-                                    onOpenHistory = openHistory,
-                                    onOpenProcesses = openProcesses,
-                                    onStartOffline = openModels,
-                                    onOpenBrowser = { chatViewModel.browser.userOpen() },
-                                    onSendFeedback = sendFeedback)
+                                    onOpenSidebar = openHistory)
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = closeProcesses) {

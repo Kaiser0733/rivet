@@ -298,6 +298,7 @@ fun SettingsScreen(
                     onEdit = { id -> onEditProvider(id) },
                     onDelete = { provider -> deleteTarget = provider },
                     onNewProvider = onNewProvider,
+                    setup = { ProviderSetup(viewModel, onOpenModels, showActions = active == null) },
                 )
                 SettingsSection.Appearance -> AppearanceDetail(
                     themeMode = themeMode,
@@ -824,6 +825,7 @@ private fun ProviderDetail(
     onEdit: (String) -> Unit,
     onDelete: (ProviderConfig) -> Unit,
     onNewProvider: (ProviderType) -> Unit,
+    setup: @Composable () -> Unit,
 ) {
     val headingColor = MaterialTheme.colorScheme.onSurfaceVariant
     val presets = listOf(
@@ -865,6 +867,7 @@ private fun ProviderDetail(
                     onEdit = { onEdit(active.id) }, onDelete = { onDelete(active) })
             }
         }
+        item(key = "provider-setup") { setup() }
         if (saved.isNotEmpty()) {
             item { SectionHeading("Other saved providers", Modifier.padding(top = 16.dp, bottom = 4.dp), color = headingColor) }
             items(saved, key = { it.id }) { provider ->

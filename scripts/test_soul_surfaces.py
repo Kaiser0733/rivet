@@ -13,8 +13,6 @@ class SoulSurfaceTest(unittest.TestCase):
                    ET.parse(MAIN / "res/values/strings.xml").getroot()}
         self.assertEqual(strings.get("open_tools"), "Tools")
         self.assertEqual(strings.get("close_tools"), "Close tools")
-        chat = (UI / "chat/ChatScreen.kt").read_text()
-        self.assertIn("ic_processes), stringResource(R.string.open_tools)", chat)
         shell = (UI / "RivetApp.kt").read_text()
         self.assertIn("onClose = closeProcesses", shell.split("RightSlidePanel(open = processesOpen")[1])
         self.assertIn("processesOpen -> closeProcesses()", shell)
@@ -23,23 +21,11 @@ class SoulSurfaceTest(unittest.TestCase):
         self.assertIn("IconButton(onClick = onClose, modifier = Modifier.size(48.dp))", tools)
         self.assertIn("onClose = onClose", tools.split("ProcessesContent(processes, modifier, null")[1])
 
-    def test_chat_setup_copy_follows_its_existing_state_and_action(self):
+    def test_chat_setup_copy_still_distinguishes_missing_models_and_folders(self):
         chat = (UI / "chat/ChatScreen.kt").read_text()
-        for old_state, mark, phrases in (
-            ("if (providers.configs.isEmpty()) {\n                    EmptyState", "Provider",
-             ("Choose a model for this chat.", "Open Settings", "Start offline")),
-            ("} else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty())", "Project",
-             ("Rivet lost access to this folder.", "Select the same folder to continue this chat.", "Choose folder again")),
-            ("} else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading)", "Project",
-             ("Which folder do you want to work in?", "Choose a folder", "starterAction")),
-            ("val ready = readyEntryPoints(projectBound", "Ready",
-             ("Tell Rivet what you want to change.", "Your Agent settings control when Rivet asks before making changes.")),
-        ):
-            with self.subTest(state=mark, heading=phrases[0]):
-                branch = chat.split(old_state, 1)[1].split("} else if", 1)[0]
-                self.assertIn(f"RivetDoodle.{mark}", branch)
-                for phrase in phrases:
-                    self.assertIn(phrase, branch)
+        self.assertIn('providers.configs.isEmpty() -> "Connect a model in Settings to start."', chat)
+        self.assertIn('state.projectName == null && !state.streaming -> "Choose a working folder to start."', chat)
+        self.assertIn('projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE', chat)
 
     def test_checkpoint_summary_appears_once_with_a_storage_kind(self):
         tools = (UI / "processes/ProcessesScreen.kt").read_text()

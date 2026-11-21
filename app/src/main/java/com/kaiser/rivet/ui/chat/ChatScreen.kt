@@ -15,11 +15,9 @@ import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
-import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.layout.Column
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.heightIn
@@ -58,10 +56,8 @@ import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
-import androidx.compose.material3.VerticalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.AssistChip
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
@@ -80,7 +76,6 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
-import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
@@ -149,22 +144,11 @@ import com.kaiser.rivet.chat.projectBindingState
 import com.kaiser.rivet.ui.FoldReveal
 import com.kaiser.rivet.ui.foldOutcomeProgress
 import com.kaiser.rivet.ui.foldChevronRotation
-import com.kaiser.rivet.ui.RivetDoodle
-import com.kaiser.rivet.ui.RivetDoodleMark
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
-import com.kaiser.rivet.provider.resolveSignInClientId
-import com.kaiser.rivet.provider.runSignIn
-import com.kaiser.rivet.provider.ChatGptSignInSession
-import com.kaiser.rivet.provider.ChatGptSignInResult
-import com.kaiser.rivet.storage.HostIdStore
-import com.kaiser.rivet.ui.browser.BrowserWatchCard
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
-import com.kaiser.rivet.ui.history.HistoryPane
-import com.kaiser.rivet.runtime.ManagedProcessStatus
 import com.kaiser.rivet.starter.StarterOption
-import com.kaiser.rivet.ui.starter.STARTER_CHIP_LABEL
 import com.kaiser.rivet.ui.starter.StarterGallery
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
@@ -173,20 +157,13 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
-               onOpenSettings: () -> Unit, onOpenHistory: () -> Unit, onOpenProcesses: () -> Unit,
-               onStartOffline: () -> Unit = {}, onOpenBrowser: () -> Unit = {},
-               onSendFeedback: () -> Unit = {}) {
-    val landscape = showsHistoryPane(LocalConfiguration.current.orientation)
+               onOpenSettings: () -> Unit, onOpenSidebar: () -> Unit,
+               onOpenProjects: (() -> Unit)? = null) {
     val state by chatViewModel.uiState.collectAsState()
-    val browserState by chatViewModel.browser.state.collectAsState()
     val userSkills by chatViewModel.userSkills.collectAsState()
     val subagents by chatViewModel.subagents.collectAsState()
     val workerSheet by chatViewModel.workerSheet.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
-    val processItems by chatViewModel.managedProcesses.processes.collectAsState()
-    val hasActiveProcesses = processItems.any { it.status in setOf(
-        ManagedProcessStatus.Starting, ManagedProcessStatus.Running, ManagedProcessStatus.Stopping,
-    ) }
     val projectBinding = projectBindingState(state.currentSessionId, state.currentSessionWorkspaceId,
         state.projectIdentity, state.projectLoading)
     val wrongProject = projectBinding == ProjectBindingState.Mismatch
@@ -202,34 +179,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     LaunchedEffect(state.ready, state.currentSessionId, state.projectIdentity, state.projectLoading, providers.activeId) {
         if (providers.activeId != null) chatViewModel.openPendingStarter()
     }
-    val offerStarters = state.ready && state.projectName == null && state.messages.isEmpty() && !state.projectLoading
     var pendingProject by remember { mutableStateOf<Pair<Uri, Int>?>(null) }
-    var showKeyInput by remember { mutableStateOf(false) }
-    var keyInput by remember { mutableStateOf("") }
-    var keyError by remember { mutableStateOf<String?>(null) }
-    val onIHaveAKey: () -> Unit = { showKeyInput = true }
-    var showStartFree by remember { mutableStateOf(false) }
     var modelSheetVisible by remember { mutableStateOf(false) }
-    var feedbackMenu by remember { mutableStateOf(false) }
-    val planNotGrantedMsg = stringResource(R.string.chatgpt_plan_not_granted)
-    val networkMsg = stringResource(R.string.chatgpt_signin_network)
-    val failedMsg = stringResource(R.string.chatgpt_signin_failed)
-    val expiredMsg = stringResource(R.string.chatgpt_signin_expired)
-    val timeoutMsg = stringResource(R.string.chatgpt_signin_timeout)
-    val chatScope = rememberCoroutineScope()
     val context = LocalContext.current
-    var showChatGptSignInError by remember { mutableStateOf<String?>(null) }
-    var showChatGptIntro by remember { mutableStateOf(false) }
-    // In-flight sign-in handle: lets a re-tap cancel the previous attempt
-    // instead of orphaning its loopback listener.
-    var chatGptSession by remember { mutableStateOf<ChatGptSignInSession?>(null) }
-    // Cancel sign-in on system back and if the composable is torn down
-    // before the coroutine clears the reference.
-    BackHandler(enabled = chatGptSession != null) { chatGptSession?.cancel() }
-    DisposableEffect(chatGptSession) {
-        val session = chatGptSession
-        onDispose { session?.cancel() }
-    }
     var usageLimitDialogVisible by remember { mutableStateOf(false) }
     var usageLimitShownFor by remember { mutableStateOf<String?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
@@ -342,106 +294,6 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             }) { Text("Discard pending changes") } },
             dismissButton = { TextButton(onClick = { confirmDiscard = null }) { Text("Cancel") } })
     }
-    if (showStartFree) {
-        val context = LocalContext.current
-        AlertDialog(onDismissRequest = { showStartFree = false },
-            title = { Text(stringResource(R.string.start_free_title),
-                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
-            text = { Text(stringResource(R.string.start_free_body),
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
-            confirmButton = {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    TextButton(onClick = {
-                        try {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://openrouter.ai"))
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        } catch (_: Exception) { }
-                    }) { Text(stringResource(R.string.open_openrouter)) }
-                    RivetOutlinedButton(onClick = { showStartFree = false; onIHaveAKey() }) {
-                        Text(stringResource(R.string.i_have_a_key))
-                    }
-                }
-            },
-            dismissButton = { TextButton(onClick = { showStartFree = false }) {
-                Text(stringResource(R.string.close))
-            } })
-    }
-    if (showKeyInput) {
-        val blankKeyMessage = stringResource(R.string.free_key_blank)
-        AlertDialog(onDismissRequest = { showKeyInput = false; keyInput = ""; keyError = null },
-            title = { Text(stringResource(R.string.free_key_title),
-                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = keyInput,
-                        onValueChange = { keyInput = it; keyError = null },
-                        label = { Text(stringResource(R.string.free_key_label)) },
-                        placeholder = { Text(stringResource(R.string.free_key_hint)) },
-                        singleLine = true,
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
-                            autoCorrect = false,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    keyError?.let { message ->
-                        Text(message, color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            },
-            confirmButton = {
-                RivetOutlinedButton(onClick = {
-                    val trimmed = keyInput.trim()
-                    if (trimmed.isBlank()) {
-                        keyError = blankKeyMessage
-                        return@RivetOutlinedButton
-                    }
-                    providersViewModel.saveFreeProvider(
-                        trimmed,
-                        onSaved = {
-                            showKeyInput = false
-                            keyInput = ""
-                            keyError = null
-                        },
-                        onError = { message -> keyError = message },
-                    )
-                }) { Text(stringResource(R.string.provider_save)) }
-            },
-            dismissButton = { TextButton(onClick = { showKeyInput = false; keyInput = ""; keyError = null }) {
-                Text(stringResource(R.string.provider_cancel))
-            } })
-    }
-    if (showChatGptSignInError != null) {
-        AlertDialog(
-            onDismissRequest = { showChatGptSignInError = null },
-            text = { Text(showChatGptSignInError.orEmpty()) },
-            confirmButton = {
-                TextButton(onClick = { showChatGptSignInError = null }) {
-                    Text(stringResource(R.string.close))
-                }
-            },
-        )
-    }
-    if (showChatGptIntro) {
-        AlertDialog(
-            onDismissRequest = { showChatGptIntro = false },
-            title = { Text(stringResource(R.string.chatgpt_plan_intro_title),
-                style = MaterialTheme.typography.titleMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
-            text = { Text(stringResource(R.string.chatgpt_plan_intro_body),
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
-            confirmButton = {
-                RivetOutlinedButton(onClick = { showChatGptIntro = false }) {
-                    Text(stringResource(R.string.got_it))
-                }
-            },
-        )
-    }
     val activeProvider = providers.configs.firstOrNull { it.id == providers.activeId }
     val isChatGptPlanActive = activeProvider?.type == ProviderType.ChatGptPlan
     LaunchedEffect(state.error, activeProvider?.id) {
@@ -489,318 +341,84 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         )
     }
 
-    BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        val sidebarWidth = landscapeSidebarWidth(maxWidth.value).dp
-        Row(Modifier.fillMaxSize()) {
-            if (landscape) {
-                HistoryPane(chatViewModel, Modifier.width(sidebarWidth).fillMaxSize())
-                VerticalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.28f))
+    val openProjects = onOpenProjects ?: ::chooseProject
+    val canStartChat = state.ready && !state.projectLoading && !state.streaming &&
+        !state.undoing && !state.recoveringProjectChanges
+
+    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+        ChatHeader(
+            title = state.currentSessionTitle ?: state.projectName ?: "Rivet",
+            canStartChat = canStartChat,
+            onOpenSidebar = onOpenSidebar,
+            onNewChat = chatViewModel::newSession,
+        )
+
+        val setupNotice = when {
+            state.projectLoading -> "Opening your project…"
+            projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE
+            wrongProject -> PROJECT_BINDING_MISMATCH_MESSAGE
+            state.projectError != null -> state.projectError
+            providers.configs.isEmpty() -> "Connect a model in Settings to start."
+            state.projectName == null && !state.streaming -> "Choose a working folder to start."
+            else -> null
+        }
+        if (state.messages.isEmpty() && !state.streaming && state.error == null &&
+            state.notice == null && !state.interruptedTurn && state.goalLine == null) {
+            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                Text(setupNotice ?: "What do you want to work on?",
+                    modifier = Modifier.padding(horizontal = 24.dp),
+                    style = MaterialTheme.typography.titleLarge,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    textAlign = TextAlign.Center)
             }
-            // Keep one Chat subtree so the composer and scroll state survive rotation.
-            Column(Modifier.weight(1f).fillMaxSize()) {
-                // Header row: sessions trigger + title on left, subagent slot + actions on right
-                Row(Modifier.fillMaxWidth()
-                    .padding(horizontal = 8.dp, vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    if (landscape) {
-                        Spacer(Modifier.width(96.dp))
-                    } else {
-                        // Sessions trigger (opens left drawer)
-                        IconButton(onClick = onOpenHistory, modifier = Modifier.size(48.dp),
-                            enabled = state.ready && !state.projectLoading &&
-                                !state.undoing && !state.recoveringProjectChanges) {
-                            Icon(painterResource(R.drawable.ic_history), "Conversation history",
-                                tint = MaterialTheme.colorScheme.onBackground)
-                        }
-                    }
-                    // Title: session title or project name (tappable to choose project).
-                    // The subagent chip overlays the title's trailing edge so the action
-                    // icons below keep their positions when workers appear or finish.
-                    val titleText = state.currentSessionTitle ?: state.projectName ?: "Rivet"
-                    val canChooseProject = providers.configs.isNotEmpty() && state.ready &&
-                        !state.streaming && !state.projectLoading && !state.undoing &&
-                        !state.recoveringProjectChanges
-                    Box(Modifier.weight(1f)) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .padding(start = 8.dp, end = chatTitleEndPaddingDp(subagents.size).dp)
-                                .clickable(enabled = canChooseProject, onClick = ::chooseProject),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Text(titleText,
-                                style = MaterialTheme.typography.titleMedium,
-                                color = MaterialTheme.colorScheme.onBackground,
-                                maxLines = 1,
-                                overflow = TextOverflow.Ellipsis)
-                            Icon(
-                                painterResource(R.drawable.ic_chevron_down),
-                                contentDescription = null,
-                                modifier = Modifier.size(18.dp).padding(start = 2.dp),
-                                tint = if (canChooseProject) MaterialTheme.colorScheme.onBackground
-                                    else MaterialTheme.colorScheme.onBackground.copy(alpha = 0.38f))
-                        }
-                        SubagentChip(
-                            workers = subagents,
-                            onWorkerClick = { worker ->
-                                selectedWorkerId = worker.id
-                                chatViewModel.openWorker(worker.id)
-                            },
-                            onChipClick = { worker ->
-                                selectedWorkerId = worker.id
-                                chatViewModel.openWorker(worker.id)
-                            },
-                            modifier = Modifier.align(Alignment.CenterEnd),
-                        )
-                    }
-                    // Browser action
-                    IconButton(onClick = onOpenBrowser, modifier = Modifier.size(48.dp)) {
-                        Icon(painterResource(R.drawable.ic_browser), "Browser",
-                            tint = MaterialTheme.colorScheme.onBackground)
-                    }
-                    // Tools action
-                    IconButton(onClick = onOpenProcesses, modifier = Modifier.size(48.dp)) {
-                        Icon(painterResource(R.drawable.ic_processes), stringResource(R.string.open_tools),
-                            tint = if (hasActiveProcesses) MaterialTheme.colorScheme.primary
-                                else MaterialTheme.colorScheme.onBackground)
-                    }
-                    // Settings action
-                    IconButton(onClick = onOpenSettings, modifier = Modifier.size(48.dp)) {
-                        Icon(painterResource(R.drawable.ic_settings), stringResource(R.string.settings),
-                            tint = MaterialTheme.colorScheme.onBackground)
-                    }
-                    Box {
-                        IconButton(onClick = { feedbackMenu = true }, modifier = Modifier.size(48.dp)) {
-                            Icon(painterResource(R.drawable.ic_more), "More",
-                                tint = MaterialTheme.colorScheme.onBackground)
-                        }
-                        DropdownMenu(expanded = feedbackMenu,
-                            onDismissRequest = { feedbackMenu = false }) {
-                            DropdownMenuItem(text = { Text(CHOOSE_DIFFERENT_PROJECT_LABEL) },
-                                enabled = canChooseProject, onClick = {
-                                    feedbackMenu = false
-                                    chooseProject()
-                                })
-                            DropdownMenuItem(text = { Text(STARTER_CHIP_LABEL) },
-                                enabled = canChooseProject, onClick = {
-                                    feedbackMenu = false
-                                    showStarterGallery = true
-                                })
-                            DropdownMenuItem(text = { Text("Send feedback") }, onClick = {
-                                feedbackMenu = false
-                                onSendFeedback()
-                            })
-                        }
-                    }
-                    // New session action
-                    IconButton(onClick = chatViewModel::newSession, modifier = Modifier.size(48.dp),
-                        enabled = state.ready && !state.projectLoading && !state.streaming &&
-                            !state.undoing && !state.recoveringProjectChanges) {
-                        Icon(painterResource(R.drawable.ic_add),
-                            stringResource(R.string.new_conversation),
-                            tint = MaterialTheme.colorScheme.onBackground)
-                    }
-                }
-                if (providers.configs.isNotEmpty()) {
-                    if (isChatGptPlanActive) {
-                        Row(
-                            Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 2.dp),
-                            verticalAlignment = Alignment.CenterVertically,
-                            horizontalArrangement = Arrangement.spacedBy(8.dp),
-                        ) {
-                            Text(
-                                stringResource(R.string.using_chatgpt_plan),
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                style = MaterialTheme.typography.bodySmall,
-                            )
-                            TextButton(onClick = {
-                                try {
-                                    context.startActivity(
-                                        Intent(Intent.ACTION_VIEW, Uri.parse("https://chatgpt.com/settings/usage"))
-                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                    )
-                                } catch (_: Exception) { }
-                            }) {
-                                Text(stringResource(R.string.manage_usage))
-                            }
-                        }
-                    }
-                }
-                HorizontalDivider(Modifier.fillMaxWidth()
-                    .align(Alignment.CenterHorizontally).padding(top = 2.dp),
-                    color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.23f))
-                if (com.kaiser.rivet.browser.BrowserDrivingPolicy.cardVisible(
-                        browserState.agentRunActive, browserState.agentVisualActive,
-                        browserState.watchVisible, browserState.visible)) {
-                    BrowserWatchCard(browserState, onWatch = { chatViewModel.browser.watch() })
-                }
-                if (state.projectError != null && projectBinding != ProjectBindingState.AccessLost &&
-                    providers.configs.isNotEmpty() && !(state.projectName == null && state.messages.isEmpty())) {
-                    Row(Modifier.fillMaxWidth()
-                        .padding(horizontal = 16.dp),
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Text(state.projectError.orEmpty(), Modifier.weight(1f), color = MaterialTheme.colorScheme.error)
-                        if (providers.configs.isNotEmpty() &&
-                            (state.projectName != null || state.messages.isNotEmpty() || state.projectError != null))
-                            TextButton(onClick = ::chooseProject) { Text("Choose again") }
-                    }
-                }
-                if (projectBinding == ProjectBindingState.AccessLost && providers.configs.isNotEmpty() && state.messages.isNotEmpty()) {
-                    Row(Modifier.fillMaxWidth()
-                        .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(PROJECT_ACCESS_LOST_MESSAGE, Modifier.weight(1f),
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        TextButton(onClick = ::chooseProject) { Text("Choose folder again") }
-                    }
-                }
-                if (wrongProject && state.projectName != null && providers.configs.isNotEmpty()) {
-                    Column(Modifier.fillMaxWidth()
-                        .padding(horizontal = 16.dp)) {
-                        Text(PROJECT_BINDING_MISMATCH_MESSAGE, color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Row {
-                            TextButton(onClick = ::chooseProject) { Text("Choose its project") }
-                            TextButton(onClick = chatViewModel::newSession) { Text("Start new conversation") }
-                        }
-                    }
-                }
-                if (providers.configs.isEmpty()) {
-                    EmptyState(RivetDoodle.Provider, "Choose a model for this chat.",
-                        "Add a provider, use ChatGPT, or run a model on this phone. Then choose a project.",
-                        "Open Settings", onOpenSettings, Modifier.weight(1f),
-                        secondaryAction = stringResource(R.string.start_free),
-                        onSecondaryAction = { showStartFree = true },
-                        tertiaryAction = stringResource(R.string.continue_with_chatgpt),
-                        offlineAction = "Start offline",
-                        onOfflineAction = onStartOffline,
-                        starterAction = if (offerStarters) ({ showStarterGallery = true }) else null,
-                        onTertiaryAction = {
-                            // Cancel any in-flight attempt first: no orphaned
-                            // loopback listeners from repeated taps.
-                            chatGptSession?.cancel()
-                            chatScope.launch {
-                                val session = ChatGptSignInSession()
-                                chatGptSession = session
-                                try {
-                                    showChatGptSignInError = null
-                                    val hostIds = HostIdStore(context)
-                                    val result = runSignIn(
-                                        hostId = hostIds.getOrCreateHostId(),
-                                        onAuthorizeUrl = { url ->
-                                            try {
-                                                context.startActivity(
-                                                    Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                                        .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK),
-                                                )
-                                            } catch (_: Exception) { }
-                                        },
-                                        clientId = resolveSignInClientId(
-                                            bundleClientId = null,
-                                            pendingClientId = hostIds.pendingClientId(),
-                                        ),
-                                        session = session,
-                                        hostIds = hostIds,
-                                    )
-                                    when (result) {
-                                        is ChatGptSignInResult.Success -> {
-                                            providersViewModel.saveChatGptPlanProvider(
-                                                result.bundle,
-                                                onSaved = {
-                                                    if (providersViewModel.shouldShowChatGptPlanIntro()) {
-                                                        providersViewModel.markChatGptPlanIntroSeen()
-                                                        showChatGptIntro = true
-                                                    }
-                                                },
-                                                onError = { msg -> showChatGptSignInError = msg },
-                                            )
-                                        }
-                                        ChatGptSignInResult.UserCancelled -> { }
-                                        ChatGptSignInResult.PlanNotGranted -> showChatGptSignInError = planNotGrantedMsg
-                                        is ChatGptSignInResult.NetworkError -> showChatGptSignInError = networkMsg
-                                        ChatGptSignInResult.InvalidCallback -> showChatGptSignInError = failedMsg
-                                        ChatGptSignInResult.NeedsReauth -> showChatGptSignInError = expiredMsg
-                                        ChatGptSignInResult.TimedOut -> showChatGptSignInError = timeoutMsg
-                                        is ChatGptSignInResult.ServerRejected ->
-                                            showChatGptSignInError = context.getString(
-                                                R.string.chatgpt_signin_server_error, result.code)
-                                    }
-                                } finally {
-                                    if (chatGptSession === session) chatGptSession = null
-                                }
-                            }
-                        })
-                } else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty()) {
-                    EmptyState(RivetDoodle.Project, "Rivet lost access to this folder.",
-                        "Select the same folder to continue this chat.",
-                        "Choose folder again", ::chooseProject, Modifier.weight(1f))
-                } else if (state.projectName == null && state.projectError != null && state.messages.isEmpty()) {
-                    EmptyState(RivetDoodle.Project, "Rivet couldn't open that project.",
-                        "Choose the folder again to continue.",
-                        "Choose project again", ::chooseProject, Modifier.weight(1f))
-                } else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading) {
-                    EmptyState(RivetDoodle.Project, "Which folder do you want to work in?",
-                        "Choose the folder that contains your project, then tell Rivet what you want to change.",
-                        "Choose a folder", ::chooseProject, Modifier.weight(1f),
-                        starterAction = if (offerStarters) ({ showStarterGallery = true }) else null)
-                } else if (state.projectLoading) {
-                    EmptyState(RivetDoodle.Project, "Opening your project…",
-                        "Rivet is restoring access to the folder you selected.",
-                        null, {}, Modifier.weight(1f))
-                } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null && !state.interruptedTurn && state.goalLine == null) {
-                    val ready = readyEntryPoints(projectBound = state.projectName != null)
-                    EmptyState(RivetDoodle.Ready, "Tell Rivet what you want to change.",
-                        "Your Agent settings control when Rivet asks before making changes.",
-                        null, {}, Modifier.weight(1f),
-                        secondaryAction = ready?.chooseProjectLabel,
-                        onSecondaryAction = ::chooseProject,
-                        starterAction = if (ready?.showStarters == true) ({ showStarterGallery = true }) else null)
-                } else {
-                    val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
-                        state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
-                    key(state.currentSessionId) {
-                        MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
-                            onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
-                            onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
-                            onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
-                            onAttachGoal = chatViewModel::attachGoalToProject,
-                            onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
-                            onRetryTurn = chatViewModel::retryFailedTurn,
-                            onChooseReasoning = chatViewModel::chooseReasoningLevel,
-                            onExportReplay = { index -> replayTurn = visibleState to index },
-                            modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
-                    }
-                }
-                if (state.undoCheckpointId != null || state.undoing) {
-                    ChangeSummary(state, onUndo = { confirmUndo = true },
-                        onDismissUndo = chatViewModel::dismissUndoBar,
-                        modifier = Modifier.fillMaxWidth())
-                }
-                // Typed explicitly: an untyped lambda would not be inferred as the
-                // composable slot the composer takes.
-                val modelSelector: (@Composable () -> Unit)? =
-                    if (providers.configs.isNotEmpty()) {
-                        { ModelSelector(providersViewModel) { modelSheetVisible = true } }
-                    } else null
-                val sharedContent by chatViewModel.sharedContent.collectAsState()
-                InputBar(streaming = state.streaming,
-                    sharedDraft = sharedContent[state.currentSessionId],
-                    phoneAvailable = providers.configs.any { it.id == providers.activeId &&
-                        it.type != com.kaiser.rivet.provider.ProviderType.Local },
-                    ready = state.ready && !state.projectLoading && !state.undoing &&
-                        !state.recoveringProjectChanges,
-                    hasProject = state.projectName != null &&
-                        projectBinding == ProjectBindingState.Matched,
-                    hasProvider = providers.configs.isNotEmpty(),
-                    acceptedMessageCount = state.acceptedMessageCount,
-                    commandAckCount = state.commandAckCount,
-                    error = state.error, notice = state.notice, sessionId = state.currentSessionId,
-                    skills = userSkills,
-                    onRequestSkills = chatViewModel::refreshUserSkills,
-                    selector = modelSelector,
-                    onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
-                    modifier = Modifier.fillMaxWidth())
-                // Status footer: one muted line with turns, tokens, model, and live state
-                StatusFooter(state, providers)
+        } else {
+            setupNotice?.let {
+                Text(it, Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
+                state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
+            key(state.currentSessionId) {
+                MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
+                    onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
+                    onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
+                    onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
+                    onAttachGoal = chatViewModel::attachGoalToProject,
+                    onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
+                    onRetryTurn = chatViewModel::retryFailedTurn,
+                    onChooseReasoning = chatViewModel::chooseReasoningLevel,
+                    onExportReplay = { index -> replayTurn = visibleState to index },
+                    modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
             }
         }
+        if (state.undoCheckpointId != null || state.undoing) {
+            ChangeSummary(state, onUndo = { confirmUndo = true },
+                onDismissUndo = chatViewModel::dismissUndoBar,
+                modifier = Modifier.fillMaxWidth())
+        }
+        val modelSelector: (@Composable () -> Unit)? =
+            if (providers.configs.isNotEmpty()) {
+                { ModelSelector(providersViewModel) { modelSheetVisible = true } }
+            } else null
+        val sharedContent by chatViewModel.sharedContent.collectAsState()
+        InputBar(streaming = state.streaming,
+            sharedDraft = sharedContent[state.currentSessionId],
+            phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
+            ready = state.ready && !state.projectLoading && !state.undoing &&
+                !state.recoveringProjectChanges,
+            hasProject = state.projectName != null && projectBinding == ProjectBindingState.Matched,
+            hasProvider = providers.configs.isNotEmpty(),
+            acceptedMessageCount = state.acceptedMessageCount,
+            commandAckCount = state.commandAckCount,
+            error = state.error, notice = state.notice, sessionId = state.currentSessionId,
+            skills = userSkills,
+            onRequestSkills = chatViewModel::refreshUserSkills,
+            folderName = state.projectName,
+            onOpenProjects = openProjects,
+            selector = modelSelector,
+            onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
+            modifier = Modifier.fillMaxWidth())
     }
     val openWorker = selectedWorker
     if (selectedWorkerId != null && openWorker != null) {
@@ -830,48 +448,32 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
 }
 
 @Composable
-@OptIn(ExperimentalLayoutApi::class)
-private fun EmptyState(kind: RivetDoodle, title: String, detail: String, action: String?,
-                       onAction: () -> Unit, modifier: Modifier = Modifier,
-                      secondaryAction: String? = null, onSecondaryAction: (() -> Unit)? = null,
-                      tertiaryAction: String? = null, onTertiaryAction: (() -> Unit)? = null,
-                      offlineAction: String? = null, onOfflineAction: (() -> Unit)? = null,
-                      starterAction: (() -> Unit)? = null) {
-    Box(modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
-        Column(Modifier.widthIn(max = 390.dp).verticalScroll(rememberScrollState())
-            .padding(horizontal = 24.dp, vertical = 20.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            RivetDoodleMark(kind)
-            // One short title, then the detail as the quieter second voice.
-            Text(title, style = MaterialTheme.typography.titleLarge,
-                textAlign = TextAlign.Center)
-            Text(detail, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                textAlign = TextAlign.Center,
-                style = MaterialTheme.typography.bodyMedium)
-            if (action != null || secondaryAction != null || tertiaryAction != null || starterAction != null) {
-                // Chips, not buttons: a choice offered quietly. FlowRow because three
-                // labels do not fit one 360dp row ("Continue with ChatGPT" wrapped
-                // mid-word when this was a fixed row).
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    if (action != null) AssistChip(onClick = onAction, label = { Text(action) })
-                    if (secondaryAction != null && onSecondaryAction != null)
-                        AssistChip(onClick = onSecondaryAction, label = { Text(secondaryAction) })
-                    if (tertiaryAction != null && onTertiaryAction != null)
-                        AssistChip(onClick = onTertiaryAction, label = { Text(tertiaryAction) })
-                    if (offlineAction != null && onOfflineAction != null)
-                        AssistChip(onClick = onOfflineAction, label = { Text(offlineAction) })
-                    if (starterAction != null)
-                        AssistChip(onClick = starterAction, label = { Text(STARTER_CHIP_LABEL) })
-                }
-            }
+private fun ChatHeader(title: String, canStartChat: Boolean, onOpenSidebar: () -> Unit,
+                       onNewChat: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        IconButton(onClick = onOpenSidebar) {
+            Icon(painterResource(R.drawable.ic_history), "Open sidebar")
+        }
+        Text(title, Modifier.weight(1f).padding(horizontal = 8.dp),
+            style = MaterialTheme.typography.titleMedium, maxLines = 1,
+            overflow = TextOverflow.Ellipsis)
+        IconButton(onClick = onNewChat, enabled = canStartChat) {
+            Icon(painterResource(R.drawable.ic_add), stringResource(R.string.new_conversation))
         }
     }
 }
 
+@Composable
+private fun WorkingFolder(name: String?, onOpen: () -> Unit) {
+    TextButton(onClick = onOpen, modifier = Modifier.widthIn(max = 132.dp),
+        contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)) {
+        Icon(painterResource(R.drawable.ic_files), null, Modifier.size(17.dp))
+        Spacer(Modifier.width(5.dp))
+        Text(name ?: "Projects", maxLines = 1, overflow = TextOverflow.Ellipsis,
+            style = MaterialTheme.typography.labelMedium)
+    }
+}
 
 // The composer's one quiet control: current model, and its effort when the provider
 // offers a choice. Both are changed in ModelSheet; this only shows and opens it.
@@ -2110,6 +1712,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
+                     folderName: String?,
+                     onOpenProjects: () -> Unit,
                      selector: (@Composable () -> Unit)? = null,
                      onSend: (String) -> Unit,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
@@ -2261,6 +1865,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                     Box(Modifier.weight(1f).padding(end = 4.dp)) {
                         selector?.invoke()
                     }
+                    WorkingFolder(folderName, onOpenProjects)
                     IconButton(onClick = { if (streaming) onCancel() else submit() },
                         enabled = streaming || canSend, modifier = Modifier.size(48.dp)
                         .clip(CircleShape)
@@ -2274,83 +1879,5 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun StatusFooter(state: ChatUiState, providers: com.kaiser.rivet.ui.provider.ProviderListUiState) {
-    val active = providers.configs.firstOrNull { it.id == providers.activeId }
-    val modelName = active?.let { "${displaySafeText(it.name)} ${displayModelName(it.model)}" }
-    val usage = state.usage
-    val turns = footerTurnCount(usage)
-    val inputTokens = usage?.reportedInputTokens ?: 0L
-    val outputTokens = usage?.reportedOutputTokens ?: 0L
-    val totalTokens = inputTokens + outputTokens
-    val liveState = when {
-        state.streaming -> "Working"
-        state.pendingApproval != null -> "Waiting"
-        state.activity != null -> "Working"
-        else -> "Ready"
-    }
-    Row(
-        modifier = Modifier.fillMaxWidth()
-            .padding(horizontal = 16.dp, vertical = 8.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        Text(
-            "$turns turns",
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-        if (totalTokens > 0) {
-            Text(
-                "${formatTokenCount(totalTokens)} tok",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-            )
-        }
-        state.spendLabel?.let {
-            Text(if (it == "unknown pricing") it else
-                "Spend $it" + if (state.spendFromEstimate) " (estimated)" else "",
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (active != null && active.type != ProviderType.Local &&
-            state.userPricePerMillionUsd == null &&
-            com.kaiser.rivet.agent.PricingTable.price(active.model) == null &&
-            state.spendLabel == null) {
-            Text("unknown pricing", style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        state.spendEstimate?.let {
-            Text(it, style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        if (modelName != null) {
-            Text(
-                modelName,
-                style = MaterialTheme.typography.labelSmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false),
-            )
-        } else {
-            Spacer(Modifier.weight(1f))
-        }
-        Text(
-            liveState,
-            style = MaterialTheme.typography.labelSmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-        )
-    }
-}
-
-private fun formatTokenCount(tokens: Long): String {
-    return when {
-        tokens >= 1_000_000 -> "${tokens / 1_000_000}M"
-        tokens >= 1_000 -> "${tokens / 1_000}K"
-        else -> tokens.toString()
     }
 }
