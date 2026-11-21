@@ -8,6 +8,9 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.statusBarsPadding
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.material3.Surface
 import androidx.compose.material3.DrawerValue
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
@@ -110,18 +113,16 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         // settings sheet are booleans, so a swipe-close or a Back-close cannot disagree
         // with a separate flag.
         var processesOpen by rememberSaveable { mutableStateOf(false) }
-        var settingsOpen by rememberSaveable { mutableStateOf(false) }
+        var destination by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
         var modelsOpen by rememberSaveable { mutableStateOf(false) }
         var installOpen by rememberSaveable { mutableStateOf(false) }
         var installZip by remember { mutableStateOf<android.net.Uri?>(null) }
         var terminalOpen by rememberSaveable { mutableStateOf(false) }
         val terminalStateLine by chatViewModel.terminalStatusLine.collectAsState()
         val drawerState = rememberDrawerState(DrawerValue.Closed)
-        val settingsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val modelsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val browserState by chatViewModel.browser.state.collectAsState()
         val sendFeedback: () -> Unit = {
-            settingsOpen = false
             coroutineScope.launch {
                 runCatching {
                     chatViewModel.browser.openVisual("https://vastraalabs.online/feedback",
@@ -134,7 +135,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             if (processNavigationRequest > 0) {
                 // A notification's deep link opens the tools slide cleanly above no stale overlays.
                 if (drawerState.isOpen) drawerState.close()
-                settingsOpen = false
+                destination = RivetDestination.Chat
                 editing = false
                 modelsOpen = false
                 terminalOpen = false
@@ -149,7 +150,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         LaunchedEffect(sharedContent.values.lastOrNull()?.id) {
             if (sharedContent.isNotEmpty()) {
                 if (drawerState.isOpen) drawerState.close()
-                settingsOpen = false
+                destination = RivetDestination.Chat
                 editing = false
                 modelsOpen = false
                 terminalOpen = false
@@ -179,7 +180,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         if (editing && editor.config.id.isEmpty()) editing = false
         // Stable instances so ChatScreen can skip: these only change shell state, which
         // rememberSaveable keeps across recompositions.
-        val openSettings = remember { { settingsOpen = true } }
+        val openSettings = remember { { destination = RivetDestination.Settings } }
         val openHistory = remember(coroutineScope, drawerState) {
             { coroutineScope.launch { drawerState.open() }; Unit }
         }
@@ -190,7 +191,6 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val closeProcesses = remember { { processesOpen = false } }
         val openModels = remember {
             {
-                settingsOpen = false
                 modelsOpen = true
             }
         }
@@ -202,7 +202,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
         val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open || processesOpen
-        BackHandler(terminalOpen || editing || settingsOpen || modelsOpen || browserState.visible || panelOpen) {
+        BackHandler(terminalOpen || editing || destination == RivetDestination.Settings || modelsOpen || browserState.visible || panelOpen) {
             when {
                 terminalOpen -> terminalOpen = false
                 browserState.visible -> chatViewModel.browser.close()
@@ -211,17 +211,19 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     providersViewModel.closeEditor()
                     editing = false
                 }
-                settingsOpen -> settingsOpen = false
+                destination == RivetDestination.Settings -> destination = RivetDestination.Chat
                 processesOpen -> closeProcesses()
                 else -> closeHistory()
             }
         }
 
         RivetBackdrop {
-            saveableStates.SaveableStateProvider(if (editing) "provider_editor" else "chat") {
-                if (editing) {
+            if (editing) {
+                saveableStates.SaveableStateProvider("provider_editor") {
                     ProviderEditor(viewModel = providersViewModel, onDone = { editing = false })
-                } else {
+                }
+            } else when (destination) {
+                RivetDestination.Chat -> saveableStates.SaveableStateProvider("chat") {
                     // Chat is the permanent base layer: the panels slide over it, so the
                     // conversation (and its scroll position) survives every open and close.
                     ModalNavigationDrawer(
@@ -279,6 +281,85 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                         }
                     }
                 }
+                RivetDestination.Settings -> saveableStates.SaveableStateProvider("settings") {
+                    Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                        val conversation by chatViewModel.uiState.collectAsState()
+                        val skillCatalog by chatViewModel.skillCatalog.collectAsState()
+                        SettingsScreen(
+                            conversationUsage = conversation.usage,
+                            skillCatalog = skillCatalog,
+                            memoryLines = conversation.memoryLines,
+                            memoryMarkdown = conversation.memoryMarkdown,
+                            hasProject = conversation.projectName != null,
+                            onUpdateMemory = chatViewModel::updateMemory,
+                            onForgetMemoryLine = chatViewModel::forgetMemoryLine,
+                            spendCaps = conversation.spendCaps,
+                            userPricePerMillionUsd = conversation.userPricePerMillionUsd,
+                            onSaveSpend = chatViewModel::saveSpendCaps,
+                            onRefreshSkills = chatViewModel::refreshSkillCatalog,
+                            onLoadSkillFiles = chatViewModel::skillBundledFiles,
+                            onInstallSkill = {
+                                installZip = null
+                                installOpen = true
+                            },
+                            viewModel = providersViewModel,
+                            versionName = versionName,
+                            onClose = { destination = RivetDestination.Chat },
+                            onEditProvider = {
+                                providersViewModel.startEdit(it)
+                                editing = true
+                            },
+                            onNewProvider = {
+                                providersViewModel.startNewProvider(it)
+                                editing = true
+                            },
+                            onOpenModels = openModels,
+                            onSendFeedback = sendFeedback,
+                            themeMode = themeMode,
+                            themeSaving = themeSaving,
+                            onThemeChange = { value ->
+                                if (!themeSaving) {
+                                    themeMode = value
+                                    themeSaving = true
+                                    appearanceSaveError = null
+                                    coroutineScope.launch {
+                                        try {
+                                            appearanceStore.setThemeMode(value)
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
+                                            themeMode = storedAppearance.themeMode
+                                            appearanceSaveError = "Rivet couldn't save this setting. Try again."
+                                        } finally {
+                                            themeSaving = false
+                                        }
+                                    }
+                                }
+                            },
+                            appearanceError = appearanceSaveError,
+                            autonomyMode = autonomyMode,
+                            autonomySaving = autonomySaving,
+                            autonomyError = autonomyError,
+                            onAutonomyChange = { value ->
+                                if (!autonomySaving && value != autonomyMode) {
+                                    autonomySaving = true
+                                    autonomyError = null
+                                    coroutineScope.launch {
+                                        try {
+                                            autonomyStore.setMode(value)
+                                        } catch (e: CancellationException) {
+                                            throw e
+                                        } catch (_: Exception) {
+                                            autonomyError = "Rivet couldn't save this setting. Try again."
+                                        } finally {
+                                            autonomySaving = false
+                                        }
+                                    }
+                                }
+                            },
+                        )
+                    }
+                }
             }
             if (browserState.visible || (browserState.rendererVisible && !browserState.teardownRequested)) {
                 BrowserScreen(
@@ -313,93 +394,6 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
 
-        // Settings: one modal sheet over the chat, created only while open. The sheet's own
-        // Back/scrim dismiss ends up in onDismissRequest; the detail-to-list step is the
-        // screen's own BackHandler, registered deeper.
-        if (settingsOpen) {
-            ModalBottomSheet(
-                onDismissRequest = { settingsOpen = false },
-                sheetState = settingsSheetState,
-            ) {
-                val conversation by chatViewModel.uiState.collectAsState()
-                val skillCatalog by chatViewModel.skillCatalog.collectAsState()
-                SettingsScreen(
-                    conversationUsage = conversation.usage,
-                    skillCatalog = skillCatalog,
-                    memoryLines = conversation.memoryLines,
-                    memoryMarkdown = conversation.memoryMarkdown,
-                    hasProject = conversation.projectName != null,
-                    onUpdateMemory = chatViewModel::updateMemory,
-                    onForgetMemoryLine = chatViewModel::forgetMemoryLine,
-                    spendCaps = conversation.spendCaps,
-                    userPricePerMillionUsd = conversation.userPricePerMillionUsd,
-                    onSaveSpend = chatViewModel::saveSpendCaps,
-                    onRefreshSkills = chatViewModel::refreshSkillCatalog,
-                    onLoadSkillFiles = chatViewModel::skillBundledFiles,
-                    onInstallSkill = {
-                        installZip = null
-                        installOpen = true
-                    },
-                    viewModel = providersViewModel,
-                    versionName = versionName,
-                    onClose = { settingsOpen = false },
-                    onEditProvider = {
-                        settingsOpen = false
-                        providersViewModel.startEdit(it)
-                        editing = true
-                    },
-                    onNewProvider = {
-                        settingsOpen = false
-                        providersViewModel.startNewProvider(it)
-                        editing = true
-                    },
-                    onOpenModels = openModels,
-                    onSendFeedback = sendFeedback,
-                    themeMode = themeMode,
-                    themeSaving = themeSaving,
-                    onThemeChange = { value ->
-                        if (!themeSaving) {
-                            themeMode = value
-                            themeSaving = true
-                            appearanceSaveError = null
-                            coroutineScope.launch {
-                                try {
-                                    appearanceStore.setThemeMode(value)
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (_: Exception) {
-                                    themeMode = storedAppearance.themeMode
-                                    appearanceSaveError = "Rivet couldn't save this setting. Try again."
-                                } finally {
-                                    themeSaving = false
-                                }
-                            }
-                        }
-                    },
-                    appearanceError = appearanceSaveError,
-                    autonomyMode = autonomyMode,
-                    autonomySaving = autonomySaving,
-                    autonomyError = autonomyError,
-                    onAutonomyChange = { value ->
-                        if (!autonomySaving && value != autonomyMode) {
-                            autonomySaving = true
-                            autonomyError = null
-                            coroutineScope.launch {
-                                try {
-                                    autonomyStore.setMode(value)
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (_: Exception) {
-                                    autonomyError = "Rivet couldn't save this setting. Try again."
-                                } finally {
-                                    autonomySaving = false
-                                }
-                            }
-                        }
-                    },
-                )
-            }
-        }
 
         if (installOpen) {
             SkillInstallDialog(

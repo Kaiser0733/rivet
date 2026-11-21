@@ -27,3 +27,14 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertIn("session.title.contains(search.trim(), ignoreCase = true)", sidebar)
         self.assertIn("relativeRecency(session.updatedAt)", sidebar)
         self.assertIn('Text("New chat")', sidebar)
+
+    def test_settings_is_a_full_screen_with_grouped_rows(self):
+        app = (UI / "RivetApp.kt").read_text()
+        settings = (UI / "provider/SettingsScreen.kt").read_text()
+        self.assertNotIn("settingsSheetState", app)
+        self.assertIn("RivetDestination.Settings ->", app)
+        for name in ("Account & providers", "Phone access", "Skills", "Memory & compaction",
+                     "Subagents", "Appearance", "Send feedback", "About"):
+            self.assertIn(f'"{name}"', settings)
+        self.assertIn("SettingsGroup {", settings)
+        self.assertNotIn("ModalBottomSheet(", settings)

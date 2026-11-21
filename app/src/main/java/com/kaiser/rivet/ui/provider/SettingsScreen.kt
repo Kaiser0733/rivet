@@ -32,8 +32,6 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -95,15 +93,10 @@ import kotlinx.coroutines.launch
 
 private val MAX_WIDTH = 680.dp
 
-// The section that is open at level 2. Remembered by RivetApp, so Android Back can step
-// detail -> list -> dismiss instead of closing the sheet in one go.
-internal enum class SettingsSection { Providers, Models, Appearance, Agent, Phone, Subagents, Memory, GitHub, Skills, Updates, About }
+internal enum class SettingsSection {
+    Providers, Appearance, Agent, Phone, PhoneAddOn, Subagents, Memory, GitHub, Skills, Updates, About, Usage,
+}
 
-/**
- * The body of the settings modal sheet: a two-level page — a section list, and one
- * section's detail inside the same sheet. Hosting (the sheet itself) is RivetApp's job;
- * this composable only fills it.
- */
 @Composable
 fun SettingsScreen(
     viewModel: ProvidersViewModel,
@@ -139,24 +132,26 @@ fun SettingsScreen(
     val subagentState by viewModel.subagentPoolState.collectAsState()
     val subagentError by viewModel.subagentPoolError.collectAsState()
     val gitHubState by viewModel.gitHubState.collectAsState()
-    // Level 2 lives here, not in the host: the sheet is only a container.
     var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
-    // A skill's detail is one level below its section list, so Back steps skill -> skills
-    // -> settings root and only then falls through to the sheet's own dismiss.
     var selectedSkill by rememberSaveable { mutableStateOf<String?>(null) }
-    // A refresh can remove the selected skill; only a resolvable one counts as a level.
     val shownSkill = skillCatalog?.skills?.firstOrNull { it.name == selectedSkill }
-    BackHandler(enabled = section != null) {
-        if (shownSkill != null) selectedSkill = null else section = null
+    val back: () -> Unit = {
+        when {
+            shownSkill != null -> selectedSkill = null
+            section == SettingsSection.PhoneAddOn -> section = SettingsSection.Phone
+            section == SettingsSection.GitHub -> section = SettingsSection.Providers
+            section == SettingsSection.Updates || section == SettingsSection.Usage -> section = SettingsSection.About
+            section == SettingsSection.Agent -> section = SettingsSection.Memory
+            section != null -> section = null
+            else -> onClose()
+        }
     }
-    // The root row's count and the page both read this catalog; refresh off-main when the
-    // sheet opens and again when the Skills page itself is opened.
+    BackHandler(enabled = section != null, onBack = back)
     LaunchedEffect(Unit) { onRefreshSkills() }
     LaunchedEffect(section) {
         if (section == SettingsSection.Skills) onRefreshSkills()
     }
     var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
-    var showUsage by rememberSaveable { mutableStateOf(false) }
     var confirmYolo by rememberSaveable { mutableStateOf(false) }
     var connectGitHubOpen by rememberSaveable { mutableStateOf(false) }
 
@@ -233,62 +228,34 @@ fun SettingsScreen(
         )
     }
 
-    if (showUsage) {
-        AlertDialog(
-            onDismissRequest = { showUsage = false },
-            title = { Text("Conversation usage") },
-            text = { Text(conversationUsage?.diagnostics() ?: "No usage has been reported for this conversation.",
-                modifier = Modifier.verticalScroll(rememberScrollState()),
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Default)) },
-            confirmButton = { TextButton(onClick = { showUsage = false }) { Text("Close") } },
-        )
-    }
-
     val active = state.configs.firstOrNull { it.id == state.activeId }
     val saved = state.configs.filterNot { it.id == active?.id }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        Column(Modifier.fillMaxSize().widthIn(max = MAX_WIDTH)) {
-            SheetTopBar(
+        Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxSize()) {
+            SettingsTopBar(
                 section = section,
                 title = if (section == SettingsSection.Skills) shownSkill?.name else null,
-                onClose = onClose,
-                onBack = {
-                    if (shownSkill != null) selectedSkill = null else section = null
-                },
+                onBack = back,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             when (section) {
                 null -> Column(Modifier.verticalScroll(rememberScrollState())) {
                     SectionList(
-                    providerSummary = when {
-                        state.loadError != null -> "Problem loading providers"
-                        active == null -> "Not set"
-                        else -> "${active.name} · ${active.model}"
-                    },
-                    themeSummary = themeMode.name,
-                    autonomySummary = autonomyDisplayName(autonomyMode),
-                    subagentSummary = subagentSummary(subagentState, state.configs),
-                    skillSummary = skillCountSummary(skillCatalog),
-                    memorySummary = if (hasProject) "${memoryLines.size} durable line${if (memoryLines.size == 1) "" else "s"}"
-                        else "Open a project",
-                    gitHubSummary = when {
-                        !gitHubState.gitAvailable -> "Git not available"
-                        gitHubState.connected -> "Connected"
-                        else -> "Not connected"
-                    },
-                    versionSummary = stringResource(R.string.provider_hint_version, versionName),
-                    onSelect = {
-                        if (it == SettingsSection.Models) onOpenModels() else section = it
-                    },
+                        providerSummary = when {
+                            state.loadError != null -> "Problem loading providers"
+                            active == null -> "Not set"
+                            else -> active.name
+                        },
+                        themeSummary = themeMode.name,
+                        subagentSummary = subagentSummary(subagentState, state.configs),
+                        skillSummary = skillCountSummary(skillCatalog),
+                        memorySummary = if (hasProject) "${memoryLines.size} saved" else "No project",
+                        versionSummary = versionName,
+                        onSelect = { section = it },
+                        onSendFeedback = onSendFeedback,
                     )
-                    TextButton(onClick = onSendFeedback,
-                        modifier = Modifier.fillMaxWidth().padding(horizontal = 12.dp)
-                            .padding(top = 8.dp)) {
-                        Text("Send feedback")
-                    }
                 }
-                SettingsSection.Models -> Unit
                 SettingsSection.Providers -> ProviderDetail(
                     loadError = state.loadError,
                     headerNotice = state.headerNotice,
@@ -299,6 +266,7 @@ fun SettingsScreen(
                     onDelete = { provider -> deleteTarget = provider },
                     onNewProvider = onNewProvider,
                     setup = { ProviderSetup(viewModel, onOpenModels, showActions = active == null) },
+                    onOpenGitHub = { section = SettingsSection.GitHub },
                 )
                 SettingsSection.Appearance -> AppearanceDetail(
                     themeMode = themeMode,
@@ -312,6 +280,7 @@ fun SettingsScreen(
                     hasProject = hasProject,
                     onUpdate = onUpdateMemory,
                     onForget = onForgetMemoryLine,
+                    onOpenAgent = { section = SettingsSection.Agent },
                 )
                 SettingsSection.Agent -> AgentDetail(
                     autonomyMode = autonomyMode,
@@ -325,7 +294,8 @@ fun SettingsScreen(
                     subagentSummary = subagentSummary(subagentState, state.configs),
                     onOpenSubagents = { section = SettingsSection.Subagents },
                 )
-                SettingsSection.Phone -> PhoneAccessDetail()
+                SettingsSection.Phone -> PhoneAccessDetail(onOpenAddOn = { section = SettingsSection.PhoneAddOn })
+                SettingsSection.PhoneAddOn -> PhoneAddOnDetail()
                 SettingsSection.Subagents -> SubagentsSettings(
                     state = subagentState,
                     configs = state.configs,
@@ -349,117 +319,90 @@ fun SettingsScreen(
                     onLoadFiles = onLoadSkillFiles,
                     onInstall = onInstallSkill,
                 )
+                SettingsSection.Usage -> DetailScroll {
+                    Text(conversationUsage?.diagnostics() ?: "No usage has been reported for this conversation.")
+                }
                 SettingsSection.Updates -> DetailScroll { UpdatesSection(versionName) }
                 SettingsSection.About -> AboutDetail(
                     versionName = versionName,
-                    onShowUsage = { showUsage = true },
+                    onShowUsage = { section = SettingsSection.Usage },
+                    onOpenUpdates = { section = SettingsSection.Updates },
                 )
             }
         }
     }
 }
 
-// The sheet supplies its own horizontal padding; the column only centres itself in it.
-
 @Composable
-private fun SheetTopBar(
-    section: SettingsSection?,
-    title: String? = null,
-    onClose: () -> Unit,
-    onBack: () -> Unit,
-) {
-    Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 4.dp, top = 2.dp, bottom = 2.dp),
+private fun SettingsTopBar(section: SettingsSection?, title: String?, onBack: () -> Unit) {
+    Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        if (section == null) {
-            Spacer(Modifier.size(48.dp))
-        } else {
-            IconButton(onClick = onBack) {
-                Icon(painterResource(R.drawable.ic_back), "Back",
-                    tint = MaterialTheme.colorScheme.onBackground)
-            }
+        IconButton(onClick = onBack) {
+            Icon(painterResource(R.drawable.ic_back), "Back")
         }
-        Text(
-            title ?: section?.title() ?: stringResource(R.string.settings),
-            style = MaterialTheme.typography.titleLarge,
-            modifier = Modifier.weight(1f),
-        )
-        IconButton(onClick = onClose) {
-            Icon(painterResource(R.drawable.ic_close), stringResource(R.string.close),
-                tint = MaterialTheme.colorScheme.onBackground)
-        }
+        Text(title ?: section?.title() ?: stringResource(R.string.settings),
+            style = MaterialTheme.typography.headlineSmall,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 
 internal fun SettingsSection.title(): String = when (this) {
-    SettingsSection.Providers -> "Providers"
-    SettingsSection.Models -> "Models"
+    SettingsSection.Providers -> "Account & providers"
     SettingsSection.Appearance -> "Appearance"
-    SettingsSection.Agent -> "Agent"
+    SettingsSection.Agent -> "Permissions & spending"
     SettingsSection.Phone -> "Phone access"
+    SettingsSection.PhoneAddOn -> "Phone access add-on"
     SettingsSection.Subagents -> "Subagents"
-    SettingsSection.Memory -> "Memory"
+    SettingsSection.Memory -> "Memory & compaction"
     SettingsSection.GitHub -> "GitHub"
     SettingsSection.Skills -> "Skills"
     SettingsSection.Updates -> "Updates"
     SettingsSection.About -> "About"
+    SettingsSection.Usage -> "Conversation usage"
 }
 
 @Composable
 private fun SectionList(
     providerSummary: String,
     themeSummary: String,
-    autonomySummary: String,
     subagentSummary: String,
     skillSummary: String,
     memorySummary: String,
-    gitHubSummary: String,
     versionSummary: String,
     onSelect: (SettingsSection) -> Unit,
+    onSendFeedback: () -> Unit,
 ) {
-    Column(
-        Modifier.fillMaxWidth()
-            .clip(RoundedCornerShape(16.dp))
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)
-            .padding(12.dp),
-        verticalArrangement = Arrangement.spacedBy(0.dp)
-    ) {
-        SettingsSection.entries.forEachIndexed { index, section ->
-            val (title, summary) = when (section) {
-                SettingsSection.Providers -> "Providers" to providerSummary
-                SettingsSection.Models -> "Models" to "Download and run a model on this phone"
-                SettingsSection.Appearance -> "Appearance" to themeSummary
-                SettingsSection.Agent -> "Agent" to autonomySummary
-                SettingsSection.Phone -> section.title() to "Share and open on your phone"
-                SettingsSection.Subagents -> "Subagents" to subagentSummary
-                SettingsSection.Memory -> "Memory" to memorySummary
-                SettingsSection.GitHub -> "GitHub" to gitHubSummary
-                SettingsSection.Skills -> "Skills" to skillSummary
-                SettingsSection.Updates -> "Updates" to "Check for updates"
-                SettingsSection.About -> "About" to versionSummary
-            }
-            val iconRes = when (section) {
-                SettingsSection.Providers -> R.drawable.ic_settings // gear = providers config
-                SettingsSection.Models -> R.drawable.ic_processes // local inference
-                SettingsSection.Appearance -> R.drawable.ic_visibility // sun/moon for theme
-                SettingsSection.Agent -> R.drawable.ic_processes // robot/processes for agent
-                SettingsSection.Phone -> R.drawable.ic_files
-                SettingsSection.Subagents -> R.drawable.ic_processes // delegated model pool
-                SettingsSection.Memory -> R.drawable.ic_files // durable project facts
-                SettingsSection.GitHub -> R.drawable.ic_files // repository and token settings
-                SettingsSection.Skills -> R.drawable.ic_files // skill folders and instructions
-                SettingsSection.Updates -> R.drawable.ic_history // refresh/history for updates
-                SettingsSection.About -> R.drawable.ic_files // info/documents for about
-            }
-            
-            SectionListItem(
-                iconRes = iconRes,
-                title = title,
-                summary = summary,
-                onClick = { onSelect(section) },
-                showDivider = index < SettingsSection.entries.size - 1
-            )
+    Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 20.dp),
+        verticalArrangement = Arrangement.spacedBy(16.dp)) {
+        SettingsGroup {
+            SectionListItem(R.drawable.ic_profile, SettingsSection.Providers.title(), providerSummary,
+                { onSelect(SettingsSection.Providers) }, true)
+            SectionListItem(R.drawable.ic_files, SettingsSection.Phone.title(), "",
+                { onSelect(SettingsSection.Phone) }, false)
+        }
+        SettingsGroup {
+            SectionListItem(R.drawable.ic_files, SettingsSection.Skills.title(), skillSummary,
+                { onSelect(SettingsSection.Skills) }, true)
+            SectionListItem(R.drawable.ic_history, SettingsSection.Memory.title(), memorySummary,
+                { onSelect(SettingsSection.Memory) }, true)
+            SectionListItem(R.drawable.ic_processes, SettingsSection.Subagents.title(), subagentSummary,
+                { onSelect(SettingsSection.Subagents) }, true)
+            SectionListItem(R.drawable.ic_visibility, SettingsSection.Appearance.title(), themeSummary,
+                { onSelect(SettingsSection.Appearance) }, false)
+        }
+        SettingsGroup {
+            SectionListItem(R.drawable.ic_edit, "Send feedback", "", onSendFeedback, true)
+            SectionListItem(R.drawable.ic_settings, SettingsSection.About.title(), versionSummary,
+                { onSelect(SettingsSection.About) }, false)
         }
     }
+}
+
+@Composable
+private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
+    Column(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium)
+        .background(MaterialTheme.colorScheme.surfaceContainerLow)
+        .padding(horizontal = 12.dp), content = content)
 }
 
 @Composable
@@ -484,16 +427,12 @@ private fun SectionListItem(
             tint = MaterialTheme.colorScheme.onSurfaceVariant
         )
         Spacer(Modifier.width(12.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.onSurface)
-            Text(
-                summary,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis
-            )
+        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
+            color = MaterialTheme.colorScheme.onSurface)
+        if (summary.isNotBlank()) {
+            Text(summary, Modifier.widthIn(max = 104.dp).padding(horizontal = 6.dp),
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         Icon(
             painterResource(R.drawable.ic_chevron_right),
@@ -517,6 +456,7 @@ private fun MemoryDetail(
     hasProject: Boolean,
     onUpdate: (String) -> Unit,
     onForget: (Int) -> Unit,
+    onOpenAgent: () -> Unit,
 ) {
     var editing by remember { mutableStateOf(false) }
     var draft by remember(markdown) { mutableStateOf(markdown) }
@@ -546,6 +486,10 @@ private fun MemoryDetail(
         )
     }
     DetailScroll {
+        SectionListItem(R.drawable.ic_processes, "Permissions & spending", "", onOpenAgent, true)
+        Text("Rivet compacts older conversation history to make room in the model's context.",
+            color = MaterialTheme.colorScheme.onSurfaceVariant,
+            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 12.dp))
         Text("Project memory", style = MaterialTheme.typography.titleMedium)
         Spacer(Modifier.height(6.dp))
         Text("Stored in .rivet/memory.md and covered by project checkpoints. AGENTS.md outranks it when they disagree.",
@@ -640,8 +584,7 @@ internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable Co
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
-private fun PhoneAccessDetail() {
-    var addOnOpen by rememberSaveable { mutableStateOf(false) }
+private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
     DetailScroll {
         SectionHeading("Share to Rivet")
         Text("On — Rivet appears in the share sheet",
@@ -663,28 +606,19 @@ private fun PhoneAccessDetail() {
             iconRes = R.drawable.ic_settings,
             title = "Phone access add-on",
             summary = "Not installed",
-            onClick = { addOnOpen = true },
+            onClick = onOpenAddOn,
             showDivider = false,
         )
     }
-    if (addOnOpen) {
-        ModalBottomSheet(
-            onDismissRequest = { addOnOpen = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        ) {
-            Column(
-                Modifier.fillMaxWidth().verticalScroll(rememberScrollState())
-                    .padding(horizontal = 24.dp, vertical = 16.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp),
-            ) {
-                Text("Phone access add-on", style = MaterialTheme.typography.titleLarge)
-                Text("Not installed", style = MaterialTheme.typography.labelLarge)
-                Text("The separate add-on would let Rivet read notifications and read or tap in other apps with your permission.")
-                Text("On Android 13 and later, if Android blocks a setting, open Settings → Apps → the add-on → More → Allow restricted settings. Follow the on-screen instructions and grant access only if you trust the add-on.")
-                Text("Google Play Protect may scan, warn about, or block apps installed outside Google Play. Keep Play Protect on and review any warning before proceeding.")
-                TextButton(onClick = { addOnOpen = false }) { Text("Close") }
-            }
-        }
+}
+
+@Composable
+private fun PhoneAddOnDetail() {
+    DetailScroll {
+        Text("Not installed", style = MaterialTheme.typography.labelLarge)
+        Text("The separate add-on would let Rivet read notifications and read or tap in other apps with your permission.")
+        Text("On Android 13 and later, if Android blocks a setting, open Settings → Apps → the add-on → More → Allow restricted settings. Follow the on-screen instructions and grant access only if you trust the add-on.")
+        Text("Google Play Protect may scan, warn about, or block apps installed outside Google Play. Keep Play Protect on and review any warning before proceeding.")
     }
 }
 
@@ -826,6 +760,7 @@ private fun ProviderDetail(
     onDelete: (ProviderConfig) -> Unit,
     onNewProvider: (ProviderType) -> Unit,
     setup: @Composable () -> Unit,
+    onOpenGitHub: () -> Unit,
 ) {
     val headingColor = MaterialTheme.colorScheme.onSurfaceVariant
     val presets = listOf(
@@ -868,6 +803,7 @@ private fun ProviderDetail(
             }
         }
         item(key = "provider-setup") { setup() }
+        item { SectionListItem(R.drawable.ic_files, "GitHub", "", onOpenGitHub, true) }
         if (saved.isNotEmpty()) {
             item { SectionHeading("Other saved providers", Modifier.padding(top = 16.dp, bottom = 4.dp), color = headingColor) }
             items(saved, key = { it.id }) { provider ->
@@ -1109,7 +1045,7 @@ private fun autonomyDisplayName(mode: AutonomyMode): String = when (mode) {
 }
 
 @Composable
-private fun AboutDetail(versionName: String, onShowUsage: () -> Unit) {
+private fun AboutDetail(versionName: String, onShowUsage: () -> Unit, onOpenUpdates: () -> Unit) {
     DetailScroll {
         
         Text(stringResource(R.string.provider_hint_version, versionName),
@@ -1118,6 +1054,7 @@ private fun AboutDetail(versionName: String, onShowUsage: () -> Unit) {
         SectionHeading(stringResource(R.string.support_heading), modifier = Modifier.padding(bottom = 8.dp))
         SupportSection()
         
+        SectionListItem(R.drawable.ic_history, "Updates", "", onOpenUpdates, true)
         UsageRow(onShowUsage = onShowUsage)
     }
 }
