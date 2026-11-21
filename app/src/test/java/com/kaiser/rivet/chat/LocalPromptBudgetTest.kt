@@ -67,4 +67,11 @@ class LocalPromptBudgetTest {
             .allowedInputTokens
         assertTrue("oversized estimate=$tokens allowed=$allowed", tokens >= allowed)
     }
+    @org.junit.Test fun compactPromptKeepsTheDeliverableRuleWithTheTool() {
+        val tool = com.kaiser.rivet.agent.AgentToolExecutor.definitions.single { it.name == "present" }
+        val rule = com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
+        org.junit.Assert.assertTrue(LocalPrompt.wire("Base", listOf(tool), 4096, workspace = true).system.contains(rule))
+        org.junit.Assert.assertFalse(LocalPrompt.wire("Base", emptyList(), 4096, workspace = false).system.contains(rule))
+    }
+
 }

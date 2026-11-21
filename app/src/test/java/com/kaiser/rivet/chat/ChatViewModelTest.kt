@@ -1041,6 +1041,15 @@ class ChatViewModelTest {
         assertFalse(restored.interrupted)
     }
 
+    @Test fun deliverableRuleReachesTheCoordinatorOnlyWhenPresentIsAvailable() {
+        val rule = com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
+        assertTrue(ChatViewModel.systemInstruction(workspace = true).contains(rule))
+        assertFalse(ChatViewModel.systemInstruction(workspace = true, presentAvailable = false).contains(rule))
+        assertFalse(ChatViewModel.systemInstruction(workspace = false).contains(rule))
+        assertTrue(com.kaiser.rivet.agent.AgentToolExecutor.definitions.single { it.name == "present" }
+            .description.contains(rule))
+    }
+
     @Test fun manualCompactionSummarisesTheIdleSessionAndLeavesTheNoticeRow() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.local
 
+import com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolDefinition
 import java.util.UUID
@@ -49,6 +50,9 @@ object LocalToolProtocol {
             if (compact) {
                 append("Use <tool_call>{\"name\":\"tool\",\"arguments\":{...}}</tool_call> only when needed. ")
                 append("Arguments are JSON. Then continue after the result.\n")
+                if (tools.any { it.name == "present" }) {
+                    append(PRESENT_DELIVERABLES_RULE).append(" Pass files as a list of path and description objects.\n")
+                }
                 for (tool in tools) {
                     val names = runCatching {
                         tool.parameters["properties"]?.jsonObject?.keys?.joinToString(", ").orEmpty()

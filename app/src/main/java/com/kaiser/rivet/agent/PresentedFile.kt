@@ -4,6 +4,9 @@ import com.kaiser.rivet.workspace.GrantPath
 import com.kaiser.rivet.workspace.WorkspacePath
 import kotlinx.serialization.Serializable
 
+internal const val PRESENT_DELIVERABLES_RULE =
+    "Before your final reply, use present for finished files the user asked you to deliver, such as documents, pages and code files. Leave out scratch files, build artifacts and incidental project edits."
+
 @Serializable
 data class PresentedFile(val path: String, val description: String)
 
