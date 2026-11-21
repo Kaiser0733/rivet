@@ -52,10 +52,10 @@ class SoulSurfaceTest(unittest.TestCase):
 
     def test_specialist_copy_names_the_existing_action_or_value(self):
         cases = (
-            ("provider/SettingsScreen.kt", 'if (active == null)', "Choose the service you want to connect."),
-            ("local/ModelsScreen.kt", 'if (totalRamMb > 0) {\n                Text(', "Estimated model size limit: about ${formatParams(ceiling.maxParamsB)} at ${ceiling.contextMax / 1024}K context."),
-            ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', 'SectionHeading("Share to Rivet")'),
-            ("provider/SettingsScreen.kt", 'SectionHeading("Screen capture")', "Rivet asks before each capture. After you allow it, tap Capture now in the notification."),
+            ("provider/SettingsScreen.kt", 'private fun ProviderDetail(', 'active?.name ?: "Connect a provider"'),
+            ("local/ModelsScreen.kt", 'private fun DeviceCard(', "formatParams(ceiling.maxParamsB)"),
+            ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', "Available in the Android share sheet"),
+            ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', "Rivet asks before each capture. After you allow it, tap Capture now in the notification."),
             ("workspace/ProjectsScreen.kt", 'FolderHeading("Starters")', "Choose a starter and an empty folder for its files."),
             ("browser/BrowserScreen.kt", 'Text(', "Enter a web address to get started."),
         )

@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.local
 
+import com.kaiser.rivet.R
+import com.kaiser.rivet.ui.UtilityGlyph
+import com.kaiser.rivet.ui.UtilityLead
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.background
@@ -306,20 +309,15 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
 @Composable
 private fun DeviceCard(totalRamMb: Int, availableRamMb: Int, freeStorage: Long) {
     val ceiling = com.kaiser.rivet.local.ModelRecommender.ceilingFor(totalRamMb)
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow,
-        shape = RoundedCornerShape(12.dp), modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Text("This phone", style = MaterialTheme.typography.labelLarge)
-            Text(
-                if (totalRamMb > 0) {
-                    "${formatRam(totalRamMb)} RAM · ${formatRam(availableRamMb)} free now · ${formatBytes(freeStorage)} storage"
-                } else "Reading memory…",
-                style = MaterialTheme.typography.bodySmall)
-            if (totalRamMb > 0) {
-                Text("Estimated model size limit: about ${formatParams(ceiling.maxParamsB)} at ${ceiling.contextMax / 1024}K context.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+    UtilityLead(
+        R.drawable.ic_phone_access,
+        "This phone",
+        if (totalRamMb > 0) "${formatRam(totalRamMb)} RAM · ${formatRam(availableRamMb)} free now"
+        else "Reading memory…",
+    ) {
+        if (totalRamMb > 0) {
+            Text("${formatBytes(freeStorage)} storage · About ${formatParams(ceiling.maxParamsB)} at ${ceiling.contextMax / 1024}K context",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -425,7 +423,9 @@ private fun ModelRow(
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp),
         modifier = Modifier.fillMaxWidth()) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
+            Row(verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                UtilityGlyph(R.drawable.ic_models)
                 Column(Modifier.weight(1f)) {
                     Text(entry.name, style = MaterialTheme.typography.bodyLarge)
                     Text("${entry.params} · ${formatBytes(entry.size)} · ${entry.contextMax / 1024}K context",

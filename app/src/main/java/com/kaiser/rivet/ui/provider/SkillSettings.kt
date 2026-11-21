@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityLead
+import com.kaiser.rivet.ui.UtilityGlyph
+import com.kaiser.rivet.ui.RivetOutlinedButton
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -106,19 +109,8 @@ internal fun SkillsSettings(
 
 @Composable
 private fun InstallRow(onInstall: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clickable(onClick = onInstall)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(painterResource(R.drawable.ic_add), contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(12.dp))
-        Text("Install from link", style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.weight(1f))
-        Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+    UtilityLead(R.drawable.ic_skills, "Your skills", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        RivetOutlinedButton(onClick = onInstall) { Text("Install from link") }
     }
 }
 
@@ -167,6 +159,8 @@ private fun SkillRow(skill: Skill, onOpen: () -> Unit) {
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            UtilityGlyph(R.drawable.ic_skills)
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(skill.name, style = MaterialTheme.typography.bodyLarge,

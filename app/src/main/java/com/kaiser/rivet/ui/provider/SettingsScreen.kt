@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityGlyph
+import com.kaiser.rivet.ui.UtilityLead
+import com.kaiser.rivet.ui.UtilityRow
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -351,9 +354,7 @@ private fun SectionList(
 
 @Composable
 private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium)
-        .background(MaterialTheme.colorScheme.surfaceContainerLow)
-        .padding(horizontal = 12.dp), content = content)
+    Column(Modifier.fillMaxWidth(), content = content)
 }
 
 @Composable
@@ -364,40 +365,7 @@ private fun SectionListItem(
     onClick: () -> Unit,
     showDivider: Boolean,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            painterResource(iconRes),
-            contentDescription = null,
-            modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface)
-        if (summary.isNotBlank()) {
-            Text(summary, Modifier.widthIn(max = 104.dp).padding(horizontal = 6.dp),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Icon(
-            painterResource(R.drawable.ic_chevron_right),
-            contentDescription = null,
-            modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-    if (showDivider) {
-        HorizontalDivider(
-            color = MaterialTheme.colorScheme.outlineVariant,
-            modifier = Modifier.padding(horizontal = 48.dp)
-        )
-    }
+    UtilityRow(iconRes, title, summary, divider = showDivider, onClick = onClick)
 }
 
 @Composable
@@ -409,6 +377,9 @@ private fun MemoryDetail(
     onOpenAgent: () -> Unit,
 ) {
     DetailScroll {
+        UtilityLead(R.drawable.ic_memory, "Project memory",
+            if (!hasProject) "Open a project to view its memory." else if (lines.isEmpty()) "No facts saved" else "${lines.size} saved")
+        Spacer(Modifier.height(16.dp))
         SectionListItem(R.drawable.ic_processes, "Permissions & spending", "", onOpenAgent, true)
         Text("Rivet compacts older conversation history to make room in the model's context.",
             color = MaterialTheme.colorScheme.onSurfaceVariant,
@@ -552,12 +523,10 @@ internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable Co
 @Composable
 private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
     DetailScroll {
-        SectionHeading("Share to Rivet")
-        Text("On — Rivet appears in the share sheet",
-            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-            style = MaterialTheme.typography.bodyMedium)
+        UtilityLead(R.drawable.ic_phone_access, "Share to Rivet", "Available in the Android share sheet")
+        Spacer(Modifier.height(16.dp))
 
-        SectionHeading("Screen capture")
+        SectionHeading("Screen capture", icon = R.drawable.ic_expand)
         Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.",
             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
             style = MaterialTheme.typography.bodyMedium)
@@ -621,7 +590,7 @@ private fun GrantedFoldersSettings() {
             scope.launch { update("Couldn't keep access to that folder. Choose it again.") { registry.add(uri, data.flags) } }
         }
     }
-    SectionHeading("Granted folders")
+    SectionHeading("Granted folders", icon = R.drawable.ic_folder)
     if (folders.isEmpty()) Text("No folders added.", style = MaterialTheme.typography.bodyMedium)
     folders.forEach { grant ->
         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -666,7 +635,7 @@ private fun TermuxSettings() {
         owner?.lifecycle?.addObserver(observer)
         onDispose { owner?.lifecycle?.removeObserver(observer) }
     }
-    SectionHeading("Termux bridge")
+    SectionHeading("Termux bridge", icon = R.drawable.ic_processes)
     Text(if (installed) "Installed" else "Not installed", style = MaterialTheme.typography.bodyMedium)
     Text(TermuxCommand.SETUP, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium)
     TextButton(enabled = installed && !testing, onClick = {
@@ -721,18 +690,17 @@ private fun ProviderDetail(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 8.dp)) }
         }
-        item { SectionHeading("Current provider", modifier = Modifier.padding(top = 4.dp, bottom = 4.dp), color = headingColor) }
-        if (active == null) {
-            item {
-                Text("Choose the service you want to connect.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(vertical = 8.dp))
-            }
-        } else {
-            item {
-                ProviderRow(active, isActive = true, onSelect = {},
-                    onEdit = { onEdit(active.id) }, onDelete = { onDelete(active) })
+        item {
+            UtilityLead(R.drawable.ic_profile, active?.name ?: "Connect a provider",
+                active?.model?.takeIf { it.isNotBlank() }) {
+                if (active?.type == ProviderType.Local) {
+                    Text("Managed in Models", style = MaterialTheme.typography.bodySmall)
+                } else if (active != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { onEdit(active.id) }) { Text("Edit connection") }
+                        TextButton(onClick = { onDelete(active) }) { Text("Remove provider") }
+                    }
+                }
             }
         }
         item(key = "provider-setup") { setup() }
@@ -750,14 +718,7 @@ private fun ProviderDetail(
             SectionHeading("Add a provider", Modifier.padding(top = 24.dp, bottom = 8.dp), color = headingColor)
         }
         items(presets, key = { it.name }) { type ->
-            Row(Modifier.fillMaxWidth().clickable { onNewProvider(type) }
-                .padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(typeDisplayName(type), Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyLarge)
-                Icon(painterResource(R.drawable.ic_chevron_right), null,
-                    Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            UtilityRow(R.drawable.ic_profile, typeDisplayName(type), onClick = { onNewProvider(type) })
         }
     }
 }
@@ -771,22 +732,11 @@ private fun AppearanceDetail(
 ) {
     DetailScroll {
         
-        Text("Theme", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 12.dp))
-        
-        // Three cards per the reference; the retired rose-intensity slider is gone from
-        // the UI, its stored value untouched.
-        // The reference lays Light and Dark side by side, System full width below.
-        Row(Modifier.fillMaxWidth()) {
-            ThemeCard(RivetThemeMode.Light, selected = themeMode == RivetThemeMode.Light,
-                enabled = !themeSaving, onClick = { onThemeChange(RivetThemeMode.Light) },
-                modifier = Modifier.weight(1f).padding(end = 8.dp))
-            ThemeCard(RivetThemeMode.Dark, selected = themeMode == RivetThemeMode.Dark,
-                enabled = !themeSaving, onClick = { onThemeChange(RivetThemeMode.Dark) },
-                modifier = Modifier.weight(1f).padding(start = 8.dp))
+        UtilityLead(R.drawable.ic_appearance, "Theme", themeMode.name)
+        Spacer(Modifier.height(16.dp))
+        RivetThemeMode.entries.forEach { mode ->
+            ThemeRow(mode, themeMode == mode, enabled = !themeSaving) { onThemeChange(mode) }
         }
-        Spacer(Modifier.height(8.dp))
-        ThemeCard(RivetThemeMode.System, selected = themeMode == RivetThemeMode.System,
-            enabled = !themeSaving, onClick = { onThemeChange(RivetThemeMode.System) })
         
         appearanceError?.let { error ->
             Text(displaySafeText(error), color = MaterialTheme.colorScheme.error,
@@ -796,55 +746,19 @@ private fun AppearanceDetail(
 }
 
 @Composable
-private fun ThemeCard(
-    mode: RivetThemeMode,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val shape = RoundedCornerShape(12.dp)
-    Surface(
-        modifier = modifier
-            .heightIn(min = 84.dp)
-            .clip(shape),
-        color = if (selected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        else MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.3f),
-        shadowElevation = if (selected) 2.dp else 0.dp,
-        tonalElevation = if (selected) 1.dp else 0.dp,
-        onClick = { /* handled by clickable below */ },
-        border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-        else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+private fun ThemeRow(mode: RivetThemeMode, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp)
+            .selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {
-                    if (enabled) onClick()
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    painterResource(themeIcon(mode)),
-                    contentDescription = null,
-                    modifier = Modifier.size(22.dp),
-                    tint = if (selected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    mode.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (selected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-            }
-        }
+        UtilityGlyph(themeIcon(mode))
+        Text(mode.name, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+        RadioButton(selected = selected, onClick = null, enabled = enabled)
     }
+    HorizontalDivider(Modifier.padding(start = 52.dp), color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 // The app ships its own icon drawables (no material-icons dependency); ic_visibility is
@@ -977,10 +891,11 @@ private fun autonomyDisplayName(mode: AutonomyMode): String = when (mode) {
 private fun AboutDetail(versionName: String, onShowUsage: () -> Unit, onOpenUpdates: () -> Unit) {
     DetailScroll {
         
-        Text(stringResource(R.string.provider_hint_version, versionName),
-            style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(bottom = 16.dp))
+        UtilityLead(R.drawable.ic_info, "Rivet", stringResource(R.string.provider_hint_version, versionName))
+        Spacer(Modifier.height(16.dp))
         
-        SectionHeading(stringResource(R.string.support_heading), modifier = Modifier.padding(bottom = 8.dp))
+        SectionHeading(stringResource(R.string.support_heading), modifier = Modifier.padding(bottom = 8.dp),
+            icon = R.drawable.ic_feedback)
         SupportSection()
         
         SectionListItem(R.drawable.ic_history, "Updates", "", onOpenUpdates, true)
@@ -992,14 +907,14 @@ private fun AboutDetail(versionName: String, onShowUsage: () -> Unit, onOpenUpda
 internal fun SectionHeading(
     text: String,
     modifier: Modifier = Modifier,
-    color: Color = MaterialTheme.colorScheme.primary,
+    color: Color = MaterialTheme.colorScheme.onSurface,
+    icon: Int? = null,
 ) {
-    Text(
-        text,
-        modifier = modifier.padding(vertical = 4.dp),
-        style = MaterialTheme.typography.titleMedium,
-        color = color,
-    )
+    Row(modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        icon?.let { UtilityGlyph(it) }
+        Text(text, style = MaterialTheme.typography.titleMedium, color = color)
+    }
 }
 
 @Composable

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityLead
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
@@ -99,6 +100,8 @@ internal fun SubagentsSettings(
     val pool = SubagentPool.resolve(state, configs)
     val fixedLabel = pool.fixed?.label ?: "Choose a model"
     DetailScroll {
+        UtilityLead(R.drawable.ic_subagents, "Worker models", subagentSummary(state, configs))
+        Spacer(Modifier.height(12.dp))
         if (error != null) {
             Text(
                 error,

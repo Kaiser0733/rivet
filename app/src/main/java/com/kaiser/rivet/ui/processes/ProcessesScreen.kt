@@ -1,5 +1,9 @@
 package com.kaiser.rivet.ui.processes
 
+import com.kaiser.rivet.ui.UtilityLead
+import com.kaiser.rivet.ui.UtilityRow
+import com.kaiser.rivet.ui.UtilityGlyph
+import com.kaiser.rivet.ui.RivetOutlinedButton
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -100,27 +104,26 @@ internal fun ToolsScreen(
                 contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp)) {
                 item {
-                    Surface(onClick = { terminal.open(); onOpenTerminal() },
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = MaterialTheme.shapes.small) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Icon(painterResource(R.drawable.ic_processes), null)
-                            Text(if (terminalState.running) "Open terminal" else "New terminal",
-                                Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                            Icon(painterResource(R.drawable.ic_chevron_right), null)
+                    UtilityLead(R.drawable.ic_processes, "Terminal") {
+                        RivetOutlinedButton(onClick = { terminal.open(); onOpenTerminal() }) {
+                            Text(if (terminalState.running) "Open terminal" else "New terminal")
                         }
                     }
                 }
                 if (onOpenWorkers != null) item {
-                    TextButton(onClick = onOpenWorkers) { Text("Subagents") }
+                    UtilityRow(R.drawable.ic_subagents, "Subagents", onClick = onOpenWorkers)
                 }
                 item {
-                    Text("Running", Modifier.padding(top = 14.dp), style = MaterialTheme.typography.titleMedium)
-                    if (running.isEmpty()) Text("Nothing is running right now.",
-                        Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        UtilityGlyph(R.drawable.ic_tools)
+                        Column {
+                            Text("Running", style = MaterialTheme.typography.titleMedium)
+                            Text(if (running.isEmpty()) "Nothing is running" else "${running.size} active",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
                 items(running, key = { it.id }) { process ->
                     ProcessRow(process, now,

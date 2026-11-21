@@ -1,5 +1,9 @@
 package com.kaiser.rivet.ui.workspace
 
+import com.kaiser.rivet.ui.RivetOutlinedButton
+import com.kaiser.rivet.ui.UtilityLead
+import com.kaiser.rivet.ui.UtilityRow
+import com.kaiser.rivet.ui.UtilityGlyph
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -153,15 +157,14 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>,
             } else {
                 LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)) {
                     item {
-                        FolderHeading("Working directory")
-                        Text(state.projectName ?: "No folder selected", style = MaterialTheme.typography.titleLarge)
-                        workspaceFolderPath(state.projectIdentity)?.let {
-                            Text(it, Modifier.padding(top = 5.dp), style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        UtilityLead(R.drawable.ic_folder, state.projectName ?: "No folder selected",
+                            workspaceFolderPath(state.projectIdentity)) {
+                            state.projectError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                            if (state.projectLoading) Text("Opening folder…")
+                            RivetOutlinedButton(onClick = { chooseProject() }, enabled = enabled) {
+                                Text("Open another folder")
+                            }
                         }
-                        state.projectError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                        if (state.projectLoading) Text("Opening folder…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        FolderRow("Open another folder", R.drawable.ic_add, enabled, onClick = { chooseProject() })
                     }
                     if (recent.isNotEmpty()) {
                         item { FolderHeading("Recent folders") }
@@ -195,15 +198,5 @@ private fun FolderHeading(title: String) {
 
 @Composable
 private fun FolderRow(title: String, iconRes: Int, enabled: Boolean, detail: String? = null, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 54.dp)
-        .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(painterResource(iconRes), null, Modifier.size(21.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-        Icon(painterResource(R.drawable.ic_chevron_right), null)
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    UtilityRow(iconRes, title, detail.orEmpty(), enabled = enabled, onClick = onClick)
 }
