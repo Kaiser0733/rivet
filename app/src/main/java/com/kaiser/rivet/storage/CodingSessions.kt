@@ -1,5 +1,6 @@
 package com.kaiser.rivet.storage
 
+import com.kaiser.rivet.agent.isTranscriptEvent
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
@@ -444,7 +445,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                     read++
                     before = cursor.getLong(0)
                     val message = decode(cursor.getString(1))
-                    if (message.role != AgentRole.Context && message.internalContext == null) {
+                    if (message.isTranscriptEvent()) {
                         visible += message
                     }
                 }

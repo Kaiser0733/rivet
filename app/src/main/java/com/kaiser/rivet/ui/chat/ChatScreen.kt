@@ -516,7 +516,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     val startsWriting = remember(state.turnStartedAt, textArrived) { textArrived && !hadText }
     SideEffect { hadText = textArrived }
     val answerProgress = entryProgress(state.turnStartedAt to textArrived, startsWriting, RivetMotion.MESSAGE_MS)
-    val streaming = state.streaming
+    val streaming = state.streaming && !state.compacting
     // While a turn runs the status line is always shown, so a long tool call and a
     // stalled stream never look the same. Outside a turn the plain activity text is
     // still used for recovery messages. The clock's start comes from the turn; without one
@@ -551,10 +551,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             )
         }
     }
-    val segmentedTurns = remember(turnItems, state.streaming, state.turnDurationsMs, state.interruptedTurn, state.error != null) {
+    val segmentedTurns = remember(turnItems, streaming, state.turnDurationsMs, state.interruptedTurn, state.error != null) {
         segmentTurnItems(
             items = turnItems,
-            isStreaming = state.streaming,
+            isStreaming = streaming,
             turnDurationsMs = state.turnDurationsMs,
             isInterruptedTurn = state.interruptedTurn,
             hasError = state.error != null,
@@ -566,6 +566,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         (if (streamingText.isNotBlank()) 1 else 0) +
         (if (liveStatusStart != null) 1 else 0) +
         (if (showActivity) 1 else 0) +
+        (if (state.compacting) 1 else 0) +
         (if (showInterruptedTurn) 1 else 0) +
         (if (state.notice != null) 1 else 0) +
         (if (state.error != null) 1 else 0) +
@@ -677,6 +678,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         liveStatusStart?.let { start ->
             item(key = "live-status") { LiveStatusRow(statusLabel, start) }
         }
+        if (state.compacting) item(key = "manual-compaction") { CompactingRow() }
         if (showActivity) state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }

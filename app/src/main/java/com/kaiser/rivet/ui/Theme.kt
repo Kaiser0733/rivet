@@ -297,6 +297,7 @@ internal object RivetMotion {
     const val MESSAGE_MS = 190
     const val FOCUS_MS = 160
     const val DISCLOSURE_MS = 200
+    const val COMPACT_DOT_MS = 300
     const val DRAWER_MS = DISCLOSURE_MS
     const val COMPLETE_MS = 660
     val pageShift = 36.dp

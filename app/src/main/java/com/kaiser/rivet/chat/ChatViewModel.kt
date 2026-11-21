@@ -174,6 +174,7 @@ data class ChatUiState(
     val messages: List<AgentMessage> = emptyList(),
     val ready: Boolean = false,
     val streaming: Boolean = false,
+    val compacting: Boolean = false,
     val streamingText: String = "",
     val streamingReasoning: String = "",
     val messageReasoning: Map<Int, String> = emptyMap(),
@@ -1015,7 +1016,7 @@ class ChatViewModel private constructor(
      */
     fun compactHistory() {
         val state = _uiState.value
-        when (compactTrigger(state.streaming, state.messages.isNotEmpty())) {
+        when (compactTrigger(state.streaming, state.messages.any { it.role != AgentRole.Context })) {
             CompactTrigger.RunActive -> {
                 _uiState.update { it.copy(notice = "Cannot compact while a reply is running.",
                     error = null, commandAckCount = it.commandAckCount + 1) }
@@ -1030,8 +1031,8 @@ class ChatViewModel private constructor(
         }
         if (!state.ready || state.projectLoading || state.undoing || state.recoveringProjectChanges) return
         val ticket = ++generation
-        _uiState.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
-            activity = "Compacting…", error = null, errorAction = null, notice = null) }
+        _uiState.update { it.copy(streaming = true, compacting = true, turnStartedAt = null,
+            activity = null, error = null, errorAction = null, notice = null) }
         val previous = sendJob
         sendJob = viewModelScope.launch {
             var store: CodingSessions? = null
@@ -1085,7 +1086,8 @@ class ChatViewModel private constructor(
                         notice = "Nothing to compact yet.", error = null) }
                     return@launch
                 }
-                val notice = InternalContext.compactionNotice(workspaceId)
+                val historyTokens = ContextBudget.estimateHistoryTokens(context.requestFor(compacted).messages)
+                val notice = InternalContext.compactionNotice(workspaceId, historyTokens)
                 val noticed = compacted + notice
                 try {
                     sql.save(noticed, interrupted = false, expectedSessionId = sessionId)
@@ -1103,13 +1105,24 @@ class ChatViewModel private constructor(
                 activeMessages = noticed
                 activeSummary = context.summary
                 if (ticket == generation) {
-                    _uiState.update { it.copy(streaming = false, activity = null,
-                        messages = (it.messages + notice).takeLast(100), error = null) }
-                    try {
-                        val estimate = context.estimate(noticed)
-                        _uiState.update { it.copy(contextEstimate = estimate) }
-                    } catch (e: CancellationException) { throw e
-                    } catch (_: Exception) { /* Usage estimates never change the completed compaction. */ }
+                    val estimate = try { context.estimate(noticed) }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { ContextEstimate(context.footprint(noticed), "estimated") }
+                    _uiState.update { state ->
+                        val visible = (state.messages + notice).takeLast(100)
+                        val remapped = com.kaiser.rivet.ui.chat.remapTurnMetadataAfterVisibilityChange(
+                            oldMessages = state.messages,
+                            newMessages = visible,
+                            oldReasoning = state.messageReasoning,
+                            oldDurations = state.turnDurationsMs,
+                            isInternal = { it.role == AgentRole.Context || it.internalContext != null },
+                            isUser = { it.role == AgentRole.User },
+                            sameMessage = { first, second -> first == second },
+                        )
+                        state.copy(streaming = false, compacting = false, activity = null, messages = visible,
+                            messageReasoning = remapped.reasoning, turnDurationsMs = remapped.durations,
+                            contextEstimate = estimate, error = null)
+                    }
                 }
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
@@ -1125,6 +1138,10 @@ class ChatViewModel private constructor(
                 if (ticket == generation) _uiState.update { it.copy(streaming = false, activity = null,
                     error = "Rivet could not shorten this session's context. The conversation was kept.",
                     errorAction = null) }
+            } finally {
+                if (ticket == generation) _uiState.update { state ->
+                    if (state.compacting) state.copy(compacting = false) else state
+                }
             }
         }
     }
@@ -1949,7 +1966,7 @@ class ChatViewModel private constructor(
                 rollbackAcceptedUser(acceptedUser)
                 releaseTurn()
                 if (ticket == generation) {
-                    val updatedHistory = if (pendingUser != null && sessions != null &&
+                    val updatedHistory = if (pendingUser.isNotEmpty() && sessions != null &&
                 _uiState.value.sessions.none { it.id == turnSessionId && it.hasMessages }) {
                 try { sessions.list() }
                 catch (e: CancellationException) { throw e }
@@ -2134,7 +2151,8 @@ class ChatViewModel private constructor(
                     if (compacted != candidate) {
                         // A completed compaction leaves one visible, persisted marker row;
                         // modelMessages keeps it off the wire and projection carries the earlier ones.
-                        val noticed = compacted + InternalContext.compactionNotice(workspaceId)
+                        val historyTokens = ContextBudget.estimateHistoryTokens(context.requestFor(compacted).messages)
+                        val noticed = compacted + InternalContext.compactionNotice(workspaceId, historyTokens)
                         durable.clear()
                         durable.addAll(noticed)
                         activeMessages = noticed

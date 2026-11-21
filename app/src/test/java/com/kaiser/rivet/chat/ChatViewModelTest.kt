@@ -1069,6 +1069,17 @@ class ChatViewModelTest {
         } }
 
         assertNull(done.error)
+        assertFalse(done.compacting)
+        val compacted = sessions.load()
+        val count = com.kaiser.rivet.agent.ContextBudget.estimateHistoryTokens(
+            com.kaiser.rivet.agent.modelMessages(compacted.messages, compacted.workspaceId, enforceWorkspace = true)
+        )
+        val copy = "Compacted to $count tokens"
+        val restored = CodingSessions(app).recent(id)
+        assertEquals(done.messages, restored)
+        assertEquals(copy, com.kaiser.rivet.agent.AgentActivityProjection.conversation(restored)
+            .filterIsInstance<com.kaiser.rivet.agent.AgentConversationItem.SystemNotice>().single().text)
+        assertFalse(com.kaiser.rivet.agent.modelMessages(compacted.messages).any { copy in it.text })
         assertEquals(1, provider.requests.size)
         assertTrue(provider.requests.single().system.contains("\"DECISIONS + WHY\""))
         // The goal stays pinned verbatim to the newest user message, as in the run path.
@@ -1241,8 +1252,9 @@ class ChatViewModelTest {
 
         viewModel.compactHistory()
         assertTrue(withTimeout(5_000) { entered.await() }.system.contains("\"DECISIONS + WHY\""))
+        assertTrue(viewModel.uiState.value.compacting)
         viewModel.cancel()
-        await(viewModel) { !it.streaming }
+        await(viewModel) { !it.streaming && !it.compacting }
 
         val restored = CodingSessions(app).load()
         assertEquals(history, restored.messages)

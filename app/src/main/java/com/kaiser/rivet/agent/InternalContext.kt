@@ -143,10 +143,11 @@ data class InternalContext(
         }
 
         /** A display-only transcript row; modelMessages keeps it off the wire. */
-        fun compactionNotice(workspace: String?): AgentMessage = InternalContext(
-            kind = CompactionNotice.KIND, workspaceId = workspace,
-            content = CompactionNotice.TEXT, digest = digest(CompactionNotice.TEXT),
-        ).event()
+        fun compactionNotice(workspace: String?, tokens: Long? = null): AgentMessage {
+            val value = tokens?.let(CompactionNotice::completed) ?: CompactionNotice.TEXT
+            return InternalContext(kind = CompactionNotice.KIND, workspaceId = workspace,
+                content = value, digest = digest(value)).event()
+        }
 
         /** The restore replacement notice, shown in the transcript when the terminal is not on screen. */
         fun restoreNotice(workspace: String?): AgentMessage = InternalContext(

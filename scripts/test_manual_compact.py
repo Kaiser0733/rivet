@@ -39,7 +39,7 @@ class ManualCompactTest(unittest.TestCase):
         body = model.split("fun compactHistory()", 1)[1].split("/** Move a no-project goal", 1)[0]
         self.assertIn("ContextPreparation(sql, sessionId", body)
         self.assertIn('context.prepare(activeMessages, force = true, reason = "manual")', body)
-        self.assertIn("InternalContext.compactionNotice(workspaceId)", body)
+        self.assertIn("InternalContext.compactionNotice(workspaceId, historyTokens)", body)
         self.assertIn("sql.save(noticed, interrupted = false, expectedSessionId = sessionId)", body)
         self.assertIn("activeSummary = context.summary", body)
         # The automatic path keeps the same machinery; the manual one adds no second checkpoint.

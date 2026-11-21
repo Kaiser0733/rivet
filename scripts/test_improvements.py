@@ -79,3 +79,15 @@ class ImprovementsTest(unittest.TestCase):
         signal = source("ui/chat/ReasoningSignal.kt")
         self.assertIn("repeat(count)", signal)
         self.assertNotIn("EffortPattern", signal)
+
+    def test_compaction_process_and_saved_notice_both_reach_the_timeline(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        self.assertIn('if (state.compacting) item(key = "manual-compaction") { CompactingRow() }', chat)
+        self.assertIn("SystemNoticeRow(it.text)", chat)
+        dots = source("ui/chat/CompactingRow.kt")
+        self.assertIn("dots = dots % 3 + 1", dots)
+        self.assertIn("RivetMotion.COMPACT_DOT_MS", dots)
+        store = source("storage/CodingSessions.kt")
+        self.assertIn("if (message.isTranscriptEvent())", store)
+        self.assertIn("CompactionNotice.isNotice(validatedContext()?.kind)", source("agent/CompactionNotice.kt"))
+        self.assertIn("!CompactionNotice.isNotice(it.kind)", source("agent/InternalContext.kt"))

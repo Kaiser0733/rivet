@@ -72,7 +72,7 @@ object AgentActivityProjection {
                 AgentRole.Context -> {
                     val context = message.validatedContext()
                     if (context != null && CompactionNotice.isNotice(context.kind)) {
-                        items += AgentConversationItem.SystemNotice(context.content)
+                        items += AgentConversationItem.SystemNotice(CompactionNotice.display(context.content))
                     }
                 }
             }
