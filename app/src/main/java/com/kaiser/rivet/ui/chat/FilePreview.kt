@@ -118,11 +118,12 @@ internal fun ChatWithPreview(
     var divider by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableFloatStateOf(0.54f) }
     val stateHolder = rememberSaveableStateHolder()
     BoxWithConstraints(Modifier.fillMaxSize()) {
-        val widthPx = with(LocalDensity.current) { maxWidth.toPx() }
-        val dividerWidth = 14.dp.coerceAtMost(maxWidth)
+        val availableWidth = maxWidth
+        val widthPx = with(LocalDensity.current) { availableWidth.toPx() }
+        val dividerWidth = 14.dp.coerceAtMost(availableWidth)
         Row(Modifier.fillMaxSize()) {
             if (!tabs.fullScreen || active == null) {
-                val chat = if (active == null) Modifier.weight(1f) else Modifier.width((maxWidth - dividerWidth) * divider)
+                val chat = if (active == null) Modifier.weight(1f) else Modifier.width((availableWidth - dividerWidth) * divider)
                 Box(chat.fillMaxHeight()) {
                     stateHolder.SaveableStateProvider("conversation") { content() }
                 }
@@ -157,7 +158,8 @@ private fun PreviewPane(tabs: PreviewTabs, path: String) {
     val fileName = path.substringAfterLast('/')
     val type = when (content) {
         is FilePreviewResult.Image -> "Image"
-        is FilePreviewResult.Text -> if (content.markdown) "Markdown" else "Text"
+        is FilePreviewResult.Text -> if (content.markdown) "Markdown"
+            else if (fileTypeLabel(path) == "Code") "Code" else "Text"
         else -> fileTypeLabel(path)
     }
     Surface(Modifier.fillMaxSize()) {
@@ -204,7 +206,7 @@ private fun PreviewPane(tabs: PreviewTabs, path: String) {
                         else Text(content.content, style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace))
                     }
                 }
-                is FilePreviewResult.Unavailable -> PreviewNotice(content.reason, content.size)
+                is FilePreviewResult.Unavailable -> PreviewNotice(content.reason, content.size, showSize = true)
                 FilePreviewResult.Missing -> PreviewNotice("Moved or deleted", null)
                 FilePreviewResult.WrongProject -> PreviewNotice("Open this chat's project to preview its files.", null)
                 null -> PreviewNotice("Opening file…", null)
@@ -214,12 +216,17 @@ private fun PreviewPane(tabs: PreviewTabs, path: String) {
 }
 
 @Composable
-private fun PreviewNotice(message: String, bytes: Long?) {
+private fun PreviewNotice(message: String, bytes: Long?, showSize: Boolean = false) {
     Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         Text(message, style = MaterialTheme.typography.bodyMedium)
-        bytes?.let {
-            Text(if (it < 1024L) "$it bytes" else "${(it / 1024.0).roundToInt()} KB",
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        if (showSize) {
+            val label = when {
+                bytes == null -> "Size unavailable"
+                bytes < 1024L -> "$bytes bytes"
+                else -> "${(bytes / 1024.0).roundToInt()} KB"
+            }
+            Text(label, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
 }
@@ -227,7 +234,12 @@ private fun PreviewNotice(message: String, bytes: Long?) {
 @Composable
 internal fun ProjectFileCard(file: PresentedFile, missing: Boolean, onOpen: () -> Unit) {
     val type = fileTypeLabel(file.path)
-    val icon = if (type == "Image") R.drawable.ic_visibility else R.drawable.ic_files
+    val icon = when (type) {
+        "Image" -> R.drawable.ic_visibility
+        "Markdown" -> R.drawable.ic_memory
+        "Code" -> R.drawable.ic_tools
+        else -> R.drawable.ic_files
+    }
     Surface(onClick = onOpen, modifier = Modifier.fillMaxWidth(), shape = MaterialTheme.shapes.small,
         color = MaterialTheme.colorScheme.surfaceContainerLow) {
         Row(Modifier.heightIn(min = 48.dp).padding(10.dp), verticalAlignment = Alignment.CenterVertically,
@@ -249,6 +261,8 @@ internal fun ProjectFileCard(file: PresentedFile, missing: Boolean, onOpen: () -
 private fun fileTypeLabel(path: String): String = when (path.substringAfterLast('.', "").lowercase()) {
     "md", "markdown", "mdx" -> "Markdown"
     "png", "jpg", "jpeg", "webp", "gif", "bmp", "heic", "avif" -> "Image"
+    "kt", "kts", "java", "js", "jsx", "ts", "tsx", "json", "xml", "css", "html", "py",
+    "rb", "go", "rs", "sh", "bash", "sql", "c", "cpp", "h", "yml", "yaml", "toml", "gradle" -> "Code"
     "pdf" -> "PDF"
     "doc", "docx", "ppt", "pptx", "xls", "xlsx", "odt" -> "Document"
     else -> "File"
