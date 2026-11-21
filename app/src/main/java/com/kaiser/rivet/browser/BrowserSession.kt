@@ -117,6 +117,7 @@ data class BrowserUiState(
     val notice: String? = null,
     val budgetCloseAction: Boolean = false,
     val error: String? = null,
+    val errorRetry: Boolean = false,
     val loadValveNotice: String? = null,
     val fullPage: Boolean = false,
     val allowJs: Boolean = true,
@@ -669,7 +670,7 @@ class BrowserSession(
                 it.copy(visible = it.visible || userInitiated,
                     pageReady = false, visualScreenshot = null,
                     url = url, mode = BrowserMode.Renderer,
-                    readerMode = false, error = null, notice = null, handoff = null,
+                    readerMode = false, error = null, errorRetry = false, notice = null, handoff = null,
                     authNotice = null, loadValveNotice = null)
             }
             val view = ensureRenderer(showWatch = !userInitiated,
@@ -788,20 +789,31 @@ class BrowserSession(
         loadForInteraction(view, activeUrl)
     }
 
-    internal var rendererLayoutTimeoutMs: Long = 1_500L
+    internal var rendererLayoutTimeoutMs: Long = 4_000L
 
     internal suspend fun awaitLaidOut(view: WebView, timeoutMs: Long = rendererLayoutTimeoutMs) {
-        if (withContext(Dispatchers.Main) { view.width > 1 && view.height > 1 }) return
+        fun outcome(): LayoutWait = layoutWait(
+            width = view.width, height = view.height,
+            rendererLost = renderer !== view || _state.value.teardownRequested,
+        )
+        if (withContext(Dispatchers.Main) { outcome() } == LayoutWait.Ready) return
         withContext(Dispatchers.Main) { view.requestLayout() }
-        val laidOut = withTimeoutOrNull(timeoutMs.coerceAtLeast(1L)) {
-            while (!withContext(Dispatchers.Main) { view.width > 1 && view.height > 1 }) {
-                delay(16L)
+        val finished = withTimeoutOrNull(timeoutMs.coerceAtLeast(1L)) {
+            while (true) {
+                when (withContext(Dispatchers.Main) { outcome() }) {
+                    LayoutWait.Ready -> return@withTimeoutOrNull true
+                    // The memory governor can take the renderer away while the sheet is
+                    // still attaching. That is not a degenerate viewport, and saying so
+                    // sent people to a browser_reset call they cannot make from the UI.
+                    LayoutWait.LostRenderer -> return@withTimeoutOrNull false
+                    LayoutWait.Waiting -> delay(16L)
+                }
             }
-            true
+            @Suppress("UNREACHABLE_CODE") false
         } ?: false
-        if (!laidOut) {
+        if (!finished) {
             throw BrowserFailure("browser_renderer_unavailable",
-                "The browser viewport is degenerate (1x1 or not laid out). Call browser_reset(reopen=true) to rebuild the renderer.")
+                "The page view didn't get a size in time. Open the browser again.")
         }
     }
 
@@ -1594,8 +1606,9 @@ class BrowserSession(
         requestRendererTeardown()
     }
 
-    fun showError(message: String) {
-        _state.update { it.copy(error = message) }
+    fun showError(failure: BrowserFailure) {
+        val copy = browserNoticeCopy(failure.code, failure.message)
+        _state.update { it.copy(error = copy.text, errorRetry = copy.retry) }
     }
 
     private data class PendingPaintRestart(val url: String, val snapshot: BrowserSnapshot?)

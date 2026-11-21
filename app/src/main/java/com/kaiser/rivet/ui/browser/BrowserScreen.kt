@@ -128,7 +128,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             try {
                 session.openVisual(address.text, userInitiated = true)
             } catch (error: BrowserFailure) {
-                session.showError(error.message)
+                session.showError(error)
             }
         }
     }
@@ -246,6 +246,15 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                                 Text(error, Modifier.weight(1f),
                                     color = MaterialTheme.colorScheme.onErrorContainer,
                                     style = MaterialTheme.typography.bodySmall)
+                                if (state.errorRetry) {
+                                    TextButton(onClick = {
+                                        val retryUrl = state.url.ifBlank { session.currentUrl() }
+                                        if (retryUrl.isNotBlank()) scope.launch {
+                                            try { session.openVisual(retryUrl, userInitiated = true) }
+                                            catch (failure: BrowserFailure) { session.showError(failure) }
+                                        }
+                                    }) { Text("Try again") }
+                                }
                                 TextButton(onClick = onCloseSession) { Text("Close browser") }
                             }
                         }
@@ -309,7 +318,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                         else try {
                             session.showReader()
                         } catch (error: BrowserFailure) {
-                            session.showError(error.message)
+                            session.showError(error)
                         }
                     }
                 }) {
@@ -349,7 +358,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                                     else try {
                                         session.showReader()
                                     } catch (error: BrowserFailure) {
-                                        session.showError(error.message)
+                                        session.showError(error)
                                     }
                                 }
                             })
