@@ -131,3 +131,10 @@ class ImprovementsTest(unittest.TestCase):
         self.assertNotIn("DateUtils", sidebar)
         self.assertIn("relativeRecency(session.updatedAt)", sidebar)
         self.assertIn("R.plurals.sidebar_days_ago", sidebar)
+
+    def test_public_support_uses_the_existing_coffee_action(self):
+        support = source("ui/provider/SupportSection.kt")
+        self.assertNotIn("UPI_ID", support)
+        self.assertNotIn("ClipboardManager", support)
+        self.assertIn("R.string.support_coffee", support)
+        self.assertIn("openSupport(context)", support)
