@@ -388,10 +388,14 @@ private fun MemoryDetail(
     DetailScroll {
         UtilityColumns(
             leading = {
-                UtilityLead(R.drawable.ic_memory, "Project memory",
+                val status = when {
+                    !hasProject -> "Open a project to view its memory."
+                    lines.isEmpty() -> "No facts saved"
+                    else -> "${lines.size} saved"
+                }
+                UtilityLead(R.drawable.ic_memory, "Project memory", status)
             },
             trailing = {
-                if (!hasProject) "Open a project to view its memory." else if (lines.isEmpty()) "No facts saved" else "${lines.size} saved")
                 Spacer(Modifier.height(16.dp))
                 SectionListItem(R.drawable.ic_processes, "Permissions & spending", "", onOpenAgent, true)
                 UtilityFold(R.drawable.ic_memory, "How memory works") {

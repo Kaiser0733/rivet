@@ -1,6 +1,5 @@
 package com.kaiser.rivet.chat
 
-import com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
 import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
@@ -47,6 +46,8 @@ import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.agent.RunRecord
 import com.kaiser.rivet.agent.RunSpendLedger
 import com.kaiser.rivet.agent.AgentUsage
+import com.kaiser.rivet.agent.ContextBudget
+import com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
 import com.kaiser.rivet.browser.BrowserBookmarkPath
 import com.kaiser.rivet.browser.BrowserRuntime
 import com.kaiser.rivet.browser.BrowserSession
@@ -2011,13 +2012,7 @@ class ChatViewModel private constructor(
                 rollbackAcceptedUser(acceptedUser)
                 releaseTurn()
                 if (ticket == generation) {
-                    val updatedHistory = if (pendingUser.isNotEmpty() && sessions != null &&
-                _uiState.value.sessions.none { it.id == turnSessionId && it.hasMessages }) {
-                try { sessions.list() }
-                catch (e: CancellationException) { throw e }
-                catch (_: Exception) { null }
-            } else null
-            _uiState.update {
+                    _uiState.update {
                         it.copy(streaming = false, pendingApproval = null, activity = null,
                             interruptedTurn = wasInterrupted,
                             error = CONTEXT_LIMIT_ERROR)
@@ -2032,6 +2027,16 @@ class ChatViewModel private constructor(
                     error = "Could not save the conversation. Check available storage and try again.") }
                 return@launch
             }
+            val updatedHistory = if (pendingUser.isNotEmpty() &&
+                _uiState.value.sessions.none { it.id == turnSessionId && it.hasMessages }) {
+                try {
+                    sessions?.list()
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    null
+                }
+            } else null
             _uiState.update {
                 it.copy(
                     // send() already appended the accepted bubble; retries reuse the tail.
