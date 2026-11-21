@@ -349,14 +349,12 @@ private fun PopoverRow(label: String, value: String, onClick: () -> Unit) {
         .clickable(onClick = onClick)
         .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically) {
-        Text(label, style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
-        Text(value, style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 1, overflow = TextOverflow.Ellipsis,
-            textAlign = TextAlign.End,
-            modifier = Modifier.weight(1f).padding(start = 12.dp))
+        Column(Modifier.weight(1f).padding(vertical = 6.dp)) {
+            Text(label, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(value, style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurface)
+        }
         Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,
             modifier = Modifier.padding(start = 6.dp).size(18.dp))
@@ -393,11 +391,9 @@ private fun ModelOptionRow(title: String, subtitle: String, selected: Boolean, o
         .padding(horizontal = 12.dp),
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+            Text(title, style = MaterialTheme.typography.bodyMedium)
             Text(subtitle, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (selected) {
             Text("✓", style = MaterialTheme.typography.titleMedium,
@@ -415,10 +411,8 @@ private fun ProviderJumpRow(name: String, model: String, onClick: () -> Unit) {
         verticalAlignment = Alignment.CenterVertically) {
         Column(Modifier.weight(1f)) {
             Text(name, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-            Text(model, style = MaterialTheme.typography.bodyMedium,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(model, style = MaterialTheme.typography.bodyMedium)
         }
         Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null,
             tint = MaterialTheme.colorScheme.onSurfaceVariant,

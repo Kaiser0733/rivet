@@ -950,15 +950,14 @@ private fun ProviderRow(
                 } else {
                     "${typeDisplayName(provider.type)} · ${provider.model}"
                 }
-                Text(providerDetail,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                Text(providerDetail, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (provider.type == ProviderType.Local) {
+                    Text("Managed in Models", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
-            if (provider.type == ProviderType.Local) {
-                Text("Managed in Models", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
+            if (provider.type != ProviderType.Local) {
                 IconButton(onClick = onEdit) {
                     Icon(painterResource(R.drawable.ic_edit), stringResource(R.string.provider_edit_action),
                         tint = MaterialTheme.colorScheme.onBackground)

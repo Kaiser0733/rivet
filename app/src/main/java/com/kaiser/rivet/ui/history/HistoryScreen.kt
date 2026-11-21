@@ -150,8 +150,7 @@ internal fun RivetSidebar(
                                 maxLines = 1, overflow = TextOverflow.Ellipsis)
                             workspaceFolderPath(state.projectIdentity)?.let {
                                 Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                    style = MaterialTheme.typography.bodySmall,
-                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                    style = MaterialTheme.typography.bodySmall)
                             }
                         }
                         Icon(painterResource(R.drawable.ic_chevron_right), "Change working folder")

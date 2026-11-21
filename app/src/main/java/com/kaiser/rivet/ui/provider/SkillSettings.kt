@@ -165,21 +165,13 @@ private fun SkillRow(skill: Skill, onOpen: () -> Unit) {
             UtilityGlyph(R.drawable.ic_skills)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(skill.name, style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false))
-                    manualOnlyLabel(skill)?.let { marker ->
-                        Text(marker, style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 8.dp))
-                    }
+                Text(skill.name, style = MaterialTheme.typography.bodyLarge)
+                manualOnlyLabel(skill)?.let { marker ->
+                    Text(marker, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text(displaySafeText(skill.description),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            Icon(painterResource(R.drawable.ic_chevron_right), null, Modifier.size(18.dp))
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
     }
@@ -190,11 +182,9 @@ private fun ErrorRow(error: SkillError) {
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Text(displaySafeText(error.displayName), style = MaterialTheme.typography.bodyMedium)
         Text(displaySafeText(error.path), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(displaySafeText(error.reason), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-            maxLines = 2, overflow = TextOverflow.Ellipsis)
+            color = MaterialTheme.colorScheme.error)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 }

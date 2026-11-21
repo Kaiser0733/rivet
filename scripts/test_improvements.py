@@ -109,3 +109,13 @@ class ImprovementsTest(unittest.TestCase):
         self.assertNotIn("AlternativeRow(", models)
         self.assertNotIn("items(ui.entries", models)
         self.assertIn(".distinctBy { it.id }", source("ui/local/ModelRows.kt"))
+
+    def test_settings_values_wrap_in_the_weighted_column(self):
+        settings = source("ui/provider/SettingsScreen.kt")
+        rows = settings.split("private fun SectionListItem(", 1)[1].split("private fun MemoryDetail", 1)[0]
+        self.assertIn("UtilityRow(iconRes, title, summary", rows)
+        row = source("ui/UtilitySurfaces.kt").split("internal fun UtilityRow(", 1)[1].split("internal fun UtilityLead(", 1)[0]
+        self.assertLess(row.index("Column(Modifier.weight(1f))"), row.index("Text(value"))
+        value = row.split("Text(value", 1)[1].split("Icon(painterResource(trailingIcon)", 1)[0]
+        self.assertNotIn("maxLines", value)
+        self.assertNotIn("Ellipsis", value)
