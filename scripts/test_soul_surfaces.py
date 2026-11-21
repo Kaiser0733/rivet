@@ -14,14 +14,16 @@ class SoulSurfaceTest(unittest.TestCase):
         self.assertIn('state.projectName == null && !state.streaming -> "Choose a working folder to start."', chat)
         self.assertIn('projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE', chat)
 
-    def test_checkpoint_summary_appears_once_with_a_storage_kind(self):
+    def test_checkpoints_fold_full_title_kind_and_actions_under_one_line(self):
         tools = (UI / "processes/ProcessesScreen.kt").read_text()
-        row = tools.split("checkpoints.take(6).forEach", 1)[1].split("checkpointNotice?.let", 1)[0]
+        row = tools.split("visible.forEach { checkpoint", 1)[1].split("checkpointNotice?.let", 1)[0]
         self.assertEqual(row.count("checkpoint.summary"), 1)
+        self.assertIn("titleMaxLines = 1", row)
+        self.assertIn("Text(title, style", row)
         self.assertIn('if (checkpoint.gitRef != null) "Git checkpoint" else "File checkpoint"', row)
         self.assertIn("RestoreTarget(checkpoint, undoRun = false)", row)
+        self.assertIn("RestoreTarget(checkpoint, undoRun = true)", row)
         self.assertIn("Locale.getDefault()", row)
-        self.assertNotIn("maxLines", row)
 
     def test_worker_sheet_selection_uses_the_selected_job_id(self):
         sheet = (UI / "chat/WorkerSheet.kt").read_text()

@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.processes
 
+import androidx.compose.runtime.key
+import com.kaiser.rivet.ui.UtilityFold
+import com.kaiser.rivet.ui.chat.displaySafeText
 import com.kaiser.rivet.ui.RivetLayout
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.lazy.LazyListScope
@@ -207,30 +210,31 @@ private fun CheckpointList(checkpoints: List<RunCheckpointInfo>, checkpointNotic
             val latestRunId = checkpoints.firstOrNull()?.runId
             val runStart = checkpoints.filter { it.runId == latestRunId }
                 .minByOrNull { it.sequence }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Run checkpoints", style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f))
-                runStart?.let {
-                    TextButton(onClick = { onRestore(RestoreTarget(it, undoRun = true)) }) {
-                        Text("Undo this run")
-                    }
-                }
+            Text("Run checkpoints", style = MaterialTheme.typography.titleMedium)
+            val visible = checkpoints.take(6).let { latest ->
+                if (runStart != null && runStart !in latest) latest + runStart else latest
             }
-            checkpoints.take(6).forEach { checkpoint ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(checkpoint.summary,
-                            style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            SimpleDateFormat("HH:mm", Locale.getDefault())
-                                .format(Date(checkpoint.createdAt)) + " · " +
-                                (if (checkpoint.gitRef != null) "Git checkpoint" else "File checkpoint"),
-                            style = MaterialTheme.typography.bodySmall,
+            visible.forEach { checkpoint ->
+                key(checkpoint.id) {
+                    val title = displaySafeText(checkpoint.summary)
+                    UtilityFold(R.drawable.ic_history, title, titleMaxLines = 1) {
+                        Text(title, style = MaterialTheme.typography.bodyMedium)
+                        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(checkpoint.createdAt))
+                        val type = if (checkpoint.gitRef != null) "Git checkpoint" else "File checkpoint"
+                        Text("$time · $type", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            if (checkpoint == runStart) {
+                                TextButton(onClick = { onRestore(RestoreTarget(checkpoint, undoRun = true)) }) {
+                                    Text("Undo this run")
+                                }
+                            }
+                            TextButton(onClick = { onRestore(RestoreTarget(checkpoint, undoRun = false)) }) {
+                                Text("Restore")
+                            }
+                        }
                     }
-                    TextButton(onClick = {
-                        onRestore(RestoreTarget(checkpoint, undoRun = false))
-                    }) { Text("Restore") }
                 }
             }
             checkpointNotice?.let {
@@ -238,7 +242,7 @@ private fun CheckpointList(checkpoints: List<RunCheckpointInfo>, checkpointNotic
                     color = if (it.startsWith("Not restored")) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (checkpoints.size > 6) Text("Showing the latest 6 checkpoints",
+            if (checkpoints.size > visible.size) Text("Showing ${visible.size} of ${checkpoints.size} checkpoints",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }

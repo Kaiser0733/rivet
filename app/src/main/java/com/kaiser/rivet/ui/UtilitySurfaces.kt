@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui
 
+import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.foundation.interaction.collectIsFocusedAsState
 import androidx.compose.foundation.interaction.collectIsHoveredAsState
 import androidx.compose.foundation.hoverable
@@ -70,6 +71,7 @@ internal fun UtilityRow(
     enabled: Boolean = true,
     divider: Boolean = true,
     trailingIcon: Int = R.drawable.ic_chevron_right,
+    titleMaxLines: Int = Int.MAX_VALUE,
     onClick: () -> Unit,
 ) {
     Column(modifier.fillMaxWidth()) {
@@ -83,6 +85,7 @@ internal fun UtilityRow(
             UtilityGlyph(icon)
             Column(Modifier.weight(1f)) {
                 Text(title, style = MaterialTheme.typography.titleSmall,
+                    maxLines = titleMaxLines, overflow = TextOverflow.Ellipsis,
                     color = MaterialTheme.colorScheme.onSurface.copy(alpha = if (enabled) 1f else 0.55f))
                 if (value.isNotBlank()) Text(value, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -128,11 +131,12 @@ internal fun UtilityFold(
     title: String,
     value: String = "",
     modifier: Modifier = Modifier,
+    titleMaxLines: Int = Int.MAX_VALUE,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
     Column(modifier.fillMaxWidth()) {
-        UtilityRow(icon, title, value, divider = false,
+        UtilityRow(icon, title, value, divider = false, titleMaxLines = titleMaxLines,
             modifier = Modifier.semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
             trailingIcon = if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right,
             onClick = { expanded = !expanded })
