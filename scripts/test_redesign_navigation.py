@@ -150,3 +150,15 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertIn("LaunchedEffect(searching, drawerOpen)", sidebar)
         self.assertIn("searchFocus.requestFocus()", sidebar)
         self.assertIn(".focusRequester(searchFocus)", sidebar)
+
+    def test_background_browser_renderer_stays_behind_an_opaque_page(self):
+        app = (UI / "RivetApp.kt").read_text()
+        host = app.split("RivetBackdrop {", 1)[1]
+        self.assertLess(host.index("background(MaterialTheme.colorScheme.background)"),
+                        host.index("pageEntry(progress, offset)"))
+        self.assertIn("browserState.rendererVisible && !browserState.teardownRequested", host)
+
+    def test_project_picker_waits_for_the_view_model_binding_result(self):
+        projects = (UI / "workspace/ProjectsScreen.kt").read_text()
+        self.assertIn("viewModel.uiState.first { !it.projectLoading }", projects)
+        self.assertIn("result.projectError == null && result.starterError == null", projects)

@@ -49,6 +49,7 @@ import com.kaiser.rivet.ui.RivetPageHeader
 import com.kaiser.rivet.ui.starter.rememberStarterListing
 import com.kaiser.rivet.ui.starter.starterRows
 import com.kaiser.rivet.ui.workspaceFolderPath
+import kotlinx.coroutines.flow.first
 
 @Composable
 internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>, onBack: () -> Unit) {
@@ -119,10 +120,11 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>,
         }
     }
 
-    LaunchedEffect(opening, state.projectLoading, state.projectError, state.starterError) {
-        if (opening && !state.projectLoading) {
+    LaunchedEffect(opening) {
+        if (opening) {
+            val result = viewModel.uiState.first { !it.projectLoading }
             opening = false
-            if (state.projectError == null && state.starterError == null) onBack()
+            if (result.projectError == null && result.starterError == null) onBack()
         }
     }
     BackHandler(enabled = pendingProject != null) { pendingProject = null }
