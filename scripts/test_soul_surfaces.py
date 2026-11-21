@@ -40,3 +40,12 @@ class SoulSurfaceTest(unittest.TestCase):
                 self.assertIn(f"RivetDoodle.{mark}", branch)
                 for phrase in phrases:
                     self.assertIn(phrase, branch)
+
+    def test_checkpoint_summary_appears_once_with_a_storage_kind(self):
+        tools = (UI / "processes/ProcessesScreen.kt").read_text()
+        row = tools.split("checkpoints.take(6).forEach", 1)[1].split("checkpointNotice?.let", 1)[0]
+        self.assertEqual(row.count("checkpoint.summary"), 1)
+        self.assertIn('if (checkpoint.gitRef != null) "Git checkpoint" else "File checkpoint"', row)
+        self.assertIn("RestoreTarget(checkpoint, undoRun = false)", row)
+        self.assertIn("Locale.getDefault()", row)
+        self.assertNotIn("maxLines", row)

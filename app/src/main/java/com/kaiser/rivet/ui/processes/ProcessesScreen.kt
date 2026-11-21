@@ -185,11 +185,9 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
                             Text(
                                 SimpleDateFormat("HH:mm", Locale.getDefault())
                                     .format(Date(checkpoint.createdAt)) + " · " +
-                                    (if (checkpoint.gitRef != null) "hidden git ref · " else "delta copy · ") +
-                                    checkpoint.summary,
+                                    (if (checkpoint.gitRef != null) "Git checkpoint" else "File checkpoint"),
                                 style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                                maxLines = 2, overflow = TextOverflow.Ellipsis)
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
                         }
                         TextButton(onClick = {
                             restoreTarget = RestoreTarget(checkpoint, undoRun = false)
