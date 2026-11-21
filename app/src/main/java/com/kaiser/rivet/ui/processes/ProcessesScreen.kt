@@ -96,7 +96,6 @@ internal fun ToolsScreen(
     val terminalState by terminal.state.collectAsState()
     val processItems by processes.processes.collectAsState()
     val (running, finished) = processItems.partition { it.status in ACTIVE }
-    var showFinished by rememberSaveable { mutableStateOf(false) }
     var restoreTarget by remember { mutableStateOf<RestoreTarget?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(running.isNotEmpty()) {
@@ -145,15 +144,13 @@ internal fun ToolsScreen(
                         onCopy = { process.url?.let { copyPreview(context, it) } })
                 }
                 if (finished.isNotEmpty()) item {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    TextButton(onClick = { showFinished = !showFinished }) {
-                        Text(if (showFinished) "Hide finished" else "Finished processes")
-                        Icon(painterResource(if (showFinished) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right),
-                            null, Modifier.size(18.dp))
+                    UtilityFold(R.drawable.ic_history, "Finished processes") {
+                        finished.forEach { process ->
+                            key(process.id) {
+                                ProcessRow(process, now, onStop = {}, onOpen = {}, onCopy = {})
+                            }
+                        }
                     }
-                }
-                if (showFinished) items(finished, key = { it.id }) { process ->
-                    ProcessRow(process, now, onStop = {}, onOpen = {}, onCopy = {})
                 }
             }
             val padding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)

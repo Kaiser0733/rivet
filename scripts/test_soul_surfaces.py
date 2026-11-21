@@ -49,8 +49,11 @@ class SoulSurfaceTest(unittest.TestCase):
         motion = (UI / "FoldReveal.kt").read_text()
         self.assertIn("currentCoroutineContext()[MotionDurationScale]", motion)
         self.assertLess(motion.index("scale() == 0f"), motion.index("withFrameNanos { it }"))
-        self.assertIn("EXPAND_MS = 180", motion)
-        self.assertIn("COLLAPSE_MS = 150", motion)
+        theme = (UI / "Theme.kt").read_text()
+        self.assertIn("CHAT_FOLD_EXPAND_MS = 180", theme)
+        self.assertIn("CHAT_FOLD_COLLAPSE_MS = 150", theme)
+        self.assertIn("EXPAND_MS = RivetMotion.CHAT_FOLD_EXPAND_MS", motion)
+        self.assertIn("COLLAPSE_MS = RivetMotion.CHAT_FOLD_COLLAPSE_MS", motion)
 
     def test_specialist_copy_names_the_existing_action_or_value(self):
         cases = (

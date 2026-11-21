@@ -119,6 +119,11 @@ class ImprovementsTest(unittest.TestCase):
         value = row.split("Text(value", 1)[1].split("Icon(painterResource(trailingIcon)", 1)[0]
         self.assertNotIn("maxLines", value)
         self.assertNotIn("Ellipsis", value)
+        provider_rows = settings.split("private fun ProviderRow(", 1)[1]
+        self.assertNotIn("TextOverflow.Ellipsis", provider_rows)
+        picker = source("ui/chat/ModelSheet.kt").split("private fun PopoverRow(", 1)[1].split("private fun PaneHeader(", 1)[0]
+        self.assertIn("Column(Modifier.weight(1f)", picker)
+        self.assertNotIn("TextOverflow.Ellipsis", picker)
 
     def test_about_destinations_use_the_same_settings_rows(self):
         about = source("ui/provider/SettingsScreen.kt").split("private fun AboutDetail", 1)[1]

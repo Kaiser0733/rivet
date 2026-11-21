@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityColumns
+import com.kaiser.rivet.ui.DisclosureBody
 import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.ui.UtilityLead
 import androidx.compose.foundation.clickable
@@ -101,87 +103,97 @@ internal fun SubagentsSettings(
     val pool = SubagentPool.resolve(state, configs)
     val fixedLabel = pool.fixed?.label ?: "Choose a model"
     DetailScroll {
-        UtilityLead(R.drawable.ic_subagents, "Worker models", subagentSummary(state, configs))
-        Spacer(Modifier.height(12.dp))
-        if (error != null) {
-            Text(
-                error,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.error,
-                modifier = Modifier.padding(bottom = 8.dp),
-            )
-        }
-        droppedSubagentNotice(droppedSubagentPicks(state, configs))?.let { notice ->
-            Text(notice,
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant,
-                modifier = Modifier.padding(bottom = 8.dp))
-        }
-        Row(Modifier.fillMaxWidth().heightIn(min = 56.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Allow agents to choose models for subagents",
-                    style = MaterialTheme.typography.bodyLarge)
-                Text("Off uses one fixed subagent model.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            Switch(checked = state.allowAgentChoice, onCheckedChange = onAllowAgentChoice)
-        }
-        UtilityFold(R.drawable.ic_info, "How subagents work") {
-            Text(SUBAGENT_WARNING, style = MaterialTheme.typography.bodyMedium)
-            Text(SUBAGENT_FACTS, style = MaterialTheme.typography.bodySmall)
-        }
-        Spacer(Modifier.height(12.dp))
-        if (state.allowAgentChoice) {
-            if (configs.isEmpty()) {
-                Text("No models configured. Add a provider first.",
-                    style = MaterialTheme.typography.bodyMedium)
-            }
-            subagentModelRows(state, configs).forEach { (group, rows) ->
-                UtilityFold(R.drawable.ic_models, group,
-                    "${rows.count { it.second }} selected") {
-                    rows.forEach { (config, checked) ->
-                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                            .clickable { onToggleModel(config) },
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Checkbox(checked = checked, onCheckedChange = null)
-                            Column(Modifier.weight(1f).padding(start = 4.dp)) {
-                                Text(config.model.ifBlank { "Model" }, style = MaterialTheme.typography.bodyLarge)
-                                Text(config.name, style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+        UtilityColumns(
+            leading = {
+                UtilityLead(R.drawable.ic_subagents, "Worker models", subagentSummary(state, configs))
+                Spacer(Modifier.height(12.dp))
+                if (error != null) {
+                    Text(
+                        error,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.error,
+                        modifier = Modifier.padding(bottom = 8.dp),
+                    )
+                }
+                droppedSubagentNotice(droppedSubagentPicks(state, configs))?.let { notice ->
+                    Text(notice,
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        modifier = Modifier.padding(bottom = 8.dp))
+                }
+                Row(Modifier.fillMaxWidth().heightIn(min = 56.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Allow agents to choose models for subagents",
+                            style = MaterialTheme.typography.bodyLarge)
+                        Text("Off uses one fixed subagent model.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = state.allowAgentChoice, onCheckedChange = onAllowAgentChoice)
+                }
+                UtilityFold(R.drawable.ic_info, "How subagents work") {
+                    Text(SUBAGENT_WARNING, style = MaterialTheme.typography.bodyMedium)
+                    Text(SUBAGENT_FACTS, style = MaterialTheme.typography.bodySmall)
+                }
+                Spacer(Modifier.height(12.dp))
+            },
+            trailing = {
+                if (state.allowAgentChoice) {
+                    if (configs.isEmpty()) {
+                        Text("No models configured. Add a provider first.",
+                            style = MaterialTheme.typography.bodyMedium)
+                    }
+                    subagentModelRows(state, configs).forEach { (group, rows) ->
+                        UtilityFold(R.drawable.ic_models, group,
+                            "${rows.count { it.second }} selected") {
+                            rows.forEach { (config, checked) ->
+                                Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                                    .clickable { onToggleModel(config) },
+                                    verticalAlignment = Alignment.CenterVertically) {
+                                    Checkbox(checked = checked, onCheckedChange = null)
+                                    Column(Modifier.weight(1f).padding(start = 4.dp)) {
+                                        Text(config.model.ifBlank { "Model" }, style = MaterialTheme.typography.bodyLarge)
+                                        Text(config.name, style = MaterialTheme.typography.bodySmall,
+                                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                    }
+                                }
                             }
                         }
                     }
+                    if (pool.entries.isEmpty()) {
+                        Text("No models selected. Tick a model in one of the provider groups.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            modifier = Modifier.padding(top = 8.dp))
+                    }
+                } else {
+                    Text("Subagent model", style = MaterialTheme.typography.titleSmall,
+                        color = MaterialTheme.colorScheme.primary,
+                        modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
+                    TextButton(onClick = { pickerOpen = !pickerOpen }, modifier = Modifier.fillMaxWidth()) {
+                        Text(fixedLabel, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
+                        Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(20.dp))
+                    }
+                    DisclosureBody(pickerOpen) {
+                        Column {
+                            configs.forEach { config ->
+                                TextButton(onClick = {
+                                    pickerOpen = false
+                                    onFixedModel(config)
+                                }, modifier = Modifier.fillMaxWidth()) {
+                                    Text("${config.name} · ${config.model}", Modifier.weight(1f))
+                                }
+                            }
+                        }
+                    }
+                    if (pool.fixed == null) {
+                        Text("No models selected. Choose a fixed model.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
-            }
-            if (pool.entries.isEmpty()) {
-                Text("No models selected. Tick at least one below.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp))
-            }
-        } else {
-            Text("Subagent model", style = MaterialTheme.typography.titleSmall,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
-            TextButton(onClick = { pickerOpen = !pickerOpen }, modifier = Modifier.fillMaxWidth()) {
-                Text(fixedLabel, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
-                Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(20.dp))
-            }
-            if (pickerOpen) configs.forEach { config ->
-                TextButton(onClick = {
-                    pickerOpen = false
-                    onFixedModel(config)
-                }, modifier = Modifier.fillMaxWidth()) {
-                    Text("${config.name} · ${config.model}", Modifier.weight(1f))
-                }
-            }
-            if (pool.fixed == null) {
-                Text("No models selected. Choose a fixed model.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-        }
+            },
+        )
     }
 }

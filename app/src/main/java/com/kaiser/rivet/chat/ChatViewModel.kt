@@ -1989,6 +1989,8 @@ class ChatViewModel private constructor(
                     if (reduced != activeMessages) {
                         activeMessages = reduced
                         activeSummary = context.summary
+                        val meter = readContextMeter(snapshot.config, sessionId, context.requestFor(reduced))
+                        if (ticket == generation) _uiState.update { it.copy(contextMeter = meter) }
                     }
                 }
                 catch (e: CancellationException) { throw e

@@ -78,7 +78,7 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertIn("onClose = { destination = RivetDestination.Tools }", app)
         tools = (UI / "processes/ProcessesScreen.kt").read_text()
         self.assertIn("val (running, finished) = processItems.partition", tools)
-        self.assertIn("if (showFinished) items(finished", tools)
+        self.assertIn('UtilityFold(R.drawable.ic_history, "Finished processes")', tools)
         self.assertIn("mutableStateOf(false)", tools.split("private fun ProcessRow(", 1)[1])
         header = tools.split("commandFirstLine(command)", 1)[1].split("DisclosureBody(expanded)", 1)[0]
         self.assertIn("maxLines = 1", header)

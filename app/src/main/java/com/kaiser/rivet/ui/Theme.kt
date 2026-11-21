@@ -262,6 +262,7 @@ internal object RivetLayout {
     val columnBreakpoint = 690.dp
     val utilityMaxWidth = 1_120.dp
     val contextInlineWidth = 410.dp
+    val compactComposerWidth = 300.dp
     val sectionGap = 16.dp
     val controlSize = 48.dp
     val drawerMaxWidth = 380.dp
@@ -298,6 +299,8 @@ internal object RivetMotion {
     const val MESSAGE_MS = 190
     const val FOCUS_MS = 160
     const val DISCLOSURE_MS = 200
+    const val CHAT_FOLD_EXPAND_MS = 180
+    const val CHAT_FOLD_COLLAPSE_MS = 150
     const val COMPACT_DOT_MS = 300
     const val DRAWER_MS = DISCLOSURE_MS
     const val COMPLETE_MS = 660

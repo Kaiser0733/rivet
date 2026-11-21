@@ -386,36 +386,40 @@ private fun MemoryDetail(
     onOpenAgent: () -> Unit,
 ) {
     DetailScroll {
-        UtilityLead(R.drawable.ic_memory, "Project memory",
-            if (!hasProject) "Open a project to view its memory." else if (lines.isEmpty()) "No facts saved" else "${lines.size} saved")
-        Spacer(Modifier.height(16.dp))
-        SectionListItem(R.drawable.ic_processes, "Permissions & spending", "", onOpenAgent, true)
-        UtilityFold(R.drawable.ic_memory, "How memory works") {
-            Text("Stored in .rivet/memory.md and covered by project checkpoints. AGENTS.md takes priority when they disagree.")
-            Text("Rivet saves durable facts here when it learns something worth keeping.")
-        }
-        UtilityFold(R.drawable.ic_models, "How compaction works") {
-            Text("Rivet compacts older conversation history to make room in the model's context.")
-        }
-        Spacer(Modifier.height(12.dp))
-        if (!hasProject) {
-            Text("Open a project to view its memory.", style = MaterialTheme.typography.bodyMedium)
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                RivetOutlinedButton(onClick = onEditMemory) {
-                    Text(if (lines.isEmpty()) "Write memory" else "Edit")
+        UtilityColumns(
+            leading = {
+                UtilityLead(R.drawable.ic_memory, "Project memory",
+            },
+            trailing = {
+                if (!hasProject) "Open a project to view its memory." else if (lines.isEmpty()) "No facts saved" else "${lines.size} saved")
+                Spacer(Modifier.height(16.dp))
+                SectionListItem(R.drawable.ic_processes, "Permissions & spending", "", onOpenAgent, true)
+                UtilityFold(R.drawable.ic_memory, "How memory works") {
+                    Text("Stored in .rivet/memory.md and covered by project checkpoints. AGENTS.md takes priority when they disagree.")
+                    Text("Rivet saves durable facts here when it learns something worth keeping.")
                 }
-            }
-            Spacer(Modifier.height(10.dp))
-            lines.forEachIndexed { index, line ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text(displaySafeText(line), modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyMedium)
-                    TextButton(onClick = { onForget(index) }) { Text("Forget") }
+                UtilityFold(R.drawable.ic_models, "How compaction works") {
+                    Text("Rivet compacts older conversation history to make room in the model's context.")
                 }
-            }
-        }
+                Spacer(Modifier.height(12.dp))
+                if (hasProject) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        RivetOutlinedButton(onClick = onEditMemory) {
+                            Text(if (lines.isEmpty()) "Write memory" else "Edit")
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    lines.forEachIndexed { index, line ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(displaySafeText(line), modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium)
+                            TextButton(onClick = { onForget(index) }) { Text("Forget") }
+                        }
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -533,13 +537,15 @@ private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
                 UtilityFold(R.drawable.ic_expand, "Screen capture", "Asks before each capture") {
                     Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.")
                 }
-                SectionListItem(R.drawable.ic_settings, "Phone access add-on", "Not installed", onOpenAddOn, false)
             },
             trailing = {
                 GrantedFoldersSettings()
                 TermuxSettings()
             },
         )
+        UtilityFold(R.drawable.ic_settings, "Advanced", "Phone access add-on") {
+            SectionListItem(R.drawable.ic_phone_access, "Phone access add-on", "Not installed", onOpenAddOn, false)
+        }
     }
 }
 
@@ -888,16 +894,18 @@ private fun autonomyDisplayName(mode: AutonomyMode): String = when (mode) {
 @Composable
 private fun AboutDetail(versionName: String, onShowUsage: () -> Unit, onOpenUpdates: () -> Unit) {
     DetailScroll {
-        
-        UtilityLead(R.drawable.ic_info, "Rivet", stringResource(R.string.provider_hint_version, versionName))
-        Spacer(Modifier.height(16.dp))
-        
-        SectionHeading(stringResource(R.string.support_heading), modifier = Modifier.padding(bottom = 8.dp),
-            icon = R.drawable.ic_feedback)
-        SupportSection()
-        
-        SectionListItem(R.drawable.ic_history, "Updates", "", onOpenUpdates, true)
-        SectionListItem(R.drawable.ic_models, "Conversation usage", "", onShowUsage, false)
+        UtilityColumns(
+            leading = {
+                UtilityLead(R.drawable.ic_info, "Rivet", stringResource(R.string.provider_hint_version, versionName))
+                Spacer(Modifier.height(16.dp))
+                SectionHeading(stringResource(R.string.support_heading), icon = R.drawable.ic_feedback)
+                SupportSection()
+            },
+            trailing = {
+                SectionListItem(R.drawable.ic_history, "Updates", "", onOpenUpdates, true)
+                SectionListItem(R.drawable.ic_models, "Conversation usage", "", onShowUsage, false)
+            },
+        )
     }
 }
 

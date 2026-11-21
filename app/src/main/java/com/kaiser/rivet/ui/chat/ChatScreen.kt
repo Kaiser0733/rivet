@@ -430,7 +430,13 @@ private fun ChatHeader(title: String, canStartChat: Boolean, onOpenSidebar: () -
 }
 
 @Composable
-private fun WorkingFolder(name: String?, onOpen: () -> Unit) {
+private fun WorkingFolder(name: String?, onOpen: () -> Unit, compact: Boolean = false) {
+    if (compact) {
+        IconButton(onClick = onOpen) {
+            Icon(painterResource(R.drawable.ic_folder), name ?: "Projects", Modifier.size(18.dp))
+        }
+        return
+    }
     TextButton(onClick = onOpen, modifier = Modifier.widthIn(max = 132.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)) {
         Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(17.dp))
@@ -1875,6 +1881,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         ) {
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val contextFitsInRow = maxWidth >= RivetLayout.contextInlineWidth
+                val compactControls = maxWidth < RivetLayout.compactComposerWidth
                 Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
                     sharedDraft?.imageName?.let { name ->
                         Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
@@ -1940,7 +1947,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                         if (contextFitsInRow && contextReading != null) {
                             ConversationContextMeter(contextReading, Modifier.padding(horizontal = 4.dp))
                         }
-                        WorkingFolder(folderName, onOpenProjects)
+                        if (compactControls) WorkingFolder(folderName, onOpenProjects, compact = true)
+                        else WorkingFolder(folderName, onOpenProjects)
                         IconButton(onClick = { if (streaming) onCancel() else submit() },
                             enabled = streaming || canSend, interactionSource = sendInteraction,
                             modifier = Modifier.size(48.dp).graphicsLayer {

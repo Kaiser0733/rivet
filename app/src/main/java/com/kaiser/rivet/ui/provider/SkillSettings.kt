@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.provider
 
+import androidx.compose.foundation.layout.BoxWithConstraints
+import com.kaiser.rivet.ui.RivetLayout
 import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.ui.UtilityLead
 import com.kaiser.rivet.ui.UtilityGlyph
@@ -93,18 +95,30 @@ internal fun SkillsSettings(
     if (selected != null) {
         SkillDetail(selected, onLoadFiles)
     } else {
-        Column(Modifier.fillMaxSize()) {
-            InstallRow(onInstall)
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+        val listing: @Composable (Modifier) -> Unit = { modifier ->
             when {
-                catalog == null -> DetailScroll(Modifier.weight(1f)) {
+                catalog == null -> DetailScroll(modifier) {
                     Text("Loading skills…", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                skillsAreEmpty(catalog) -> DetailScroll(Modifier.weight(1f)) {
+                skillsAreEmpty(catalog) -> DetailScroll(modifier) {
                     UtilityFold(R.drawable.ic_info, "How to add skills", "No skills installed") { EmptySkills() }
                 }
-                else -> SkillsList(skillPageSections(catalog), onSelect, Modifier.weight(1f))
+                else -> SkillsList(skillPageSections(catalog), onSelect, modifier)
+            }
+        }
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            if (maxWidth >= RivetLayout.columnBreakpoint) {
+                Row(Modifier.fillMaxSize()) {
+                    Column(Modifier.weight(1f)) { InstallRow(onInstall) }
+                    listing(Modifier.weight(1f))
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    InstallRow(onInstall)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    listing(Modifier.weight(1f))
+                }
             }
         }
     }
