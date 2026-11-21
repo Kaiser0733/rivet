@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.ui.RivetLayout
+import com.kaiser.rivet.chat.ContextMeterReading
 import androidx.compose.ui.input.key.Key
 import androidx.compose.ui.input.key.KeyEventType
 import androidx.compose.ui.input.key.isAltPressed
@@ -240,6 +242,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             dismissButton = { TextButton(onClick = { confirmDiscard = null }) { Text("Cancel") } })
     }
     val activeProvider = providers.configs.firstOrNull { it.id == providers.activeId }
+    val contextReading = activeProvider?.let { config -> state.contextMeter?.takeIf { it.matches(config) } }
+    LaunchedEffect(activeProvider, state.currentSessionId, state.ready, state.projectLoading, state.streaming) {
+        if (activeProvider != null) chatViewModel.refreshContextMeter(activeProvider)
+    }
     val isChatGptPlanActive = activeProvider?.type == ProviderType.ChatGptPlan
     LaunchedEffect(state.error, activeProvider?.id) {
         val isUsageLimit = state.error == ProviderError.UsageLimit().text()
@@ -378,6 +384,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     folderName = state.projectName,
                     onOpenProjects = onOpenProjects,
                     selector = modelSelector,
+                    contextReading = contextReading,
                     onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
                     modifier = Modifier.fillMaxWidth())
             }
@@ -1666,6 +1673,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      folderName: String?,
                      onOpenProjects: () -> Unit,
                      selector: (@Composable () -> Unit)? = null,
+                     contextReading: ContextMeterReading? = null,
                      onSend: (String) -> Unit,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
     // A draft belongs to the conversation it was typed in: switching away keeps it there and
@@ -1819,78 +1827,87 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             shape = RoundedCornerShape(20.dp),
             border = BorderStroke(1.dp, composerEdge),
         ) {
-            Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
-                sharedDraft?.imageName?.let { name ->
-                    Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.labelMedium)
-                }
-                OutlinedTextField(
-                    value = editing,
-                    onValueChange = updateField,
-                    modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
-                        .onPreviewKeyEvent { event ->
-                            if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
-                            val native = event.nativeKeyEvent
-                            val action = composerEnter(
-                                hardware = native.flags and android.view.KeyEvent.FLAG_SOFT_KEYBOARD == 0,
-                                shift = event.isShiftPressed,
-                                shortcutModifier = event.isCtrlPressed || event.isMetaPressed || event.isAltPressed,
-                            )
-                            if (action == ComposerEnter.Edit) return@onPreviewKeyEvent false
-                            if (event.type == KeyEventType.KeyDown && native.repeatCount == 0) {
-                                when (action) {
-                                    ComposerEnter.Send -> submit()
-                                    ComposerEnter.Newline -> {
-                                        val from = editing.selection.min
-                                        val to = editing.selection.max
-                                        updateField(TextFieldValue(editing.text.replaceRange(from, to, "\n"),
-                                            TextRange(from + 1)))
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val contextFitsInRow = maxWidth >= RivetLayout.contextInlineWidth
+                Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
+                    sharedDraft?.imageName?.let { name ->
+                        Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelMedium)
+                    }
+                    OutlinedTextField(
+                        value = editing,
+                        onValueChange = updateField,
+                        modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
+                            .onPreviewKeyEvent { event ->
+                                if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+                                val native = event.nativeKeyEvent
+                                val action = composerEnter(
+                                    hardware = native.flags and android.view.KeyEvent.FLAG_SOFT_KEYBOARD == 0,
+                                    shift = event.isShiftPressed,
+                                    shortcutModifier = event.isCtrlPressed || event.isMetaPressed || event.isAltPressed,
+                                )
+                                if (action == ComposerEnter.Edit) return@onPreviewKeyEvent false
+                                if (event.type == KeyEventType.KeyDown && native.repeatCount == 0) {
+                                    when (action) {
+                                        ComposerEnter.Send -> submit()
+                                        ComposerEnter.Newline -> {
+                                            val from = editing.selection.min
+                                            val to = editing.selection.max
+                                            updateField(TextFieldValue(editing.text.replaceRange(from, to, "\n"),
+                                                TextRange(from + 1)))
+                                        }
+                                        ComposerEnter.Edit -> Unit
                                     }
-                                    ComposerEnter.Edit -> Unit
                                 }
-                            }
-                            true
-                        },
-                    placeholder = { Text("Ask Rivet…") },
-                    minLines = 1,
-                    maxLines = 6,
-                    keyboardOptions = if (draft.startsWith("/")) KeyboardOptions(
-                        capitalization = KeyboardCapitalization.None,
-                        autoCorrect = false,
-                        imeAction = ImeAction.Send,
-                    ) else KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Sentences,
-                        imeAction = ImeAction.Send,
-                    ),
-                    keyboardActions = KeyboardActions(onSend = { submit() }),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    ),
-                )
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
-                        Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+                                true
+                            },
+                        placeholder = { Text("Ask Rivet…") },
+                        minLines = 1,
+                        maxLines = 6,
+                        keyboardOptions = if (draft.startsWith("/")) KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrect = false,
+                            imeAction = ImeAction.Send,
+                        ) else KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Send,
+                        ),
+                        keyboardActions = KeyboardActions(onSend = { submit() }),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        ),
+                    )
+                    if (!contextFitsInRow && contextReading != null) {
+                        ConversationContextMeter(contextReading, Modifier.align(Alignment.End).padding(end = 6.dp))
                     }
-                    Box(Modifier.weight(1f).padding(end = 4.dp)) {
-                        selector?.invoke()
-                    }
-                    WorkingFolder(folderName, onOpenProjects)
-                    IconButton(onClick = { if (streaming) onCancel() else submit() },
-                        enabled = streaming || canSend, interactionSource = sendInteraction,
-                        modifier = Modifier.size(48.dp).graphicsLayer {
-                            scaleX = sendScale
-                            scaleY = sendScale
-                        }.clip(CircleShape)
-                        .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surfaceVariant)) {
-                        Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
-                            stringResource(if (streaming) R.string.chat_stop else R.string.chat_send),
-                            tint = if (streaming || canSend) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
+                            Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+                        }
+                        Box(Modifier.weight(1f).padding(end = 4.dp)) {
+                            selector?.invoke()
+                        }
+                        if (contextFitsInRow && contextReading != null) {
+                            ConversationContextMeter(contextReading, Modifier.padding(horizontal = 4.dp))
+                        }
+                        WorkingFolder(folderName, onOpenProjects)
+                        IconButton(onClick = { if (streaming) onCancel() else submit() },
+                            enabled = streaming || canSend, interactionSource = sendInteraction,
+                            modifier = Modifier.size(48.dp).graphicsLayer {
+                                scaleX = sendScale
+                                scaleY = sendScale
+                            }.clip(CircleShape)
+                            .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceVariant)) {
+                            Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
+                                stringResource(if (streaming) R.string.chat_stop else R.string.chat_send),
+                                tint = if (streaming || canSend) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }

@@ -91,3 +91,13 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("if (message.isTranscriptEvent())", store)
         self.assertIn("CompactionNotice.isNotice(validatedContext()?.kind)", source("agent/CompactionNotice.kt"))
         self.assertIn("!CompactionNotice.isNotice(it.kind)", source("agent/InternalContext.kt"))
+
+    def test_context_meter_uses_the_active_config_and_updates_with_the_compaction_notice(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        self.assertIn("state.contextMeter?.takeIf { it.matches(config) }", chat)
+        self.assertIn("ConversationContextMeter(contextReading", chat)
+        model = source("chat/ChatViewModel.kt")
+        self.assertIn("contextEstimate = estimate, contextMeter = meter, error = null", model)
+        self.assertIn("context.requestFor(noticed)", model)
+        self.assertIn("currentEstimate - sampledEstimate", source("storage/ContextUsageDelta.kt"))
+        self.assertIn("base_estimated_tokens", source("storage/CodingSessions.kt"))

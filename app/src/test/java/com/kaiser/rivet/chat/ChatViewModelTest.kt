@@ -1063,6 +1063,8 @@ class ChatViewModelTest {
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && !it.projectLoading }
 
+        viewModel.refreshContextMeter(config)
+        val before = requireNotNull(viewModel.uiState.value.contextMeter)
         viewModel.compactHistory()
         val done = await(viewModel) { !it.streaming && it.messages.any { message ->
             message.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
@@ -1070,6 +1072,9 @@ class ChatViewModelTest {
 
         assertNull(done.error)
         assertFalse(done.compacting)
+        val after = requireNotNull(done.contextMeter)
+        assertTrue(after.matches(config))
+        assertTrue(after.usedTokens < before.usedTokens)
         val compacted = sessions.load()
         val count = com.kaiser.rivet.agent.ContextBudget.estimateHistoryTokens(
             com.kaiser.rivet.agent.modelMessages(compacted.messages, compacted.workspaceId, enforceWorkspace = true)

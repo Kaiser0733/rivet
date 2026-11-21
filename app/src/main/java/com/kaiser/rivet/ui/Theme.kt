@@ -261,6 +261,7 @@ internal object RivetLayout {
     val pageGutter = 20.dp
     val columnBreakpoint = 690.dp
     val utilityMaxWidth = 1_120.dp
+    val contextInlineWidth = 410.dp
     val sectionGap = 16.dp
     val controlSize = 48.dp
     val drawerMaxWidth = 380.dp

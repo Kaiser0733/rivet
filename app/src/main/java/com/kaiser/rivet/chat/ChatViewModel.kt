@@ -191,6 +191,7 @@ data class ChatUiState(
     val currentSessionWorkspaceId: String? = null,
     val usage: SessionUsage? = null,
     val contextEstimate: ContextEstimate? = null,
+    val contextMeter: ContextMeterReading? = null,
     val projectName: String? = null,
     val projectIdentity: String? = null,
     val projectLoading: Boolean = true,
@@ -818,7 +819,7 @@ class ChatViewModel private constructor(
                         _uiState.update { it.copy(messages = emptyList(), messageReasoning = emptyMap(),
                             sessions = store.list(),
                             currentSessionId = selected.id, currentSessionTitle = selected.title,
-                            currentSessionWorkspaceId = identity, usage = null, contextEstimate = null,
+                            currentSessionWorkspaceId = identity, usage = null, contextEstimate = null, contextMeter = null,
                             turnDurationsMs = emptyMap(),
                             lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
                             interruptedTurn = false) }
@@ -1009,6 +1010,54 @@ class ChatViewModel private constructor(
         }
     }
 
+    private fun idleContextRequest(config: ProviderConfig, workspaceId: String?, messages: List<AgentMessage>): AgentRequest {
+        val hasWorkspace = workspaceId != null
+        val phoneAccess = config.type != ProviderType.Local
+        // The request shape the next turn will send, so the estimate and the
+        // compaction budget match the automatic path's.
+        val tools = BrowserTools.definitions +
+            AgentToolExecutor.definitions.filter {
+                it.name !in AgentToolExecutor.phoneOnlyNames &&
+                    (hasWorkspace || it.name in UNBOUND_FILE_TOOLS)
+            } +
+            (if (phoneAccess) AgentToolExecutor.definitions.filter {
+                it.name in AgentToolExecutor.phoneOnlyNames
+            } else emptyList()) +
+            (if (hasWorkspace) SubagentTools.definitions else emptyList())
+        val baseSystem = systemInstruction(hasWorkspace,
+            runtimeController.terminalStateLine(interactiveTerminalCount(managedProcesses.processes.value))
+                .takeIf { it != "Terminal: ready" },
+            browser.contextLine(), phoneAccess = phoneAccess)
+        val wire = if (config.type == ProviderType.Local) {
+            LocalPrompt.wire(baseSystem, tools, config.resolvedContextWindowTokens(), hasWorkspace)
+        } else null
+        val projected = modelMessages(messages, workspaceId, enforceWorkspace = true)
+        val requestMessages = if (config.type == ProviderType.Local &&
+            ProviderVisionAttachments.needsPreparation(projected)) {
+            ProviderVisionAttachments.prepare(projected, VisionCapability.assess(config)) { null }.first
+        } else projected
+        return AgentRequest(config.model, requestMessages, wire?.system ?: baseSystem,
+            config.reasoning, wire?.tools ?: tools)
+    }
+
+    private suspend fun readContextMeter(config: ProviderConfig, sessionId: String?, request: AgentRequest): ContextMeterReading {
+        val measured = try {
+            sessionId?.let { sessions?.contextMeterTokens(it, config.id, config.baseUrl, request) }
+        } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { null }
+        return contextReading(config, measured ?: ContextBudget.estimateRequestTokens(request))
+    }
+
+    internal suspend fun refreshContextMeter(config: ProviderConfig) {
+        val state = _uiState.value
+        if (!state.ready || state.projectLoading || state.streaming || config.model.isBlank() ||
+            state.contextMeter?.matches(config) == true) return
+        val ticket = generation
+        val meter = readContextMeter(config, state.currentSessionId,
+            idleContextRequest(config, state.currentSessionWorkspaceId, activeMessages))
+        if (ticket == generation) _uiState.update { it.copy(contextMeter = meter) }
+    }
+
     /**
      * Manual compaction from the slash panel: the same preparation the turn's overflow
      * path runs, on the idle session's durable projection, leaving the same persisted
@@ -1048,36 +1097,10 @@ class ChatViewModel private constructor(
                 }
                 store = sql
                 val workspaceId = _uiState.value.currentSessionWorkspaceId
-                val hasWorkspace = workspaceId != null
-                val phoneAccess = snapshot.config.type != ProviderType.Local
-                // The request shape the next turn will send, so the estimate and the
-                // compaction budget match the automatic path's.
-                val tools = BrowserTools.definitions +
-                    AgentToolExecutor.definitions.filter {
-                        it.name !in AgentToolExecutor.phoneOnlyNames &&
-                            (hasWorkspace || it.name in UNBOUND_FILE_TOOLS)
-                    } +
-                    (if (phoneAccess) AgentToolExecutor.definitions.filter {
-                        it.name in AgentToolExecutor.phoneOnlyNames
-                    } else emptyList()) +
-                    (if (hasWorkspace) SubagentTools.definitions else emptyList())
                 val context = ContextPreparation(sql, sessionId,
                     clientFactory(snapshot.config, snapshot.apiKey), snapshot.config,
                     UUID.randomUUID().toString(), activeSummary, workspaceId) { messages, _ ->
-                    val baseSystem = systemInstruction(hasWorkspace,
-                        runtimeController.terminalStateLine(interactiveTerminalCount(managedProcesses.processes.value))
-                            .takeIf { it != "Terminal: ready" },
-                        browser.contextLine(), phoneAccess = phoneAccess)
-                    val wire = if (snapshot.config.type == ProviderType.Local) {
-                        LocalPrompt.wire(baseSystem, tools, snapshot.config.resolvedContextWindowTokens(), hasWorkspace)
-                    } else null
-                    val projected = modelMessages(messages, workspaceId, enforceWorkspace = true)
-                    val requestMessages = if (snapshot.config.type == ProviderType.Local &&
-                        ProviderVisionAttachments.needsPreparation(projected)) {
-                        ProviderVisionAttachments.prepare(projected, VisionCapability.assess(snapshot.config)) { null }.first
-                    } else projected
-                    AgentRequest(snapshot.config.model, requestMessages, wire?.system ?: baseSystem,
-                        snapshot.config.reasoning, wire?.tools ?: tools)
+                    idleContextRequest(snapshot.config, workspaceId, messages)
                 }
                 val compacted = context.prepare(activeMessages, force = true, reason = "manual")
                 if (ticket != generation) return@launch
@@ -1108,6 +1131,7 @@ class ChatViewModel private constructor(
                     val estimate = try { context.estimate(noticed) }
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { ContextEstimate(context.footprint(noticed), "estimated") }
+                    val meter = readContextMeter(snapshot.config, sessionId, context.requestFor(noticed))
                     _uiState.update { state ->
                         val visible = (state.messages + notice).takeLast(100)
                         val remapped = com.kaiser.rivet.ui.chat.remapTurnMetadataAfterVisibilityChange(
@@ -1121,7 +1145,7 @@ class ChatViewModel private constructor(
                         )
                         state.copy(streaming = false, compacting = false, activity = null, messages = visible,
                             messageReasoning = remapped.reasoning, turnDurationsMs = remapped.durations,
-                            contextEstimate = estimate, error = null)
+                            contextEstimate = estimate, contextMeter = meter, error = null)
                     }
                 }
             } catch (e: CancellationException) {
@@ -2046,6 +2070,10 @@ class ChatViewModel private constructor(
                         catch (e: CancellationException) { throw e
                         } catch (_: Exception) { /* A completed provider response remains usable if usage storage fails. */ }
                     }
+                    if (ticket == generation) {
+                        val meter = readContextMeter(snapshot.config, sessionId, request)
+                        _uiState.update { it.copy(contextMeter = meter) }
+                    }
                     // Some OpenAI-compatible providers omit usage entirely. Estimate
                     // from the exact text sent and received so the cap still bites and
                     // the footer never lies by omission.
@@ -2157,6 +2185,8 @@ class ChatViewModel private constructor(
                         durable.addAll(noticed)
                         activeMessages = noticed
                         activeSummary = context.summary
+                        val meter = readContextMeter(snapshot.config, sessionId, context.requestFor(noticed))
+                        if (ticket == generation) _uiState.update { it.copy(contextMeter = meter) }
                         noticed
                     } else compacted
                 },
@@ -2300,7 +2330,8 @@ class ChatViewModel private constructor(
                     if (sessionId != null && lastSystem.isNotEmpty()) {
                         try {
                             val estimate = context.estimate(durable)
-                            _uiState.update { it.copy(contextEstimate = estimate) }
+                            val meter = readContextMeter(snapshot.config, sessionId, context.requestFor(durable))
+                            _uiState.update { it.copy(contextEstimate = estimate, contextMeter = meter) }
                         } catch (e: CancellationException) { throw e
                         } catch (_: Exception) { /* Usage estimates never change the completed turn. */ }
                     }

@@ -43,6 +43,25 @@ class CodingSessionsTest {
         AgentSessionStore(app).clear()
     }
 
+    @Test fun meterAnchorsACompactedProjectionToTheLastMatchingReport() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val full = listOf(AgentMessage.user("x".repeat(6000)), AgentMessage.assistant("Done"))
+        val compacted = listOf(AgentMessage.user("Short checkpoint"), full.last())
+        val before = com.kaiser.rivet.provider.AgentRequest("m", full, "system")
+        val after = before.copy(messages = compacted)
+        val budget = com.kaiser.rivet.agent.ContextBudget
+        sessions.recordUsage(id, "normal", "p", "m", AgentUsage(inputTokens = 4000), full,
+            "system", endpoint = "same")
+        sessions.recordUsage(id, "compaction-1", "p", "m", AgentUsage(inputTokens = 8000), full,
+            "system", endpoint = "same")
+
+        assertEquals(4000L, sessions.contextMeterTokens(id, "p", "same", before))
+        assertEquals(4000 + budget.estimateRequestTokens(after) - budget.estimateRequestTokens(before),
+            sessions.contextMeterTokens(id, "p", "same", after))
+        assertEquals(budget.estimateRequestTokens(after), sessions.contextMeterTokens(id, "p", "other", after))
+    }
+
     @Test fun starterSessionKeepsItsBriefOffTheReloadedTranscript() = runBlocking {
         val store = CodingSessions(app)
         store.load()
@@ -599,6 +618,9 @@ class CodingSessionsTest {
             db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, payload TEXT NOT NULL)")
             db.execSQL("CREATE TABLE active_events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, payload TEXT NOT NULL)")
             db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
+            db.execSQL("CREATE TABLE usage (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, " +
+                "turn_id TEXT NOT NULL, provider_id TEXT NOT NULL, model TEXT NOT NULL, source TEXT NOT NULL, " +
+                "context_input_tokens INTEGER, system_hash TEXT)")
             db.execSQL("CREATE TABLE compactions (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL, " +
                 "through_event_id INTEGER NOT NULL, summary TEXT NOT NULL, before_count INTEGER NOT NULL, " +
                 "after_count INTEGER NOT NULL, created_at INTEGER NOT NULL, prefix_hash TEXT, active_hash TEXT, summary_hash TEXT)")
