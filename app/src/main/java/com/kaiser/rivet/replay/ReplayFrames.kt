@@ -64,19 +64,20 @@ internal class ReplayFrames(
     }
 
     private fun textCard(canvas: Canvas, label: String, text: String, detail: String? = null) {
-        val eyebrow = layout(label, 808, 32f, palette.accent, mono = true)
-        val heading = layout(text, 808, if (text.length > 220) 53f else 62f,
+        val width = frameTextWidth()
+        val eyebrow = layout(label, width, 32f, palette.accent, mono = true)
+        val heading = layout(text, width, if (text.length > 220) 53f else 62f,
             palette.text, maxLines = if (detail == null) 14 else 8, bold = true)
-        val description = detail?.let { layout(it, 808, 38f, palette.muted, maxLines = 6, mono = true) }
+        val description = detail?.let { layout(it, width, 38f, palette.muted, maxLines = 6, mono = true) }
         val cardHeight = 128f + eyebrow.height + 30f + heading.height +
             (description?.let { 32f + it.height } ?: 0f)
         val top = 960f - cardHeight / 2
         panel(canvas, RectF(72f, top, 1008f, top + cardHeight))
         val labelY = top + 64f
-        draw(canvas, eyebrow, 136f, labelY)
+        draw(canvas, eyebrow, FRAME_TEXT_LEFT, labelY)
         val headingY = labelY + eyebrow.height + 30f
-        draw(canvas, heading, 136f, headingY)
-        if (description != null) draw(canvas, description, 136f, headingY + heading.height + 32f)
+        draw(canvas, heading, FRAME_TEXT_LEFT, headingY)
+        if (description != null) draw(canvas, description, FRAME_TEXT_LEFT, headingY + heading.height + 32f)
     }
 
     private data class ShotPixels(val width: Int, val height: Int, val colors: IntArray)

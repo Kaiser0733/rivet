@@ -194,6 +194,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     var replayTurn by remember { mutableStateOf<Pair<ChatUiState, Int>?>(null) }
     replayTurn?.let { (turnState, index) ->
         ReplayExportSheet(
+            runKey = "${turnState.currentSessionId}:$index",
             loadStory = { chatViewModel.replayStory(turnState, index) },
             onDismiss = { replayTurn = null },
         )

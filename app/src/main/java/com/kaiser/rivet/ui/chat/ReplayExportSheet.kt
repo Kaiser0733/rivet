@@ -22,11 +22,14 @@ import androidx.compose.ui.graphics.toArgb
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.replay.GifTooLarge
+import com.kaiser.rivet.replay.LastReplayExport
 import com.kaiser.rivet.replay.ReplayChoice
 import com.kaiser.rivet.replay.ReplayExporter
 import com.kaiser.rivet.replay.ReplayFile
 import com.kaiser.rivet.replay.ReplayFramePalette
+import com.kaiser.rivet.replay.ReplayLastExportStore
 import com.kaiser.rivet.replay.ReplayStory
+import com.kaiser.rivet.replay.reusableReplay
 import com.kaiser.rivet.replay.ReplayVideoUnavailable
 import com.kaiser.rivet.storage.ReplaySettingsStore
 import com.kaiser.rivet.ui.RivetThemeMode
@@ -37,6 +40,7 @@ import kotlinx.coroutines.launch
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 internal fun ReplayExportSheet(
+    runKey: String,
     loadStory: suspend () -> ReplayStory?,
     onDismiss: () -> Unit,
 ) {
@@ -44,6 +48,8 @@ internal fun ReplayExportSheet(
     val settings = remember(app) { ReplaySettingsStore(app) }
     val watermark by settings.watermark.collectAsState(initial = null)
     val exporter = remember(app) { ReplayExporter(app) }
+    val store = remember(app) { ReplayLastExportStore(java.io.File(app.cacheDir, "run-replays")) }
+    var lastExport by remember(runKey) { mutableStateOf(store.load(runKey)) }
     val palette = remember {
         val colors = rivetColors(RivetThemeMode.Dark, dark = true)
         ReplayFramePalette(colors.background.toArgb(), colors.surface.toArgb(),
@@ -78,11 +84,21 @@ internal fun ReplayExportSheet(
                                 return@launch
                             }
                             story = source
-                            val format = choice.format(prepared?.format)
-                            val file = prepared?.takeIf {
-                                it.format == format && it.watermark == watermarkEnabled && it.file.isFile
-                            } ?: exporter.render(source, palette, format, watermarkEnabled)
+                            val remembered = reusableReplay(
+                                choice = choice,
+                                prepared = prepared?.let { LastReplayExport(it.format, it.file.path, it.watermark) },
+                                last = lastExport,
+                                watermark = watermarkEnabled,
+                                exists = { path -> java.io.File(path).isFile },
+                            )
+                            val file = remembered?.let {
+                                ReplayFile(java.io.File(it.path), it.format, it.watermark)
+                            } ?: exporter.render(source, palette,
+                                com.kaiser.rivet.replay.replayFormatFor(choice, prepared?.format, lastExport),
+                                watermarkEnabled)
                             prepared = file
+                            lastExport = LastReplayExport(file.format, file.file.path, file.watermark)
+                            store.save(runKey, lastExport!!)
                             feedback = try {
                                 exporter.distribute(file, choice)
                             } catch (cancelled: CancellationException) {
