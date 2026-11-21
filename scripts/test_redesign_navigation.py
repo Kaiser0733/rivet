@@ -106,3 +106,14 @@ class RedesignNavigationTest(unittest.TestCase):
         install = (UI / "provider/SkillInstallDialog.kt").read_text()
         self.assertNotIn("Dialog(onDismissRequest", install)
         self.assertIn("RivetPageHeader(titleFor(step), onDismiss)", install)
+
+    def test_deliverables_and_changed_files_open_the_workspace_preview(self):
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        preview = (UI / "chat/FilePreview.kt").read_text()
+        model = (UI.parent / "chat/ChatViewModel.kt").read_text()
+        self.assertIn("previewProjectFile", model)
+        self.assertIn("WorkspaceFilePreview.read", model)
+        self.assertIn("onOpenPreview = preview::open", chat)
+        self.assertIn("presentedFilesForTurns", chat)
+        self.assertIn("detectHorizontalDragGestures", preview)
+        self.assertIn("Moved or deleted", preview)

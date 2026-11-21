@@ -120,6 +120,7 @@ import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.Skill
+import com.kaiser.rivet.agent.PresentedFile
 import com.kaiser.rivet.agent.parseGoalCommand
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.offeredReasoning
@@ -264,82 +265,90 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val canStartChat = state.ready && !state.projectLoading && !state.streaming &&
         !state.undoing && !state.recoveringProjectChanges
 
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-        ChatHeader(
-            title = state.currentSessionTitle ?: state.projectName ?: "Rivet",
-            canStartChat = canStartChat,
-            onOpenSidebar = onOpenSidebar,
-            onNewChat = chatViewModel::newSession,
-        )
+    val preview = remember(state.currentSessionId, state.currentSessionWorkspaceId) { PreviewTabs() }
+    ChatWithPreview(preview, load = { path ->
+        chatViewModel.previewProjectFile(path, state.currentSessionWorkspaceId)
+    }) {
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            ChatHeader(
+                title = state.currentSessionTitle ?: state.projectName ?: "Rivet",
+                canStartChat = canStartChat,
+                onOpenSidebar = onOpenSidebar,
+                onNewChat = chatViewModel::newSession,
+            )
 
-        val setupNotice = when {
-            state.projectLoading -> "Opening your project…"
-            projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE
-            wrongProject -> PROJECT_BINDING_MISMATCH_MESSAGE
-            state.projectError != null -> state.projectError
-            providers.configs.isEmpty() -> "Connect a model in Settings to start."
-            state.projectName == null && !state.streaming -> "Choose a working folder to start."
-            else -> null
-        }
-        if (state.messages.isEmpty() && !state.streaming && state.error == null &&
-            state.notice == null && !state.interruptedTurn && state.goalLine == null) {
-            Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                Text(setupNotice ?: "What do you want to work on?",
-                    modifier = Modifier.padding(horizontal = 24.dp),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    textAlign = TextAlign.Center)
+            val setupNotice = when {
+                state.projectLoading -> "Opening your project…"
+                projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE
+                wrongProject -> PROJECT_BINDING_MISMATCH_MESSAGE
+                state.projectError != null -> state.projectError
+                providers.configs.isEmpty() -> "Connect a model in Settings to start."
+                state.projectName == null && !state.streaming -> "Choose a working folder to start."
+                else -> null
             }
-        } else {
-            setupNotice?.let {
-                Text(it, Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            if (state.messages.isEmpty() && !state.streaming && state.error == null &&
+                state.notice == null && !state.interruptedTurn && state.goalLine == null) {
+                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                    Text(setupNotice ?: "What do you want to work on?",
+                        modifier = Modifier.padding(horizontal = 24.dp),
+                        style = MaterialTheme.typography.titleLarge,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant,
+                        textAlign = TextAlign.Center)
+                }
+            } else {
+                setupNotice?.let {
+                    Text(it, Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
+                    state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
+                key(state.currentSessionId) {
+                    MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
+                        onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
+                        onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
+                        onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
+                        onAttachGoal = chatViewModel::attachGoalToProject,
+                        onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
+                        onRetryTurn = chatViewModel::retryFailedTurn,
+                        onChooseReasoning = chatViewModel::chooseReasoningLevel,
+                        onExportReplay = { index -> replayTurn = visibleState to index },
+                    onOpenPreview = preview::open,
+                    missingFiles = preview.missing,
+                        modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                }
             }
-            val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
-                state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
-            key(state.currentSessionId) {
-                MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
-                    onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
-                    onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
-                    onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
-                    onAttachGoal = chatViewModel::attachGoalToProject,
-                    onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
-                    onRetryTurn = chatViewModel::retryFailedTurn,
-                    onChooseReasoning = chatViewModel::chooseReasoningLevel,
-                    onExportReplay = { index -> replayTurn = visibleState to index },
-                    modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
+            if (state.undoCheckpointId != null || state.undoing) {
+                ChangeSummary(state, onUndo = { confirmUndo = true },
+                    onDismissUndo = chatViewModel::dismissUndoBar,
+                    onOpenPreview = preview::open, missingFiles = preview.missing,
+                    modifier = Modifier.fillMaxWidth())
             }
-        }
-        if (state.undoCheckpointId != null || state.undoing) {
-            ChangeSummary(state, onUndo = { confirmUndo = true },
-                onDismissUndo = chatViewModel::dismissUndoBar,
+            val modelSelector: (@Composable () -> Unit)? =
+                if (providers.configs.isNotEmpty()) {
+                    { ModelSelector(providersViewModel) { modelSheetVisible = true } }
+                } else null
+            val sharedContent by chatViewModel.sharedContent.collectAsState()
+            InputBar(streaming = state.streaming,
+                sharedDraft = sharedContent[state.currentSessionId],
+                phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
+                ready = state.ready && !state.projectLoading && !state.undoing &&
+                    !state.recoveringProjectChanges,
+                hasProject = state.projectName != null && projectBinding == ProjectBindingState.Matched,
+                hasProvider = providers.configs.isNotEmpty(),
+                acceptedMessageCount = state.acceptedMessageCount,
+                commandAckCount = state.commandAckCount,
+                error = state.error, notice = state.notice, sessionId = state.currentSessionId,
+                skills = skillCatalog?.skills.orEmpty(),
+                onRequestSkills = chatViewModel::refreshSkillCatalog,
+                onSendFeedback = onSendFeedback,
+                onAutonomyChange = onAutonomyChange,
+                folderName = state.projectName,
+                onOpenProjects = onOpenProjects,
+                selector = modelSelector,
+                onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
                 modifier = Modifier.fillMaxWidth())
         }
-        val modelSelector: (@Composable () -> Unit)? =
-            if (providers.configs.isNotEmpty()) {
-                { ModelSelector(providersViewModel) { modelSheetVisible = true } }
-            } else null
-        val sharedContent by chatViewModel.sharedContent.collectAsState()
-        InputBar(streaming = state.streaming,
-            sharedDraft = sharedContent[state.currentSessionId],
-            phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
-            ready = state.ready && !state.projectLoading && !state.undoing &&
-                !state.recoveringProjectChanges,
-            hasProject = state.projectName != null && projectBinding == ProjectBindingState.Matched,
-            hasProvider = providers.configs.isNotEmpty(),
-            acceptedMessageCount = state.acceptedMessageCount,
-            commandAckCount = state.commandAckCount,
-            error = state.error, notice = state.notice, sessionId = state.currentSessionId,
-            skills = skillCatalog?.skills.orEmpty(),
-            onRequestSkills = chatViewModel::refreshSkillCatalog,
-            onSendFeedback = onSendFeedback,
-            onAutonomyChange = onAutonomyChange,
-            folderName = state.projectName,
-            onOpenProjects = onOpenProjects,
-            selector = modelSelector,
-            onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
-            modifier = Modifier.fillMaxWidth())
     }
 }
 
@@ -410,7 +419,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onRetryTurn: () -> Unit,
                         onChooseReasoning: (ReasoningLevel) -> Unit,
                         onExportReplay: (Int) -> Unit,
+                        onOpenPreview: (String) -> Unit,
+                        missingFiles: Set<String>,
                         modifier: Modifier = Modifier) {
+    val deliverables = remember(state.messages) { presentedFilesForTurns(state.messages) }
     val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning) {
         val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
         var cursor = 0
@@ -605,6 +617,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 state = state,
                 isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
                 onExportReplay = onExportReplay,
+                fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
+                missingFiles = missingFiles,
+                onOpenPreview = onOpenPreview,
             )
         }
         if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
@@ -791,6 +806,9 @@ private fun TurnBlockView(
     state: ChatUiState,
     isLastTurn: Boolean,
     onExportReplay: (Int) -> Unit,
+    fileCards: List<PresentedFile>,
+    missingFiles: Set<String>,
+    onOpenPreview: (String) -> Unit,
 ) {
     var turnOpen by rememberSaveable(turn.turnIndex) {
         mutableStateOf(initialFoldOpen(turn.spec.canFold))
@@ -925,6 +943,9 @@ private fun TurnBlockView(
                     }
                 }
             }
+        }
+        fileCards.forEach { file ->
+            ProjectFileCard(file, missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
         }
     }
 }
@@ -1345,7 +1366,7 @@ private fun AssistantMessage(text: String, streaming: Boolean) {
 }
 
 @Composable
-private fun AssistantMarkdown(text: String) {
+internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
     // The answer grows a few characters at a time while it streams. A full parse per publication
     // re-splits and re-joins the whole reply; this keeps the blocks before the last one and
     // re-parses only that block, with the same result (see MarkdownBlocks).
@@ -1378,7 +1399,8 @@ private fun AssistantMarkdown(text: String) {
                         }
                     }
                 }
-                is ChatMarkdownBlock.Image -> BrowserImage(block)
+                is ChatMarkdownBlock.Image -> if (showInlineImages) BrowserImage(block)
+                    else if (block.alt.isNotBlank()) InlineMarkdown(block.alt)
                 is ChatMarkdownBlock.Table -> MarkdownTable(block)
                 is ChatMarkdownBlock.Code -> Column(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1468,7 +1490,8 @@ internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> 
 
 @Composable
 private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit,
-                          onDismissUndo: () -> Unit, modifier: Modifier = Modifier) {
+                          onDismissUndo: () -> Unit, onOpenPreview: (String) -> Unit,
+                          missingFiles: Set<String>, modifier: Modifier = Modifier) {
     var details by remember { mutableStateOf(false) }
     Column(modifier.padding(horizontal = 16.dp)) {
         Row(verticalAlignment = Alignment.CenterVertically) {
@@ -1491,8 +1514,8 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
         if (details) state.lastTurnFiles.forEach { path ->
-            Text(displaySafeText(path), style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            ProjectFileCard(PresentedFile(path, path.substringBeforeLast('/', "")),
+                missing = path in missingFiles, onOpen = { onOpenPreview(path) })
         }
         if (details && state.lastTurnFileCount > state.lastTurnFiles.size)
             Text("Showing the first ${state.lastTurnFiles.size} files", style = MaterialTheme.typography.bodySmall)

@@ -132,6 +132,8 @@ import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.workspace.WorkspaceFailure
+import com.kaiser.rivet.workspace.FilePreviewResult
+import com.kaiser.rivet.workspace.WorkspaceFilePreview
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Job
@@ -848,6 +850,23 @@ class ChatViewModel private constructor(
                     projectError = if (starter == null) "Rivet couldn't open that project. Try choosing it again." else null,
                     starterError = if (starter != null) "Rivet couldn't finish installing. Check the folder before trying again." else null) }
             }
+        }
+    }
+
+    internal suspend fun previewProjectFile(path: String, identity: String?): FilePreviewResult {
+        if (identity == null || _uiState.value.currentSessionWorkspaceId != identity) {
+            return FilePreviewResult.WrongProject
+        }
+        return try {
+            val workspace = workspaceSelection.restore()?.first ?: return FilePreviewResult.WrongProject
+            if (workspace.tree.toString() != identity) return FilePreviewResult.WrongProject
+            val content = WorkspaceFilePreview.read(workspace, path)
+            if (workspaceSelection.currentIdentity() == identity &&
+                _uiState.value.currentSessionWorkspaceId == identity) content else FilePreviewResult.WrongProject
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            FilePreviewResult.Unavailable(null, "Rivet couldn't read this file.")
         }
     }
 

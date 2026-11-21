@@ -23,7 +23,7 @@ data class ParsedLocalOutput(val text: String, val calls: List<AgentToolCall>)
 object LocalToolProtocol {
     val coreTools = linkedSetOf(
         "read_file", "write_file", "create_file", "apply_patch",
-        "search_files", "list_directory", "run_command",
+        "search_files", "list_directory", "run_command", "present",
     )
 
     private data class Tag(val open: String, val close: String?)

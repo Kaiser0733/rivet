@@ -192,6 +192,7 @@ object AgentActivityProjection {
     }
 
     private fun title(name: String): String = when (name) {
+        "present" -> "Present files"
         "read_file" -> "Read"
         "list_directory" -> "List"
         "search_files" -> "Search"

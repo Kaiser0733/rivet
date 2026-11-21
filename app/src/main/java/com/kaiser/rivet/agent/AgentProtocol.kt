@@ -30,6 +30,7 @@ data class AgentToolResult(
     /** Screenshot path only; image bytes are hydrated into the transient wire request. */
     val imagePath: String? = null,
     val imageMime: String? = null,
+    val presentedFiles: List<PresentedFile> = emptyList(),
 )
 
 @Serializable

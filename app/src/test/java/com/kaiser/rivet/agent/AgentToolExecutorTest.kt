@@ -24,6 +24,26 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AgentToolExecutorTest {
+    @Test fun presentIsReadOnlyAndRejectsDirectoriesAndWorkerCalls() = kotlinx.coroutines.runBlocking {
+        val files = FakeWorkspace()
+        val call = AgentToolCall("present-1", "present",
+            """{"files":[{"path":"docs/Plan.md","description":"The finished plan"}]}""")
+        val prepared = AgentToolExecutor(files).prepare(call)
+        assertEquals(AgentToolEffect.ReadOnly, prepared.effect)
+        assertNull(prepared.approval)
+        assertEquals(listOf(PresentedFile("docs/Plan.md", "The finished plan")),
+            prepared.execute().presentedFiles)
+        files.directories += "docs/Plan.md"
+        val directory = prepared.execute()
+        assertTrue(directory.error)
+        assertTrue(directory.content.contains("not_file"))
+        assertTrue(directory.presentedFiles.isEmpty())
+        val worker = AgentToolExecutor(files, worker = true).prepare(call).execute()
+        assertTrue(worker.error)
+        assertTrue(worker.content.contains("unknown_tool"))
+        assertEquals(0, files.writes)
+    }
+
     internal class FakeWorkspace(
         var text: String = "content",
         var readHash: String = "a".repeat(64),

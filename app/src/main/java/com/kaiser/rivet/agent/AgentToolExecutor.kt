@@ -195,6 +195,22 @@ class AgentToolExecutor(
                         success(call, value, "Read  $path")
                     }
                 }
+                "present" -> {
+                    if (worker) return invalid(call, "unknown_tool")
+                    val args = json.decodeFromString<PresentArguments>(call.arguments)
+                    readOnly(call) {
+                        val files = try {
+                            verifyPresentedFiles(args.files, workspace::stat)
+                        } catch (error: PresentationFailure) {
+                            return@readOnly failure(call, error.code, subject = error.path)
+                        } catch (_: IllegalArgumentException) {
+                            return@readOnly failure(call, "invalid_arguments")
+                        }
+                        success(call, buildJsonObject { put("presented", files.size) },
+                            "Presented ${files.size} file${if (files.size == 1) "" else "s"}")
+                            .copy(presentedFiles = files)
+                    }
+                }
                 "search_files" -> {
                     val args = json.decodeFromString<SearchArgs>(call.arguments)
                     val path = path(args.path, root = true)
@@ -997,6 +1013,14 @@ class AgentToolExecutor(
                 "Read a bounded UTF-8 chunk of a workspace file. Offset and next_offset are UTF-8 byte positions. Start at 0; continue with next_offset only when needed, until eof. Every chunk includes the full-file SHA-256. Prefer targeted search for large files; use the returned SHA for write_file or apply_patch.",
                 schema(listOf("path"), path, "offset" to nonNegativeInteger),
             ),
+            AgentToolDefinition("present",
+                "Show 1–4 finished project files as deliverables under your response. Give each project's exact relative path and a one-line description. Missing paths or directories are rejected; correct them and try again.",
+                schema(listOf("files"), "files" to buildJsonObject {
+                    put("type", "array")
+                    put("minItems", 1)
+                    put("maxItems", 4)
+                    put("items", schema(listOf("path", "description"), path, "description" to string))
+                })),
             AgentToolDefinition(
                 "search_files",
                 "Search one file or a directory recursively; empty path means workspace root. Searches are literal and case-sensitive. Broad searches may be limited; inspect limited, files_scanned, entries_visited, bytes_scanned, and skipped for completeness.",
