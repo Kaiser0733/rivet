@@ -76,3 +76,17 @@ class SoulSurfaceTest(unittest.TestCase):
         self.assertLess(motion.index("scale() == 0f"), motion.index("withFrameNanos { it }"))
         self.assertIn("EXPAND_MS = 180", motion)
         self.assertIn("COLLAPSE_MS = 150", motion)
+
+    def test_specialist_copy_names_the_existing_action_or_value(self):
+        cases = (
+            ("provider/SettingsScreen.kt", 'if (active == null)', "Choose the service you want to connect."),
+            ("local/ModelsScreen.kt", 'if (totalRamMb > 0) {\n                Text(', "Estimated model size limit: about ${formatParams(ceiling.maxParamsB)} at ${ceiling.contextMax / 1024}K context."),
+            ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail()', 'SectionHeading("Share to Rivet")'),
+            ("provider/SettingsScreen.kt", 'SectionHeading("Screen capture")', "Rivet asks before each capture. After you allow it, tap Capture now in the notification."),
+            ("starter/StarterGallery.kt", 'Text("Starters"', "Choose a starter and an empty folder for its files."),
+            ("browser/BrowserScreen.kt", 'Text(', "Enter a web address, then tap Go."),
+            ("chat/ReplayExportSheet.kt", 'busy = true', 'feedback = "Creating your replay…"'),
+        )
+        for path, anchor, expected in cases:
+            with self.subTest(path=path, copy=expected):
+                self.assertIn(expected, (UI / path).read_text().split(anchor, 1)[1])

@@ -76,7 +76,7 @@ internal fun StarterGallery(providerIds: List<String>, onDismiss: () -> Unit, on
         Column(Modifier.fillMaxWidth().padding(bottom = 16.dp)) {
             Text("Starters", modifier = Modifier.padding(horizontal = 24.dp),
                 style = MaterialTheme.typography.titleLarge)
-            Text("Pick a starter, then choose an empty folder.",
+            Text("Choose a starter and an empty folder for its files.",
                 modifier = Modifier.padding(horizontal = 24.dp, vertical = 8.dp),
                 color = MaterialTheme.colorScheme.onSurfaceVariant,
                 style = MaterialTheme.typography.bodyMedium)
@@ -90,9 +90,15 @@ internal fun StarterGallery(providerIds: List<String>, onDismiss: () -> Unit, on
                 items(rows, key = { it.starter.id }) { option ->
                     ListItem(
                         modifier = Modifier.clickable(role = Role.Button) { onPick(option) },
-                        headlineContent = { Text(option.starter.name) },
+                        headlineContent = {
+                            Text(option.starter.name, style = MaterialTheme.typography.titleSmall,
+                                color = MaterialTheme.colorScheme.onSurface)
+                        },
                         supportingContent = { Text(option.starter.blurb) },
-                        trailingContent = { Text(starterSize(option.starter.bytes)) },
+                        trailingContent = {
+                            Text(starterSize(option.starter.bytes), style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        },
                     )
                 }
                 starterFootnote(hasProviderKey)?.let { footnote ->

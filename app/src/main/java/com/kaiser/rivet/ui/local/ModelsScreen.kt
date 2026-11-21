@@ -318,7 +318,7 @@ private fun DeviceCard(totalRamMb: Int, availableRamMb: Int, freeStorage: Long) 
                 } else "Reading memory…",
                 style = MaterialTheme.typography.bodySmall)
             if (totalRamMb > 0) {
-                Text("Safe model ceiling: about ${formatParams(ceiling.maxParamsB)} at ${ceiling.contextMax / 1024}K context.",
+                Text("Estimated model size limit: about ${formatParams(ceiling.maxParamsB)} at ${ceiling.contextMax / 1024}K context.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }

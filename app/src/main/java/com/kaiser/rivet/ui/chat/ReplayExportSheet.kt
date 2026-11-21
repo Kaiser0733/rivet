@@ -76,7 +76,7 @@ internal fun ReplayExportSheet(
                 TextButton(enabled = !busy && watermark != null, onClick = {
                     val watermarkEnabled = watermark ?: return@TextButton
                     busy = true
-                    feedback = "Making replay…"
+                    feedback = "Creating your replay…"
                     scope.launch {
                         try {
                             val source = story ?: loadStory()

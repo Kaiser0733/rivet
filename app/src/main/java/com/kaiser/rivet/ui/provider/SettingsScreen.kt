@@ -56,6 +56,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -641,7 +642,7 @@ internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable Co
 private fun PhoneAccessDetail() {
     var addOnOpen by rememberSaveable { mutableStateOf(false) }
     DetailScroll {
-        SectionHeading("Share target")
+        SectionHeading("Share to Rivet")
         Text("On — Rivet appears in the share sheet",
             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
             style = MaterialTheme.typography.bodyMedium)
@@ -649,7 +650,7 @@ private fun PhoneAccessDetail() {
         ReplayWatermarkSetting()
 
         SectionHeading("Screen capture")
-        Text("Rivet asks every time it captures your screen",
+        Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.",
             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
             style = MaterialTheme.typography.bodyMedium)
 
@@ -824,6 +825,7 @@ private fun ProviderDetail(
     onDelete: (ProviderConfig) -> Unit,
     onNewProvider: (ProviderType) -> Unit,
 ) {
+    val headingColor = MaterialTheme.colorScheme.onSurfaceVariant
     val presets = listOf(
         ProviderType.OpenAiCompatible,
         ProviderType.OpenAi,
@@ -849,11 +851,12 @@ private fun ProviderDetail(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 8.dp)) }
         }
-        item { SectionHeading("Current provider", modifier = Modifier.padding(top = 4.dp, bottom = 4.dp)) }
+        item { SectionHeading("Current provider", modifier = Modifier.padding(top = 4.dp, bottom = 4.dp), color = headingColor) }
         if (active == null) {
             item {
-                Text("Choose a provider below to connect Rivet to a model.",
+                Text("Choose the service you want to connect.",
                     color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodySmall,
                     modifier = Modifier.padding(vertical = 8.dp))
             }
         } else {
@@ -863,7 +866,7 @@ private fun ProviderDetail(
             }
         }
         if (saved.isNotEmpty()) {
-            item { SectionHeading("Other saved providers", Modifier.padding(top = 16.dp, bottom = 4.dp)) }
+            item { SectionHeading("Other saved providers", Modifier.padding(top = 16.dp, bottom = 4.dp), color = headingColor) }
             items(saved, key = { it.id }) { provider ->
                 ProviderRow(provider, isActive = false,
                     onSelect = { onSelect(provider) },
@@ -872,7 +875,7 @@ private fun ProviderDetail(
             }
         }
         item {
-            SectionHeading("Add a provider", Modifier.padding(top = 24.dp, bottom = 8.dp))
+            SectionHeading("Add a provider", Modifier.padding(top = 24.dp, bottom = 8.dp), color = headingColor)
         }
         items(presets, key = { it.name }) { type ->
             Row(Modifier.fillMaxWidth().clickable { onNewProvider(type) }
@@ -882,7 +885,7 @@ private fun ProviderDetail(
                 Icon(painterResource(R.drawable.ic_chevron_right), null,
                     Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         }
     }
 }
@@ -1117,12 +1120,16 @@ private fun AboutDetail(versionName: String, onShowUsage: () -> Unit) {
 }
 
 @Composable
-internal fun SectionHeading(text: String, modifier: Modifier = Modifier) {
+internal fun SectionHeading(
+    text: String,
+    modifier: Modifier = Modifier,
+    color: Color = MaterialTheme.colorScheme.primary,
+) {
     Text(
         text,
         modifier = modifier.padding(vertical = 4.dp),
         style = MaterialTheme.typography.titleMedium,
-        color = MaterialTheme.colorScheme.primary
+        color = color,
     )
 }
 
@@ -1143,7 +1150,8 @@ private fun ProviderRow(
         ) {
             RadioButton(selected = isActive, onClick = if (isActive) null else onSelect)
             Column(Modifier.weight(1f).padding(start = 4.dp, end = 4.dp)) {
-                Text(provider.name, style = MaterialTheme.typography.titleMedium)
+                Text(provider.name, style = MaterialTheme.typography.titleSmall,
+                    color = MaterialTheme.colorScheme.onSurface)
                 val providerDetail = if (provider.type == ProviderType.Local) {
                     "${typeDisplayName(provider.type)} · installed model"
                 } else {
