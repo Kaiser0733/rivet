@@ -63,7 +63,7 @@ import com.kaiser.rivet.ui.workspace.ProjectsScreen
 import com.kaiser.rivet.ui.provider.ProviderEditor
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import com.kaiser.rivet.ui.provider.SettingsScreen
-import com.kaiser.rivet.ui.provider.SkillInstallDialog
+import com.kaiser.rivet.ui.provider.SkillInstallScreen
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
@@ -118,8 +118,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         // with a separate flag.
         var destination by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
         var modelsReturn by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
-        var installOpen by rememberSaveable { mutableStateOf(false) }
-        var installZip by remember { mutableStateOf<android.net.Uri?>(null) }
+        var installReturn by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
+        var installZip by rememberSaveable { mutableStateOf<Uri?>(null) }
         val terminalStateLine by chatViewModel.terminalStatusLine.collectAsState()
         val drawerState = rememberDrawerState(DrawerValue.Closed)
         val browserState by chatViewModel.browser.state.collectAsState()
@@ -161,7 +161,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 if (drawerState.isOpen) drawerState.close()
                 destination = RivetDestination.Chat
                 editing = false
-                installOpen = false
+                installZip = null
                 if (browserState.visible) chatViewModel.browser.close()
                 destination = RivetDestination.Tools
             }
@@ -174,14 +174,18 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 if (drawerState.isOpen) drawerState.close()
                 destination = RivetDestination.Chat
                 editing = false
-                installOpen = false
+                installZip = null
                 if (browserState.visible) chatViewModel.browser.close()
             }
         }
         LaunchedEffect(sharedZip) {
             if (sharedZip != null) {
+                drawerState.close()
+                if (browserState.visible) chatViewModel.browser.close()
+                editing = false
+                installReturn = RivetDestination.Chat
                 installZip = sharedZip
-                installOpen = true
+                destination = RivetDestination.SkillInstall
                 chatViewModel.clearSharedZip()
             }
         }
@@ -228,6 +232,10 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     editing = false
                 }
                 destination == RivetDestination.Models -> destination = modelsReturn
+                destination == RivetDestination.SkillInstall -> {
+                    installZip = null
+                    destination = installReturn
+                }
                 destination == RivetDestination.Terminal -> destination = RivetDestination.Tools
                 destination == RivetDestination.Workers -> {
                     chatViewModel.closeWorker()
@@ -332,6 +340,14 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 onClose = { destination = modelsReturn })
                         }
                     }
+                    RivetDestination.SkillInstall -> SkillInstallScreen(
+                        initialZip = installZip,
+                        onDismiss = {
+                            installZip = null
+                            destination = installReturn
+                        },
+                        onInstalled = chatViewModel::refreshSkillCatalog,
+                    )
                     RivetDestination.Settings -> saveableStates.SaveableStateProvider("settings") {
                         Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                             val conversation by chatViewModel.uiState.collectAsState()
@@ -350,8 +366,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 onRefreshSkills = chatViewModel::refreshSkillCatalog,
                                 onLoadSkillFiles = chatViewModel::skillBundledFiles,
                                 onInstallSkill = {
+                                    installReturn = RivetDestination.Settings
                                     installZip = null
-                                    installOpen = true
+                                    destination = RivetDestination.SkillInstall
                                 },
                                 viewModel = providersViewModel,
                                 versionName = versionName,
@@ -409,17 +426,6 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 )
             }
 
-        }
-
-        if (installOpen) {
-            SkillInstallDialog(
-                initialZip = installZip,
-                onDismiss = {
-                    installOpen = false
-                    installZip = null
-                },
-                onInstalled = chatViewModel::refreshSkillCatalog,
-            )
         }
 
         if (confirmYolo) {

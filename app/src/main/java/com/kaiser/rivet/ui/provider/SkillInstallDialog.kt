@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.statusBarsPadding
+import com.kaiser.rivet.ui.RivetPageHeader
 import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
@@ -38,8 +41,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.dp
-import androidx.compose.ui.window.Dialog
-import androidx.compose.ui.window.DialogProperties
 import com.kaiser.rivet.agent.GitHubSource
 import com.kaiser.rivet.agent.SKILL_BUNDLE_MIME_TYPES
 import com.kaiser.rivet.agent.SkillInstallFailure
@@ -74,12 +75,8 @@ private sealed interface InstallStep {
     data class Failed(val message: String) : InstallStep
 }
 
-/**
- * One sheet for both install routes: a GitHub link, or a zip shared to Rivet. Nothing is
- * written to the global skills folder until the user confirms on the review step.
- */
 @Composable
-internal fun SkillInstallDialog(
+internal fun SkillInstallScreen(
     initialZip: Uri?,
     onDismiss: () -> Unit,
     onInstalled: suspend () -> Unit,
@@ -181,97 +178,88 @@ internal fun SkillInstallDialog(
         }
     }
 
-    Dialog(onDismissRequest = onDismiss,
-        properties = DialogProperties(usePlatformDefaultWidth = false)) {
-        Box(Modifier.fillMaxSize().padding(24.dp), contentAlignment = Alignment.Center) {
-            Surface(
-                Modifier.fillMaxWidth().widthIn(max = 460.dp).heightIn(max = 560.dp),
-                shape = RoundedCornerShape(20.dp),
-                color = MaterialTheme.colorScheme.surfaceContainerHigh,
-                border = BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant),
-            ) {
-                Column(
-                    Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
-                ) {
-                    Text(titleFor(step), style = MaterialTheme.typography.titleLarge)
+    Surface(Modifier.fillMaxSize()) {
+        Column(Modifier.statusBarsPadding().navigationBarsPadding()) {
+            RivetPageHeader(titleFor(step), onDismiss)
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(horizontal = 20.dp)) {
+            Spacer(Modifier.height(12.dp))
+            when (val current = step) {
+                is InstallStep.Link -> LinkStep(
+                    link = link,
+                    error = current.error,
+                    onLinkChange = { link = it },
+                    onSubmit = { scope.launch { submitLink() } },
+                    onPickZip = { scope.launch { openZip(it) } },
+                    onCancel = onDismiss,
+                )
+                is InstallStep.Busy -> {
+                    CircularProgressIndicator(Modifier.size(28.dp))
                     Spacer(Modifier.height(12.dp))
-                    when (val current = step) {
-                        is InstallStep.Link -> LinkStep(
-                            link = link,
-                            error = current.error,
-                            onLinkChange = { link = it },
-                            onSubmit = { scope.launch { submitLink() } },
-                            onPickZip = { scope.launch { openZip(it) } },
-                            onCancel = onDismiss,
-                        )
-                        is InstallStep.Busy -> {
-                            CircularProgressIndicator(Modifier.size(28.dp))
-                            Spacer(Modifier.height(12.dp))
-                            Text(current.label, style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        is InstallStep.Choose -> ChooseStep(current, onPick = { path ->
-                            val source = current.source
-                            val zip = current.zip
-                            scope.launch {
-                                step = InstallStep.Busy("Reading the skill…")
-                                try {
-                                    val payload = when {
-                                        zip != null -> readZipSkill(zip, path, current.zipLabel)
-                                        source != null -> fetchGitHubSkill(source, path)
-                                        else -> throw SkillInstallFailure("That skill couldn't be read.")
-                                    }
-                                    review(payload)
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (e: Exception) {
-                                    fail(e)
-                                }
+                    Text(current.label, style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                is InstallStep.Choose -> ChooseStep(current, onPick = { path ->
+                    val source = current.source
+                    val zip = current.zip
+                    scope.launch {
+                        step = InstallStep.Busy("Reading the skill…")
+                        try {
+                            val payload = when {
+                                zip != null -> readZipSkill(zip, path, current.zipLabel)
+                                source != null -> fetchGitHubSkill(source, path)
+                                else -> throw SkillInstallFailure("That skill couldn't be read.")
                             }
-                        }, onCancel = onDismiss)
-                        is InstallStep.Review -> ReviewStep(
-                            current,
-                            onCancel = onDismiss,
-                            onInstall = {
-                                scope.launch {
-                                    step = InstallStep.Busy("Installing…")
-                                    try {
-                                        installSkill(current.payload, skillsRoot)
-                                        onInstalled()
-                                        markInstalled(current.payload.skill.name)
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (e: Exception) {
-                                        fail(e)
-                                    }
-                                }
-                            },
-                        )
-                        is InstallStep.Installed -> {
-                            Text("Installed ${current.name}. The skill is available in every project.",
-                                style = MaterialTheme.typography.bodyMedium)
-                            Spacer(Modifier.height(16.dp))
-                            Row(Modifier.fillMaxWidth()) {
-                                Spacer(Modifier.weight(1f))
-                                Button(onClick = onDismiss) { Text("Done") }
-                            }
-                        }
-                        is InstallStep.Failed -> {
-                            Text(displaySafeText(current.message),
-                                style = MaterialTheme.typography.bodyMedium,
-                                color = MaterialTheme.colorScheme.error)
-                            Spacer(Modifier.height(16.dp))
-                            Row(Modifier.fillMaxWidth()) {
-                                Spacer(Modifier.weight(1f))
-                                Button(onClick = onDismiss) { Text("Close") }
-                            }
+                            review(payload)
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            fail(e)
                         }
                     }
+                }, onCancel = onDismiss)
+                is InstallStep.Review -> ReviewStep(
+                    current,
+                    onCancel = onDismiss,
+                    onInstall = {
+                        scope.launch {
+                            step = InstallStep.Busy("Installing…")
+                            try {
+                                installSkill(current.payload, skillsRoot)
+                                onInstalled()
+                                markInstalled(current.payload.skill.name)
+                            } catch (e: CancellationException) {
+                                throw e
+                            } catch (e: Exception) {
+                                fail(e)
+                            }
+                        }
+                    },
+                )
+                is InstallStep.Installed -> {
+                    Text("Installed ${current.name}. The skill is available in every project.",
+                        style = MaterialTheme.typography.bodyMedium)
+                    Spacer(Modifier.height(16.dp))
+                    Row(Modifier.fillMaxWidth()) {
+                        Spacer(Modifier.weight(1f))
+                        Button(onClick = onDismiss) { Text("Done") }
+                    }
                 }
+                is InstallStep.Failed -> {
+                    Text(displaySafeText(current.message),
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = MaterialTheme.colorScheme.error)
+                    Spacer(Modifier.height(16.dp))
+                    Row(Modifier.fillMaxWidth()) {
+                        Spacer(Modifier.weight(1f))
+                        Button(onClick = onDismiss) { Text("Close") }
+                    }
+                }
+            }
             }
         }
     }
 }
+
 
 private fun titleFor(step: InstallStep): String = when (step) {
     is InstallStep.Link -> "Install a skill"

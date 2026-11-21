@@ -97,3 +97,12 @@ class RedesignNavigationTest(unittest.TestCase):
         models = (UI / "local/ModelsScreen.kt").read_text()
         self.assertIn('RivetPageHeader("Add a GGUF"', models)
         self.assertIn("viewModel.addByo(byoUrl)", models)
+
+    def test_skill_install_uses_the_same_full_page_for_settings_and_shared_zips(self):
+        app = (UI / "RivetApp.kt").read_text()
+        self.assertIn("RivetDestination.SkillInstall ->", app)
+        self.assertIn("initialZip = installZip", app)
+        self.assertGreaterEqual(app.count("destination = RivetDestination.SkillInstall"), 2)
+        install = (UI / "provider/SkillInstallDialog.kt").read_text()
+        self.assertNotIn("Dialog(onDismissRequest", install)
+        self.assertIn("RivetPageHeader(titleFor(step), onDismiss)", install)
