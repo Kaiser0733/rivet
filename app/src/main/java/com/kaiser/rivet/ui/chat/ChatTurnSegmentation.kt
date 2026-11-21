@@ -33,6 +33,20 @@ data class ChatTurnProcessSpec(
     }
 }
 
+internal data class FoldOutcomeObservation(
+    val turnStartedAt: Long?,
+    val acceptedMessageCount: Long,
+    val spec: ChatTurnProcessSpec,
+    val cleanFinish: Boolean,
+) {
+    fun revealsAfter(previous: FoldOutcomeObservation?): Boolean =
+        previous != null && turnStartedAt != null &&
+            turnStartedAt == previous.turnStartedAt && acceptedMessageCount == previous.acceptedMessageCount &&
+            previous.spec.turnIndex == spec.turnIndex && previous.spec.isLive &&
+            spec.canFold && cleanFinish && spec.durationMs != null &&
+            previous.spec.durationMs != spec.durationMs
+}
+
 data class TurnItem<T>(
     val data: T,
     val isUser: Boolean,

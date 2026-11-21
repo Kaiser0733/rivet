@@ -7,6 +7,22 @@ import org.junit.Test
 
 class ChatTurnSegmentationTest {
 
+    @Test
+    fun onlyObservedSameTurnWithFreshSuccessfulDurationReveals() {
+        val live = FoldOutcomeObservation(100L, 2L, ChatTurnProcessSpec(1, isLive = true), false)
+        val success = live.copy(spec = ChatTurnProcessSpec(1, durationMs = 7_000L), cleanFinish = true)
+        assertTrue(success.revealsAfter(live))
+        assertEquals(false, success.revealsAfter(null))
+        assertEquals(false, success.revealsAfter(success))
+        assertEquals(false, success.revealsAfter(live.copy(turnStartedAt = 50L)))
+        assertEquals(false, success.revealsAfter(live.copy(acceptedMessageCount = 1L)))
+        assertEquals(false, success.revealsAfter(live.copy(spec = live.spec.copy(turnIndex = 0))))
+        assertEquals(false, success.revealsAfter(live.copy(spec = live.spec.copy(durationMs = 7_000L))))
+        assertEquals(false, success.copy(cleanFinish = false).revealsAfter(live))
+        assertEquals(false, success.copy(spec = success.spec.copy(isStopped = true)).revealsAfter(live))
+        assertEquals(false, success.copy(spec = success.spec.copy(isError = true)).revealsAfter(live))
+    }
+
     private data class Msg(val role: String, val text: String)
 
     @Test

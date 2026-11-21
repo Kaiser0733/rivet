@@ -10,13 +10,15 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.Layout
 import kotlin.math.roundToInt
+import kotlinx.coroutines.currentCoroutineContext
 
 /**
  * One fold body for every expandable row. The body is driven by the frame clock
- * directly so a zero system motion scale cannot turn the reveal into a one-frame jump.
+ * directly, with the composition’s motion scale applied to its elapsed time.
  */
 @Composable
 internal fun FoldReveal(
@@ -30,17 +32,7 @@ internal fun FoldReveal(
         if (expanded) composed = true
         val target = if (expanded) 1f else 0f
         val duration = if (expanded) FoldMotion.EXPAND_MS else FoldMotion.COLLAPSE_MS
-        val from = progress
-        if (from != target) {
-            val start = withFrameNanos { it }
-            while (true) {
-                val now = withFrameNanos { it }
-                val fraction = ((now - start) / 1_000_000f / duration).coerceIn(0f, 1f)
-                progress = from + (target - from) * FoldMotion.ease(fraction)
-                if (fraction >= 1f) break
-            }
-        }
-        progress = target
+        animateFoldValue(progress, target, duration) { progress = it }
         if (!expanded) composed = false
     }
     Layout(
@@ -69,17 +61,37 @@ internal fun foldChevronRotation(open: Boolean): Float {
     LaunchedEffect(open) {
         val target = if (open) 180f else 0f
         val duration = if (open) FoldMotion.EXPAND_MS else FoldMotion.COLLAPSE_MS
-        val from = rotation
-        if (from != target) {
-            val start = withFrameNanos { it }
-            while (true) {
-                val now = withFrameNanos { it }
-                val fraction = ((now - start) / 1_000_000f / duration).coerceIn(0f, 1f)
-                rotation = from + (target - from) * FoldMotion.ease(fraction)
-                if (fraction >= 1f) break
-            }
-        }
-        rotation = target
+        animateFoldValue(rotation, target, duration) { rotation = it }
     }
     return rotation
+}
+
+
+@Composable
+internal fun foldOutcomeProgress(reveal: Boolean): Float {
+    var progress by remember { mutableFloatStateOf(if (reveal) 0f else 1f) }
+    LaunchedEffect(Unit) {
+        animateFoldValue(progress, 1f, FoldMotion.EXPAND_MS) { progress = it }
+    }
+    return progress
+}
+
+private suspend fun animateFoldValue(from: Float, target: Float, duration: Int, update: (Float) -> Unit) {
+    val motion = currentCoroutineContext()[MotionDurationScale]
+    fun scale(): Float = motion?.scaleFactor ?: 1f
+    if (from == target || scale() == 0f) {
+        update(target)
+        return
+    }
+    var previous = withFrameNanos { it }
+    var elapsed = 0f
+    while (elapsed < duration) {
+        val now = withFrameNanos { it }
+        val scale = scale()
+        if (scale == 0f) break
+        elapsed += (now - previous) / 1_000_000f / scale
+        previous = now
+        update(from + (target - from) * FoldMotion.ease(elapsed / duration))
+    }
+    update(target)
 }

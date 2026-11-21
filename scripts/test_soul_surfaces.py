@@ -64,3 +64,15 @@ class SoulSurfaceTest(unittest.TestCase):
         self.assertIn('if (waitingWithoutPreview) "Waiting for a response" else "Think"', row)
         self.assertIn("colorScheme.onSurface", row)
         self.assertNotIn("rememberInfiniteTransition", chat)
+
+    def test_outcome_uses_live_observation_and_manual_folds_honor_motion_scale(self):
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        turn = chat.split("private fun TurnBlockView(", 1)[1].split("@Composable\nprivate fun", 1)[0]
+        self.assertIn("outcome.revealsAfter(observedOutcome)", turn)
+        self.assertIn("SideEffect { observedOutcome = outcome }", turn)
+        self.assertIn("when {", turn)
+        motion = (UI / "FoldReveal.kt").read_text()
+        self.assertIn("currentCoroutineContext()[MotionDurationScale]", motion)
+        self.assertLess(motion.index("scale() == 0f"), motion.index("withFrameNanos { it }"))
+        self.assertIn("EXPAND_MS = 180", motion)
+        self.assertIn("COLLAPSE_MS = 150", motion)

@@ -73,6 +73,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -105,6 +106,7 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
@@ -122,6 +124,7 @@ import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
 import com.kaiser.rivet.chat.withDraft
 import com.kaiser.rivet.chat.liveStatusLine
+import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.parseGoalCommand
@@ -144,6 +147,7 @@ import com.kaiser.rivet.chat.PROJECT_ACCESS_LOST_MESSAGE
 import com.kaiser.rivet.chat.PROJECT_BINDING_MISMATCH_MESSAGE
 import com.kaiser.rivet.chat.projectBindingState
 import com.kaiser.rivet.ui.FoldReveal
+import com.kaiser.rivet.ui.foldOutcomeProgress
 import com.kaiser.rivet.ui.foldChevronRotation
 import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
@@ -1197,6 +1201,8 @@ private fun LiveStatusRow(label: String, startedAt: Long) {
 @Composable
 private fun TurnProcessRow(
     spec: ChatTurnProcessSpec,
+    label: String,
+    labelColor: Color,
     open: Boolean,
     onToggle: () -> Unit,
     onExportReplay: (() -> Unit)? = null,
@@ -1231,12 +1237,11 @@ private fun TurnProcessRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.weight(1f, fill = false)
         ) {
-            val label = spec.foldLabel()
             if (spec.durationMs != null && label.startsWith("Completed in ")) {
                 Text(
                     text = "Completed in ",
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                    color = MaterialTheme.colorScheme.tertiary,
+                    color = labelColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1246,14 +1251,14 @@ private fun TurnProcessRow(
                         fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace
                     ),
-                    color = MaterialTheme.colorScheme.tertiary,
+                    color = labelColor,
                     maxLines = 1,
                 )
             } else {
                 Text(
                     text = label,
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                    color = MaterialTheme.colorScheme.tertiary,
+                    color = labelColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1297,6 +1302,19 @@ private fun TurnBlockView(
     }
     val isOpen = !turn.spec.canFold || turnOpen
 
+    val lastAnswer = turn.answerItem?.item as? AgentConversationItem.Message
+    val hasAnswer = lastAnswer?.message?.text?.isNotBlank() == true
+    val outcome = FoldOutcomeObservation(
+        turnStartedAt = state.turnStartedAt.takeIf { isLastTurn && turn.userItem != null },
+        acceptedMessageCount = state.acceptedMessageCount,
+        spec = turn.spec,
+        cleanFinish = hasAnswer && state.turnStartedWallClock == null &&
+            state.run?.phase !in setOf(RunPhase.Paused, RunPhase.Stopped, RunPhase.Failed),
+    )
+    var observedOutcome by remember { mutableStateOf<FoldOutcomeObservation?>(null) }
+    val revealOutcome = outcome.revealsAfter(observedOutcome)
+    SideEffect { observedOutcome = outcome }
+
     val replayIndex = turn.userItem?.messageIndex ?: turn.parts.firstNotNullOfOrNull { part ->
         when (part) {
             is TurnPart.Process -> part.items.firstNotNullOfOrNull { it.messageIndex }
@@ -1324,8 +1342,23 @@ private fun TurnBlockView(
 
         if (turn.processItems.isNotEmpty()) {
             if (!turn.spec.isLive) {
+                val stoppedNotice = isLastTurn && (state.notice == "Stopped. Any saved project changes remain." ||
+                    state.notice == "Stopped. Any completed changes remain in the project.")
+                val label = when {
+                    isLastTurn && turn.spec.isStopped && state.runRecovery != null &&
+                        state.run?.phase == RunPhase.Paused -> state.run.plainState().replaceFirstChar { it.titlecase() }
+                    turn.spec.isError -> "Failed"
+                    turn.spec.isStopped || stoppedNotice -> "Stopped"
+                    hasAnswer && turn.spec.durationMs != null -> turn.spec.foldLabel()
+                    else -> stringResource(R.string.open_tools)
+                }
+                val progress = key(outcome.turnStartedAt, outcome.acceptedMessageCount) {
+                    foldOutcomeProgress(revealOutcome && label.startsWith("Completed in "))
+                }
                 TurnProcessRow(
                     spec = turn.spec,
+                    label = label,
+                    labelColor = lerp(MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.onSurface, progress),
                     open = isOpen,
                     onToggle = { if (turn.spec.canFold) turnOpen = !turnOpen },
                     onExportReplay = exportAction,
