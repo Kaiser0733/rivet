@@ -173,6 +173,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             { coroutineScope.launch { drawerState.close() }; Unit }
         }
         val openProcesses = remember { { processesOpen = true } }
+        val closeProcesses = remember { { processesOpen = false } }
         val openModels = remember {
             {
                 settingsOpen = false
@@ -191,7 +192,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     editing = false
                 }
                 settingsOpen -> settingsOpen = false
-                processesOpen -> processesOpen = false
+                processesOpen -> closeProcesses()
                 else -> closeHistory()
             }
         }
@@ -224,14 +225,15 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                     onSendFeedback = sendFeedback)
                             }
                             RightSlidePanel(open = processesOpen,
-                                onClose = { processesOpen = false }) {
+                                onClose = closeProcesses) {
                                 val conversation by chatViewModel.uiState.collectAsState()
                                 ToolsPane(
                                     processes = chatViewModel.managedProcesses,
                                     terminal = chatViewModel.terminalSession,
                                     stateLine = terminalStateLine,
+                                    onClose = closeProcesses,
                                     onOpenTerminal = {
-                                        processesOpen = false
+                                        closeProcesses()
                                         terminalOpen = true
                                     },
                                     checkpoints = conversation.runCheckpoints,

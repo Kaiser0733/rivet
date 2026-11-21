@@ -40,6 +40,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.res.stringResource
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
@@ -65,6 +66,7 @@ internal fun ToolsPane(
     processes: ManagedProcesses,
     terminal: InteractiveTerminalSession,
     stateLine: String,
+    onClose: () -> Unit,
     onOpenTerminal: () -> Unit = {},
     checkpoints: List<RunCheckpointInfo> = emptyList(),
     onRestoreCheckpoint: (String, Boolean) -> Unit = { _, _ -> },
@@ -72,7 +74,7 @@ internal fun ToolsPane(
     modifier: Modifier = Modifier,
 ) {
     val terminalState by terminal.state.collectAsState()
-    ProcessesContent(processes, modifier, null, stateLine = stateLine,
+    ProcessesContent(processes, modifier, null, onClose = onClose, stateLine = stateLine,
         terminalRunning = terminalState.running,
         onOpenTerminal = {
             terminal.open()
@@ -89,6 +91,7 @@ internal fun restorePrimaryLabel(undoRun: Boolean): String =
 
 @Composable
 private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, onBack: (() -> Unit)?,
+                             onClose: (() -> Unit)? = null,
                              stateLine: String? = null,
                              terminalRunning: Boolean = false,
                              onOpenTerminal: (() -> Unit)? = null,
@@ -109,21 +112,28 @@ private fun ProcessesContent(processes: ManagedProcesses, modifier: Modifier, on
     if (onBack != null) BackHandler(onBack = onBack)
 
     Column(modifier) {
-        Row(Modifier.fillMaxWidth().padding(end = 16.dp).then(
-                if (terminalRunning && onOpenTerminal != null) Modifier.clickable(onClick = onOpenTerminal)
-                else Modifier),
+        Row(Modifier.fillMaxWidth().padding(end = 16.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
-                Icon(painterResource(R.drawable.ic_back), "Back to chat",
-                    tint = MaterialTheme.colorScheme.onBackground)
-            } else Spacer(Modifier.size(16.dp))
-            Column {
-                Text(if (onOpenTerminal == null) "Processes" else "Tools",
-                    style = MaterialTheme.typography.titleLarge)
-                if (stateLine != null) {
-                    Text(stateLine, style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Row(Modifier.weight(1f).then(
+                    if (terminalRunning && onOpenTerminal != null) Modifier.clickable(onClick = onOpenTerminal)
+                    else Modifier),
+                verticalAlignment = Alignment.CenterVertically) {
+                if (onBack != null) IconButton(onClick = onBack, modifier = Modifier.size(48.dp)) {
+                    Icon(painterResource(R.drawable.ic_back), "Back to chat",
+                        tint = MaterialTheme.colorScheme.onBackground)
+                } else Spacer(Modifier.size(16.dp))
+                Column {
+                    Text(if (onOpenTerminal == null) "Processes" else "Tools",
+                        style = MaterialTheme.typography.titleLarge)
+                    if (stateLine != null) {
+                        Text(stateLine, style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
                 }
+            }
+            if (onClose != null) IconButton(onClick = onClose, modifier = Modifier.size(48.dp)) {
+                Icon(painterResource(R.drawable.ic_close), stringResource(R.string.close_tools),
+                    tint = MaterialTheme.colorScheme.onBackground)
             }
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.25f))

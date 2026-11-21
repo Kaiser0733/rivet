@@ -559,9 +559,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         Icon(painterResource(R.drawable.ic_browser), "Browser",
                             tint = MaterialTheme.colorScheme.onBackground)
                     }
-                    // Processes action
+                    // Tools action
                     IconButton(onClick = onOpenProcesses, modifier = Modifier.size(48.dp)) {
-                        Icon(painterResource(R.drawable.ic_processes), "Processes",
+                        Icon(painterResource(R.drawable.ic_processes), stringResource(R.string.open_tools),
                             tint = if (hasActiveProcesses) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onBackground)
                     }
