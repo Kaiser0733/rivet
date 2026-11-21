@@ -119,6 +119,7 @@ import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
+import com.kaiser.rivet.chat.compactRowEnabled
 import com.kaiser.rivet.chat.SharedDraft
 import com.kaiser.rivet.chat.appendClipboardText
 import com.kaiser.rivet.chat.draftFor
@@ -345,6 +346,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 skills = skillCatalog?.skills.orEmpty(),
                 onRequestSkills = chatViewModel::refreshSkillCatalog,
                 onSendFeedback = onSendFeedback,
+                onCompact = chatViewModel::compactHistory,
                 onAutonomyChange = onAutonomyChange,
                 folderName = state.projectName,
                 onOpenProjects = onOpenProjects,
@@ -1637,6 +1639,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
                      onSendFeedback: () -> Unit,
+                     onCompact: () -> Unit,
                      onAutonomyChange: (AutonomyMode) -> Unit,
                      folderName: String?,
                      onOpenProjects: () -> Unit,
@@ -1732,7 +1735,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // The "/" picker only appears while the first token is still being typed; picking a
     // row just completes the text, and sending is what loads the skill.
     val commandQuery = skillCommandQuery(draft)
-    val commandMatches = if (commandQuery == null) emptyList() else slashRows(skills, commandQuery)
+    val commandMatches = if (commandQuery == null) emptyList()
+        else slashRows(skills, commandQuery, compactEnabled = compactRowEnabled(streaming))
     var dismissedCommand by rememberSaveable { mutableStateOf<String?>(null) }
     val showCommands = commandQuery != null && dismissedCommand != draft && commandMatches.isNotEmpty()
     LaunchedEffect(commandQuery != null) {
@@ -1764,6 +1768,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                 drafts = withDraft(drafts, sessionId, nextDraft)
                 when (row.action) {
                     SlashAction.Feedback -> onSendFeedback()
+                    SlashAction.Compact -> onCompact()
                     SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
                     SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
                     else -> Unit

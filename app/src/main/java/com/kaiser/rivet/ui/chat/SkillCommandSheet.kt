@@ -37,7 +37,7 @@ internal fun SlashCommandPanel(rows: List<SlashRow>, onPick: (SlashRow) -> Unit)
                 }
                 items(section, key = { row -> row.action?.let { "action:${it.token}" } ?: "skill:${row.name}" }) { row ->
                     val unavailable = when {
-                        row.action == SlashAction.Compact -> "Runs automatically"
+                        row.action == SlashAction.Compact && !row.enabled -> "Wait for the reply to finish"
                         row.skill?.userInvocable == false -> "Agent only"
                         else -> null
                     }

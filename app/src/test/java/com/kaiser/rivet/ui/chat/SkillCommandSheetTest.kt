@@ -3,6 +3,7 @@ package com.kaiser.rivet.ui.chat
 import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.SkillRootKind
 import com.kaiser.rivet.agent.SkillSource
+import com.kaiser.rivet.chat.compactRowEnabled
 import org.junit.Assert.*
 import org.junit.Test
 
@@ -46,7 +47,18 @@ class SkillCommandSheetTest {
         assertEquals(listOf(null, null, "Commands", "Commands", "Commands"), actions.map { it.group })
         assertEquals(listOf("Goal", "Feedback", "Compact", "YOLO", "Basic YOLO"), actions.map { it.name })
         assertEquals(listOf(SlashAction.BasicYolo), slashRows(emptyList(), "basic-y").map { it.action })
-        assertFalse(actions.single { it.action == SlashAction.Compact }.enabled)
+        val compact = actions.single { it.action == SlashAction.Compact }
+        assertTrue(compact.enabled)
+        assertEquals("Compact older conversation history", compact.description)
+    }
+
+    @Test fun compactWaitsWhileAReplyRunsAndTheOtherRowsStayAvailable() {
+        val rows = slashRows(emptyList(), "", compactEnabled = compactRowEnabled(streaming = true))
+        val compact = rows.single { it.action == SlashAction.Compact }
+        assertFalse(compact.enabled)
+        assertTrue(rows.filter { it.action != SlashAction.Compact }.all { it.enabled })
+        assertTrue(slashRows(emptyList(), "", compactEnabled = compactRowEnabled(streaming = false))
+            .single { it.action == SlashAction.Compact }.enabled)
     }
 
 }

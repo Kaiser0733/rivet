@@ -1041,6 +1041,216 @@ class ChatViewModelTest {
         assertFalse(restored.interrupted)
     }
 
+    @Test fun manualCompactionSummarisesTheIdleSessionAndLeavesTheNoticeRow() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(10) { index ->
+                add(AgentMessage.user("Inspect $index " + "x".repeat(2_000)))
+                add(AgentMessage.assistant("Analysis $index " + "y".repeat(2_000)))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val provider = QueueProvider(ArrayDeque(listOf(
+            AgentResponse(text = """{"STATE":["Inspected code"],"OPEN THREADS":["Verify"]}"""),
+        )))
+        val endpoint = "https://example.invalid"
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.compactHistory()
+        val done = await(viewModel) { !it.streaming && it.messages.any { message ->
+            message.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
+        } }
+
+        assertNull(done.error)
+        assertEquals(1, provider.requests.size)
+        assertTrue(provider.requests.single().system.contains("\"DECISIONS + WHY\""))
+        // The goal stays pinned verbatim to the newest user message, as in the run path.
+        assertEquals(history.last { it.role == com.kaiser.rivet.agent.AgentRole.User }.text,
+            com.kaiser.rivet.agent.TaskCheckpoint.parse(sessions.load().summary)?.goal)
+        assertEquals(1, sessions.load().messages.count {
+            it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
+        })
+        assertTrue(AgentContext.serializedBytes(sessions.load().messages) <
+            AgentContext.serializedBytes(history) / 2)
+        // The visible transcript keeps its history and gains the same marker row.
+        assertEquals(history, done.messages.dropLast(1))
+        assertEquals(history.size + 1, sessions.fullEventCount(id))
+        assertFalse(done.streaming)
+    }
+
+    @Test fun manualCompactionOnAFreshSessionIsAPlainNoOp() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val provider = QueueProvider(ArrayDeque())
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.compactHistory()
+        val done = await(viewModel) { it.notice == "Nothing to compact yet." }
+
+        assertFalse(done.streaming)
+        assertNull(done.error)
+        assertEquals(0, provider.requests.size)
+        assertEquals(0, sessions.fullEventCount(id))
+        assertEquals("", sessions.load().summary)
+    }
+
+    @Test fun manualCompactionWithNothingWorthCompactingKeepsTheSession() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = listOf(AgentMessage.user("Hello"), AgentMessage.assistant("Hi there"))
+        sessions.save(history, interrupted = false)
+        val provider = QueueProvider(ArrayDeque())
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.compactHistory()
+        val done = await(viewModel) { !it.streaming && it.notice == "Nothing to compact yet." }
+
+        assertNull(done.error)
+        assertEquals(0, provider.requests.size)
+        assertEquals(history, sessions.load().messages)
+        assertEquals("", sessions.load().summary)
+        assertEquals(2, sessions.fullEventCount(id))
+        assertEquals(history, done.messages)
+    }
+
+    @Test fun manualCompactionWaitsWhileAReplyIsRunning() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val started = CompletableDeferred<Unit>()
+        val provider = object : ProviderClient {
+            val requests = mutableListOf<AgentRequest>()
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                requests += request
+                started.complete(Unit)
+                awaitCancellation()
+            }
+        }
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "gpt-4o")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.send("Start a long turn")
+        withTimeout(5_000) { started.await() }
+        viewModel.compactHistory()
+        val blocked = await(viewModel) { it.notice == "Cannot compact while a reply is running." }
+
+        assertTrue(blocked.streaming)
+        assertEquals(1, provider.requests.size)
+        viewModel.cancel()
+        await(viewModel) { !it.streaming }
+        assertEquals("", sessions.load().summary)
+    }
+
+    @Test fun failedManualCompactionKeepsTheSessionUntouched() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(10) { index ->
+                add(AgentMessage.user("Inspect $index " + "x".repeat(2_000)))
+                add(AgentMessage.assistant("Analysis $index " + "y".repeat(2_000)))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse = throw ProviderError.Timeout("stream")
+        }
+        val endpoint = "https://example.invalid"
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.compactHistory()
+        val failed = await(viewModel) { !it.streaming &&
+            it.error == "Rivet could not shorten this session's context. The conversation was kept." }
+
+        assertEquals(history, sessions.load().messages)
+        assertEquals("", sessions.load().summary)
+        assertEquals(history.size, sessions.fullEventCount(id))
+        assertEquals(history, failed.messages)
+    }
+
+    @Test fun cancellingManualCompactionKeepsTheDurableSession() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = buildList {
+            repeat(10) { index ->
+                add(AgentMessage.user("Inspect $index " + "x".repeat(2_000)))
+                add(AgentMessage.assistant("Analysis $index " + "y".repeat(2_000)))
+            }
+        }
+        sessions.save(history, interrupted = false)
+        val entered = CompletableDeferred<AgentRequest>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                entered.complete(request)
+                awaitCancellation()
+            }
+        }
+        val endpoint = "https://example.invalid"
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        viewModel.compactHistory()
+        assertTrue(withTimeout(5_000) { entered.await() }.system.contains("\"DECISIONS + WHY\""))
+        viewModel.cancel()
+        await(viewModel) { !it.streaming }
+
+        val restored = CodingSessions(app).load()
+        assertEquals(history, restored.messages)
+        assertEquals("", restored.summary)
+        assertEquals(history.size, sessions.fullEventCount(id))
+        assertFalse(restored.interrupted)
+    }
+
     @Test fun repeatedStructuredCompactionEvolvesStateAcrossRestart() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()

@@ -12,20 +12,20 @@ internal data class SlashRow(
     val description: String,
     val action: SlashAction? = null,
     val skill: Skill? = null,
-) {
-    val enabled: Boolean get() = action != SlashAction.Compact && skill?.userInvocable != false
-}
+    val enabled: Boolean = true,
+)
 
 internal fun skillCommandQuery(text: String): String? {
     if (!text.startsWith("/")) return null
     return text.drop(1).takeUnless { it.any(Char::isWhitespace) }
 }
 
-internal fun slashRows(installed: List<Skill>, query: String): List<SlashRow> = buildList {
+internal fun slashRows(installed: List<Skill>, query: String, compactEnabled: Boolean = true): List<SlashRow> = buildList {
     fun row(group: String?, name: String, description: String, action: SlashAction) {
         if (action.token.startsWith(query, ignoreCase = true) ||
             name.startsWith(query, ignoreCase = true)) {
-            add(SlashRow(group, name, description, action = action))
+            add(SlashRow(group, name, description, action = action,
+                enabled = action != SlashAction.Compact || compactEnabled))
         }
     }
     row(null, "Goal", "Set or view the goal for a long-running task", SlashAction.Goal)
@@ -35,5 +35,5 @@ internal fun slashRows(installed: List<Skill>, query: String): List<SlashRow> = 
     row("Commands", "Basic YOLO", "Ask before sensitive actions", SlashAction.BasicYolo)
     installed.filter { it.name.startsWith(query, ignoreCase = true) }
         .forEach { skill -> add(SlashRow(group = "Skills", name = skill.name,
-            description = skill.description, skill = skill)) }
+            description = skill.description, skill = skill, enabled = skill.userInvocable != false)) }
 }
