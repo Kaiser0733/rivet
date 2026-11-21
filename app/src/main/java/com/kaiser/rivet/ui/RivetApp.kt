@@ -57,7 +57,10 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import androidx.compose.runtime.produceState
 import com.kaiser.rivet.ui.local.ModelsScreen
-import com.kaiser.rivet.ui.processes.ToolsPane
+import com.kaiser.rivet.ui.processes.ToolsScreen
+import com.kaiser.rivet.ui.chat.WorkerScreen
+import com.kaiser.rivet.ui.chat.workerSheetRows
+import com.kaiser.rivet.ui.chat.chipSheetWorker
 import com.kaiser.rivet.ui.workspace.ProjectsScreen
 import com.kaiser.rivet.ui.provider.ProviderEditor
 import com.kaiser.rivet.ui.provider.ProvidersViewModel
@@ -115,12 +118,10 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         // Panels: the left slide's state is the drawer's own; the right slide and the
         // settings sheet are booleans, so a swipe-close or a Back-close cannot disagree
         // with a separate flag.
-        var processesOpen by rememberSaveable { mutableStateOf(false) }
         var destination by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
         var modelsOpen by rememberSaveable { mutableStateOf(false) }
         var installOpen by rememberSaveable { mutableStateOf(false) }
         var installZip by remember { mutableStateOf<android.net.Uri?>(null) }
-        var terminalOpen by rememberSaveable { mutableStateOf(false) }
         val terminalStateLine by chatViewModel.terminalStatusLine.collectAsState()
         val drawerState = rememberDrawerState(DrawerValue.Closed)
         val modelsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
@@ -164,10 +165,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 destination = RivetDestination.Chat
                 editing = false
                 modelsOpen = false
-                terminalOpen = false
                 installOpen = false
                 if (browserState.visible) chatViewModel.browser.close()
-                processesOpen = true
+                destination = RivetDestination.Tools
             }
         }
         // A zip shared to Rivet lands on the same review sheet as the GitHub route.
@@ -179,8 +179,6 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 destination = RivetDestination.Chat
                 editing = false
                 modelsOpen = false
-                terminalOpen = false
-                processesOpen = false
                 installOpen = false
                 if (browserState.visible) chatViewModel.browser.close()
             }
@@ -214,8 +212,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val closeHistory: () -> Unit = remember(coroutineScope, drawerState) {
             { coroutineScope.launch { drawerState.close() }; Unit }
         }
-        val openProcesses = remember { { processesOpen = true } }
-        val closeProcesses = remember { { processesOpen = false } }
+        val openTools = remember { { destination = RivetDestination.Tools } }
         val openModels = remember {
             {
                 modelsOpen = true
@@ -228,18 +225,21 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 action()
             }
         }
-        val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open || processesOpen
-        BackHandler(terminalOpen || editing || destination != RivetDestination.Chat || modelsOpen || browserState.visible || panelOpen) {
+        val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
+        BackHandler(editing || destination != RivetDestination.Chat || modelsOpen || browserState.visible || panelOpen) {
             when {
-                terminalOpen -> terminalOpen = false
                 browserState.visible -> chatViewModel.browser.close()
                 modelsOpen -> modelsOpen = false
                 editing -> {
                     providersViewModel.closeEditor()
                     editing = false
                 }
+                destination == RivetDestination.Terminal -> destination = RivetDestination.Tools
+                destination == RivetDestination.Workers -> {
+                    chatViewModel.closeWorker()
+                    destination = RivetDestination.Tools
+                }
                 destination != RivetDestination.Chat -> destination = RivetDestination.Chat
-                processesOpen -> closeProcesses()
                 else -> closeHistory()
             }
         }
@@ -262,7 +262,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                     profileInitial = profileInitial,
                                     onNavigate = closeHistory,
                                     onOpenProjects = { closeSidebarThen(openProjects) },
-                                    onOpenTools = { closeSidebarThen(openProcesses) },
+                                    onOpenTools = { closeSidebarThen(openTools) },
                                     onOpenBrowser = {
                                         closeSidebarThen {
                                             if (com.kaiser.rivet.browser.BrowserDrivingPolicy.cardVisible(
@@ -278,36 +278,53 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             }
                         },
                     ) {
-                        Box(Modifier.fillMaxSize()) {
-                            Box(Modifier.fillMaxSize()) {
-                                RivetChatBackground()
-                                ChatScreen(chatViewModel, providersViewModel,
-                                    onOpenSettings = openSettings,
-                                    onOpenSidebar = openHistory,
-                                    onSendFeedback = sendFeedback,
-                                    onAutonomyChange = requestAutonomy,
-                                    onOpenProjects = openProjects)
-                            }
-                            RightSlidePanel(open = processesOpen,
-                                onClose = closeProcesses) {
-                                val conversation by chatViewModel.uiState.collectAsState()
-                                ToolsPane(
-                                    processes = chatViewModel.managedProcesses,
-                                    terminal = chatViewModel.terminalSession,
-                                    stateLine = terminalStateLine,
-                                    onClose = closeProcesses,
-                                    onOpenTerminal = {
-                                        closeProcesses()
-                                        terminalOpen = true
-                                    },
-                                    checkpoints = conversation.runCheckpoints,
-                                    onRestoreCheckpoint = chatViewModel::restoreRunCheckpoint,
-                                    checkpointNotice = conversation.runCheckpointNotice,
-                                    modifier = Modifier.fillMaxSize(),
-                                )
-                            }
-                        }
+                        ChatScreen(chatViewModel, providersViewModel,
+                            onOpenSettings = openSettings,
+                            onOpenSidebar = openHistory,
+                            onSendFeedback = sendFeedback,
+                            onAutonomyChange = requestAutonomy,
+                            onOpenProjects = openProjects)
                     }
+                }
+                RivetDestination.Tools -> saveableStates.SaveableStateProvider("tools") {
+                    val conversation by chatViewModel.uiState.collectAsState()
+                    val workers by chatViewModel.subagents.collectAsState()
+                    val selected = chipSheetWorker(workers)
+                    ToolsScreen(
+                        processes = chatViewModel.managedProcesses,
+                        terminal = chatViewModel.terminalSession,
+                        onBack = { destination = RivetDestination.Chat },
+                        onOpenTerminal = { destination = RivetDestination.Terminal },
+                        onOpenWorkers = selected?.let { { chatViewModel.openWorker(it.id); destination = RivetDestination.Workers } },
+                        checkpoints = conversation.runCheckpoints,
+                        onRestoreCheckpoint = chatViewModel::restoreRunCheckpoint,
+                        checkpointNotice = conversation.runCheckpointNotice,
+                    )
+                }
+                RivetDestination.Terminal -> TerminalPane(chatViewModel.terminalSession, terminalStateLine,
+                    onClose = { destination = RivetDestination.Tools },
+                    modifier = Modifier.fillMaxSize())
+                RivetDestination.Workers -> {
+                    val workers by chatViewModel.subagents.collectAsState()
+                    val sheet by chatViewModel.workerSheet.collectAsState()
+                    val worker = workers.firstOrNull { it.id == sheet.worker?.id } ?: sheet.worker
+                    if (worker == null) Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                        RivetPageHeader("Subagents") { destination = RivetDestination.Tools }
+                    } else WorkerScreen(
+                        worker = worker,
+                        workers = workerSheetRows(workers),
+                        onSelect = chatViewModel::openWorker,
+                        messages = sheet.messages,
+                        loading = sheet.loading,
+                        error = sheet.error,
+                        onDismiss = { chatViewModel.closeWorker(); destination = RivetDestination.Tools },
+                        onStop = { chatViewModel.stopSubagent(worker.id) },
+                        onContinue = {
+                            chatViewModel.closeWorker()
+                            destination = RivetDestination.Chat
+                            chatViewModel.continueWorker(worker.id)
+                        },
+                    )
                 }
                 RivetDestination.Projects -> saveableStates.SaveableStateProvider("projects") {
                     ProjectsScreen(chatViewModel, providerIds = providerList.configs
@@ -389,11 +406,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     },
                 )
             }
-            if (terminalOpen) {
-                TerminalPane(chatViewModel.terminalSession, terminalStateLine,
-                    onClose = { terminalOpen = false },
-                    modifier = Modifier.fillMaxSize().zIndex(3f))
-            }
+
         }
 
         // Models is reachable before any provider exists, so it gets its own sheet

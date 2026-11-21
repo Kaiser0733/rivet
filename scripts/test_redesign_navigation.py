@@ -64,3 +64,17 @@ class RedesignNavigationTest(unittest.TestCase):
         chat = (UI / "chat/ChatScreen.kt").read_text()
         self.assertNotIn("ACTION_OPEN_DOCUMENT_TREE", chat)
         self.assertNotIn("StarterGallery(", chat)
+
+    def test_tools_is_a_running_first_full_screen_and_terminal_returns_to_tools(self):
+        app = (UI / "RivetApp.kt").read_text()
+        self.assertNotIn("RightSlidePanel(", app)
+        self.assertIn("RivetDestination.Tools ->", app)
+        self.assertIn("RivetDestination.Terminal ->", app)
+        self.assertIn("onClose = { destination = RivetDestination.Tools }", app)
+        tools = (UI / "processes/ProcessesScreen.kt").read_text()
+        self.assertIn("val (running, finished) = processItems.partition", tools)
+        self.assertIn("if (showFinished) items(finished", tools)
+        self.assertIn("mutableStateOf(false)", tools.split("private fun ProcessRow(", 1)[1])
+        header = tools.split("commandFirstLine(process.label)", 1)[1].split("if (expanded)", 1)[0]
+        self.assertIn("maxLines = 1", header)
+        self.assertIn("TextOverflow.Ellipsis", header)

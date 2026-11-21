@@ -158,8 +158,6 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                onSendFeedback: () -> Unit = {}, onAutonomyChange: (AutonomyMode) -> Unit = {}) {
     val state by chatViewModel.uiState.collectAsState()
     val skillCatalog by chatViewModel.skillCatalog.collectAsState()
-    val subagents by chatViewModel.subagents.collectAsState()
-    val workerSheet by chatViewModel.workerSheet.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
     val projectBinding = projectBindingState(state.currentSessionId, state.currentSessionWorkspaceId,
         state.projectIdentity, state.projectLoading)
@@ -181,8 +179,6 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     var usageLimitShownFor by remember { mutableStateOf<String?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf<String?>(null) }
-    var selectedWorkerId by remember { mutableStateOf<String?>(null) }
-    val selectedWorker = subagents.firstOrNull { it.id == selectedWorkerId } ?: workerSheet.worker
     if (confirmUndo) {
         AlertDialog(onDismissRequest = { confirmUndo = false },
             title = { Text("Undo Rivet's last changes?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
@@ -344,31 +340,6 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             selector = modelSelector,
             onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
             modifier = Modifier.fillMaxWidth())
-    }
-    val openWorker = selectedWorker
-    if (selectedWorkerId != null && openWorker != null) {
-        WorkerSheet(
-            worker = openWorker,
-            workers = workerSheetRows(subagents),
-            onSelect = { id ->
-                selectedWorkerId = id
-                chatViewModel.openWorker(id)
-            },
-            messages = workerSheet.messages,
-            loading = workerSheet.loading,
-            error = workerSheet.error,
-            onDismiss = {
-                selectedWorkerId = null
-                chatViewModel.closeWorker()
-            },
-            onStop = { chatViewModel.stopSubagent(openWorker.id) },
-            onContinue = {
-                val id = openWorker.id
-                selectedWorkerId = null
-                chatViewModel.closeWorker()
-                chatViewModel.continueWorker(id)
-            },
-        )
     }
 }
 
