@@ -144,3 +144,9 @@ class RedesignNavigationTest(unittest.TestCase):
         message = (UI / "chat/ChatScreen.kt").read_text().split("internal fun MessageRow(", 1)[1]
         self.assertNotIn("DropdownMenu(", message)
         self.assertIn('Text("Copy message")', message)
+
+    def test_search_focuses_the_field_when_the_drawer_is_open(self):
+        sidebar = (UI / "history/HistoryScreen.kt").read_text()
+        self.assertIn("LaunchedEffect(searching, drawerOpen)", sidebar)
+        self.assertIn("searchFocus.requestFocus()", sidebar)
+        self.assertIn(".focusRequester(searchFocus)", sidebar)

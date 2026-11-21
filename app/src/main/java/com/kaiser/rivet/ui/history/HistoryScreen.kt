@@ -31,12 +31,18 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.remember
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalFocusManager
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.contentDescription
 import androidx.compose.ui.semantics.semantics
@@ -52,6 +58,7 @@ import com.kaiser.rivet.ui.RivetLayout
 internal fun RivetSidebar(
     viewModel: ChatViewModel,
     profileInitial: String?,
+    drawerOpen: Boolean,
     onNavigate: () -> Unit,
     onOpenProjects: () -> Unit,
     onOpenTools: () -> Unit,
@@ -72,6 +79,18 @@ internal fun RivetSidebar(
         editTitle = null
         confirmingDelete = false
     }
+    val searchFocus = remember { FocusRequester() }
+    val focus = LocalFocusManager.current
+    val keyboard = LocalSoftwareKeyboardController.current
+    LaunchedEffect(searching, drawerOpen) {
+        if (searching && drawerOpen) {
+            searchFocus.requestFocus()
+            keyboard?.show()
+        } else if (searching) {
+            focus.clearFocus()
+            keyboard?.hide()
+        }
+    }
     val rows = state.sessions.filter { session -> session.title.contains(search.trim(), ignoreCase = true) }
 
     Column(Modifier.fillMaxSize().imePadding().padding(horizontal = RivetLayout.pageGutter)) {
@@ -79,14 +98,19 @@ internal fun RivetSidebar(
             Text("Rivet", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
             IconButton(onClick = {
                 searching = !searching
-                if (!searching) search = ""
+                if (!searching) {
+                    search = ""
+                    focus.clearFocus()
+                    keyboard?.hide()
+                }
             }) {
                 Icon(painterResource(if (searching) R.drawable.ic_close else R.drawable.ic_search),
                     if (searching) "Close search" else "Search chats")
             }
         }
         if (searching) {
-            OutlinedTextField(search, { search = it }, Modifier.fillMaxWidth().padding(bottom = 8.dp),
+            OutlinedTextField(search, { search = it }, Modifier.fillMaxWidth().padding(bottom = 8.dp)
+                .focusRequester(searchFocus),
                 placeholder = { Text("Search chats") }, singleLine = true)
         }
         Surface(onClick = onOpenProjects, modifier = Modifier.fillMaxWidth(),

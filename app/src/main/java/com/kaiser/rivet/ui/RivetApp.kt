@@ -8,6 +8,8 @@ import androidx.compose.foundation.isSystemInDarkTheme
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.fillMaxSize
+import androidx.compose.foundation.layout.fillMaxWidth
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material3.Surface
@@ -264,10 +266,15 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 drawerState = drawerState,
                                 scrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = RivetMotion.drawerScrim),
                                 drawerContent = {
-                                    ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
+                                    ModalDrawerSheet(
+                                        modifier = Modifier.widthIn(max = RivetLayout.drawerMaxWidth)
+                                            .fillMaxWidth(RivetLayout.drawerWidthFraction),
+                                        drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow,
+                                    ) {
                                         RivetSidebar(
                                             viewModel = chatViewModel,
                                             profileInitial = profileInitial,
+                                            drawerOpen = drawerState.isOpen,
                                             onNavigate = closeHistory,
                                             onOpenProjects = { closeSidebarThen(openProjects) },
                                             onOpenTools = { closeSidebarThen(openTools) },
