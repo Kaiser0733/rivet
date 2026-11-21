@@ -119,3 +119,9 @@ class ImprovementsTest(unittest.TestCase):
         value = row.split("Text(value", 1)[1].split("Icon(painterResource(trailingIcon)", 1)[0]
         self.assertNotIn("maxLines", value)
         self.assertNotIn("Ellipsis", value)
+
+    def test_about_destinations_use_the_same_settings_rows(self):
+        about = source("ui/provider/SettingsScreen.kt").split("private fun AboutDetail", 1)[1]
+        self.assertIn('SectionListItem(R.drawable.ic_history, "Updates", "", onOpenUpdates', about)
+        self.assertIn('SectionListItem(R.drawable.ic_models, "Conversation usage", "", onShowUsage', about)
+        self.assertNotIn("UsageRow(", about)

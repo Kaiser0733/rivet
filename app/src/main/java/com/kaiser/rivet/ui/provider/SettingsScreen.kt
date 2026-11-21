@@ -779,17 +779,6 @@ private fun themeIcon(mode: RivetThemeMode): Int = when (mode) {
 }
 
 @Composable
-private fun UsageRow(onShowUsage: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onShowUsage),
-        verticalAlignment = Alignment.CenterVertically) {
-        Text("Conversation usage", Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyLarge)
-        Icon(painterResource(R.drawable.ic_chevron_right), null, Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
 private fun AgentDetail(
     autonomyMode: AutonomyMode,
     autonomySaving: Boolean,
@@ -908,7 +897,7 @@ private fun AboutDetail(versionName: String, onShowUsage: () -> Unit, onOpenUpda
         SupportSection()
         
         SectionListItem(R.drawable.ic_history, "Updates", "", onOpenUpdates, true)
-        UsageRow(onShowUsage = onShowUsage)
+        SectionListItem(R.drawable.ic_models, "Conversation usage", "", onShowUsage, false)
     }
 }
 
