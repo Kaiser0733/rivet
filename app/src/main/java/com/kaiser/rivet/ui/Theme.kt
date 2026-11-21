@@ -164,3 +164,17 @@ fun RivetTheme(themeMode: RivetThemeMode = RivetThemeMode.Dark,
         content = content,
     )
 }
+
+internal object RivetMotion {
+    const val PAGE_MS = 240
+    const val MESSAGE_MS = 190
+    const val FOCUS_MS = 160
+    const val PROCESS_MS = 200
+    const val COMPLETE_MS = 660
+    val pageShift = 24.dp
+    val messageRise = 10.dp
+    val completionStroke = 3.dp
+    val completionLength = 78.dp
+    const val drawerScrim = 0.46f
+    val easing = androidx.compose.animation.core.FastOutSlowInEasing
+}

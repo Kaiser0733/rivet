@@ -35,6 +35,7 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
+import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -246,170 +247,176 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
 
+        val page = if (browserState.visible) "browser" else if (editing) "provider" else destination.name
+        val progress = entryProgress(page, animate = page != RivetDestination.Terminal.name,
+            duration = RivetMotion.PAGE_MS)
+        val offset = if (destination == RivetDestination.Chat && !browserState.visible) (-16).dp
+            else RivetMotion.pageShift
         RivetBackdrop {
             if (!browserState.visible) {
-                if (editing) {
-                    saveableStates.SaveableStateProvider("provider_editor") {
-                        ProviderEditor(viewModel = providersViewModel, onDone = { editing = false })
-                    }
-                } else when (destination) {
-                    RivetDestination.Chat -> saveableStates.SaveableStateProvider("chat") {
-                        // Chat is the permanent base layer: the panels slide over it, so the
-                        // conversation (and its scroll position) survives every open and close.
-                        ModalNavigationDrawer(
-                            drawerState = drawerState,
-                            drawerContent = {
-                                ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
-                                    RivetSidebar(
-                                        viewModel = chatViewModel,
-                                        profileInitial = profileInitial,
-                                        onNavigate = closeHistory,
-                                        onOpenProjects = { closeSidebarThen(openProjects) },
-                                        onOpenTools = { closeSidebarThen(openTools) },
-                                        onOpenBrowser = {
-                                            closeSidebarThen {
-                                                if (com.kaiser.rivet.browser.BrowserDrivingPolicy.cardVisible(
-                                                        browserState.agentRunActive, browserState.agentVisualActive,
-                                                        browserState.watchVisible, browserState.visible))
-                                                    chatViewModel.browser.watch()
-                                                else chatViewModel.browser.userOpen()
-                                            }
-                                        },
-                                        onOpenModels = { closeSidebarThen(openModels) },
-                                        onOpenSettings = { closeSidebarThen(openSettings) },
-                                    )
-                                }
-                            },
-                        ) {
-                            ChatScreen(chatViewModel, providersViewModel,
-                                onOpenSettings = openSettings,
-                                onOpenSidebar = openHistory,
-                                onSendFeedback = sendFeedback,
-                                onAutonomyChange = requestAutonomy,
-                                onOpenProjects = openProjects)
+                Box(Modifier.fillMaxSize().pageEntry(progress, offset)) {
+                    if (editing) {
+                        saveableStates.SaveableStateProvider("provider_editor") {
+                            ProviderEditor(viewModel = providersViewModel, onDone = { editing = false })
                         }
-                    }
-                    RivetDestination.Tools -> saveableStates.SaveableStateProvider("tools") {
-                        val conversation by chatViewModel.uiState.collectAsState()
-                        val workers by chatViewModel.subagents.collectAsState()
-                        val selected = chipSheetWorker(workers)
-                        ToolsScreen(
-                            processes = chatViewModel.managedProcesses,
-                            terminal = chatViewModel.terminalSession,
-                            onBack = { destination = RivetDestination.Chat },
-                            onOpenTerminal = { destination = RivetDestination.Terminal },
-                            onOpenWorkers = selected?.let { { chatViewModel.openWorker(it.id); destination = RivetDestination.Workers } },
-                            checkpoints = conversation.runCheckpoints,
-                            onRestoreCheckpoint = chatViewModel::restoreRunCheckpoint,
-                            checkpointNotice = conversation.runCheckpointNotice,
-                        )
-                    }
-                    RivetDestination.Terminal -> TerminalPane(chatViewModel.terminalSession, terminalStateLine,
-                        onClose = { destination = RivetDestination.Tools },
-                        modifier = Modifier.fillMaxSize())
-                    RivetDestination.Workers -> {
-                        val workers by chatViewModel.subagents.collectAsState()
-                        val sheet by chatViewModel.workerSheet.collectAsState()
-                        val worker = workers.firstOrNull { it.id == sheet.worker?.id } ?: sheet.worker
-                        if (worker == null) Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                            RivetPageHeader("Subagents") { destination = RivetDestination.Tools }
-                        } else WorkerScreen(
-                            worker = worker,
-                            workers = workerSheetRows(workers),
-                            onSelect = chatViewModel::openWorker,
-                            messages = sheet.messages,
-                            loading = sheet.loading,
-                            error = sheet.error,
-                            onDismiss = { chatViewModel.closeWorker(); destination = RivetDestination.Tools },
-                            onStop = { chatViewModel.stopSubagent(worker.id) },
-                            onContinue = {
-                                chatViewModel.closeWorker()
-                                destination = RivetDestination.Chat
-                                chatViewModel.continueWorker(worker.id)
-                            },
-                        )
-                    }
-                    RivetDestination.Projects -> saveableStates.SaveableStateProvider("projects") {
-                        ProjectsScreen(chatViewModel, providerIds = providerList.configs
-                            .filter { it.type != ProviderType.Local && it.type != ProviderType.ChatGptPlan }
-                            .map { it.id }, onBack = { destination = RivetDestination.Chat })
-                    }
-                    RivetDestination.Models -> saveableStates.SaveableStateProvider("models") {
-                        Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                            ModelsScreen(modelsViewModel, firstRun = providerList.configs.isEmpty(),
-                                onClose = { destination = modelsReturn })
-                        }
-                    }
-                    RivetDestination.SkillInstall -> SkillInstallScreen(
-                        initialZip = installZip,
-                        onDismiss = {
-                            installZip = null
-                            destination = installReturn
-                        },
-                        onInstalled = chatViewModel::refreshSkillCatalog,
-                    )
-                    RivetDestination.Settings -> saveableStates.SaveableStateProvider("settings") {
-                        Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                            val conversation by chatViewModel.uiState.collectAsState()
-                            val skillCatalog by chatViewModel.skillCatalog.collectAsState()
-                            SettingsScreen(
-                                conversationUsage = conversation.usage,
-                                skillCatalog = skillCatalog,
-                                memoryLines = conversation.memoryLines,
-                                memoryMarkdown = conversation.memoryMarkdown,
-                                hasProject = conversation.projectName != null,
-                                onUpdateMemory = chatViewModel::updateMemory,
-                                onForgetMemoryLine = chatViewModel::forgetMemoryLine,
-                                spendCaps = conversation.spendCaps,
-                                userPricePerMillionUsd = conversation.userPricePerMillionUsd,
-                                onSaveSpend = chatViewModel::saveSpendCaps,
-                                onRefreshSkills = chatViewModel::refreshSkillCatalog,
-                                onLoadSkillFiles = chatViewModel::skillBundledFiles,
-                                onInstallSkill = {
-                                    installReturn = RivetDestination.Settings
-                                    installZip = null
-                                    destination = RivetDestination.SkillInstall
-                                },
-                                viewModel = providersViewModel,
-                                versionName = versionName,
-                                onClose = { destination = RivetDestination.Chat },
-                                onEditProvider = {
-                                    providersViewModel.startEdit(it)
-                                    editing = true
-                                },
-                                onNewProvider = {
-                                    providersViewModel.startNewProvider(it)
-                                    editing = true
-                                },
-                                onOpenModels = openModels,
-                                onSendFeedback = sendFeedback,
-                                themeMode = themeMode,
-                                themeSaving = themeSaving,
-                                onThemeChange = { value ->
-                                    if (!themeSaving) {
-                                        themeMode = value
-                                        themeSaving = true
-                                        appearanceSaveError = null
-                                        coroutineScope.launch {
-                                            try {
-                                                appearanceStore.setThemeMode(value)
-                                            } catch (e: CancellationException) {
-                                                throw e
-                                            } catch (_: Exception) {
-                                                themeMode = storedAppearance.themeMode
-                                                appearanceSaveError = "Rivet couldn't save this setting. Try again."
-                                            } finally {
-                                                themeSaving = false
-                                            }
-                                        }
+                    } else when (destination) {
+                        RivetDestination.Chat -> saveableStates.SaveableStateProvider("chat") {
+                            ModalNavigationDrawer(
+                                drawerState = drawerState,
+                                scrimColor = MaterialTheme.colorScheme.scrim.copy(alpha = RivetMotion.drawerScrim),
+                                drawerContent = {
+                                    ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
+                                        RivetSidebar(
+                                            viewModel = chatViewModel,
+                                            profileInitial = profileInitial,
+                                            onNavigate = closeHistory,
+                                            onOpenProjects = { closeSidebarThen(openProjects) },
+                                            onOpenTools = { closeSidebarThen(openTools) },
+                                            onOpenBrowser = {
+                                                closeSidebarThen {
+                                                    if (com.kaiser.rivet.browser.BrowserDrivingPolicy.cardVisible(
+                                                            browserState.agentRunActive, browserState.agentVisualActive,
+                                                            browserState.watchVisible, browserState.visible))
+                                                        chatViewModel.browser.watch()
+                                                    else chatViewModel.browser.userOpen()
+                                                }
+                                            },
+                                            onOpenModels = { closeSidebarThen(openModels) },
+                                            onOpenSettings = { closeSidebarThen(openSettings) },
+                                        )
                                     }
                                 },
-                                appearanceError = appearanceSaveError,
-                                autonomyMode = autonomyMode,
-                                autonomySaving = autonomySaving,
-                                autonomyError = autonomyError,
-                                onAutonomyChange = requestAutonomy,
+                            ) {
+                                ChatScreen(chatViewModel, providersViewModel,
+                                    onOpenSettings = openSettings,
+                                    onOpenSidebar = openHistory,
+                                    onSendFeedback = sendFeedback,
+                                    onAutonomyChange = requestAutonomy,
+                                    onOpenProjects = openProjects)
+                            }
+                        }
+                        RivetDestination.Tools -> saveableStates.SaveableStateProvider("tools") {
+                            val conversation by chatViewModel.uiState.collectAsState()
+                            val workers by chatViewModel.subagents.collectAsState()
+                            val selected = chipSheetWorker(workers)
+                            ToolsScreen(
+                                processes = chatViewModel.managedProcesses,
+                                terminal = chatViewModel.terminalSession,
+                                onBack = { destination = RivetDestination.Chat },
+                                onOpenTerminal = { destination = RivetDestination.Terminal },
+                                onOpenWorkers = selected?.let { { chatViewModel.openWorker(it.id); destination = RivetDestination.Workers } },
+                                checkpoints = conversation.runCheckpoints,
+                                onRestoreCheckpoint = chatViewModel::restoreRunCheckpoint,
+                                checkpointNotice = conversation.runCheckpointNotice,
                             )
+                        }
+                        RivetDestination.Terminal -> TerminalPane(chatViewModel.terminalSession, terminalStateLine,
+                            onClose = { destination = RivetDestination.Tools },
+                            modifier = Modifier.fillMaxSize())
+                        RivetDestination.Workers -> {
+                            val workers by chatViewModel.subagents.collectAsState()
+                            val sheet by chatViewModel.workerSheet.collectAsState()
+                            val worker = workers.firstOrNull { it.id == sheet.worker?.id } ?: sheet.worker
+                            if (worker == null) Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                                RivetPageHeader("Subagents") { destination = RivetDestination.Tools }
+                            } else WorkerScreen(
+                                worker = worker,
+                                workers = workerSheetRows(workers),
+                                onSelect = chatViewModel::openWorker,
+                                messages = sheet.messages,
+                                loading = sheet.loading,
+                                error = sheet.error,
+                                onDismiss = { chatViewModel.closeWorker(); destination = RivetDestination.Tools },
+                                onStop = { chatViewModel.stopSubagent(worker.id) },
+                                onContinue = {
+                                    chatViewModel.closeWorker()
+                                    destination = RivetDestination.Chat
+                                    chatViewModel.continueWorker(worker.id)
+                                },
+                            )
+                        }
+                        RivetDestination.Projects -> saveableStates.SaveableStateProvider("projects") {
+                            ProjectsScreen(chatViewModel, providerIds = providerList.configs
+                                .filter { it.type != ProviderType.Local && it.type != ProviderType.ChatGptPlan }
+                                .map { it.id }, onBack = { destination = RivetDestination.Chat })
+                        }
+                        RivetDestination.Models -> saveableStates.SaveableStateProvider("models") {
+                            Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                                ModelsScreen(modelsViewModel, firstRun = providerList.configs.isEmpty(),
+                                    onClose = { destination = modelsReturn })
+                            }
+                        }
+                        RivetDestination.SkillInstall -> SkillInstallScreen(
+                            initialZip = installZip,
+                            onDismiss = {
+                                installZip = null
+                                destination = installReturn
+                            },
+                            onInstalled = chatViewModel::refreshSkillCatalog,
+                        )
+                        RivetDestination.Settings -> saveableStates.SaveableStateProvider("settings") {
+                            Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                                val conversation by chatViewModel.uiState.collectAsState()
+                                val skillCatalog by chatViewModel.skillCatalog.collectAsState()
+                                SettingsScreen(
+                                    conversationUsage = conversation.usage,
+                                    skillCatalog = skillCatalog,
+                                    memoryLines = conversation.memoryLines,
+                                    memoryMarkdown = conversation.memoryMarkdown,
+                                    hasProject = conversation.projectName != null,
+                                    onUpdateMemory = chatViewModel::updateMemory,
+                                    onForgetMemoryLine = chatViewModel::forgetMemoryLine,
+                                    spendCaps = conversation.spendCaps,
+                                    userPricePerMillionUsd = conversation.userPricePerMillionUsd,
+                                    onSaveSpend = chatViewModel::saveSpendCaps,
+                                    onRefreshSkills = chatViewModel::refreshSkillCatalog,
+                                    onLoadSkillFiles = chatViewModel::skillBundledFiles,
+                                    onInstallSkill = {
+                                        installReturn = RivetDestination.Settings
+                                        installZip = null
+                                        destination = RivetDestination.SkillInstall
+                                    },
+                                    viewModel = providersViewModel,
+                                    versionName = versionName,
+                                    onClose = { destination = RivetDestination.Chat },
+                                    onEditProvider = {
+                                        providersViewModel.startEdit(it)
+                                        editing = true
+                                    },
+                                    onNewProvider = {
+                                        providersViewModel.startNewProvider(it)
+                                        editing = true
+                                    },
+                                    onOpenModels = openModels,
+                                    onSendFeedback = sendFeedback,
+                                    themeMode = themeMode,
+                                    themeSaving = themeSaving,
+                                    onThemeChange = { value ->
+                                        if (!themeSaving) {
+                                            themeMode = value
+                                            themeSaving = true
+                                            appearanceSaveError = null
+                                            coroutineScope.launch {
+                                                try {
+                                                    appearanceStore.setThemeMode(value)
+                                                } catch (e: CancellationException) {
+                                                    throw e
+                                                } catch (_: Exception) {
+                                                    themeMode = storedAppearance.themeMode
+                                                    appearanceSaveError = "Rivet couldn't save this setting. Try again."
+                                                } finally {
+                                                    themeSaving = false
+                                                }
+                                            }
+                                        }
+                                    },
+                                    appearanceError = appearanceSaveError,
+                                    autonomyMode = autonomyMode,
+                                    autonomySaving = autonomySaving,
+                                    autonomyError = autonomyError,
+                                    onAutonomyChange = requestAutonomy,
+                                )
+                            }
                         }
                     }
                 }
@@ -419,7 +426,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     chatViewModel.browser,
                     onClose = { chatViewModel.browser.close() },
                     onCloseSession = { chatViewModel.browser.endSession() },
-                    modifier = Modifier.fillMaxSize().zIndex(if (browserState.visible) 2f else -1f),
+                    modifier = Modifier.fillMaxSize()
+                        .then(if (browserState.visible) Modifier.pageEntry(progress, offset) else Modifier)
+                        .zIndex(if (browserState.visible) 2f else -1f),
                     hostContent = { hostModifier, onPageInteraction ->
                         BrowserHost(chatViewModel.browser, hostModifier, onPageInteraction)
                     },

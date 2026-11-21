@@ -46,6 +46,16 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.gestures.scrollBy
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.animation.animateColorAsState
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.tween
+import androidx.compose.ui.focus.onFocusChanged
+import androidx.compose.ui.graphics.StrokeCap
+import com.kaiser.rivet.ui.RivetMotion
+import com.kaiser.rivet.ui.entryProgress
+import com.kaiser.rivet.ui.messageEntry
+import com.kaiser.rivet.ui.motionDisabled
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.AlertDialog
@@ -465,6 +475,15 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     ) }
     val streamingText = state.streamingText
     val streamingReasoning = state.streamingReasoning
+    var displayedCount by remember(state.currentSessionId) { mutableStateOf(state.acceptedMessageCount) }
+    val justSent = remember(state.acceptedMessageCount) { state.acceptedMessageCount > displayedCount }
+    SideEffect { displayedCount = state.acceptedMessageCount }
+    val messageProgress = entryProgress(state.acceptedMessageCount, justSent, RivetMotion.MESSAGE_MS)
+    var hadText by remember(state.currentSessionId) { mutableStateOf(streamingText.isNotBlank()) }
+    val textArrived = streamingText.isNotBlank()
+    val startsWriting = remember(state.turnStartedAt, textArrived) { textArrived && !hadText }
+    SideEffect { hadText = textArrived }
+    val answerProgress = entryProgress(state.turnStartedAt to textArrived, startsWriting, RivetMotion.MESSAGE_MS)
     val streaming = state.streaming
     // While a turn runs the status line is always shown, so a long tool call and a
     // stalled stream never look the same. Outside a turn the plain activity text is
@@ -606,6 +625,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 turn = turn,
                 state = state,
                 isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
+                messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
                 fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
                 missingFiles = missingFiles,
                 onOpenPreview = onOpenPreview,
@@ -618,7 +638,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             )
         }
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
-            AssistantMessage(displaySafeText(streamingText), streaming = true)
+            Box(Modifier.messageEntry(answerProgress)) {
+                AssistantMessage(displaySafeText(streamingText), streaming = true)
+            }
         }
         liveStatusStart?.let { start ->
             item(key = "live-status") { LiveStatusRow(statusLabel, start) }
@@ -783,6 +805,7 @@ private fun TurnBlockView(
     turn: SegmentedTurn<TimelineDisplayEntry>,
     state: ChatUiState,
     isLastTurn: Boolean,
+    messageProgress: Float,
     fileCards: List<PresentedFile>,
     missingFiles: Set<String>,
     onOpenPreview: (String) -> Unit,
@@ -806,19 +829,35 @@ private fun TurnBlockView(
     )
     var observedOutcome by remember { mutableStateOf<FoldOutcomeObservation?>(null) }
     val revealOutcome = outcome.revealsAfter(observedOutcome)
-    SideEffect { observedOutcome = outcome }
-
+    var completion by remember(outcome.turnStartedAt, outcome.acceptedMessageCount) { mutableStateOf(false) }
+    SideEffect {
+        observedOutcome = outcome
+        if (revealOutcome) completion = true
+    }
+    val finishProgress = entryProgress(completion, completion, RivetMotion.COMPLETE_MS)
+    val finishInk = MaterialTheme.colorScheme.primary
     Column(
-        modifier = Modifier.fillMaxWidth(),
+        modifier = Modifier.fillMaxWidth().drawBehind {
+            if (finishProgress > 0f && finishProgress < 1f) {
+                val length = RivetMotion.completionLength.toPx().coerceAtMost(size.width)
+                val reach = (finishProgress * 1.75f).coerceAtMost(1f)
+                val strength = (1f - (finishProgress - 0.52f).coerceAtLeast(0f) / 0.48f)
+                val y = size.height - RivetMotion.completionStroke.toPx() / 2f
+                drawLine(finishInk.copy(alpha = strength), Offset(0f, y), Offset(length * reach, y),
+                    RivetMotion.completionStroke.toPx(), StrokeCap.Round)
+            }
+        },
         verticalArrangement = Arrangement.spacedBy(6.dp)
     ) {
         turn.userItem?.let { entry ->
             if (entry.item is AgentConversationItem.Message) {
-                MessageRow(
-                    message = entry.item.message,
-                    reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
-                    messageKey = entry.messageIndex ?: entry.item.message.hashCode(),
-                )
+                Box(Modifier.messageEntry(messageProgress)) {
+                    MessageRow(
+                        message = entry.item.message,
+                        reasoning = entry.messageIndex?.let { state.messageReasoning[it] },
+                        messageKey = entry.messageIndex ?: entry.item.message.hashCode(),
+                    )
+                }
             }
         }
 
@@ -1698,6 +1737,17 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         if (commandQuery != null) onRequestSkills() else dismissedCommand = null
     }
     BackHandler(enabled = showCommands) { dismissedCommand = draft }
+    var focused by remember { mutableStateOf(false) }
+    val composerEdge by animateColorAsState(
+        if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
+        else MaterialTheme.colorScheme.outlineVariant,
+        animationSpec = tween(RivetMotion.FOCUS_MS, easing = RivetMotion.easing),
+        label = "Composer focus",
+    )
+    val sendInteraction = remember { MutableInteractionSource() }
+    val pressingSend by sendInteraction.collectIsPressedAsState()
+    val sendScale by animateFloatAsState(if (pressingSend) 0.91f else 1f,
+        animationSpec = tween(RivetMotion.FOCUS_MS, easing = RivetMotion.easing), label = "Send press")
     // One container for the whole composer: the field inside carries no outline of its
     // own, and the selector shares the quiet second row with send/stop.
     Column(modifier.fillMaxWidth().imePadding().padding(horizontal = 14.dp, vertical = 9.dp)) {
@@ -1723,7 +1773,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             Modifier.fillMaxWidth(),
             color = MaterialTheme.colorScheme.surfaceContainer,
             shape = RoundedCornerShape(20.dp),
-            border = BorderStroke(1.dp, MaterialTheme.colorScheme.onBackground.copy(alpha = 0.12f)),
+            border = BorderStroke(1.dp, composerEdge),
         ) {
             Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
                 sharedDraft?.imageName?.let { name ->
@@ -1733,7 +1783,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                 OutlinedTextField(
                     value = draft,
                     onValueChange = { drafts = withDraft(drafts, sessionId, it) },
-                    modifier = Modifier.fillMaxWidth(),
+                    modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
                     placeholder = { Text("Ask Rivet…") },
                     minLines = 1,
                     maxLines = 6,
@@ -1763,8 +1813,11 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                     }
                     WorkingFolder(folderName, onOpenProjects)
                     IconButton(onClick = { if (streaming) onCancel() else submit() },
-                        enabled = streaming || canSend, modifier = Modifier.size(48.dp)
-                        .clip(CircleShape)
+                        enabled = streaming || canSend, interactionSource = sendInteraction,
+                        modifier = Modifier.size(48.dp).graphicsLayer {
+                            scaleX = sendScale
+                            scaleY = sendScale
+                        }.clip(CircleShape)
                         .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
                             else MaterialTheme.colorScheme.surfaceVariant)) {
                         Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),

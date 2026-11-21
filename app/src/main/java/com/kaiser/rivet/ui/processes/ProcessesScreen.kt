@@ -7,6 +7,8 @@ import android.content.Intent
 import android.net.Uri
 import android.widget.Toast
 import androidx.compose.animation.animateContentSize
+import androidx.compose.animation.core.tween
+import com.kaiser.rivet.ui.RivetMotion
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.PaddingValues
 import androidx.compose.foundation.layout.navigationBarsPadding
@@ -227,7 +229,7 @@ private fun ProcessRow(
     val active = process.status in ACTIVE
     val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.small) {
-        Column(Modifier.fillMaxWidth().animateContentSize()) {
+        Column(Modifier.fillMaxWidth().animateContentSize(tween(RivetMotion.PROCESS_MS, easing = RivetMotion.easing))) {
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
                 .clickable(role = Role.Button) { expanded = !expanded }

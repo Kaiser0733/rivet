@@ -126,3 +126,11 @@ class RedesignNavigationTest(unittest.TestCase):
         paths = (UI.parents[4] / "res/xml/shared_file_paths.xml").read_text()
         import xml.etree.ElementTree as ET
         self.assertEqual([path.attrib["name"] for path in ET.fromstring(paths)], ["inbox"])
+
+    def test_effort_animation_lives_in_the_reasoning_pane_and_uses_its_existing_apply(self):
+        model = (UI / "chat/ModelSheet.kt").read_text()
+        pane = model.split("PickerPane.Effort ->", 1)[1].split("private fun PaneHeader", 1)[0]
+        self.assertIn("it.copy(reasoning = level)", pane)
+        self.assertIn("ReasoningSignal(", pane)
+        self.assertNotIn("ReasoningSignal(", (UI / "chat/ChatScreen.kt").read_text())
+        self.assertIn("motionDisabled()", model)

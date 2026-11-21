@@ -42,7 +42,7 @@ class SoulSurfaceTest(unittest.TestCase):
         chat = (UI / "chat/ChatScreen.kt").read_text()
         turn = chat.split("private fun TurnBlockView(", 1)[1].split("@Composable\nprivate fun", 1)[0]
         self.assertIn("outcome.revealsAfter(observedOutcome)", turn)
-        self.assertIn("SideEffect { observedOutcome = outcome }", turn)
+        self.assertIn("observedOutcome = outcome", turn)
         self.assertIn("when {", turn)
         motion = (UI / "FoldReveal.kt").read_text()
         self.assertIn("currentCoroutineContext()[MotionDurationScale]", motion)

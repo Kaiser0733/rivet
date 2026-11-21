@@ -1,6 +1,10 @@
 package com.kaiser.rivet.ui.chat
 
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.tween
+import com.kaiser.rivet.ui.RivetMotion
+import com.kaiser.rivet.ui.motionDisabled
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -106,12 +110,26 @@ fun ModelSheet(
     // the picker goes away instead of blanking the sections still on screen.
     val commitPending: () -> Unit = {
         if (reasoningTouched && editorConfig.id.isNotEmpty() && editorConfig.model.isNotBlank()) {
+            reasoningTouched = false
             providersViewModel.save {}
         }
     }
     val close: () -> Unit = {
         commitPending()
         onDismiss()
+    }
+
+    var selectionMotion by remember { mutableStateOf<EffortMotion?>(null) }
+    val signalProgress = remember { Animatable(0f) }
+    val instant = motionDisabled()
+    LaunchedEffect(selectionMotion, instant) {
+        selectionMotion?.let { effect ->
+            if (!instant) {
+                signalProgress.snapTo(0f)
+                signalProgress.animateTo(1f, tween(effect.duration, easing = RivetMotion.easing))
+            }
+            close()
+        }
     }
 
     LaunchedEffect(openedFor) {
@@ -138,7 +156,7 @@ fun ModelSheet(
         // Back leaves a sub-view first and only dismisses from the root, so the
         // staged save always runs on the way out.
         BackHandler {
-            if (pane == PickerPane.Root) close() else pane = PickerPane.Root
+            if (pane == PickerPane.Root || selectionMotion != null) close() else pane = PickerPane.Root
         }
         Box(Modifier.fillMaxSize()) {
             // Outside tap dismisses, like the retired sheet's scrim.
@@ -285,15 +303,24 @@ fun ModelSheet(
                         PaneHeader(stringResource(R.string.provider_reasoning_label)) {
                             pane = PickerPane.Root
                         }
-                        // Applying a level also closes, so the staged change is written.
-                        reasoningOptions.forEach { level ->
-                            SelectableRow(
-                                title = stringResource(level.labelRes()),
-                                selected = editorConfig.reasoning == level,
-                            ) {
-                                reasoningTouched = true
-                                providersViewModel.updateConfig { it.copy(reasoning = level) }
-                                close()
+                        Box(Modifier.fillMaxWidth()) {
+                            Column {
+                                reasoningOptions.forEach { level ->
+                                    SelectableRow(
+                                        title = stringResource(level.labelRes()),
+                                        selected = editorConfig.reasoning == level,
+                                    ) {
+                                        if (selectionMotion == null) {
+                                            reasoningTouched = true
+                                            providersViewModel.updateConfig { it.copy(reasoning = level) }
+                                            val effect = effortMotion(level)
+                                            if (instant || effect == null) close() else selectionMotion = effect
+                                        }
+                                    }
+                                }
+                            }
+                            selectionMotion?.let {
+                                if (!instant) ReasoningSignal(it, signalProgress.value, Modifier.matchParentSize())
                             }
                         }
                     }
