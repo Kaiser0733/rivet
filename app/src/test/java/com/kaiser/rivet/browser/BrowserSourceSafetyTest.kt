@@ -157,11 +157,17 @@ class BrowserSourceSafetyTest {
         assertTrue(closeWindowBody.contains("unparkRenderer(verifyPaint = false)"))
         assertTrue(closeWindowBody.contains("pendingSnapshotRestore ="))
         assertFalse(closeWindowBody.contains("loadSnapshotState(view, it)"))
+        // Restore is deferred: the surviving tab is loaded first, the snapshot follows
+        // in onPageFinished rather than being evaluated against the outgoing page.
+        assertTrue(closeWindowBody.indexOf("pendingSnapshotRestore =") <
+            closeWindowBody.indexOf("view.loadUrl(activeUrl)"))
 
         val screen = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt"),
             File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt")).first { it.isFile }.readText()
         assertFalse(screen.contains("runCatching { session.showReader() }"))
-        assertTrue(screen.contains("state.url.isBlank() && (!state.rendererVisible || state.activeWindowId == null)"))
+        val readerToggle = screen.substringAfter("session.showReader()").substringBefore("onBack()")
+        assertTrue(readerToggle.contains("session.showError(error)"))
+        assertTrue(screen.contains("state.url.isBlank() || state.url == \"about:blank\""))
     }
 
     @Test fun rendererAttachDisablesHardwareLayerAndDropsSurfaceReattach() {
