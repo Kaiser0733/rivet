@@ -70,7 +70,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
-import com.kaiser.rivet.storage.ReplaySettingsStore
 import com.kaiser.rivet.storage.SessionUsage
 import com.kaiser.rivet.storage.diagnostics
 import com.kaiser.rivet.R
@@ -575,8 +574,6 @@ private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
             style = MaterialTheme.typography.bodyMedium)
 
-        ReplayWatermarkSetting()
-
         SectionHeading("Screen capture")
         Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.",
             modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
@@ -604,37 +601,6 @@ private fun PhoneAddOnDetail() {
         Text("On Android 13 and later, if Android blocks a setting, open Settings → Apps → the add-on → More → Allow restricted settings. Follow the on-screen instructions and grant access only if you trust the add-on.")
         Text("Google Play Protect may scan, warn about, or block apps installed outside Google Play. Keep Play Protect on and review any warning before proceeding.")
     }
-}
-
-@Composable
-private fun ReplayWatermarkSetting() {
-    val context = LocalContext.current
-    val store = remember(context) { ReplaySettingsStore(context) }
-    val enabled by store.watermark.collectAsState(initial = null)
-    val scope = rememberCoroutineScope()
-    var failure by remember { mutableStateOf(false) }
-    Row(Modifier.fillMaxWidth().padding(bottom = 12.dp),
-        verticalAlignment = Alignment.CenterVertically) {
-        Column(Modifier.weight(1f)) {
-            Text("Replay watermark", style = MaterialTheme.typography.bodyLarge)
-            Text("Show 'built with Rivet' on exported replays.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
-        Switch(checked = enabled != false, enabled = enabled != null,
-            modifier = Modifier.semantics { contentDescription = "Replay watermark" },
-            onCheckedChange = { checked ->
-            scope.launch {
-                try {
-                    store.setWatermark(checked)
-                    failure = false
-                } catch (cancelled: CancellationException) {
-                    throw cancelled
-                } catch (_: Exception) { failure = true }
-            }
-        })
-    }
-    if (failure) Text("Couldn't save the watermark setting.", style = MaterialTheme.typography.bodySmall)
 }
 
 @Composable

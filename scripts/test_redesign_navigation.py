@@ -117,3 +117,12 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertIn("presentedFilesForTurns", chat)
         self.assertIn("detectHorizontalDragGestures", preview)
         self.assertIn("Moved or deleted", preview)
+
+    def test_turns_no_longer_offer_media_export_and_inbox_sharing_stays_available(self):
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        settings = (UI / "provider/SettingsScreen.kt").read_text()
+        self.assertNotIn("Export ", chat)
+        self.assertNotIn("watermark", settings.lower())
+        paths = (UI.parents[4] / "res/xml/shared_file_paths.xml").read_text()
+        import xml.etree.ElementTree as ET
+        self.assertEqual([path.attrib["name"] for path in ET.fromstring(paths)], ["inbox"])

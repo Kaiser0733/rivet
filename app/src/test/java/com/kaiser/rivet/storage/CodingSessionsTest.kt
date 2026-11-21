@@ -13,8 +13,6 @@ import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentUsage
-import com.kaiser.rivet.agent.RunPhase
-import com.kaiser.rivet.agent.RunRecord
 import com.kaiser.rivet.agent.AgentToolDefinition
 import com.kaiser.rivet.provider.ProviderType
 import kotlinx.coroutines.flow.first
@@ -58,30 +56,6 @@ class CodingSessionsTest {
         assertEquals(listOf(event), selected.messages)
         assertEquals(emptyList<AgentMessage>(), reopened.recent(requireNotNull(session.id)))
         assertTrue(modelMessages(selected.messages, workspace, enforceWorkspace = true).single().text.contains(brief))
-    }
-
-    @Test fun replaySelectionKeepsIdenticalPromptsBoundToTheirOwnOutcomes() = runBlocking {
-        val sessions = CodingSessions(app)
-        val id = sessions.load().id!!
-        val first = listOf(AgentMessage.user("Repeat this"), AgentMessage.assistant("Partial reply"))
-        val stopped = RunRecord("first", null, "Repeat this", RunPhase.Stopped)
-        sessions.save(first, false)
-        val firstEvent = requireNotNull(sessions.latestReplayUserEvent(id))
-        sessions.recordReplayRun(id, firstEvent, stopped)
-
-        val done = stopped.copy(id = "second", phase = RunPhase.Done)
-        sessions.save(first + first, false)
-        val secondEvent = requireNotNull(sessions.latestReplayUserEvent(id))
-        assertNotEquals(firstEvent, secondEvent)
-        sessions.recordReplayRun(id, secondEvent, done)
-
-        val reopened = CodingSessions(app)
-        val visible = reopened.recent(id)
-        assertEquals(stopped, reopened.replayTurn(id, visible, 0)?.run)
-        assertEquals(done, reopened.replayTurn(id, visible, 2)?.run)
-        assertEquals(first, reopened.replayTurn(id, visible, 2)?.messages)
-        assertEquals(first, reopened.replayTurn(id, reopened.recent(id, 1), 0)?.messages)
-        assertEquals(null, reopened.replayTurn(id, visible.dropLast(1), 0))
     }
 
     @Test fun automaticTitleEligibilityIsNewSessionOnlyAndConsumedOnceAcrossRestart() = runBlocking {
