@@ -1014,7 +1014,7 @@ class AgentToolExecutor(
                 schema(listOf("path"), path, "offset" to nonNegativeInteger),
             ),
             AgentToolDefinition("present",
-                "Show 1–4 finished project files as deliverables under your response. Give each project's exact relative path and a one-line description. Missing paths or directories are rejected; correct them and try again.",
+                "$PRESENT_DELIVERABLES_RULE Show 1–4 files using exact project-relative paths and one-line descriptions. Correct any missing path or directory and try again.",
                 schema(listOf("files"), "files" to buildJsonObject {
                     put("type", "array")
                     put("minItems", 1)

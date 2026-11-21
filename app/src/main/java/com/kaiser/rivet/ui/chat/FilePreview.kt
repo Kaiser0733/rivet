@@ -1,5 +1,10 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.ui.dismissOnEscape
+import com.kaiser.rivet.ui.RivetMotion
+import com.kaiser.rivet.ui.entryProgress
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -112,18 +117,20 @@ internal fun ChatWithPreview(
     LaunchedEffect(active, tabs.revision) {
         if (active != null) tabs.resolved(active, load(active))
     }
-    BackHandler(enabled = active != null) {
+    val dismissPreview: () -> Unit = {
         if (tabs.fullScreen) tabs.fullScreen = false else tabs.active?.let(tabs::close)
     }
+    BackHandler(enabled = active != null, onBack = dismissPreview)
     var divider by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableFloatStateOf(0.54f) }
     val stateHolder = rememberSaveableStateHolder()
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize().dismissOnEscape(active != null, dismissPreview)) {
         val availableWidth = maxWidth
+        val split = chatPaneFraction(availableWidth.value, divider)
         val widthPx = with(LocalDensity.current) { availableWidth.toPx() }
         val dividerWidth = 14.dp.coerceAtMost(availableWidth)
         Row(Modifier.fillMaxSize()) {
             if (!tabs.fullScreen || active == null) {
-                val chat = if (active == null) Modifier.weight(1f) else Modifier.width((availableWidth - dividerWidth) * divider)
+                val chat = if (active == null) Modifier.weight(1f) else Modifier.width((availableWidth - dividerWidth) * split)
                 Box(chat.fillMaxHeight()) {
                     stateHolder.SaveableStateProvider("conversation") { content() }
                 }
@@ -134,19 +141,25 @@ internal fun ChatWithPreview(
                         .background(MaterialTheme.colorScheme.surfaceContainer)
                         .semantics {
                             contentDescription = "Resize file preview"
-                            progressBarRangeInfo = ProgressBarRangeInfo(divider, 0.32f..0.72f)
-                            setProgress { fraction -> divider = fraction.coerceIn(0.32f, 0.72f); true }
+                            progressBarRangeInfo = ProgressBarRangeInfo(split, 0.32f..0.72f)
+                            setProgress { fraction -> divider = chatPaneFraction(availableWidth.value, fraction); true }
                         }
                         .pointerInput(widthPx) {
                             detectHorizontalDragGestures { change, delta ->
                                 change.consume()
-                                if (widthPx > 0f) divider = (divider + delta / widthPx).coerceIn(0.32f, 0.72f)
+                                if (widthPx > 0f) divider = chatPaneFraction(availableWidth.value, chatPaneFraction(availableWidth.value, divider) + delta / widthPx)
                             }
                         }, contentAlignment = Alignment.Center) {
                         Box(Modifier.width(2.dp).height(28.dp).background(MaterialTheme.colorScheme.onSurfaceVariant))
                     }
                 }
-                Box(Modifier.weight(1f).fillMaxHeight()) { PreviewPane(tabs, active) }
+                val progress = entryProgress(Unit, animate = !tabs.fullScreen, duration = RivetMotion.PAGE_MS)
+                Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
+                    Box(Modifier.fillMaxSize().graphicsLayer {
+                        translationX = RivetMotion.paneTravel.toPx() * (1f - progress)
+                        alpha = 0.65f + 0.35f * progress
+                    }) { PreviewPane(tabs, active) }
+                }
             }
         }
     }

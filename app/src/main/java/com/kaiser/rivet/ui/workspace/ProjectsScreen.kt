@@ -1,5 +1,12 @@
 package com.kaiser.rivet.ui.workspace
 
+import com.kaiser.rivet.ui.UtilityColumns
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import com.kaiser.rivet.ui.RivetOutlinedButton
+import com.kaiser.rivet.ui.UtilityLead
+import com.kaiser.rivet.ui.UtilityRow
+import com.kaiser.rivet.ui.UtilityGlyph
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import android.content.Intent
@@ -44,20 +51,16 @@ import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.ChatViewModel
-import com.kaiser.rivet.starter.StarterOption
 import com.kaiser.rivet.ui.RivetPageHeader
-import com.kaiser.rivet.ui.starter.rememberStarterListing
-import com.kaiser.rivet.ui.starter.starterRows
 import com.kaiser.rivet.ui.workspaceFolderPath
 import kotlinx.coroutines.flow.first
 
 @Composable
-internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>, onBack: () -> Unit) {
+internal fun ProjectsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
     val enabled = state.ready && !state.streaming && !state.projectLoading &&
         !state.undoing && !state.recoveringProjectChanges
-    var pickingStarter by rememberSaveable { mutableStateOf(false) }
     var pendingProject by rememberSaveable { mutableStateOf<String?>(null) }
     var pendingFlags by rememberSaveable { mutableIntStateOf(0) }
     var opening by rememberSaveable { mutableStateOf(false) }
@@ -75,37 +78,18 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>,
         }
     }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
-        val starterPick = pickingStarter
-        pickingStarter = false
-        val starter = viewModel.takePendingStarter()
         val uri = result.data?.data
         if (result.resultCode == Activity.RESULT_OK && uri != null) {
-            val flags = result.data?.flags ?: 0
-            if (starterPick) {
-                if (starter != null) {
-                    opening = true
-                    viewModel.installStarter(uri, flags, starter)
-                } else viewModel.starterPickerInterrupted()
-            } else {
-                acceptFolder(uri, flags)
-            }
+            acceptFolder(uri, result.data?.flags ?: 0)
         }
     }
-    fun chooseProject(starter: StarterOption? = null, initial: Uri? = null) {
+    fun chooseProject(initial: Uri? = null) {
         if (!enabled) return
-        val intent = Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
-            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
-                Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION)
-        if (initial != null) intent.putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial)
-        viewModel.setPendingStarter(starter)
-        pickingStarter = starter != null
         try {
-            picker.launch(intent)
+            picker.launch(projectFolderPickerIntent(initial))
         } catch (failure: RuntimeException) {
             if (failure !is ActivityNotFoundException && failure !is SecurityException) throw failure
-            viewModel.takePendingStarter()
-            pickingStarter = false
-            if (starter == null) viewModel.projectPickerUnavailable() else viewModel.starterPickerInterrupted()
+            viewModel.projectPickerUnavailable()
         }
     }
     fun openRecent(identity: String) {
@@ -128,7 +112,6 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>,
         }
     }
     BackHandler(enabled = pendingProject != null) { pendingProject = null }
-    val starterListing = rememberStarterListing(providerIds)
     val recent = state.sessions.sortedByDescending { it.updatedAt }
         .mapNotNull { it.workspaceId }.distinct().filterNot { it == state.projectIdentity }
 
@@ -151,36 +134,29 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, providerIds: List<String>,
                     }
                 }
             } else {
-                LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)) {
-                    item {
-                        FolderHeading("Working directory")
-                        Text(state.projectName ?: "No folder selected", style = MaterialTheme.typography.titleLarge)
-                        workspaceFolderPath(state.projectIdentity)?.let {
-                            Text(it, Modifier.padding(top = 5.dp), style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                        state.projectError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                        if (state.projectLoading) Text("Opening folder…", color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        FolderRow("Open another folder", R.drawable.ic_add, enabled, onClick = { chooseProject() })
-                    }
-                    if (recent.isNotEmpty()) {
-                        item { FolderHeading("Recent folders") }
-                        items(recent, key = { "folder:$it" }) { identity ->
-                            val path = workspaceFolderPath(identity) ?: identity
-                            FolderRow(path.trimEnd('/').substringAfterLast('/'), R.drawable.ic_files, enabled,
-                                detail = path, onClick = { openRecent(identity) })
-                        }
-                    }
-                    item {
-                        FolderHeading("Starters")
-                        Text("Choose a starter and an empty folder for its files.",
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodyMedium)
-                        state.starterError?.let {
-                            Text(it, Modifier.padding(top = 8.dp), color = MaterialTheme.colorScheme.error)
-                        }
-                    }
-                    starterRows(starterListing, enabled) { chooseProject(starter = it) }
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 10.dp)) {
+                    UtilityColumns(
+                        leading = {
+                            UtilityLead(R.drawable.ic_folder, state.projectName ?: "No folder selected",
+                                workspaceFolderPath(state.projectIdentity)) {
+                                state.projectError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                                if (state.projectLoading) Text("Opening folder…")
+                                RivetOutlinedButton(onClick = { chooseProject() }, enabled = enabled) {
+                                    Text("Open another folder")
+                                }
+                            }
+                        },
+                        trailing = {
+                            if (recent.isNotEmpty()) {
+                                FolderHeading("Recent folders")
+                                recent.forEach { identity ->
+                                    val path = workspaceFolderPath(identity) ?: identity
+                                    FolderRow(path.trimEnd('/').substringAfterLast('/'), R.drawable.ic_files, enabled,
+                                        detail = path, onClick = { openRecent(identity) })
+                                }
+                            }
+                        },
+                    )
                 }
             }
         }
@@ -195,15 +171,13 @@ private fun FolderHeading(title: String) {
 
 @Composable
 private fun FolderRow(title: String, iconRes: Int, enabled: Boolean, detail: String? = null, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 54.dp)
-        .clickable(enabled = enabled, role = Role.Button, onClick = onClick).padding(vertical = 8.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp), verticalAlignment = Alignment.CenterVertically) {
-        Icon(painterResource(iconRes), null, Modifier.size(21.dp))
-        Column(Modifier.weight(1f)) {
-            Text(title, style = MaterialTheme.typography.titleSmall)
-            detail?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-        Icon(painterResource(R.drawable.ic_chevron_right), null)
-    }
-    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+    UtilityRow(iconRes, title, detail.orEmpty(), enabled = enabled, onClick = onClick)
 }
+
+internal fun projectFolderPickerIntent(initial: Uri? = null): Intent =
+    Intent(Intent.ACTION_OPEN_DOCUMENT_TREE).addFlags(
+        Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or Intent.FLAG_GRANT_PREFIX_URI_PERMISSION,
+    ).apply {
+        if (initial != null) putExtra(DocumentsContract.EXTRA_INITIAL_URI, initial)
+    }

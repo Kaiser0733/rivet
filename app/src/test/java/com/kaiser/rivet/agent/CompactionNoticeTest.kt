@@ -7,7 +7,9 @@ import org.junit.Test
 
 class CompactionNoticeTest {
     @Test fun theMarkerSaysWhatHappenedInPlainWords() {
-        assertEquals("Earlier turns were summarised to fit the model's window.", CompactionNotice.TEXT)
+        assertEquals("Compacted to 2149 tokens", CompactionNotice.completed(2149))
+        assertEquals("Conversation compacted",
+            CompactionNotice.display("Earlier turns were summarised to fit the model's window."))
     }
 
     @Test fun onlyTheCompactionKindIsANotice() {

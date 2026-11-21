@@ -65,8 +65,14 @@ internal object ContextBudget {
         }
     }
 
+    private fun historyBytes(messages: List<AgentMessage>): Long =
+        AgentContext.serializedBytes(messages).toLong() + messages.size * 64L
+
+    fun estimateHistoryTokens(messages: List<AgentMessage>): Long =
+        (historyBytes(messages) + 2) / 3 + attachedImageCount(messages) * IMAGE_TOKEN_ESTIMATE
+
     fun estimateRequestTokens(request: AgentRequest): Long {
-        val messageBytes = AgentContext.serializedBytes(request.messages).toLong()
+        val messageBytes = historyBytes(request.messages)
         val fixedBytes = request.system.toByteArray(Charsets.UTF_8).size +
             request.model.toByteArray(Charsets.UTF_8).size + 128L
         val toolBytes = request.tools.sumOf { tool ->
@@ -74,9 +80,8 @@ internal object ContextBudget {
                 tool.description.toByteArray(Charsets.UTF_8).size +
                 tool.parameters.toString().toByteArray(Charsets.UTF_8).size + 96L
         }
-        val framingBytes = request.messages.size * 64L
         val imageTokens = attachedImageCount(request.messages) * IMAGE_TOKEN_ESTIMATE
-        return (messageBytes + fixedBytes + toolBytes + framingBytes + 2) / 3 + imageTokens
+        return (messageBytes + fixedBytes + toolBytes + 2) / 3 + imageTokens
     }
 
     fun assess(config: ProviderConfig, inputTokens: Long?, source: TokenEstimateSource): ContextAssessment {

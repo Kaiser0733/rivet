@@ -1,5 +1,14 @@
 package com.kaiser.rivet.ui
 
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.hoverable
+import androidx.compose.ui.Alignment
+import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.foundation.background
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.layout.Box
@@ -30,9 +39,14 @@ fun RivetOutlinedButton(
     enabled: Boolean = true,
     content: @Composable RowScope.() -> Unit,
 ) {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    val focused by source.collectIsFocusedAsState()
+    val hovered by source.collectIsHoveredAsState()
     OutlinedButton(
         onClick = onClick,
-        modifier = modifier,
+        modifier = modifier.hoverable(source, enabled),
+        interactionSource = source,
         enabled = enabled,
         shape = RoundedCornerShape(8.dp),
         colors = ButtonDefaults.outlinedButtonColors(
@@ -43,6 +57,8 @@ fun RivetOutlinedButton(
         ),
         border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline.copy(
             alpha = if (enabled) 1f else 0.32f)),
-        content = content,
+        content = {
+            Row(Modifier.pressLayer(pressed, hovered, focused), verticalAlignment = Alignment.CenterVertically, content = content)
+        },
     )
 }

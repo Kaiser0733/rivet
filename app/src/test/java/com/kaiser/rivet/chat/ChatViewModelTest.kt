@@ -880,10 +880,12 @@ class ChatViewModelTest {
             AgentContext.serializedBytes(history) / 2)
         assertTrue(provider.requests.single().messages.flatMap { it.toolResults }
             .any { it.content.contains("output_pruned") })
-        // recent() is the visible transcript: context rows, including the compaction
-        // notice, are hidden there even though the notice is a persisted event.
-        assertEquals(68, sessions.recent(id, 100).size)
-        assertTrue(sessions.recent(id, 100).none { it.internalContext != null })
+        // recent() is the visible transcript: context rows are hidden there except
+        // the compaction notice, which is a persisted row that renders in the chat.
+        assertEquals(69, sessions.recent(id, 100).size)
+        assertTrue(sessions.recent(id, 100).none {
+            it.internalContext != null && it.validatedContext()?.kind != com.kaiser.rivet.agent.CompactionNotice.KIND
+        })
 
         val switchedProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "After switch"))))
         val switched = newChatViewModel(app, sessions,
@@ -1041,6 +1043,15 @@ class ChatViewModelTest {
         assertFalse(restored.interrupted)
     }
 
+    @Test fun deliverableRuleReachesTheCoordinatorOnlyWhenPresentIsAvailable() {
+        val rule = com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
+        assertTrue(ChatViewModel.systemInstruction(workspace = true).contains(rule))
+        assertFalse(ChatViewModel.systemInstruction(workspace = true, presentAvailable = false).contains(rule))
+        assertFalse(ChatViewModel.systemInstruction(workspace = false).contains(rule))
+        assertTrue(com.kaiser.rivet.agent.AgentToolExecutor.definitions.single { it.name == "present" }
+            .description.contains(rule))
+    }
+
     @Test fun manualCompactionSummarisesTheIdleSessionAndLeavesTheNoticeRow() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
@@ -1063,12 +1074,28 @@ class ChatViewModelTest {
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && !it.projectLoading }
 
+        viewModel.refreshContextMeter(config)
+        val before = requireNotNull(viewModel.uiState.value.contextMeter)
         viewModel.compactHistory()
         val done = await(viewModel) { !it.streaming && it.messages.any { message ->
             message.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
         } }
 
         assertNull(done.error)
+        assertFalse(done.compacting)
+        val after = requireNotNull(done.contextMeter)
+        assertTrue(after.matches(config))
+        assertTrue(after.usedTokens < before.usedTokens)
+        val compacted = sessions.load()
+        val count = com.kaiser.rivet.agent.ContextBudget.estimateHistoryTokens(
+            com.kaiser.rivet.agent.modelMessages(compacted.messages, compacted.workspaceId, enforceWorkspace = true)
+        )
+        val copy = "Compacted to $count tokens"
+        val restored = CodingSessions(app).recent(id)
+        assertEquals(done.messages, restored)
+        assertEquals(copy, com.kaiser.rivet.agent.AgentActivityProjection.conversation(restored)
+            .filterIsInstance<com.kaiser.rivet.agent.AgentConversationItem.SystemNotice>().single().text)
+        assertFalse(com.kaiser.rivet.agent.modelMessages(compacted.messages).any { copy in it.text })
         assertEquals(1, provider.requests.size)
         assertTrue(provider.requests.single().system.contains("\"DECISIONS + WHY\""))
         // The goal stays pinned verbatim to the newest user message, as in the run path.
@@ -1241,8 +1268,9 @@ class ChatViewModelTest {
 
         viewModel.compactHistory()
         assertTrue(withTimeout(5_000) { entered.await() }.system.contains("\"DECISIONS + WHY\""))
+        assertTrue(viewModel.uiState.value.compacting)
         viewModel.cancel()
-        await(viewModel) { !it.streaming }
+        await(viewModel) { !it.streaming && !it.compacting }
 
         val restored = CodingSessions(app).load()
         assertEquals(history, restored.messages)

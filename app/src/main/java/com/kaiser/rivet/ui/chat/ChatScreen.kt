@@ -1,5 +1,30 @@
 package com.kaiser.rivet.ui.chat
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.rememberCoroutineScope
+import com.kaiser.rivet.ui.RivetLayout
+import com.kaiser.rivet.chat.ContextMeterReading
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import com.kaiser.rivet.chat.ComposerEnter
+import com.kaiser.rivet.chat.composerEnter
+import com.kaiser.rivet.ui.dismissOnEscape
+import com.kaiser.rivet.ui.utilityClick
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.BoxWithConstraints
+import com.kaiser.rivet.ui.panelEntry
+import com.kaiser.rivet.ui.rivetMotionSpec
+import androidx.compose.ui.draw.clipToBounds
+import com.kaiser.rivet.ui.starter.HomeStarters
 import android.graphics.BitmapFactory
 import android.content.ClipData
 import android.content.Context
@@ -219,6 +244,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             dismissButton = { TextButton(onClick = { confirmDiscard = null }) { Text("Cancel") } })
     }
     val activeProvider = providers.configs.firstOrNull { it.id == providers.activeId }
+    val contextReading = activeProvider?.let { config -> state.contextMeter?.takeIf { it.matches(config) } }
+    LaunchedEffect(activeProvider, state.currentSessionId, state.ready, state.projectLoading, state.streaming) {
+        if (activeProvider != null) chatViewModel.refreshContextMeter(activeProvider)
+    }
     val isChatGptPlanActive = activeProvider?.type == ProviderType.ChatGptPlan
     LaunchedEffect(state.error, activeProvider?.id) {
         val isUsageLimit = state.error == ProviderError.UsageLimit().text()
@@ -271,88 +300,114 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         !state.undoing && !state.recoveringProjectChanges
 
     val preview = remember(state.currentSessionId, state.currentSessionWorkspaceId, state.projectIdentity) { PreviewTabs() }
+    val linkDoor = if (projectBinding == ProjectBindingState.Matched) {
+        remember(preview, state.streaming, state.undoing, state.lastTurnFiles, state.runCheckpoints) {
+            val identity = state.currentSessionWorkspaceId
+            val session = state.currentSessionId
+            AssistantFileLinks(
+                resolve = { paths -> chatViewModel.existingProjectFiles(paths, identity) },
+                open = { path ->
+                    val exists = path in chatViewModel.existingProjectFiles(setOf(path), identity)
+                    if (exists && chatViewModel.uiState.value.currentSessionId == session) {
+                        preview.open(path)
+                        true
+                    } else false
+                },
+            )
+        }
+    } else null
     ChatWithPreview(preview, load = { path ->
         chatViewModel.previewProjectFile(path, state.currentSessionWorkspaceId)
     }) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            ChatHeader(
-                title = state.currentSessionTitle ?: state.projectName ?: "Rivet",
-                canStartChat = canStartChat,
-                onOpenSidebar = onOpenSidebar,
-                onNewChat = chatViewModel::newSession,
-            )
+        BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            val lane = conversationWidth(maxWidth.value).dp
+            val starterRoom = (maxHeight * 0.48f).coerceAtMost(215.dp)
+            Column(Modifier.width(lane).fillMaxHeight().align(Alignment.TopCenter)) {
+                ChatHeader(
+                    title = state.currentSessionTitle ?: state.projectName ?: "Rivet",
+                    canStartChat = canStartChat,
+                    onOpenSidebar = onOpenSidebar,
+                    onNewChat = chatViewModel::newSession,
+                )
 
-            val setupNotice = when {
-                state.projectLoading -> "Opening your project…"
-                projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE
-                wrongProject -> PROJECT_BINDING_MISMATCH_MESSAGE
-                state.projectError != null -> state.projectError
-                providers.configs.isEmpty() -> "Connect a model in Settings to start."
-                state.projectName == null && !state.streaming -> "Choose a working folder to start."
-                else -> null
-            }
-            if (state.messages.isEmpty() && !state.streaming && state.error == null &&
-                state.notice == null && !state.interruptedTurn && state.goalLine == null) {
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(setupNotice ?: "What do you want to work on?",
-                        modifier = Modifier.padding(horizontal = 24.dp),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center)
+                val setupNotice = when {
+                    state.projectLoading -> "Opening your project…"
+                    projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE
+                    wrongProject -> PROJECT_BINDING_MISMATCH_MESSAGE
+                    state.projectError != null -> state.projectError
+                    providers.configs.isEmpty() -> "Connect a model in Settings to start."
+                    state.projectName == null && !state.streaming -> "Choose a working folder to start."
+                    else -> null
                 }
-            } else {
-                setupNotice?.let {
-                    Text(it, Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val emptyConversation = state.messages.isEmpty() && !state.streaming && state.error == null &&
+                    state.notice == null && !state.interruptedTurn && state.goalLine == null
+                if (emptyConversation) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text(setupNotice ?: "What do you want to work on?",
+                            modifier = Modifier.padding(horizontal = 24.dp),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center)
+                    }
+                } else {
+                    setupNotice?.let {
+                        Text(it, Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
+                        state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
+                    CompositionLocalProvider(LocalAssistantFileLinks provides linkDoor) {
+                        key(state.currentSessionId) {
+                            MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
+                                onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
+                                onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
+                                onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
+                                onAttachGoal = chatViewModel::attachGoalToProject,
+                                onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
+                                onRetryTurn = chatViewModel::retryFailedTurn,
+                                onChooseReasoning = chatViewModel::chooseReasoningLevel,
+                                onOpenPreview = preview::open,
+                                missingFiles = preview.missing,
+                                modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                        }
+                    }
                 }
-                val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
-                    state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
-                key(state.currentSessionId) {
-                    MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
-                        onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
-                        onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
-                        onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
-                        onAttachGoal = chatViewModel::attachGoalToProject,
-                        onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
-                        onRetryTurn = chatViewModel::retryFailedTurn,
-                        onChooseReasoning = chatViewModel::chooseReasoningLevel,
-                    onOpenPreview = preview::open,
-                    missingFiles = preview.missing,
-                        modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                if (state.undoCheckpointId != null || state.undoing) {
+                    ChangeSummary(state, onUndo = { confirmUndo = true },
+                        onDismissUndo = chatViewModel::dismissUndoBar,
+                        onOpenPreview = preview::open, missingFiles = preview.missing,
+                        modifier = Modifier.fillMaxWidth())
                 }
-            }
-            if (state.undoCheckpointId != null || state.undoing) {
-                ChangeSummary(state, onUndo = { confirmUndo = true },
-                    onDismissUndo = chatViewModel::dismissUndoBar,
-                    onOpenPreview = preview::open, missingFiles = preview.missing,
+                val modelSelector: (@Composable () -> Unit)? =
+                    if (providers.configs.isNotEmpty()) {
+                        { ProtectedControls { ModelSelector(providersViewModel) { modelSheetVisible = true } } }
+                    } else null
+                val sharedContent by chatViewModel.sharedContent.collectAsState()
+                if (emptyConversation) HomeStarters(chatViewModel, canStartChat, state.starterError,
+                    modifier = Modifier.heightIn(max = starterRoom).verticalScroll(rememberScrollState()))
+                InputBar(streaming = state.streaming,
+                    sharedDraft = sharedContent[state.currentSessionId],
+                    phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
+                    ready = state.ready && !state.projectLoading && !state.undoing &&
+                        !state.recoveringProjectChanges,
+                    hasProject = state.projectName != null && projectBinding == ProjectBindingState.Matched,
+                    hasProvider = providers.configs.isNotEmpty(),
+                    acceptedMessageCount = state.acceptedMessageCount,
+                    commandAckCount = state.commandAckCount,
+                    error = state.error, notice = state.notice, sessionId = state.currentSessionId,
+                    skills = skillCatalog?.skills.orEmpty(),
+                    onRequestSkills = chatViewModel::refreshSkillCatalog,
+                    onSendFeedback = onSendFeedback,
+                    onCompact = chatViewModel::compactHistory,
+                    onAutonomyChange = onAutonomyChange,
+                    folderName = state.projectName,
+                    onOpenProjects = onOpenProjects,
+                    selector = modelSelector,
+                    contextReading = contextReading,
+                    onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
                     modifier = Modifier.fillMaxWidth())
             }
-            val modelSelector: (@Composable () -> Unit)? =
-                if (providers.configs.isNotEmpty()) {
-                    { ProtectedControls { ModelSelector(providersViewModel) { modelSheetVisible = true } } }
-                } else null
-            val sharedContent by chatViewModel.sharedContent.collectAsState()
-            InputBar(streaming = state.streaming,
-                sharedDraft = sharedContent[state.currentSessionId],
-                phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
-                ready = state.ready && !state.projectLoading && !state.undoing &&
-                    !state.recoveringProjectChanges,
-                hasProject = state.projectName != null && projectBinding == ProjectBindingState.Matched,
-                hasProvider = providers.configs.isNotEmpty(),
-                acceptedMessageCount = state.acceptedMessageCount,
-                commandAckCount = state.commandAckCount,
-                error = state.error, notice = state.notice, sessionId = state.currentSessionId,
-                skills = skillCatalog?.skills.orEmpty(),
-                onRequestSkills = chatViewModel::refreshSkillCatalog,
-                onSendFeedback = onSendFeedback,
-                onCompact = chatViewModel::compactHistory,
-                onAutonomyChange = onAutonomyChange,
-                folderName = state.projectName,
-                onOpenProjects = onOpenProjects,
-                selector = modelSelector,
-                onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
-                modifier = Modifier.fillMaxWidth())
         }
     }
 }
@@ -375,7 +430,13 @@ private fun ChatHeader(title: String, canStartChat: Boolean, onOpenSidebar: () -
 }
 
 @Composable
-private fun WorkingFolder(name: String?, onOpen: () -> Unit) {
+private fun WorkingFolder(name: String?, onOpen: () -> Unit, compact: Boolean = false) {
+    if (compact) {
+        IconButton(onClick = onOpen) {
+            Icon(painterResource(R.drawable.ic_folder), name ?: "Projects", Modifier.size(18.dp))
+        }
+        return
+    }
     TextButton(onClick = onOpen, modifier = Modifier.widthIn(max = 132.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)) {
         Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(17.dp))
@@ -488,7 +549,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     val startsWriting = remember(state.turnStartedAt, textArrived) { textArrived && !hadText }
     SideEffect { hadText = textArrived }
     val answerProgress = entryProgress(state.turnStartedAt to textArrived, startsWriting, RivetMotion.MESSAGE_MS)
-    val streaming = state.streaming
+    val streaming = state.streaming && !state.compacting
     // While a turn runs the status line is always shown, so a long tool call and a
     // stalled stream never look the same. Outside a turn the plain activity text is
     // still used for recovery messages. The clock's start comes from the turn; without one
@@ -523,10 +584,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             )
         }
     }
-    val segmentedTurns = remember(turnItems, state.streaming, state.turnDurationsMs, state.interruptedTurn, state.error != null) {
+    val segmentedTurns = remember(turnItems, streaming, state.turnDurationsMs, state.interruptedTurn, state.error != null) {
         segmentTurnItems(
             items = turnItems,
-            isStreaming = state.streaming,
+            isStreaming = streaming,
             turnDurationsMs = state.turnDurationsMs,
             isInterruptedTurn = state.interruptedTurn,
             hasError = state.error != null,
@@ -538,6 +599,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         (if (streamingText.isNotBlank()) 1 else 0) +
         (if (liveStatusStart != null) 1 else 0) +
         (if (showActivity) 1 else 0) +
+        (if (state.compacting) 1 else 0) +
         (if (showInterruptedTurn) 1 else 0) +
         (if (state.notice != null) 1 else 0) +
         (if (state.error != null) 1 else 0) +
@@ -603,7 +665,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
         }
     }
-    LazyColumn(state = listState, modifier = modifier.widthIn(max = CHAT_CONTENT_MAX_WIDTH_DP.dp).fillMaxSize(),
+    LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -649,6 +711,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         liveStatusStart?.let { start ->
             item(key = "live-status") { LiveStatusRow(statusLabel, start) }
         }
+        if (state.compacting) item(key = "manual-compaction") { CompactingRow() }
         if (showActivity) state.activity?.let { activity ->
             item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
         }
@@ -1177,7 +1240,7 @@ internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messag
                 onLongClick = { menuOpen = !menuOpen },
             ),
         )) {
-            if (selectingText) SelectionContainer { bubble() } else bubble()
+            SelectionContainer { bubble() }
         }
         if (menuOpen) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1379,10 +1442,25 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
     // re-parses only that block, with the same result (see MarkdownBlocks).
     val parser = remember { MarkdownBlocks() }
     val blocks = parser.forText(text)
+    val links = LocalAssistantFileLinks.current
+    val paths = remember(blocks, links != null) {
+        if (links == null) emptySet() else fileReferencePaths(blocks)
+    }
+    var files by remember(links, paths) { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(links, paths) {
+        if (links != null && paths.isNotEmpty()) files = links.resolve(paths)
+    }
+    val linkScope = rememberCoroutineScope()
+    val open: ((String) -> Unit)? = if (links == null) null else remember(links, paths) {
+        { path ->
+            linkScope.launch { if (!links.open(path)) files = files - path }
+            Unit
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is ChatMarkdownBlock.Paragraph -> InlineMarkdown(block.text)
+                is ChatMarkdownBlock.Paragraph -> InlineMarkdown(block.text, files = files, open = open)
                 is ChatMarkdownBlock.Heading -> {
                     val style = when (block.level) {
                         1 -> MaterialTheme.typography.titleLarge
@@ -1390,19 +1468,20 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                         else -> MaterialTheme.typography.titleSmall
                     }
                     InlineMarkdown(block.text, style = style.copy(fontFamily = FontFamily.Default,
-                        fontWeight = FontWeight.SemiBold))
+                        fontWeight = FontWeight.SemiBold), files = files, open = open)
                 }
                 is ChatMarkdownBlock.Quote -> Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
                     shape = RoundedCornerShape(4.dp),
-                ) { InlineMarkdown(block.text, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)) }
+                ) { InlineMarkdown(block.text, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                    files = files, open = open) }
                 is ChatMarkdownBlock.ListItems -> Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     block.items.forEachIndexed { index, item ->
                         Row(verticalAlignment = Alignment.Top) {
                             Text(if (block.ordered) "${block.start + index}." else "•",
                                 modifier = Modifier.widthIn(min = 24.dp),
                                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
-                            InlineMarkdown(item, modifier = Modifier.weight(1f))
+                            InlineMarkdown(item, modifier = Modifier.weight(1f), files = files, open = open)
                         }
                     }
                 }
@@ -1440,25 +1519,27 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
 }
 
 @Composable
-private fun InlineMarkdown(text: String, modifier: Modifier = Modifier, style: TextStyle? = null) {
+private fun InlineMarkdown(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle? = null,
+    files: Set<String> = emptySet(),
+    open: ((String) -> Unit)? = null,
+) {
     val textStyle = style ?: MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)
     val runs = remember(text) { parseInlineMarkdown(text) }
     val color = MaterialTheme.colorScheme.onBackground
     val codeBackground = MaterialTheme.colorScheme.surfaceContainer
-    val annotated = remember(runs, color, codeBackground, textStyle) {
-        buildAnnotatedString {
-            runs.forEach { run ->
-                withStyle(SpanStyle(
-                    color = color,
-                    fontFamily = if (run.code) FontFamily.Monospace else null,
-                    fontWeight = if (run.bold) FontWeight.SemiBold else textStyle.fontWeight,
-                    fontStyle = if (run.italic) FontStyle.Italic else textStyle.fontStyle,
-                    background = if (run.code) codeBackground else Color.Transparent,
-                )) { append(displaySafeText(run.text)) }
-            }
-        }
+    val linkColor = MaterialTheme.colorScheme.primary
+    val annotated = remember(runs, codeBackground, files, linkColor, open) {
+        if (open == null) assistantInlineText(runs, codeBackground)
+        else assistantInlineText(runs, codeBackground, files, linkColor, open)
     }
-    Text(annotated, modifier = modifier, style = textStyle.copy(color = color))
+    if (annotated.spanStyles.isEmpty()) {
+        Text(annotated.text, modifier = modifier, style = textStyle.copy(color = color))
+    } else {
+        Text(annotated, modifier = modifier, style = textStyle.copy(color = color))
+    }
 }
 
 internal fun approvalTitle(request: AgentApprovalRequest): String = when {
@@ -1644,6 +1725,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      folderName: String?,
                      onOpenProjects: () -> Unit,
                      selector: (@Composable () -> Unit)? = null,
+                     contextReading: ContextMeterReading? = null,
                      onSend: (String) -> Unit,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
     // A draft belongs to the conversation it was typed in: switching away keeps it there and
@@ -1687,7 +1769,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                         attachmentsOpen = false
                     }
                 },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                    .dismissOnEscape { attachmentsOpen = false },
             ) { Text("Include clipboard text") }
         }
     }
@@ -1743,35 +1826,49 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         if (commandQuery != null) onRequestSkills() else dismissedCommand = null
     }
     BackHandler(enabled = showCommands) { dismissedCommand = draft }
+    var field by rememberSaveable(sessionId, stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(draft, TextRange(draft.length)))
+    }
+    val editing = if (field.text == draft) field else TextFieldValue(draft, TextRange(draft.length))
+    val updateField: (TextFieldValue) -> Unit = {
+        field = it
+        drafts = withDraft(drafts, sessionId, it.text)
+    }
     var focused by remember { mutableStateOf(false) }
     val composerEdge by animateColorAsState(
         if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
         else MaterialTheme.colorScheme.outlineVariant,
-        animationSpec = tween(RivetMotion.FOCUS_MS, easing = RivetMotion.easing),
+        animationSpec = rivetMotionSpec(RivetMotion.FOCUS_MS),
         label = "Composer focus",
     )
     val sendInteraction = remember { MutableInteractionSource() }
     val pressingSend by sendInteraction.collectIsPressedAsState()
     val sendScale by animateFloatAsState(if (pressingSend) 0.91f else 1f,
-        animationSpec = tween(RivetMotion.FOCUS_MS, easing = RivetMotion.easing), label = "Send press")
+        animationSpec = rivetMotionSpec(RivetMotion.FOCUS_MS), label = "Send press")
     // One container for the whole composer: the field inside carries no outline of its
     // own, and the selector shares the quiet second row with send/stop.
-    Column(modifier.fillMaxWidth().imePadding().padding(horizontal = 14.dp, vertical = 9.dp)) {
+    Column(modifier.fillMaxWidth().imePadding().padding(horizontal = 14.dp, vertical = 9.dp)
+        .dismissOnEscape(showCommands) { dismissedCommand = draft }) {
         if (showCommands) {
-            SlashCommandPanel(commandMatches) { row ->
-                dismissedCommand = null
-                val nextDraft = when (row.action) {
-                    SlashAction.Goal -> "/goal "
-                    null -> row.skill?.let { "/${it.name} " } ?: draft
-                    else -> ""
-                }
-                drafts = withDraft(drafts, sessionId, nextDraft)
-                when (row.action) {
-                    SlashAction.Feedback -> onSendFeedback()
-                    SlashAction.Compact -> onCompact()
-                    SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
-                    SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
-                    else -> Unit
+            val progress = entryProgress(Unit, animate = true, duration = RivetMotion.PAGE_MS)
+            Box(Modifier.clipToBounds()) {
+                Box(Modifier.panelEntry(progress)) {
+                    SlashCommandPanel(commandMatches) { row ->
+                        dismissedCommand = null
+                        val nextDraft = when (row.action) {
+                            SlashAction.Goal -> "/goal "
+                            null -> row.skill?.let { "/${it.name} " } ?: draft
+                            else -> ""
+                        }
+                        drafts = withDraft(drafts, sessionId, nextDraft)
+                        when (row.action) {
+                            SlashAction.Feedback -> onSendFeedback()
+                            SlashAction.Compact -> onCompact()
+                            SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
+                            SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
+                            else -> Unit
+                        }
+                    }
                 }
             }
             Spacer(Modifier.padding(bottom = 6.dp))
@@ -1782,55 +1879,89 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             shape = RoundedCornerShape(20.dp),
             border = BorderStroke(1.dp, composerEdge),
         ) {
-            Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
-                sharedDraft?.imageName?.let { name ->
-                    Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
-                        style = MaterialTheme.typography.labelMedium)
-                }
-                OutlinedTextField(
-                    value = draft,
-                    onValueChange = { drafts = withDraft(drafts, sessionId, it) },
-                    modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
-                    placeholder = { Text("Ask Rivet…") },
-                    minLines = 1,
-                    maxLines = 6,
-                    keyboardOptions = if (draft.startsWith("/")) KeyboardOptions(
-                        capitalization = KeyboardCapitalization.None,
-                        autoCorrect = false,
-                        imeAction = ImeAction.Send,
-                    ) else KeyboardOptions(
-                        capitalization = KeyboardCapitalization.Sentences,
-                        imeAction = ImeAction.Send,
-                    ),
-                    keyboardActions = KeyboardActions(onSend = { submit() }),
-                    shape = RoundedCornerShape(12.dp),
-                    colors = OutlinedTextFieldDefaults.colors(
-                        focusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
-                        unfocusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
-                        focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                        unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
-                    ),
-                )
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
-                        Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+            BoxWithConstraints(Modifier.fillMaxWidth()) {
+                val contextFitsInRow = maxWidth >= RivetLayout.contextInlineWidth
+                val compactControls = maxWidth < RivetLayout.compactComposerWidth
+                Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
+                    sharedDraft?.imageName?.let { name ->
+                        Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
+                            style = MaterialTheme.typography.labelMedium)
                     }
-                    Box(Modifier.weight(1f).padding(end = 4.dp)) {
-                        selector?.invoke()
+                    OutlinedTextField(
+                        value = editing,
+                        onValueChange = updateField,
+                        modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
+                            .onPreviewKeyEvent { event ->
+                                if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+                                val native = event.nativeKeyEvent
+                                val action = composerEnter(
+                                    hardware = native.flags and android.view.KeyEvent.FLAG_SOFT_KEYBOARD == 0,
+                                    shift = event.isShiftPressed,
+                                    shortcutModifier = event.isCtrlPressed || event.isMetaPressed || event.isAltPressed,
+                                )
+                                if (action == ComposerEnter.Edit) return@onPreviewKeyEvent false
+                                if (event.type == KeyEventType.KeyDown && native.repeatCount == 0) {
+                                    when (action) {
+                                        ComposerEnter.Send -> submit()
+                                        ComposerEnter.Newline -> {
+                                            val from = editing.selection.min
+                                            val to = editing.selection.max
+                                            updateField(TextFieldValue(editing.text.replaceRange(from, to, "\n"),
+                                                TextRange(from + 1)))
+                                        }
+                                        ComposerEnter.Edit -> Unit
+                                    }
+                                }
+                                true
+                            },
+                        placeholder = { Text("Ask Rivet…") },
+                        minLines = 1,
+                        maxLines = 6,
+                        keyboardOptions = if (draft.startsWith("/")) KeyboardOptions(
+                            capitalization = KeyboardCapitalization.None,
+                            autoCorrect = false,
+                            imeAction = ImeAction.Send,
+                        ) else KeyboardOptions(
+                            capitalization = KeyboardCapitalization.Sentences,
+                            imeAction = ImeAction.Send,
+                        ),
+                        keyboardActions = KeyboardActions(onSend = { submit() }),
+                        shape = RoundedCornerShape(12.dp),
+                        colors = OutlinedTextFieldDefaults.colors(
+                            focusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
+                            unfocusedBorderColor = MaterialTheme.colorScheme.surfaceContainer,
+                            focusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                            unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
+                        ),
+                    )
+                    if (!contextFitsInRow && contextReading != null) {
+                        ConversationContextMeter(contextReading, Modifier.align(Alignment.End).padding(end = 6.dp))
                     }
-                    WorkingFolder(folderName, onOpenProjects)
-                    IconButton(onClick = { if (streaming) onCancel() else submit() },
-                        enabled = streaming || canSend, interactionSource = sendInteraction,
-                        modifier = Modifier.size(48.dp).graphicsLayer {
-                            scaleX = sendScale
-                            scaleY = sendScale
-                        }.clip(CircleShape)
-                        .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
-                            else MaterialTheme.colorScheme.surfaceVariant)) {
-                        Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
-                            stringResource(if (streaming) R.string.chat_stop else R.string.chat_send),
-                            tint = if (streaming || canSend) MaterialTheme.colorScheme.onPrimary
-                            else MaterialTheme.colorScheme.onSurfaceVariant)
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
+                            Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+                        }
+                        Box(Modifier.weight(1f).padding(end = 4.dp)) {
+                            selector?.invoke()
+                        }
+                        if (contextFitsInRow && contextReading != null) {
+                            ConversationContextMeter(contextReading, Modifier.padding(horizontal = 4.dp))
+                        }
+                        if (compactControls) WorkingFolder(folderName, onOpenProjects, compact = true)
+                        else WorkingFolder(folderName, onOpenProjects)
+                        IconButton(onClick = { if (streaming) onCancel() else submit() },
+                            enabled = streaming || canSend, interactionSource = sendInteraction,
+                            modifier = Modifier.size(48.dp).graphicsLayer {
+                                scaleX = sendScale
+                                scaleY = sendScale
+                            }.clip(CircleShape)
+                            .background(if (streaming || canSend) MaterialTheme.colorScheme.primary
+                                else MaterialTheme.colorScheme.surfaceVariant)) {
+                            Icon(painterResource(if (streaming) R.drawable.ic_stop else R.drawable.ic_send),
+                                stringResource(if (streaming) R.string.chat_stop else R.string.chat_send),
+                                tint = if (streaming || canSend) MaterialTheme.colorScheme.onPrimary
+                                else MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
                     }
                 }
             }

@@ -1,6 +1,5 @@
 package com.kaiser.rivet.ui
 
-import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
@@ -51,10 +50,10 @@ internal fun FoldReveal(
 
 /** Shared fold timing and a frame-clock-driven chevron rotation. */
 internal object FoldMotion {
-    const val EXPAND_MS = 180
-    const val COLLAPSE_MS = 150
+    const val EXPAND_MS = RivetMotion.CHAT_FOLD_EXPAND_MS
+    const val COLLAPSE_MS = RivetMotion.CHAT_FOLD_COLLAPSE_MS
 
-    fun ease(fraction: Float): Float = FastOutSlowInEasing.transform(fraction.coerceIn(0f, 1f))
+    fun ease(fraction: Float): Float = RivetMotion.easing.transform(fraction.coerceIn(0f, 1f))
 }
 
 @Composable

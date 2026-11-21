@@ -1,5 +1,13 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityColumns
+import com.kaiser.rivet.ui.RivetMotion
+import com.kaiser.rivet.ui.entryProgress
+import com.kaiser.rivet.ui.pageEntry
+import com.kaiser.rivet.ui.UtilityFold
+import com.kaiser.rivet.ui.UtilityGlyph
+import com.kaiser.rivet.ui.UtilityLead
+import com.kaiser.rivet.ui.UtilityRow
 import android.app.Activity
 import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -91,8 +99,6 @@ import com.kaiser.rivet.workspace.grantDisplayPath
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-private val MAX_WIDTH = 680.dp
-
 internal enum class SettingsSection {
     Providers, Appearance, Agent, Phone, PhoneAddOn, Subagents, Memory, GitHub, GitHubConnect, Skills, Updates, About, Usage, EditMemory,
 }
@@ -174,109 +180,113 @@ fun SettingsScreen(
     val saved = state.configs.filterNot { it.id == active?.id }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxSize()) {
+        Column(Modifier.widthIn(max = RivetLayout.utilityMaxWidth).fillMaxSize()) {
             SettingsTopBar(
                 section = section,
                 title = if (section == SettingsSection.Skills) shownSkill?.name else null,
                 onBack = back,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            when (section) {
-                null -> Column(Modifier.verticalScroll(rememberScrollState())) {
-                    SectionList(
-                        providerSummary = when {
-                            state.loadError != null -> "Problem loading providers"
-                            active == null -> "Not set"
-                            else -> active.name
-                        },
-                        themeSummary = themeMode.name,
+            val pageProgress = entryProgress(section to shownSkill?.name, animate = true, duration = RivetMotion.PAGE_MS)
+            Box(Modifier.weight(1f).fillMaxWidth().pageEntry(pageProgress,
+                if (section == null) RivetMotion.pageBackShift else RivetMotion.pageShift)) {
+                when (section) {
+                    null -> Column(Modifier.verticalScroll(rememberScrollState())) {
+                        SectionList(
+                            providerSummary = when {
+                                state.loadError != null -> "Problem loading providers"
+                                active == null -> "Not set"
+                                else -> active.name
+                            },
+                            themeSummary = themeMode.name,
+                            subagentSummary = subagentSummary(subagentState, state.configs),
+                            skillSummary = skillCountSummary(skillCatalog),
+                            memorySummary = if (hasProject) "${memoryLines.size} saved" else "No project",
+                            versionSummary = versionName,
+                            onSelect = { section = it },
+                            onSendFeedback = onSendFeedback,
+                        )
+                    }
+                    SettingsSection.Providers -> ProviderDetail(
+                        loadError = state.loadError,
+                        headerNotice = state.headerNotice,
+                        active = active,
+                        saved = saved,
+                        onSelect = { viewModel.setActive(it.id) },
+                        onEdit = { id -> onEditProvider(id) },
+                        onDelete = { provider -> deleteTarget = provider },
+                        onNewProvider = onNewProvider,
+                        setup = { ProviderSetup(viewModel, onOpenModels, showActions = active == null) },
+                        onOpenGitHub = { section = SettingsSection.GitHub },
+                    )
+                    SettingsSection.Appearance -> AppearanceDetail(
+                        themeMode = themeMode,
+                        themeSaving = themeSaving,
+                        onThemeChange = onThemeChange,
+                        appearanceError = appearanceError,
+                    )
+                    SettingsSection.Memory -> MemoryDetail(
+                        lines = memoryLines,
+                        hasProject = hasProject,
+                        onEditMemory = { section = SettingsSection.EditMemory },
+                        onForget = onForgetMemoryLine,
+                        onOpenAgent = { section = SettingsSection.Agent },
+                    )
+                    SettingsSection.EditMemory -> MemoryEditor(memoryMarkdown) { text ->
+                        onUpdateMemory(text)
+                        section = SettingsSection.Memory
+                    }
+                    SettingsSection.Agent -> AgentDetail(
+                        autonomyMode = autonomyMode,
+                        autonomySaving = autonomySaving,
+                        autonomyError = autonomyError,
+                        onAutonomyChange = onAutonomyChange,
+                        spendCaps = spendCaps,
+                        userPricePerMillionUsd = userPricePerMillionUsd,
+                        onSaveSpend = onSaveSpend,
                         subagentSummary = subagentSummary(subagentState, state.configs),
-                        skillSummary = skillCountSummary(skillCatalog),
-                        memorySummary = if (hasProject) "${memoryLines.size} saved" else "No project",
-                        versionSummary = versionName,
-                        onSelect = { section = it },
-                        onSendFeedback = onSendFeedback,
+                        onOpenSubagents = { section = SettingsSection.Subagents },
+                    )
+                    SettingsSection.Phone -> PhoneAccessDetail(onOpenAddOn = { section = SettingsSection.PhoneAddOn })
+                    SettingsSection.PhoneAddOn -> PhoneAddOnDetail()
+                    SettingsSection.Subagents -> SubagentsSettings(
+                        state = subagentState,
+                        configs = state.configs,
+                        error = subagentError,
+                        onAllowAgentChoice = viewModel::setSubagentAllowAgentChoice,
+                        onToggleModel = viewModel::toggleSubagentModel,
+                        onFixedModel = viewModel::setFixedSubagentModel,
+                    )
+                    SettingsSection.GitHub -> GitHubDetail(
+                        connected = gitHubState.connected,
+                        gitAvailable = gitHubState.gitAvailable,
+                        busy = gitHubState.busy,
+                        error = gitHubState.error,
+                        onConnect = { section = SettingsSection.GitHubConnect },
+                        onDisconnect = viewModel::disconnectGitHub,
+                    )
+                    SettingsSection.GitHubConnect -> GitHubConnect(
+                        state = gitHubState,
+                        onConnect = viewModel::connectGitHub,
+                        onConnected = { section = SettingsSection.GitHub },
+                    )
+                    SettingsSection.Skills -> SkillsSettings(
+                        catalog = skillCatalog,
+                        selectedName = selectedSkill,
+                        onSelect = { selectedSkill = it },
+                        onLoadFiles = onLoadSkillFiles,
+                        onInstall = onInstallSkill,
+                    )
+                    SettingsSection.Usage -> DetailScroll {
+                        Text(conversationUsage?.diagnostics() ?: "No usage has been reported for this conversation.")
+                    }
+                    SettingsSection.Updates -> DetailScroll { UpdatesSection(versionName) }
+                    SettingsSection.About -> AboutDetail(
+                        versionName = versionName,
+                        onShowUsage = { section = SettingsSection.Usage },
+                        onOpenUpdates = { section = SettingsSection.Updates },
                     )
                 }
-                SettingsSection.Providers -> ProviderDetail(
-                    loadError = state.loadError,
-                    headerNotice = state.headerNotice,
-                    active = active,
-                    saved = saved,
-                    onSelect = { viewModel.setActive(it.id) },
-                    onEdit = { id -> onEditProvider(id) },
-                    onDelete = { provider -> deleteTarget = provider },
-                    onNewProvider = onNewProvider,
-                    setup = { ProviderSetup(viewModel, onOpenModels, showActions = active == null) },
-                    onOpenGitHub = { section = SettingsSection.GitHub },
-                )
-                SettingsSection.Appearance -> AppearanceDetail(
-                    themeMode = themeMode,
-                    themeSaving = themeSaving,
-                    onThemeChange = onThemeChange,
-                    appearanceError = appearanceError,
-                )
-                SettingsSection.Memory -> MemoryDetail(
-                    lines = memoryLines,
-                    hasProject = hasProject,
-                    onEditMemory = { section = SettingsSection.EditMemory },
-                    onForget = onForgetMemoryLine,
-                    onOpenAgent = { section = SettingsSection.Agent },
-                )
-                SettingsSection.EditMemory -> MemoryEditor(memoryMarkdown) { text ->
-                    onUpdateMemory(text)
-                    section = SettingsSection.Memory
-                }
-                SettingsSection.Agent -> AgentDetail(
-                    autonomyMode = autonomyMode,
-                    autonomySaving = autonomySaving,
-                    autonomyError = autonomyError,
-                    onAutonomyChange = onAutonomyChange,
-                    spendCaps = spendCaps,
-                    userPricePerMillionUsd = userPricePerMillionUsd,
-                    onSaveSpend = onSaveSpend,
-                    subagentSummary = subagentSummary(subagentState, state.configs),
-                    onOpenSubagents = { section = SettingsSection.Subagents },
-                )
-                SettingsSection.Phone -> PhoneAccessDetail(onOpenAddOn = { section = SettingsSection.PhoneAddOn })
-                SettingsSection.PhoneAddOn -> PhoneAddOnDetail()
-                SettingsSection.Subagents -> SubagentsSettings(
-                    state = subagentState,
-                    configs = state.configs,
-                    error = subagentError,
-                    onAllowAgentChoice = viewModel::setSubagentAllowAgentChoice,
-                    onToggleModel = viewModel::toggleSubagentModel,
-                    onFixedModel = viewModel::setFixedSubagentModel,
-                )
-                SettingsSection.GitHub -> GitHubDetail(
-                    connected = gitHubState.connected,
-                    gitAvailable = gitHubState.gitAvailable,
-                    busy = gitHubState.busy,
-                    error = gitHubState.error,
-                    onConnect = { section = SettingsSection.GitHubConnect },
-                    onDisconnect = viewModel::disconnectGitHub,
-                )
-                SettingsSection.GitHubConnect -> GitHubConnect(
-                    state = gitHubState,
-                    onConnect = viewModel::connectGitHub,
-                    onConnected = { section = SettingsSection.GitHub },
-                )
-                SettingsSection.Skills -> SkillsSettings(
-                    catalog = skillCatalog,
-                    selectedName = selectedSkill,
-                    onSelect = { selectedSkill = it },
-                    onLoadFiles = onLoadSkillFiles,
-                    onInstall = onInstallSkill,
-                )
-                SettingsSection.Usage -> DetailScroll {
-                    Text(conversationUsage?.diagnostics() ?: "No usage has been reported for this conversation.")
-                }
-                SettingsSection.Updates -> DetailScroll { UpdatesSection(versionName) }
-                SettingsSection.About -> AboutDetail(
-                    versionName = versionName,
-                    onShowUsage = { section = SettingsSection.Usage },
-                    onOpenUpdates = { section = SettingsSection.Updates },
-                )
             }
         }
     }
@@ -323,37 +333,37 @@ private fun SectionList(
     onSelect: (SettingsSection) -> Unit,
     onSendFeedback: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = RivetLayout.pageGutter, vertical = RivetLayout.pageGutter),
-        verticalArrangement = Arrangement.spacedBy(RivetLayout.sectionGap)) {
-        SettingsGroup {
-            SectionListItem(R.drawable.ic_profile, SettingsSection.Providers.title(), providerSummary,
-                { onSelect(SettingsSection.Providers) }, true)
-            SectionListItem(R.drawable.ic_phone_access, SettingsSection.Phone.title(), "",
-                { onSelect(SettingsSection.Phone) }, false)
-        }
-        SettingsGroup {
-            SectionListItem(R.drawable.ic_skills, SettingsSection.Skills.title(), skillSummary,
-                { onSelect(SettingsSection.Skills) }, true)
-            SectionListItem(R.drawable.ic_memory, SettingsSection.Memory.title(), memorySummary,
-                { onSelect(SettingsSection.Memory) }, true)
-            SectionListItem(R.drawable.ic_subagents, SettingsSection.Subagents.title(), subagentSummary,
-                { onSelect(SettingsSection.Subagents) }, true)
-            SectionListItem(R.drawable.ic_appearance, SettingsSection.Appearance.title(), themeSummary,
-                { onSelect(SettingsSection.Appearance) }, false)
-        }
-        SettingsGroup {
-            SectionListItem(R.drawable.ic_feedback, "Send feedback", "", onSendFeedback, true)
-            SectionListItem(R.drawable.ic_info, SettingsSection.About.title(), versionSummary,
-                { onSelect(SettingsSection.About) }, false)
-        }
-    }
+    UtilityColumns(
+        modifier = Modifier.padding(RivetLayout.pageGutter),
+        leading = {
+            SettingsGroup {
+                SectionListItem(R.drawable.ic_profile, SettingsSection.Providers.title(), providerSummary,
+                    { onSelect(SettingsSection.Providers) }, true)
+                SectionListItem(R.drawable.ic_phone_access, SettingsSection.Phone.title(), "",
+                    { onSelect(SettingsSection.Phone) }, true)
+                SectionListItem(R.drawable.ic_skills, SettingsSection.Skills.title(), skillSummary,
+                    { onSelect(SettingsSection.Skills) }, true)
+                SectionListItem(R.drawable.ic_memory, SettingsSection.Memory.title(), memorySummary,
+                    { onSelect(SettingsSection.Memory) }, false)
+            }
+        },
+        trailing = {
+            SettingsGroup {
+                SectionListItem(R.drawable.ic_subagents, SettingsSection.Subagents.title(), subagentSummary,
+                    { onSelect(SettingsSection.Subagents) }, true)
+                SectionListItem(R.drawable.ic_appearance, SettingsSection.Appearance.title(), themeSummary,
+                    { onSelect(SettingsSection.Appearance) }, true)
+                SectionListItem(R.drawable.ic_feedback, "Send feedback", "", onSendFeedback, true)
+                SectionListItem(R.drawable.ic_info, SettingsSection.About.title(), versionSummary,
+                    { onSelect(SettingsSection.About) }, false)
+            }
+        },
+    )
 }
 
 @Composable
 private fun SettingsGroup(content: @Composable ColumnScope.() -> Unit) {
-    Column(Modifier.fillMaxWidth().clip(MaterialTheme.shapes.medium)
-        .background(MaterialTheme.colorScheme.surfaceContainerLow)
-        .padding(horizontal = 12.dp), content = content)
+    Column(Modifier.fillMaxWidth(), content = content)
 }
 
 @Composable
@@ -364,40 +374,7 @@ private fun SectionListItem(
     onClick: () -> Unit,
     showDivider: Boolean,
 ) {
-    Row(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clickable(onClick = onClick)
-            .padding(vertical = 14.dp, horizontal = 4.dp),
-        verticalAlignment = Alignment.CenterVertically
-    ) {
-        Icon(
-            painterResource(iconRes),
-            contentDescription = null,
-            modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-        Spacer(Modifier.width(12.dp))
-        Text(title, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface)
-        if (summary.isNotBlank()) {
-            Text(summary, Modifier.widthIn(max = 104.dp).padding(horizontal = 6.dp),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                maxLines = 1, overflow = TextOverflow.Ellipsis)
-        }
-        Icon(
-            painterResource(R.drawable.ic_chevron_right),
-            contentDescription = null,
-            modifier = Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant
-        )
-    }
-    if (showDivider) {
-        HorizontalDivider(
-            color = MaterialTheme.colorScheme.outlineVariant,
-            modifier = Modifier.padding(horizontal = 48.dp)
-        )
-    }
+    UtilityRow(iconRes, title, summary, divider = showDivider, onClick = onClick)
 }
 
 @Composable
@@ -409,39 +386,44 @@ private fun MemoryDetail(
     onOpenAgent: () -> Unit,
 ) {
     DetailScroll {
-        SectionListItem(R.drawable.ic_processes, "Permissions & spending", "", onOpenAgent, true)
-        Text("Rivet compacts older conversation history to make room in the model's context.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 12.dp))
-        Text("Project memory", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(6.dp))
-        Text("Stored in .rivet/memory.md and covered by project checkpoints. AGENTS.md outranks it when they disagree.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(10.dp))
-        if (!hasProject) {
-            Text("Open a project to view its memory.", style = MaterialTheme.typography.bodyMedium)
-        } else {
-            Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                RivetOutlinedButton(onClick = onEditMemory) {
-                    Text(if (lines.isEmpty()) "Write memory" else "Edit")
+        UtilityColumns(
+            leading = {
+                val status = when {
+                    !hasProject -> "Open a project to view its memory."
+                    lines.isEmpty() -> "No facts saved"
+                    else -> "${lines.size} saved"
                 }
-            }
-            Spacer(Modifier.height(10.dp))
-            if (lines.isEmpty()) {
-                Text("No durable facts yet. Rivet adds them with the remember tool when it learns something worth keeping.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
-            lines.forEachIndexed { index, line ->
-                Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
-                    verticalAlignment = Alignment.CenterVertically) {
-                    Text(displaySafeText(line), modifier = Modifier.weight(1f),
-                        style = MaterialTheme.typography.bodyMedium)
-                    TextButton(onClick = { onForget(index) }) { Text("Forget") }
+                UtilityLead(R.drawable.ic_memory, "Project memory", status)
+            },
+            trailing = {
+                Spacer(Modifier.height(16.dp))
+                SectionListItem(R.drawable.ic_processes, "Permissions & spending", "", onOpenAgent, true)
+                UtilityFold(R.drawable.ic_memory, "How memory works") {
+                    Text("Stored in .rivet/memory.md and covered by project checkpoints. AGENTS.md takes priority when they disagree.")
+                    Text("Rivet saves durable facts here when it learns something worth keeping.")
                 }
-            }
-        }
+                UtilityFold(R.drawable.ic_models, "How compaction works") {
+                    Text("Rivet compacts older conversation history to make room in the model's context.")
+                }
+                Spacer(Modifier.height(12.dp))
+                if (hasProject) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        RivetOutlinedButton(onClick = onEditMemory) {
+                            Text(if (lines.isEmpty()) "Write memory" else "Edit")
+                        }
+                    }
+                    Spacer(Modifier.height(10.dp))
+                    lines.forEachIndexed { index, line ->
+                        Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Text(displaySafeText(line), modifier = Modifier.weight(1f),
+                                style = MaterialTheme.typography.bodyMedium)
+                            TextButton(onClick = { onForget(index) }) { Text("Forget") }
+                        }
+                    }
+                }
+            },
+        )
     }
 }
 
@@ -552,37 +534,38 @@ internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable Co
 @Composable
 private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
     DetailScroll {
-        SectionHeading("Share to Rivet")
-        Text("On — Rivet appears in the share sheet",
-            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-            style = MaterialTheme.typography.bodyMedium)
-
-        SectionHeading("Screen capture")
-        Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.",
-            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-            style = MaterialTheme.typography.bodyMedium)
-
-        GrantedFoldersSettings()
-        TermuxSettings()
-
-        SectionHeading("Advanced")
-        SectionListItem(
-            iconRes = R.drawable.ic_settings,
-            title = "Phone access add-on",
-            summary = "Not installed",
-            onClick = onOpenAddOn,
-            showDivider = false,
+        UtilityColumns(
+            leading = {
+                UtilityLead(R.drawable.ic_phone_access, "Share to Rivet", "Available in the Android share sheet")
+                Spacer(Modifier.height(16.dp))
+                UtilityFold(R.drawable.ic_expand, "Screen capture", "Asks before each capture") {
+                    Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.")
+                }
+            },
+            trailing = {
+                GrantedFoldersSettings()
+                TermuxSettings()
+            },
         )
+        UtilityFold(R.drawable.ic_settings, "Advanced", "Phone access add-on") {
+            SectionListItem(R.drawable.ic_phone_access, "Phone access add-on", "Not installed", onOpenAddOn, false)
+        }
     }
 }
 
 @Composable
 private fun PhoneAddOnDetail() {
     DetailScroll {
-        Text("Not installed", style = MaterialTheme.typography.labelLarge)
-        Text("The separate add-on would let Rivet read notifications and read or tap in other apps with your permission.")
-        Text("On Android 13 and later, if Android blocks a setting, open Settings → Apps → the add-on → More → Allow restricted settings. Follow the on-screen instructions and grant access only if you trust the add-on.")
-        Text("Google Play Protect may scan, warn about, or block apps installed outside Google Play. Keep Play Protect on and review any warning before proceeding.")
+        UtilityLead(R.drawable.ic_phone_access, "Phone access add-on", "Not installed")
+        UtilityFold(R.drawable.ic_info, "What the add-on can do") {
+            Text("The separate add-on would let Rivet read notifications and read or tap in other apps with your permission.")
+        }
+        UtilityFold(R.drawable.ic_settings, "Allow restricted settings") {
+            Text("On Android 13 and later, if Android blocks a setting, open Settings, Apps, the add-on, then More and Allow restricted settings. Grant access only if you trust the add-on.")
+        }
+        UtilityFold(R.drawable.ic_info, "Google Play Protect") {
+            Text("Google Play Protect may scan, warn about, or block apps installed outside Google Play. Keep Play Protect on and review any warning.")
+        }
     }
 }
 
@@ -621,31 +604,33 @@ private fun GrantedFoldersSettings() {
             scope.launch { update("Couldn't keep access to that folder. Choose it again.") { registry.add(uri, data.flags) } }
         }
     }
-    SectionHeading("Granted folders")
-    if (folders.isEmpty()) Text("No folders added.", style = MaterialTheme.typography.bodyMedium)
-    folders.forEach { grant ->
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(grantDisplayPath(grant.treeUri, grant.label),
-                    style = MaterialTheme.typography.bodyMedium)
-                Text(when {
-                    grant.revoked -> "Revoked — add the folder again to restore access"
-                    grant.write -> "Read and write"
-                    else -> "Read-only"
-                }, style = MaterialTheme.typography.bodySmall)
+    UtilityFold(R.drawable.ic_folder, "Granted folders",
+        if (folders.isEmpty()) "No folders added" else "${folders.size} added") {
+        if (folders.isEmpty()) Text("No folders added.", style = MaterialTheme.typography.bodyMedium)
+        folders.forEach { grant ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(grantDisplayPath(grant.treeUri, grant.label),
+                        style = MaterialTheme.typography.bodyMedium)
+                    Text(when {
+                        grant.revoked -> "Revoked — add the folder again to restore access"
+                        grant.write -> "Read and write"
+                        else -> "Read-only"
+                    }, style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = {
+                    scope.launch { update("Couldn't remove that folder.") { registry.remove(grant.id) } }
+                }) { Text("Remove") }
             }
-            TextButton(onClick = {
-                scope.launch { update("Couldn't remove that folder.") { registry.remove(grant.id) } }
-            }) { Text("Remove") }
         }
+        TextButton(onClick = {
+            try { picker.launch(AndroidGrantedFolders.pickerIntent()) }
+            catch (_: Exception) { feedback = "Couldn't open the folder picker." }
+        }) { Text("Add folder") }
+        Text("Some system folders can't be shared directly — pick or create a subfolder instead.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    TextButton(onClick = {
-        try { picker.launch(AndroidGrantedFolders.pickerIntent()) }
-        catch (_: Exception) { feedback = "Couldn't open the folder picker." }
-    }) { Text("Add folder") }
-    Text("Some system folders can't be shared directly — pick or create a subfolder instead.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant)
     feedback?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     Spacer(Modifier.height(24.dp))
 }
@@ -666,18 +651,18 @@ private fun TermuxSettings() {
         owner?.lifecycle?.addObserver(observer)
         onDispose { owner?.lifecycle?.removeObserver(observer) }
     }
-    SectionHeading("Termux bridge")
-    Text(if (installed) "Installed" else "Not installed", style = MaterialTheme.typography.bodyMedium)
-    Text(TermuxCommand.SETUP, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium)
-    TextButton(enabled = installed && !testing, onClick = {
-        testing = true
-        output = null
-        scope.launch {
-            try { output = bridge.test() } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { output = "Couldn't start the Termux bridge. Try again while Rivet is open." }
-            finally { testing = false }
-        }
-    }) { Text(if (testing) "Testing…" else "Test bridge") }
+    UtilityFold(R.drawable.ic_processes, "Termux bridge", if (installed) "Installed" else "Not installed") {
+        Text(TermuxCommand.SETUP, style = MaterialTheme.typography.bodyMedium)
+        TextButton(enabled = installed && !testing, onClick = {
+            testing = true
+            output = null
+            scope.launch {
+                try { output = bridge.test() } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { output = "Couldn't start the Termux bridge. Try again while Rivet is open." }
+                finally { testing = false }
+            }
+        }) { Text(if (testing) "Testing…" else "Test bridge") }
+    }
     output?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     Spacer(Modifier.height(24.dp))
 }
@@ -721,18 +706,17 @@ private fun ProviderDetail(
                 style = MaterialTheme.typography.bodySmall,
                 modifier = Modifier.padding(vertical = 8.dp)) }
         }
-        item { SectionHeading("Current provider", modifier = Modifier.padding(top = 4.dp, bottom = 4.dp), color = headingColor) }
-        if (active == null) {
-            item {
-                Text("Choose the service you want to connect.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    style = MaterialTheme.typography.bodySmall,
-                    modifier = Modifier.padding(vertical = 8.dp))
-            }
-        } else {
-            item {
-                ProviderRow(active, isActive = true, onSelect = {},
-                    onEdit = { onEdit(active.id) }, onDelete = { onDelete(active) })
+        item {
+            UtilityLead(R.drawable.ic_profile, active?.name ?: "Connect a provider",
+                active?.model?.takeIf { it.isNotBlank() }) {
+                if (active?.type == ProviderType.Local) {
+                    Text("Managed in Models", style = MaterialTheme.typography.bodySmall)
+                } else if (active != null) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        TextButton(onClick = { onEdit(active.id) }) { Text("Edit connection") }
+                        TextButton(onClick = { onDelete(active) }) { Text("Remove provider") }
+                    }
+                }
             }
         }
         item(key = "provider-setup") { setup() }
@@ -750,14 +734,7 @@ private fun ProviderDetail(
             SectionHeading("Add a provider", Modifier.padding(top = 24.dp, bottom = 8.dp), color = headingColor)
         }
         items(presets, key = { it.name }) { type ->
-            Row(Modifier.fillMaxWidth().clickable { onNewProvider(type) }
-                .padding(vertical = 12.dp), verticalAlignment = Alignment.CenterVertically) {
-                Text(typeDisplayName(type), Modifier.weight(1f),
-                    style = MaterialTheme.typography.bodyLarge)
-                Icon(painterResource(R.drawable.ic_chevron_right), null,
-                    Modifier.size(20.dp), tint = MaterialTheme.colorScheme.onBackground)
-            }
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+            UtilityRow(R.drawable.ic_profile, typeDisplayName(type), onClick = { onNewProvider(type) })
         }
     }
 }
@@ -771,23 +748,14 @@ private fun AppearanceDetail(
 ) {
     DetailScroll {
         
-        Text("Theme", style = MaterialTheme.typography.titleSmall, modifier = Modifier.padding(bottom = 12.dp))
-        
-        // Three cards per the reference; the retired rose-intensity slider is gone from
-        // the UI, its stored value untouched.
-        // The reference lays Light and Dark side by side, System full width below.
-        Row(Modifier.fillMaxWidth()) {
-            ThemeCard(RivetThemeMode.Light, selected = themeMode == RivetThemeMode.Light,
-                enabled = !themeSaving, onClick = { onThemeChange(RivetThemeMode.Light) },
-                modifier = Modifier.weight(1f).padding(end = 8.dp))
-            ThemeCard(RivetThemeMode.Dark, selected = themeMode == RivetThemeMode.Dark,
-                enabled = !themeSaving, onClick = { onThemeChange(RivetThemeMode.Dark) },
-                modifier = Modifier.weight(1f).padding(start = 8.dp))
-        }
-        Spacer(Modifier.height(8.dp))
-        ThemeCard(RivetThemeMode.System, selected = themeMode == RivetThemeMode.System,
-            enabled = !themeSaving, onClick = { onThemeChange(RivetThemeMode.System) })
-        
+        UtilityColumns(
+            leading = { UtilityLead(R.drawable.ic_appearance, "Theme", themeMode.name) },
+            trailing = {
+                RivetThemeMode.entries.forEach { mode ->
+                    ThemeRow(mode, themeMode == mode, enabled = !themeSaving) { onThemeChange(mode) }
+                }
+            },
+        )
         appearanceError?.let { error ->
             Text(displaySafeText(error), color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 16.dp))
@@ -796,55 +764,19 @@ private fun AppearanceDetail(
 }
 
 @Composable
-private fun ThemeCard(
-    mode: RivetThemeMode,
-    selected: Boolean,
-    enabled: Boolean,
-    onClick: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val shape = RoundedCornerShape(12.dp)
-    Surface(
-        modifier = modifier
-            .heightIn(min = 84.dp)
-            .clip(shape),
-        color = if (selected) MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.5f)
-        else MaterialTheme.colorScheme.surfaceContainerHigh.copy(alpha = 0.3f),
-        shadowElevation = if (selected) 2.dp else 0.dp,
-        tonalElevation = if (selected) 1.dp else 0.dp,
-        onClick = { /* handled by clickable below */ },
-        border = if (selected) BorderStroke(1.5.dp, MaterialTheme.colorScheme.primary)
-        else BorderStroke(1.dp, MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.3f))
+private fun ThemeRow(mode: RivetThemeMode, selected: Boolean, enabled: Boolean, onClick: () -> Unit) {
+    Row(
+        Modifier.fillMaxWidth().heightIn(min = 56.dp)
+            .selectable(selected, enabled = enabled, role = Role.RadioButton, onClick = onClick)
+            .padding(horizontal = 4.dp, vertical = 8.dp),
+        horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            modifier = Modifier
-                .fillMaxSize()
-                .clickable(
-                    indication = null,
-                    interactionSource = remember { MutableInteractionSource() }
-                ) {
-                    if (enabled) onClick()
-                },
-            contentAlignment = Alignment.Center
-        ) {
-            Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                Icon(
-                    painterResource(themeIcon(mode)),
-                    contentDescription = null,
-                    modifier = Modifier.size(22.dp),
-                    tint = if (selected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-                Spacer(Modifier.height(6.dp))
-                Text(
-                    mode.name,
-                    style = MaterialTheme.typography.bodyMedium,
-                    color = if (selected) MaterialTheme.colorScheme.primary
-                    else MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = 0.6f)
-                )
-            }
-        }
+        UtilityGlyph(themeIcon(mode))
+        Text(mode.name, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+        RadioButton(selected = selected, onClick = null, enabled = enabled)
     }
+    HorizontalDivider(Modifier.padding(start = 52.dp), color = MaterialTheme.colorScheme.outlineVariant)
 }
 
 // The app ships its own icon drawables (no material-icons dependency); ic_visibility is
@@ -854,17 +786,6 @@ private fun themeIcon(mode: RivetThemeMode): Int = when (mode) {
     RivetThemeMode.Light -> R.drawable.ic_visibility
     RivetThemeMode.Dark -> R.drawable.ic_visibility_off
     RivetThemeMode.System -> R.drawable.ic_settings
-}
-
-@Composable
-private fun UsageRow(onShowUsage: () -> Unit) {
-    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(onClick = onShowUsage),
-        verticalAlignment = Alignment.CenterVertically) {
-        Text("Conversation usage", Modifier.weight(1f),
-            style = MaterialTheme.typography.bodyLarge)
-        Icon(painterResource(R.drawable.ic_chevron_right), null, Modifier.size(20.dp),
-            tint = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
 }
 
 @Composable
@@ -936,34 +857,35 @@ private fun AgentDetail(
             style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
 
         Spacer(Modifier.height(22.dp))
-        SectionHeading("Spend guard")
-        Text("Caps pause a run; they never stop it. Blank means no cap. Local models skip this.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(value = perRunUsd, onValueChange = { perRunUsd = it },
-            label = { Text("Per-run cap (USD)") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = monthlyUsd, onValueChange = { monthlyUsd = it },
-            label = { Text("Monthly cap (USD)") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-        OutlinedTextField(value = perRunTokens, onValueChange = { perRunTokens = it },
-            label = { Text("Per-run token cap") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-        OutlinedTextField(value = monthlyTokens, onValueChange = { monthlyTokens = it },
-            label = { Text("Monthly token cap") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-        OutlinedTextField(value = price, onValueChange = { price = it },
-            label = { Text("Unknown model price / million tokens (USD)") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-        TextButton(onClick = {
-            onSaveSpend(SpendCaps(
-                perRunUsd = perRunUsd.toDoubleOrNull()?.takeIf { it > 0 },
-                monthlyUsd = monthlyUsd.toDoubleOrNull()?.takeIf { it > 0 },
-                perRunTokens = perRunTokens.toLongOrNull()?.takeIf { it > 0 },
-                monthlyTokens = monthlyTokens.toLongOrNull()?.takeIf { it > 0 },
-            ), price.toDoubleOrNull()?.takeIf { it > 0 })
-        }) { Text("Save spend limits") }
+        UtilityFold(R.drawable.ic_memory, "Spend guard") {
+            Text("Caps pause a run; they never stop it. Blank means no cap. Local models skip this.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(value = perRunUsd, onValueChange = { perRunUsd = it },
+                label = { Text("Per-run cap (USD)") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = monthlyUsd, onValueChange = { monthlyUsd = it },
+                label = { Text("Monthly cap (USD)") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+            OutlinedTextField(value = perRunTokens, onValueChange = { perRunTokens = it },
+                label = { Text("Per-run token cap") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+            OutlinedTextField(value = monthlyTokens, onValueChange = { monthlyTokens = it },
+                label = { Text("Monthly token cap") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+            OutlinedTextField(value = price, onValueChange = { price = it },
+                label = { Text("Unknown model price / million tokens (USD)") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+            TextButton(onClick = {
+                onSaveSpend(SpendCaps(
+                    perRunUsd = perRunUsd.toDoubleOrNull()?.takeIf { it > 0 },
+                    monthlyUsd = monthlyUsd.toDoubleOrNull()?.takeIf { it > 0 },
+                    perRunTokens = perRunTokens.toLongOrNull()?.takeIf { it > 0 },
+                    monthlyTokens = monthlyTokens.toLongOrNull()?.takeIf { it > 0 },
+                ), price.toDoubleOrNull()?.takeIf { it > 0 })
+            }) { Text("Save spend limits") }
+        }
     }
 }
 
@@ -976,15 +898,18 @@ private fun autonomyDisplayName(mode: AutonomyMode): String = when (mode) {
 @Composable
 private fun AboutDetail(versionName: String, onShowUsage: () -> Unit, onOpenUpdates: () -> Unit) {
     DetailScroll {
-        
-        Text(stringResource(R.string.provider_hint_version, versionName),
-            style = MaterialTheme.typography.bodyLarge, modifier = Modifier.padding(bottom = 16.dp))
-        
-        SectionHeading(stringResource(R.string.support_heading), modifier = Modifier.padding(bottom = 8.dp))
-        SupportSection()
-        
-        SectionListItem(R.drawable.ic_history, "Updates", "", onOpenUpdates, true)
-        UsageRow(onShowUsage = onShowUsage)
+        UtilityColumns(
+            leading = {
+                UtilityLead(R.drawable.ic_info, "Rivet", stringResource(R.string.provider_hint_version, versionName))
+                Spacer(Modifier.height(16.dp))
+                SectionHeading(stringResource(R.string.support_heading), icon = R.drawable.ic_feedback)
+                SupportSection()
+            },
+            trailing = {
+                SectionListItem(R.drawable.ic_history, "Updates", "", onOpenUpdates, true)
+                SectionListItem(R.drawable.ic_models, "Conversation usage", "", onShowUsage, false)
+            },
+        )
     }
 }
 
@@ -992,14 +917,14 @@ private fun AboutDetail(versionName: String, onShowUsage: () -> Unit, onOpenUpda
 internal fun SectionHeading(
     text: String,
     modifier: Modifier = Modifier,
-    color: Color = MaterialTheme.colorScheme.primary,
+    color: Color = MaterialTheme.colorScheme.onSurface,
+    icon: Int? = null,
 ) {
-    Text(
-        text,
-        modifier = modifier.padding(vertical = 4.dp),
-        style = MaterialTheme.typography.titleMedium,
-        color = color,
-    )
+    Row(modifier.padding(vertical = 6.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+        verticalAlignment = Alignment.CenterVertically) {
+        icon?.let { UtilityGlyph(it) }
+        Text(text, style = MaterialTheme.typography.titleMedium, color = color)
+    }
 }
 
 @Composable
@@ -1026,15 +951,14 @@ private fun ProviderRow(
                 } else {
                     "${typeDisplayName(provider.type)} · ${provider.model}"
                 }
-                Text(providerDetail,
-                    style = MaterialTheme.typography.bodySmall,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis,
+                Text(providerDetail, style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (provider.type == ProviderType.Local) {
+                    Text("Managed in Models", style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
             }
-            if (provider.type == ProviderType.Local) {
-                Text("Managed in Models", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            } else {
+            if (provider.type != ProviderType.Local) {
                 IconButton(onClick = onEdit) {
                     Icon(painterResource(R.drawable.ic_edit), stringResource(R.string.provider_edit_action),
                         tint = MaterialTheme.colorScheme.onBackground)

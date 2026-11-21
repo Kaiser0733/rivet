@@ -1,5 +1,11 @@
 package com.kaiser.rivet.ui.provider
 
+import androidx.compose.foundation.layout.BoxWithConstraints
+import com.kaiser.rivet.ui.RivetLayout
+import com.kaiser.rivet.ui.UtilityFold
+import com.kaiser.rivet.ui.UtilityLead
+import com.kaiser.rivet.ui.UtilityGlyph
+import com.kaiser.rivet.ui.RivetOutlinedButton
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.PaddingValues
@@ -89,16 +95,30 @@ internal fun SkillsSettings(
     if (selected != null) {
         SkillDetail(selected, onLoadFiles)
     } else {
-        Column(Modifier.fillMaxSize()) {
-            InstallRow(onInstall)
-            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
+        val listing: @Composable (Modifier) -> Unit = { modifier ->
             when {
-                catalog == null -> DetailScroll(Modifier.weight(1f)) {
+                catalog == null -> DetailScroll(modifier) {
                     Text("Loading skills…", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                skillsAreEmpty(catalog) -> DetailScroll(Modifier.weight(1f)) { EmptySkills() }
-                else -> SkillsList(skillPageSections(catalog), onSelect, Modifier.weight(1f))
+                skillsAreEmpty(catalog) -> DetailScroll(modifier) {
+                    UtilityFold(R.drawable.ic_info, "How to add skills", "No skills installed") { EmptySkills() }
+                }
+                else -> SkillsList(skillPageSections(catalog), onSelect, modifier)
+            }
+        }
+        BoxWithConstraints(Modifier.fillMaxSize()) {
+            if (maxWidth >= RivetLayout.columnBreakpoint) {
+                Row(Modifier.fillMaxSize()) {
+                    Column(Modifier.weight(1f)) { InstallRow(onInstall) }
+                    listing(Modifier.weight(1f))
+                }
+            } else {
+                Column(Modifier.fillMaxSize()) {
+                    InstallRow(onInstall)
+                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
+                    listing(Modifier.weight(1f))
+                }
             }
         }
     }
@@ -106,19 +126,8 @@ internal fun SkillsSettings(
 
 @Composable
 private fun InstallRow(onInstall: () -> Unit) {
-    Row(
-        Modifier.fillMaxWidth()
-            .clickable(onClick = onInstall)
-            .padding(horizontal = 16.dp, vertical = 14.dp),
-        verticalAlignment = Alignment.CenterVertically,
-    ) {
-        Icon(painterResource(R.drawable.ic_add), contentDescription = null,
-            tint = MaterialTheme.colorScheme.primary, modifier = Modifier.size(20.dp))
-        Spacer(Modifier.width(12.dp))
-        Text("Install from link", style = MaterialTheme.typography.bodyLarge)
-        Spacer(Modifier.weight(1f))
-        Icon(painterResource(R.drawable.ic_chevron_right), contentDescription = null,
-            tint = MaterialTheme.colorScheme.onSurfaceVariant, modifier = Modifier.size(20.dp))
+    UtilityLead(R.drawable.ic_skills, "Your skills", modifier = Modifier.padding(horizontal = 16.dp, vertical = 8.dp)) {
+        RivetOutlinedButton(onClick = onInstall) { Text("Install from link") }
     }
 }
 
@@ -167,22 +176,16 @@ private fun SkillRow(skill: Skill, onOpen: () -> Unit) {
                 .padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
         ) {
+            UtilityGlyph(R.drawable.ic_skills)
+            Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Text(skill.name, style = MaterialTheme.typography.bodyLarge,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis,
-                        modifier = Modifier.weight(1f, fill = false))
-                    manualOnlyLabel(skill)?.let { marker ->
-                        Text(marker, style = MaterialTheme.typography.labelSmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            modifier = Modifier.padding(start = 8.dp))
-                    }
+                Text(skill.name, style = MaterialTheme.typography.bodyLarge)
+                manualOnlyLabel(skill)?.let { marker ->
+                    Text(marker, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                Text(displaySafeText(skill.description),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    maxLines = 1, overflow = TextOverflow.Ellipsis)
             }
+            Icon(painterResource(R.drawable.ic_chevron_right), null, Modifier.size(18.dp))
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
     }
@@ -193,11 +196,9 @@ private fun ErrorRow(error: SkillError) {
     Column(Modifier.fillMaxWidth().padding(vertical = 8.dp)) {
         Text(displaySafeText(error.displayName), style = MaterialTheme.typography.bodyMedium)
         Text(displaySafeText(error.path), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            maxLines = 1, overflow = TextOverflow.Ellipsis)
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
         Text(displaySafeText(error.reason), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.error,
-            maxLines = 2, overflow = TextOverflow.Ellipsis)
+            color = MaterialTheme.colorScheme.error)
     }
     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
 }
@@ -218,33 +219,23 @@ private fun SkillDetail(skill: Skill, onLoadFiles: suspend (Skill) -> List<Strin
     var files by remember(skill.name) { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(skill.name) { files = onLoadFiles(skill) }
     DetailScroll {
-        Text(displaySafeText(skill.description), style = MaterialTheme.typography.bodyLarge)
-        Text(displaySafeText(skill.source?.baseDir.orEmpty()),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp))
-        SectionHeading("Invocation", Modifier.padding(top = 20.dp, bottom = 4.dp))
-        Text(
-            if (skill.disableModelInvocation) "Manual only: the assistant cannot load this skill."
-            else "The assistant can load this skill when a task matches it.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            if (skill.userInvocable) "You can run it with /${skill.name}."
-            else "The assistant is the only way to load it.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
-        )
+        UtilityLead(R.drawable.ic_skills, skill.name, manualOnlyLabel(skill))
+        UtilityFold(R.drawable.ic_info, "Description") {
+            Text(displaySafeText(skill.description))
+            Text(displaySafeText(skill.source?.baseDir.orEmpty()), style = MaterialTheme.typography.bodySmall)
+        }
+        UtilityFold(R.drawable.ic_processes, "Invocation") {
+            Text(if (skill.disableModelInvocation) "Manual only: the assistant cannot load this skill."
+                else "The assistant can load this skill when a task matches it.")
+            Text(if (skill.userInvocable) "You can run it with /${skill.name}."
+                else "The assistant is the only way to load it.")
+        }
         if (skill.allowedTools.isNotEmpty()) {
-            SectionHeading("Allowed tools", Modifier.padding(top = 20.dp, bottom = 4.dp))
-            Text(skill.allowedTools.joinToString(", "),
-                style = MaterialTheme.typography.bodyMedium)
+            UtilityFold(R.drawable.ic_tools, "Allowed tools") { Text(skill.allowedTools.joinToString(", ")) }
         }
         if (files.isNotEmpty()) {
-            SectionHeading("Bundled files", Modifier.padding(top = 20.dp, bottom = 4.dp))
-            files.forEach { file ->
-                Text(file, style = MaterialTheme.typography.bodyMedium)
+            UtilityFold(R.drawable.ic_folder, "Bundled files") {
+                files.forEach { file -> Text(file) }
             }
         }
     }

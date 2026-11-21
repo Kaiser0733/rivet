@@ -14,14 +14,16 @@ class SoulSurfaceTest(unittest.TestCase):
         self.assertIn('state.projectName == null && !state.streaming -> "Choose a working folder to start."', chat)
         self.assertIn('projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE', chat)
 
-    def test_checkpoint_summary_appears_once_with_a_storage_kind(self):
+    def test_checkpoints_fold_full_title_kind_and_actions_under_one_line(self):
         tools = (UI / "processes/ProcessesScreen.kt").read_text()
-        row = tools.split("checkpoints.take(6).forEach", 1)[1].split("checkpointNotice?.let", 1)[0]
+        row = tools.split("visible.forEach { checkpoint", 1)[1].split("checkpointNotice?.let", 1)[0]
         self.assertEqual(row.count("checkpoint.summary"), 1)
+        self.assertIn("titleMaxLines = 1", row)
+        self.assertIn("Text(title, style", row)
         self.assertIn('if (checkpoint.gitRef != null) "Git checkpoint" else "File checkpoint"', row)
         self.assertIn("RestoreTarget(checkpoint, undoRun = false)", row)
+        self.assertIn("RestoreTarget(checkpoint, undoRun = true)", row)
         self.assertIn("Locale.getDefault()", row)
-        self.assertNotIn("maxLines", row)
 
     def test_worker_sheet_selection_uses_the_selected_job_id(self):
         sheet = (UI / "chat/WorkerSheet.kt").read_text()
@@ -47,16 +49,18 @@ class SoulSurfaceTest(unittest.TestCase):
         motion = (UI / "FoldReveal.kt").read_text()
         self.assertIn("currentCoroutineContext()[MotionDurationScale]", motion)
         self.assertLess(motion.index("scale() == 0f"), motion.index("withFrameNanos { it }"))
-        self.assertIn("EXPAND_MS = 180", motion)
-        self.assertIn("COLLAPSE_MS = 150", motion)
+        theme = (UI / "Theme.kt").read_text()
+        self.assertIn("CHAT_FOLD_EXPAND_MS = 180", theme)
+        self.assertIn("CHAT_FOLD_COLLAPSE_MS = 150", theme)
+        self.assertIn("EXPAND_MS = RivetMotion.CHAT_FOLD_EXPAND_MS", motion)
+        self.assertIn("COLLAPSE_MS = RivetMotion.CHAT_FOLD_COLLAPSE_MS", motion)
 
     def test_specialist_copy_names_the_existing_action_or_value(self):
         cases = (
-            ("provider/SettingsScreen.kt", 'if (active == null)', "Choose the service you want to connect."),
-            ("local/ModelsScreen.kt", 'if (totalRamMb > 0) {\n                Text(', "Estimated model size limit: about ${formatParams(ceiling.maxParamsB)} at ${ceiling.contextMax / 1024}K context."),
-            ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', 'SectionHeading("Share to Rivet")'),
-            ("provider/SettingsScreen.kt", 'SectionHeading("Screen capture")', "Rivet asks before each capture. After you allow it, tap Capture now in the notification."),
-            ("workspace/ProjectsScreen.kt", 'FolderHeading("Starters")', "Choose a starter and an empty folder for its files."),
+            ("provider/SettingsScreen.kt", 'private fun ProviderDetail(', 'active?.name ?: "Connect a provider"'),
+            ("local/ModelsScreen.kt", 'private fun DeviceCard(', "formatParams(ceiling.maxParamsB)"),
+            ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', "Available in the Android share sheet"),
+            ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', "Rivet asks before each capture. After you allow it, tap Capture now in the notification."),
             ("browser/BrowserScreen.kt", 'Text(', "Enter a web address to get started."),
         )
         for path, anchor, expected in cases:

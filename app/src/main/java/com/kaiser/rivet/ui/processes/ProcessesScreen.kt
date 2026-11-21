@@ -1,5 +1,17 @@
 package com.kaiser.rivet.ui.processes
 
+import androidx.compose.runtime.key
+import com.kaiser.rivet.ui.UtilityFold
+import com.kaiser.rivet.ui.chat.displaySafeText
+import com.kaiser.rivet.ui.RivetLayout
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.lazy.LazyListScope
+import com.kaiser.rivet.ui.DisclosureBody
+import com.kaiser.rivet.ui.utilityClick
+import com.kaiser.rivet.ui.UtilityLead
+import com.kaiser.rivet.ui.UtilityRow
+import com.kaiser.rivet.ui.UtilityGlyph
+import com.kaiser.rivet.ui.RivetOutlinedButton
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -84,7 +96,6 @@ internal fun ToolsScreen(
     val terminalState by terminal.state.collectAsState()
     val processItems by processes.processes.collectAsState()
     val (running, finished) = processItems.partition { it.status in ACTIVE }
-    var showFinished by rememberSaveable { mutableStateOf(false) }
     var restoreTarget by remember { mutableStateOf<RestoreTarget?>(null) }
     var now by remember { mutableLongStateOf(System.currentTimeMillis()) }
     LaunchedEffect(running.isNotEmpty()) {
@@ -96,31 +107,35 @@ internal fun ToolsScreen(
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.statusBarsPadding().navigationBarsPadding()) {
             RivetPageHeader("Tools", onBack)
-            LazyColumn(Modifier.widthIn(max = 760.dp).fillMaxSize().align(Alignment.CenterHorizontally),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val actions: LazyListScope.() -> Unit = {
                 item {
-                    Surface(onClick = { terminal.open(); onOpenTerminal() },
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = MaterialTheme.shapes.small) {
-                        Row(Modifier.fillMaxWidth().padding(horizontal = 14.dp, vertical = 13.dp),
-                            horizontalArrangement = Arrangement.spacedBy(12.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Icon(painterResource(R.drawable.ic_processes), null)
-                            Text(if (terminalState.running) "Open terminal" else "New terminal",
-                                Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                            Icon(painterResource(R.drawable.ic_chevron_right), null)
+                    UtilityLead(R.drawable.ic_processes, "Terminal") {
+                        RivetOutlinedButton(onClick = { terminal.open(); onOpenTerminal() }) {
+                            Text(if (terminalState.running) "Open terminal" else "New terminal")
                         }
                     }
                 }
                 if (onOpenWorkers != null) item {
-                    TextButton(onClick = onOpenWorkers) { Text("Subagents") }
+                    UtilityRow(R.drawable.ic_subagents, "Subagents", onClick = onOpenWorkers)
                 }
+            }
+            val checkpointsPane: LazyListScope.() -> Unit = {
                 item {
-                    Text("Running", Modifier.padding(top = 14.dp), style = MaterialTheme.typography.titleMedium)
-                    if (running.isEmpty()) Text("Nothing is running right now.",
-                        Modifier.padding(top = 6.dp), style = MaterialTheme.typography.bodyMedium,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    CheckpointList(checkpoints, checkpointNotice, onRestore = { restoreTarget = it })
+                }
+            }
+            val processPane: LazyListScope.() -> Unit = {
+                item {
+                    Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                        UtilityGlyph(R.drawable.ic_tools)
+                        Column {
+                            Text("Running", style = MaterialTheme.typography.titleMedium)
+                            Text(if (running.isEmpty()) "Nothing is running" else "${running.size} active",
+                                style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
                 }
                 items(running, key = { it.id }) { process ->
                     ProcessRow(process, now,
@@ -128,21 +143,36 @@ internal fun ToolsScreen(
                         onOpen = { process.url?.let { openPreview(context, it) } },
                         onCopy = { process.url?.let { copyPreview(context, it) } })
                 }
-                item {
-                    CheckpointList(checkpoints, checkpointNotice, onRestore = { restoreTarget = it })
-                }
                 if (finished.isNotEmpty()) item {
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                    TextButton(onClick = { showFinished = !showFinished }) {
-                        Text(if (showFinished) "Hide finished" else "Finished processes")
-                        Icon(painterResource(if (showFinished) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right),
-                            null, Modifier.size(18.dp))
+                    UtilityFold(R.drawable.ic_history, "Finished processes") {
+                        finished.forEach { process ->
+                            key(process.id) {
+                                ProcessRow(process, now, onStop = {}, onOpen = {}, onCopy = {})
+                            }
+                        }
                     }
                 }
-                if (showFinished) items(finished, key = { it.id }) { process ->
-                    ProcessRow(process, now, onStop = {}, onOpen = {}, onCopy = {})
+            }
+            val padding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+            val gaps = Arrangement.spacedBy(8.dp)
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                if (maxWidth >= RivetLayout.columnBreakpoint) {
+                    Row(Modifier.widthIn(max = RivetLayout.utilityMaxWidth).fillMaxSize().align(Alignment.TopCenter)) {
+                        LazyColumn(Modifier.weight(1f), contentPadding = padding, verticalArrangement = gaps) {
+                            actions()
+                            checkpointsPane()
+                        }
+                        LazyColumn(Modifier.weight(1f), contentPadding = padding, verticalArrangement = gaps, content = processPane)
+                    }
+                } else {
+                    LazyColumn(contentPadding = padding, verticalArrangement = gaps) {
+                        actions()
+                        processPane()
+                        checkpointsPane()
+                    }
                 }
             }
+
         }
     }
     restoreTarget?.let { target ->
@@ -177,30 +207,31 @@ private fun CheckpointList(checkpoints: List<RunCheckpointInfo>, checkpointNotic
             val latestRunId = checkpoints.firstOrNull()?.runId
             val runStart = checkpoints.filter { it.runId == latestRunId }
                 .minByOrNull { it.sequence }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text("Run checkpoints", style = MaterialTheme.typography.titleMedium,
-                    modifier = Modifier.weight(1f))
-                runStart?.let {
-                    TextButton(onClick = { onRestore(RestoreTarget(it, undoRun = true)) }) {
-                        Text("Undo this run")
-                    }
-                }
+            Text("Run checkpoints", style = MaterialTheme.typography.titleMedium)
+            val visible = checkpoints.take(6).let { latest ->
+                if (runStart != null && runStart !in latest) latest + runStart else latest
             }
-            checkpoints.take(6).forEach { checkpoint ->
-                Row(verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text(checkpoint.summary,
-                            style = MaterialTheme.typography.bodyMedium)
-                        Text(
-                            SimpleDateFormat("HH:mm", Locale.getDefault())
-                                .format(Date(checkpoint.createdAt)) + " · " +
-                                (if (checkpoint.gitRef != null) "Git checkpoint" else "File checkpoint"),
-                            style = MaterialTheme.typography.bodySmall,
+            visible.forEach { checkpoint ->
+                key(checkpoint.id) {
+                    val title = displaySafeText(checkpoint.summary)
+                    UtilityFold(R.drawable.ic_history, title, titleMaxLines = 1) {
+                        Text(title, style = MaterialTheme.typography.bodyMedium)
+                        val time = SimpleDateFormat("HH:mm", Locale.getDefault()).format(Date(checkpoint.createdAt))
+                        val type = if (checkpoint.gitRef != null) "Git checkpoint" else "File checkpoint"
+                        Text("$time · $type", style = MaterialTheme.typography.bodySmall,
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        Row(horizontalArrangement = Arrangement.spacedBy(4.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            if (checkpoint == runStart) {
+                                TextButton(onClick = { onRestore(RestoreTarget(checkpoint, undoRun = true)) }) {
+                                    Text("Undo this run")
+                                }
+                            }
+                            TextButton(onClick = { onRestore(RestoreTarget(checkpoint, undoRun = false)) }) {
+                                Text("Restore")
+                            }
+                        }
                     }
-                    TextButton(onClick = {
-                        onRestore(RestoreTarget(checkpoint, undoRun = false))
-                    }) { Text("Restore") }
                 }
             }
             checkpointNotice?.let {
@@ -208,7 +239,7 @@ private fun CheckpointList(checkpoints: List<RunCheckpointInfo>, checkpointNotic
                     color = if (it.startsWith("Not restored")) MaterialTheme.colorScheme.error
                     else MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (checkpoints.size > 6) Text("Showing the latest 6 checkpoints",
+            if (checkpoints.size > visible.size) Text("Showing ${visible.size} of ${checkpoints.size} checkpoints",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
@@ -230,10 +261,10 @@ private fun ProcessRow(
     val command = process.commandForDisplay ?: process.label
     val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.small) {
-        Column(Modifier.fillMaxWidth().animateContentSize(tween(RivetMotion.PROCESS_MS, easing = RivetMotion.easing))) {
+        Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
-                .clickable(role = Role.Button) { expanded = !expanded }
+                .utilityClick { expanded = !expanded }
                 .padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
@@ -242,7 +273,7 @@ private fun ProcessRow(
                 Icon(painterResource(if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right),
                     null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (expanded) {
+            DisclosureBody(expanded) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(command, Modifier.fillMaxWidth().heightIn(max = 220.dp)

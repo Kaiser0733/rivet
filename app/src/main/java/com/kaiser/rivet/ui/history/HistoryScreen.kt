@@ -1,6 +1,14 @@
 package com.kaiser.rivet.ui.history
 
-import android.text.format.DateUtils
+import androidx.compose.ui.res.pluralStringResource
+import androidx.compose.ui.res.stringResource
+import androidx.compose.foundation.Image
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.sp
+import androidx.compose.foundation.focusable
+import com.kaiser.rivet.ui.utilityClick
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -80,22 +88,38 @@ internal fun RivetSidebar(
         confirmingDelete = false
     }
     val searchFocus = remember { FocusRequester() }
+    val sidebarFocus = remember { FocusRequester() }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(searching, drawerOpen) {
         if (searching && drawerOpen) {
             searchFocus.requestFocus()
             keyboard?.show()
+        } else if (drawerOpen) {
+            sidebarFocus.requestFocus()
         } else if (searching) {
             focus.clearFocus()
             keyboard?.hide()
         }
     }
-    val rows = state.sessions.filter { session -> session.title.contains(search.trim(), ignoreCase = true) }
+    val rows = state.sessions.filter { session ->
+        session.hasMessages && session.title.contains(search.trim(), ignoreCase = true)
+    }
 
-    Column(Modifier.fillMaxSize().imePadding().padding(horizontal = RivetLayout.pageGutter)) {
+    Column(Modifier.fillMaxSize().focusRequester(sidebarFocus).focusable()
+        .imePadding().padding(horizontal = RivetLayout.pageGutter)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
-            Text("Rivet", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+            Box(Modifier.size(32.dp).clip(CircleShape), contentAlignment = Alignment.Center) {
+                Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null,
+                    modifier = Modifier.fillMaxSize().graphicsLayer {
+                        scaleX = 1.42f
+                        scaleY = 1.42f
+                    })
+            }
+            Spacer(Modifier.size(10.dp))
+            Text("RIVET", Modifier.weight(1f),
+                style = MaterialTheme.typography.headlineSmall.copy(fontWeight = FontWeight.SemiBold,
+                    letterSpacing = 1.1.sp))
             IconButton(onClick = {
                 searching = !searching
                 if (!searching) {
@@ -113,31 +137,32 @@ internal fun RivetSidebar(
                 .focusRequester(searchFocus),
                 placeholder = { Text("Search chats") }, singleLine = true)
         }
-        Surface(onClick = onOpenProjects, modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = MaterialTheme.shapes.small) {
-            Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Icon(painterResource(R.drawable.ic_folder), null)
-                Column(Modifier.weight(1f)) {
-                    Text(state.projectName ?: "Choose a working folder",
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    workspaceFolderPath(state.projectIdentity)?.let {
-                        Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        LazyColumn(Modifier.weight(1f)) {
+            item(key = "sidebar-links") {
+                Surface(onClick = onOpenProjects, modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = MaterialTheme.shapes.small) {
+                    Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Icon(painterResource(R.drawable.ic_folder), null)
+                        Column(Modifier.weight(1f)) {
+                            Text(state.projectName ?: "Choose a working folder",
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            workspaceFolderPath(state.projectIdentity)?.let {
+                                Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall)
+                            }
+                        }
+                        Icon(painterResource(R.drawable.ic_chevron_right), "Change working folder")
                     }
                 }
-                Icon(painterResource(R.drawable.ic_chevron_right), "Change working folder")
+                Spacer(Modifier.size(8.dp))
+                SidebarLink("Tools", R.drawable.ic_tools, onOpenTools)
+                SidebarLink("Browser", R.drawable.ic_web, onOpenBrowser)
+                SidebarLink("Models", R.drawable.ic_models, onOpenModels)
+                HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
             }
-        }
-        Spacer(Modifier.size(8.dp))
-        SidebarLink("Tools", R.drawable.ic_tools, onOpenTools)
-        SidebarLink("Browser", R.drawable.ic_web, onOpenBrowser)
-        SidebarLink("Models", R.drawable.ic_models, onOpenModels)
-        HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
-        LazyColumn(Modifier.weight(1f)) {
             if (rows.isEmpty()) item {
                 Text(if (search.isBlank()) "Your chats will appear here." else "No matching chats.",
                     Modifier.padding(vertical = 14.dp),
@@ -231,6 +256,13 @@ private fun SidebarLink(label: String, icon: Int, onClick: () -> Unit) {
     }
 }
 
-internal fun relativeRecency(updatedAt: Long, now: Long = System.currentTimeMillis()): String =
-    DateUtils.getRelativeTimeSpanString(updatedAt, now, DateUtils.MINUTE_IN_MILLIS,
-        DateUtils.FORMAT_ABBREV_RELATIVE).toString()
+@Composable
+private fun relativeRecency(updatedAt: Long): String {
+    val recency = chatRecency(updatedAt, System.currentTimeMillis())
+    return when (recency.unit) {
+        RecencyUnit.Now -> stringResource(R.string.sidebar_just_now)
+        RecencyUnit.Minute -> pluralStringResource(R.plurals.sidebar_minutes_ago, recency.count, recency.count)
+        RecencyUnit.Hour -> pluralStringResource(R.plurals.sidebar_hours_ago, recency.count, recency.count)
+        RecencyUnit.Day -> pluralStringResource(R.plurals.sidebar_days_ago, recency.count, recency.count)
+    }
+}

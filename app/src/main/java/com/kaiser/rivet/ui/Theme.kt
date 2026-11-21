@@ -16,7 +16,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import com.kaiser.rivet.provider.ReasoningLevel
 
 private val TextPrimaryDark = Color(0xFFF3F6F9)
 private val TextSecondaryDark = Color(0xFFB8C3CE)
@@ -260,6 +259,10 @@ private val RivetShapes = Shapes(
 
 internal object RivetLayout {
     val pageGutter = 20.dp
+    val columnBreakpoint = 690.dp
+    val utilityMaxWidth = 1_120.dp
+    val contextInlineWidth = 410.dp
+    val compactComposerWidth = 300.dp
     val sectionGap = 16.dp
     val controlSize = 48.dp
     val drawerMaxWidth = 380.dp
@@ -295,29 +298,25 @@ internal object RivetMotion {
     const val PAGE_MS = 240
     const val MESSAGE_MS = 190
     const val FOCUS_MS = 160
-    const val PROCESS_MS = 200
+    const val DISCLOSURE_MS = 200
+    const val CHAT_FOLD_EXPAND_MS = 180
+    const val CHAT_FOLD_COLLAPSE_MS = 150
+    const val COMPACT_DOT_MS = 300
+    const val DRAWER_MS = DISCLOSURE_MS
     const val COMPLETE_MS = 660
-    val pageShift = 24.dp
+    val pageShift = 36.dp
+    val panelRise = 18.dp
+    val paneTravel = 32.dp
     val pageBackShift = (-16).dp
     val messageRise = 10.dp
     val completionStroke = 3.dp
     val completionLength = 78.dp
-    val effortSignalLength = 76.dp
-    val effortSignalStroke = 1.6.dp
+    const val EFFORT_MS = 420
+    val effortSignalWidth = 55.dp
+    val effortSignalHeight = 18.dp
+    val effortSignalStroke = 2.dp
     const val drawerScrim = 0.46f
+    const val pressAlpha = 0.16f
+    const val hoverAlpha = 0.08f
     val easing = androidx.compose.animation.core.FastOutSlowInEasing
-}
-
-internal enum class EffortPattern { Line, Fork, Steps, Cross, Rings, Lattice }
-
-internal data class EffortMotion(val pattern: EffortPattern, val duration: Int, val strength: Float)
-
-internal fun effortMotion(level: ReasoningLevel): EffortMotion? = when (level) {
-    ReasoningLevel.Default -> null
-    ReasoningLevel.Low -> EffortMotion(EffortPattern.Line, 260, 0.48f)
-    ReasoningLevel.Medium -> EffortMotion(EffortPattern.Fork, 300, 0.56f)
-    ReasoningLevel.High -> EffortMotion(EffortPattern.Steps, 345, 0.64f)
-    ReasoningLevel.XHigh -> EffortMotion(EffortPattern.Cross, 390, 0.72f)
-    ReasoningLevel.Max -> EffortMotion(EffortPattern.Rings, 445, 0.80f)
-    ReasoningLevel.Ultra -> EffortMotion(EffortPattern.Lattice, 500, 0.88f)
 }

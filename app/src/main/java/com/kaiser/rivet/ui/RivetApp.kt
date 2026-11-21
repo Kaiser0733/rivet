@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui
 
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
+import androidx.compose.material3.DrawerState
 import android.app.Activity
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
@@ -161,7 +163,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         LaunchedEffect(processNavigationRequest) {
             if (processNavigationRequest > 0) {
                 // A notification's deep link opens the tools slide cleanly above no stale overlays.
-                if (drawerState.isOpen) drawerState.close()
+                if (drawerState.isOpen || drawerState.targetValue == DrawerValue.Open) drawerState.slideTo(DrawerValue.Closed)
                 destination = RivetDestination.Chat
                 editing = false
                 installZip = null
@@ -174,7 +176,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val sharedContent by chatViewModel.sharedContent.collectAsState()
         LaunchedEffect(sharedContent.values.lastOrNull()?.id) {
             if (sharedContent.isNotEmpty()) {
-                if (drawerState.isOpen) drawerState.close()
+                if (drawerState.isOpen || drawerState.targetValue == DrawerValue.Open) drawerState.slideTo(DrawerValue.Closed)
                 destination = RivetDestination.Chat
                 editing = false
                 installZip = null
@@ -183,7 +185,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         }
         LaunchedEffect(sharedZip) {
             if (sharedZip != null) {
-                drawerState.close()
+                drawerState.slideTo(DrawerValue.Closed)
                 if (browserState.visible) chatViewModel.browser.close()
                 editing = false
                 installReturn = RivetDestination.Chat
@@ -209,10 +211,10 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val openProjects = remember { { destination = RivetDestination.Projects } }
         val openSettings = remember { { destination = RivetDestination.Settings } }
         val openHistory = remember(coroutineScope, drawerState) {
-            { coroutineScope.launch { drawerState.open() }; Unit }
+            { coroutineScope.launch { drawerState.slideTo(DrawerValue.Open) }; Unit }
         }
         val closeHistory: () -> Unit = remember(coroutineScope, drawerState) {
-            { coroutineScope.launch { drawerState.close() }; Unit }
+            { coroutineScope.launch { drawerState.slideTo(DrawerValue.Closed) }; Unit }
         }
         val openTools = remember { { destination = RivetDestination.Tools } }
         val openModels: () -> Unit = {
@@ -222,12 +224,14 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
 
         val closeSidebarThen: (() -> Unit) -> Unit = { action ->
             coroutineScope.launch {
-                drawerState.close()
+                drawerState.slideTo(DrawerValue.Closed)
                 action()
             }
         }
         val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
-        BackHandler(editing || destination != RivetDestination.Chat || browserState.visible || panelOpen) {
+        val canDismissPage = editing || destination != RivetDestination.Chat || browserState.visible || panelOpen
+        val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+        BackHandler(canDismissPage) {
             when {
                 browserState.visible -> chatViewModel.browser.close()
                 editing -> {
@@ -257,7 +261,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         RivetBackdrop {
             if (!browserState.visible) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    Box(Modifier.fillMaxSize().pageEntry(progress, offset)) {
+                    Box(Modifier.fillMaxSize().dismissOnEscape(canDismissPage) { backDispatcher?.onBackPressed() }.pageEntry(progress, offset)) {
                         if (editing) {
                             saveableStates.SaveableStateProvider("provider_editor") {
                                 ProviderEditor(viewModel = providersViewModel, onDone = { editing = false })
@@ -346,9 +350,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 )
                             }
                             RivetDestination.Projects -> saveableStates.SaveableStateProvider("projects") {
-                                ProjectsScreen(chatViewModel, providerIds = providerList.configs
-                                    .filter { it.type != ProviderType.Local && it.type != ProviderType.ChatGptPlan }
-                                    .map { it.id }, onBack = { destination = RivetDestination.Chat })
+                                ProjectsScreen(chatViewModel, onBack = { destination = RivetDestination.Chat })
                             }
                             RivetDestination.Models -> saveableStates.SaveableStateProvider("models") {
                                 Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
@@ -469,4 +471,12 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
         }
     }
+}
+
+@Suppress("DEPRECATION")
+private suspend fun DrawerState.slideTo(value: DrawerValue) {
+    val reducedMotion = kotlinx.coroutines.currentCoroutineContext()[androidx.compose.ui.MotionDurationScale]
+        ?.scaleFactor == 0f
+    if (reducedMotion) snapTo(value)
+    else animateTo(value, androidx.compose.animation.core.tween(RivetMotion.DRAWER_MS, easing = RivetMotion.easing))
 }

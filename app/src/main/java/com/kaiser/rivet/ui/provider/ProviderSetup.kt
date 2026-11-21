@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.DisclosureBody
+import com.kaiser.rivet.ui.UtilityRow
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
@@ -61,8 +63,8 @@ internal fun ProviderSetup(providersViewModel: ProvidersViewModel, onOpenModels:
         onDispose { session?.cancel() }
     }
 
-    if (showActions) FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-        TextButton(onClick = {
+    if (showActions) {
+        UtilityRow(R.drawable.ic_profile, stringResource(R.string.continue_with_chatgpt), onClick = {
             // Cancel any in-flight attempt first: no orphaned
             // loopback listeners from repeated taps.
             chatGptSession?.cancel()
@@ -116,11 +118,11 @@ internal fun ProviderSetup(providersViewModel: ProvidersViewModel, onOpenModels:
                     if (chatGptSession === session) chatGptSession = null
                 }
             }
-        }) { Text(stringResource(R.string.continue_with_chatgpt)) }
-        TextButton(onClick = { showStartFree = true }) { Text(stringResource(R.string.start_free)) }
-        TextButton(onClick = onOpenModels) { Text("Start offline") }
+        })
+        UtilityRow(R.drawable.ic_web, stringResource(R.string.start_free), onClick = { showStartFree = true })
+        UtilityRow(R.drawable.ic_models, "Start offline", onClick = onOpenModels)
     }
-    if (showStartFree) {
+    DisclosureBody(showStartFree) {
         Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.start_free_title), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.start_free_body), style = MaterialTheme.typography.bodyMedium)
@@ -179,7 +181,7 @@ internal fun ProviderSetup(providersViewModel: ProvidersViewModel, onOpenModels:
             TextButton(onClick = { showChatGptSignInError = null }) { Text(stringResource(R.string.close)) }
         }
     }
-    if (showChatGptIntro) {
+    DisclosureBody(showChatGptIntro) {
         Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(stringResource(R.string.chatgpt_plan_intro_title), style = MaterialTheme.typography.titleMedium)
             Text(stringResource(R.string.chatgpt_plan_intro_body))

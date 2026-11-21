@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.browser
 
+import com.kaiser.rivet.ui.dismissOnEscape
+import com.kaiser.rivet.ui.UtilityColumns
 import android.app.Activity
 import android.content.Context
 import android.content.Intent
@@ -142,43 +144,51 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
     BackHandler(enabled = state.visible && pageOptions) { pageOptions = false }
     val context = LocalContext.current
 
-    Column(modifier.fillMaxSize().then(
+    Column(modifier.fillMaxSize()
+        .dismissOnEscape(state.visible) { if (pageOptions) pageOptions = false else onClose() }.then(
         if (state.visible) Modifier.background(MaterialTheme.colorScheme.surface).navigationBarsPadding()
         else Modifier)) {
         if (state.visible && !pageOptions) {
             Column(Modifier.fillMaxWidth().statusBarsPadding()) {
-                BrowserTabStrip(
-                    windows = state.windows,
-                    onSelect = session::selectWindow,
-                    onClose = session::closeWindow,
-                    onNewTab = session::newWindow,
-                    onBack = onClose,
-                )
-                BrowserToolbar(
-                    address = address,
-                    focused = isUrlFocused,
-                    onAddressChange = { address = it },
-                    onFocusChange = { isUrlFocused = it },
-                    focusRequester = focusRequester,
-                    onSelectAddress = {
-                        address = address.copy(selection = TextRange(0, address.text.length), composition = null)
-                        focusRequester.requestFocus()
-                        keyboardController?.show()
+                UtilityColumns(
+                    stackedGap = 0.dp,
+                    leading = {
+                        BrowserTabStrip(
+                            windows = state.windows,
+                            onSelect = session::selectWindow,
+                            onClose = session::closeWindow,
+                            onNewTab = session::newWindow,
+                            onBack = onClose,
+                        )
                     },
-                    onSubmit = submitUrl,
-                    onBack = { scope.launch { runCatching { session.back() } } },
-                    onForward = { scope.launch { runCatching { session.forward() } } },
-                    onReload = { scope.launch { runCatching { session.reload() } } },
-                    onCloseTab = state.activeWindowId?.let { id -> { session.closeWindow(id) } },
-                    onShare = state.url.takeUnless { it.isBlank() || it == "about:blank" }?.let { url ->
-                        {
-                            val send = Intent(Intent.ACTION_SEND).setType("text/plain")
-                                .putExtra(Intent.EXTRA_TEXT, url)
-                            runCatching { context.startActivity(Intent.createChooser(send, null)) }
-                            Unit
-                        }
+                    trailing = {
+                        BrowserToolbar(
+                            address = address,
+                            focused = isUrlFocused,
+                            onAddressChange = { address = it },
+                            onFocusChange = { isUrlFocused = it },
+                            focusRequester = focusRequester,
+                            onSelectAddress = {
+                                address = address.copy(selection = TextRange(0, address.text.length), composition = null)
+                                focusRequester.requestFocus()
+                                keyboardController?.show()
+                            },
+                            onSubmit = submitUrl,
+                            onBack = { scope.launch { runCatching { session.back() } } },
+                            onForward = { scope.launch { runCatching { session.forward() } } },
+                            onReload = { scope.launch { runCatching { session.reload() } } },
+                            onCloseTab = state.activeWindowId?.let { id -> { session.closeWindow(id) } },
+                            onShare = state.url.takeUnless { it.isBlank() || it == "about:blank" }?.let { url ->
+                                {
+                                    val send = Intent(Intent.ACTION_SEND).setType("text/plain")
+                                        .putExtra(Intent.EXTRA_TEXT, url)
+                                    runCatching { context.startActivity(Intent.createChooser(send, null)) }
+                                    Unit
+                                }
+                            },
+                            onOptions = { clearUrlFocus(); pageOptions = true },
+                        )
                     },
-                    onOptions = { clearUrlFocus(); pageOptions = true },
                 )
                 state.handoff?.let {
                     BrowserNotice(MaterialTheme.colorScheme.errorContainer) {

@@ -22,12 +22,22 @@ internal object WorkspaceFilePreview {
     private const val IMAGE_BYTES = 8L * 1024 * 1024
     private const val IMAGE_SIDE = 1600
 
+    suspend fun isFile(workspace: SafWorkspace, relative: String): Boolean = try {
+        statFile(workspace, presentablePath(relative)) != null
+    } catch (cancelled: CancellationException) {
+        throw cancelled
+    } catch (_: Exception) {
+        false
+    }
+
+    private suspend fun statFile(workspace: SafWorkspace, path: WorkspacePath): WorkspaceEntry? =
+        workspace.stat(path).takeUnless { it.directory }
+
     suspend fun read(workspace: SafWorkspace, relative: String): FilePreviewResult {
         val path = presentablePath(relative)
         val files = SafAgentWorkspace(workspace)
         return try {
-            val entry = workspace.stat(path)
-            if (entry.directory) return FilePreviewResult.Missing
+            val entry = statFile(workspace, path) ?: return FilePreviewResult.Missing
             val type = previewType(entry.mimeType, path.name)
             when (type) {
                 "Markdown", "Text" -> {

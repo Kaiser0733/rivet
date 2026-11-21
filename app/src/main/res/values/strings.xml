@@ -109,7 +109,18 @@
     <string name="support_heading">Support Rivet</string>
     <string name="support_body">Rivet is free and built by a two-person indie studio. If it saves you time, you can support the next build.</string>
     <string name="support_coffee">Buy us a coffee</string>
-    <string name="support_upi_label">UPI</string>
-    <string name="support_upi_copied">UPI ID copied.</string>
     <string name="support_no_browser">No browser is available to open this link.</string>
+    <string name="sidebar_just_now">Just now</string>
+    <plurals name="sidebar_minutes_ago">
+        <item quantity="one">%d minute ago</item>
+        <item quantity="other">%d minutes ago</item>
+    </plurals>
+    <plurals name="sidebar_hours_ago">
+        <item quantity="one">%d hour ago</item>
+        <item quantity="other">%d hours ago</item>
+    </plurals>
+    <plurals name="sidebar_days_ago">
+        <item quantity="one">%d day ago</item>
+        <item quantity="other">%d days ago</item>
+    </plurals>
 </resources>

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.storage
 
+import com.kaiser.rivet.agent.isTranscriptEvent
 import android.content.ContentValues
 import android.content.Context
 import android.database.Cursor
@@ -45,6 +46,7 @@ data class CodingSessionHeader(
     val updatedAt: Long,
     val interrupted: Boolean,
     val pinned: Boolean,
+    val hasMessages: Boolean = true,
 )
 
 data class SessionUsage(
@@ -232,13 +234,24 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     suspend fun list(): List<CodingSessionHeader> = onDatabase { db ->
-        db.rawQuery("SELECT id,title,workspace_id,created_at,updated_at,interrupted,pinned " +
-            "FROM sessions ORDER BY pinned DESC, updated_at DESC", null)
-            .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.header()) } }
+        db.rawQuery(
+            """
+            SELECT id,title,workspace_id,created_at,updated_at,interrupted,pinned,
+                EXISTS(SELECT 1 FROM events WHERE session_id=sessions.id
+                    AND payload NOT GLOB '{"role":"context"*')
+            FROM sessions ORDER BY pinned DESC, updated_at DESC
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(cursor.header().copy(hasMessages = cursor.getInt(7) != 0))
+            }
+        }
     }
 
     suspend fun create(
         workspaceId: String?, starterTitle: String? = null, starterBrief: AgentMessage? = null,
+        reuseEmpty: Boolean = false,
     ): AgentSession = onDatabase { db ->
         require((starterTitle == null) == (starterBrief == null))
         if (starterBrief != null) {
@@ -246,6 +259,20 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             require(row != null && row.kind == StarterBrief.KIND && row.workspaceId == workspaceId)
         }
         val title = starterTitle ?: "New session"
+        if (reuseEmpty && starterBrief == null) {
+            val binding = if (workspaceId == null) "workspace_id IS NULL" else "workspace_id=?"
+            val empty = db.rawQuery(
+                "SELECT id FROM sessions WHERE $binding AND title='New session' " +
+                    "AND NOT EXISTS(SELECT 1 FROM events WHERE session_id=sessions.id) " +
+                    "ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+                workspaceId?.let { arrayOf(it) },
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+            if (empty != null) {
+                setActive(db, empty)
+                summaryBytes = 0
+                return@onDatabase AgentSession(emptyList(), id = empty, title = title, workspaceId = workspaceId)
+            }
+        }
         val id = UUID.randomUUID().toString()
         db.beginTransaction()
         try {
@@ -418,7 +445,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                     read++
                     before = cursor.getLong(0)
                     val message = decode(cursor.getString(1))
-                    if (message.role != AgentRole.Context && message.internalContext == null) {
+                    if (message.isTranscriptEvent()) {
                         visible += message
                     }
                 }
@@ -537,6 +564,10 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 put("total_tokens", usage?.totalTokens)
                 put("base_count", requestMessages.size)
                 put("base_prefix_hash", hashMessages(requestMessages))
+                if (contextInput != null && !turnId.startsWith("title-") && !turnId.startsWith("compaction-")) {
+                    put("base_estimated_tokens", ContextBudget.estimateRequestTokens(
+                        AgentRequest(model, requestMessages, system, reasoning, tools)))
+                }
                 put("system_hash", requestEnvironmentHash(endpoint, system, tools, reasoning))
                 put("active_generation", generation)
                 put("created_at", System.currentTimeMillis())
@@ -579,6 +610,25 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             }
         }
         ContextEstimate(estimated, "estimated")
+    }
+
+    suspend fun contextMeterTokens(sessionId: String, providerId: String, endpoint: String,
+                                   request: AgentRequest): Long = onDatabase { db ->
+        val estimated = ContextBudget.estimateRequestTokens(request)
+        val environment = requestEnvironmentHash(endpoint, request.system, request.tools, request.reasoning)
+        db.rawQuery(
+            """
+            SELECT context_input_tokens,base_estimated_tokens FROM usage
+            WHERE session_id=? AND provider_id=? AND model=? AND system_hash=? AND source='reported'
+              AND context_input_tokens > 0 AND base_estimated_tokens IS NOT NULL
+              AND turn_id NOT LIKE 'compaction-%' AND turn_id NOT LIKE 'title-%' AND turn_id NOT LIKE 'worker-%'
+            ORDER BY id DESC LIMIT 1
+            """.trimIndent(),
+            arrayOf(sessionId, providerId, request.model, environment),
+        ).use { cursor ->
+            if (cursor.moveToFirst()) repriceContextUsage(cursor.getLong(0), cursor.getLong(1), estimated)
+            else estimated
+        }
     }
 
     suspend fun usage(sessionId: String): SessionUsage = onDatabase { db ->
@@ -1062,7 +1112,7 @@ internal object InterruptedTurnRecovery {
     }
 }
 
-private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 6) {
+private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 7) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL DEFAULT '', active_generation INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL)")
@@ -1070,6 +1120,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
         db.execSQL("CREATE TABLE metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)")
         createUsage(db)
         addContextUsageColumns(db)
+        addMeterUsageColumn(db)
         createCompaction(db)
         addProjectionHashes(db)
         createContextAttempts(db)
@@ -1081,7 +1132,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 1 || newVersion != 6) throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
+        if (oldVersion < 1 || newVersion != 7) throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
         if (oldVersion == 1) createUsage(db)
         if (oldVersion <= 2) {
             db.execSQL("ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
@@ -1103,6 +1154,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
             createContextAttempts(db)
         }
         if (oldVersion <= 5) db.execSQL("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
+        if (oldVersion <= 6) addMeterUsageColumn(db)
     }
 
     private fun createUsage(db: SQLiteDatabase) {
@@ -1114,6 +1166,10 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
         db.execSQL("ALTER TABLE usage ADD COLUMN cache_creation_tokens INTEGER")
         db.execSQL("ALTER TABLE usage ADD COLUMN context_input_tokens INTEGER")
         db.execSQL("ALTER TABLE usage ADD COLUMN base_prefix_hash TEXT")
+    }
+
+    private fun addMeterUsageColumn(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE usage ADD COLUMN base_estimated_tokens INTEGER")
     }
 
     private fun createCompaction(db: SQLiteDatabase) {
