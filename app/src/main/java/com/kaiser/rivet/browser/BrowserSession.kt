@@ -63,6 +63,7 @@ data class BrowserWindowSummary(
     val fidelity: BrowserFidelity,
     val active: Boolean,
     val thumbnailFile: String? = null,
+    val favicon: android.graphics.Bitmap? = null,
 )
 
 data class BrowserHandoffState(val url: String, val reason: String)
@@ -265,6 +266,7 @@ class BrowserSession(
     private val windows = linkedMapOf<String, BrowserSnapshot>().apply {
         snapshots.loadAll().forEach { put(it.id, it) }
     }
+    private val tabIcons = mutableMapOf<String, Pair<String, android.graphics.Bitmap>>()
     private var activeWindowId: String? = null
     private var reader: ReaderDocument? = null
     private var readerReloaded = false
@@ -2451,9 +2453,14 @@ class BrowserSession(
         return result
     }
 
-    private fun windowSummaries(): List<BrowserWindowSummary> = windows.values.map {
-        BrowserWindowSummary(it.id, it.title.ifBlank { it.currentUrl ?: "Untitled" },
-            it.currentUrl.orEmpty(), it.fidelity, it.id == activeWindowId, it.thumbnailFile)
+    private fun windowSummaries(): List<BrowserWindowSummary> {
+        tabIcons.keys.retainAll(windows.keys)
+        return windows.values.map {
+            val url = it.currentUrl.orEmpty()
+            val icon = tabIcons[it.id]?.takeIf { (loaded, _) -> loaded == url }?.second
+            BrowserWindowSummary(it.id, it.title.ifBlank { it.currentUrl ?: "Untitled" },
+                url, it.fidelity, it.id == activeWindowId, it.thumbnailFile, icon)
+        }
     }
 
     private fun recordVisit(url: String, preview: Boolean = false, publish: Boolean = true) {
@@ -2522,12 +2529,18 @@ class BrowserSession(
             activeTitle = view.title.orEmpty()
             if (lastMainHttpStatus == null) lastMainHttpStatus = 200
             recordVisit(actual)
-            updateActiveWindow(actual, activeTitle)
+            updateActiveWindow(actual, activeTitle, publish = false)
+            activeWindowId?.let { id ->
+                val favicon = view.favicon
+                if (favicon != null && !favicon.isRecycled && actual != "about:blank") {
+                    tabIcons[id] = actual to android.graphics.Bitmap.createScaledBitmap(favicon, 32, 32, true)
+                } else tabIcons.remove(id)
+            }
             pageFinished?.complete(Unit)
             pageFinished = null
             _state.update { it.copy(url = actual, title = activeTitle,
                 mode = BrowserMode.Renderer, rendererVisible = true, pageReady = true,
-                fidelity = BrowserFidelity.Reloaded) }
+                fidelity = BrowserFidelity.Reloaded, windows = windowSummaries(), activeWindowId = activeWindowId) }
             refreshBudget()
             schedulePostLoadBudgetChecks()
             val pending = pendingSnapshotRestore?.takeIf { (windowId, _) -> windowId == activeWindowId }?.second

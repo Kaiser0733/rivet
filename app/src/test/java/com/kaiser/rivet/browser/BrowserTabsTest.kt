@@ -4,7 +4,6 @@ import com.kaiser.rivet.ui.browser.BrowserTabs
 import com.kaiser.rivet.ui.browser.BrowserWindowInfo
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
-import org.junit.Assert.assertNull
 import org.junit.Test
 
 class BrowserTabsTest {
@@ -21,9 +20,12 @@ class BrowserTabsTest {
         assertEquals(listOf(false, true), chips.map { it.active })
     }
 
-    @Test fun onlyTheActiveWindowIsTheStripCloseTarget() {
-        assertEquals("b", BrowserTabs.activeCloseTarget(windows))
-        assertNull(BrowserTabs.activeCloseTarget(windows.map { it.copy(active = false) }))
+    @Test fun chromeShowsDomainsAndFriendlyBlankTabs() {
+        assertEquals("docs.example.com", BrowserTabs.addressLabel("https://docs.example.com/api?q=x"))
+        assertEquals("Web address", BrowserTabs.addressLabel("about:blank"))
+        assertEquals("New tab", BrowserTabs.tabTitle("about:blank", "about:blank"))
+        assertEquals("Docs", BrowserTabs.tabTitle("Docs", "https://docs.example.com/api"))
+        assertEquals("docs.example.com", BrowserTabs.tabTitle("", "https://docs.example.com/api"))
     }
 
     @Test fun blankUrlFallsBackToANeutralTitle() {

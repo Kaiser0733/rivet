@@ -57,7 +57,7 @@ class SoulSurfaceTest(unittest.TestCase):
             ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', 'SectionHeading("Share to Rivet")'),
             ("provider/SettingsScreen.kt", 'SectionHeading("Screen capture")', "Rivet asks before each capture. After you allow it, tap Capture now in the notification."),
             ("workspace/ProjectsScreen.kt", 'FolderHeading("Starters")', "Choose a starter and an empty folder for its files."),
-            ("browser/BrowserScreen.kt", 'Text(', "Enter a web address, then tap Go."),
+            ("browser/BrowserScreen.kt", 'Text(', "Enter a web address to get started."),
             ("chat/ReplayExportSheet.kt", 'busy = true', 'feedback = "Creating your replay…"'),
         )
         for path, anchor, expected in cases:

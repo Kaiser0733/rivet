@@ -25,6 +25,17 @@ data class WindowCloseTarget(
 
 /** Pure tab-strip mapping and close targeting. */
 object BrowserTabs {
+    fun addressLabel(url: String): String {
+        if (url.isBlank() || url == "about:blank") return "Web address"
+        return runCatching { java.net.URI(url).host }.getOrNull() ?: url
+    }
+
+    fun tabTitle(title: String, url: String): String = when {
+        url == "about:blank" -> "New tab"
+        title.isBlank() || title == url -> if (url.isBlank()) "New tab" else addressLabel(url)
+        else -> title
+    }
+
     fun title(title: String, url: String): String {
         if (title.isNotBlank()) return title
         val host = url.substringAfter("://", "").substringBefore('/').substringBefore('?')
@@ -35,10 +46,6 @@ object BrowserTabs {
         windows.map { window ->
             BrowserTabChip(window.id, title(window.title, window.url), window.active)
         }
-
-    /** Only the active chip owns the strip's close X. */
-    fun activeCloseTarget(windows: List<BrowserWindowInfo>): String? =
-        windows.firstOrNull { it.active }?.id
 
     /**
      * State the chrome and renderer must adopt after a close. Closing an inactive

@@ -78,3 +78,14 @@ class RedesignNavigationTest(unittest.TestCase):
         header = tools.split("commandFirstLine(process.label)", 1)[1].split("if (expanded)", 1)[0]
         self.assertIn("maxLines = 1", header)
         self.assertIn("TextOverflow.Ellipsis", header)
+
+    def test_browser_uses_two_chrome_rows_and_opens_tab_actions_from_there(self):
+        browser = (UI / "browser/BrowserScreen.kt").read_text()
+        self.assertIn("onNewTab = session::newWindow", browser)
+        self.assertIn("onClose(window.id)", browser)
+        self.assertIn("window.favicon", browser)
+        toolbar = browser.split("private fun BrowserToolbar(", 1)[1].split("@Composable", 1)[0]
+        for value in ('"Page back"', '"Page forward"', '"Reload page"', '"Browser menu"', '"Share link"'):
+            self.assertIn(value, toolbar)
+        self.assertNotIn("BrowserWindowCard(", browser)
+        self.assertNotIn("AlertDialog(", browser)
