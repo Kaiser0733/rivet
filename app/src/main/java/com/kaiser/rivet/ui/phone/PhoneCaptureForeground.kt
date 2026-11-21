@@ -22,3 +22,11 @@ internal fun phoneShotFailureCode(
     timedOut -> PHONE_SHOT_NEEDS_FOREGROUND
     else -> null
 }
+
+/**
+ * A chained tool can leave Chrome in front, and phone_shot then waits for a Rivet
+ * that nobody is going to bring back. Raise Rivet once; if it is still not resumed
+ * after that, the existing bounded wait and its honest error still apply.
+ */
+internal fun shouldRaiseRivet(resumed: Boolean, alreadyRaised: Boolean): Boolean =
+    !resumed && !alreadyRaised

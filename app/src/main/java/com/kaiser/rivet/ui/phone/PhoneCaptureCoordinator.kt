@@ -22,6 +22,14 @@ internal class PhoneCaptureCoordinator(context: Context) {
     var consentLauncher: ((Intent) -> Boolean)? = null
     var rivetVisible = false
     var rivetResumed = false
+    // Overridable so a test can prove the raise happens once without starting an activity.
+    var bringToFront: () -> Unit = {
+        runCatching {
+            app.startActivity(Intent(app, com.kaiser.rivet.MainActivity::class.java).addFlags(
+                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
+        }
+        Unit
+    }
 
     private var active: Capture? = null
     private var awaitingActivityResult = false
@@ -70,9 +78,14 @@ internal class PhoneCaptureCoordinator(context: Context) {
     ): String? {
         var accepted = false
         var refusedWhileResumed = false
+        var raised = false
         request.onStatus(PHONE_SHOT_WAITING_FOREGROUND)
         val completed = withTimeoutOrNull(PHONE_SHOT_FOREGROUND_WAIT_MS) {
             while (true) {
+                if (shouldRaiseRivet(rivetResumed, raised)) {
+                    raised = true
+                    bringToFront()
+                }
                 if (rivetResumed) {
                     if (launcher(intent)) {
                         accepted = true
