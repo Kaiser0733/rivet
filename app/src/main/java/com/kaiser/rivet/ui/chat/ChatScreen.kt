@@ -810,6 +810,11 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     if (selectedWorkerId != null && openWorker != null) {
         WorkerSheet(
             worker = openWorker,
+            workers = workerSheetRows(subagents),
+            onSelect = { id ->
+                selectedWorkerId = id
+                chatViewModel.openWorker(id)
+            },
             messages = workerSheet.messages,
             loading = workerSheet.loading,
             error = workerSheet.error,

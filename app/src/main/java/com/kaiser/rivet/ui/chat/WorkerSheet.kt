@@ -3,6 +3,8 @@ package com.kaiser.rivet.ui.chat
 import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
@@ -15,6 +17,7 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.Text
+import androidx.compose.material3.AssistChip
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
@@ -25,10 +28,12 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.subagent.WorkerRecord
 
-@OptIn(ExperimentalMaterial3Api::class)
+@OptIn(ExperimentalMaterial3Api::class, ExperimentalLayoutApi::class)
 @Composable
 internal fun WorkerSheet(
     worker: WorkerRecord,
+    workers: List<WorkerRecord>,
+    onSelect: (String) -> Unit,
     messages: List<AgentMessage>,
     loading: Boolean,
     error: String? = null,
@@ -45,6 +50,14 @@ internal fun WorkerSheet(
             Text("${worker.modelLabel} · ${workerStateLabel(worker)}",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                workers.forEach { entry ->
+                    AssistChip(onClick = { onSelect(entry.id) }, label = {
+                        Text(if (entry.id == worker.id) entry.job
+                            else "${entry.job} · ${workerSheetState(entry)}")
+                    })
+                }
+            }
             HorizontalDivider(Modifier.padding(vertical = 8.dp),
                 color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             if (loading) {
