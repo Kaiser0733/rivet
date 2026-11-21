@@ -45,6 +45,6 @@ class SoulPaletteTest(unittest.TestCase):
 
     def test_chat_uses_canvas_and_outlined_actions_use_the_interactive_edge(self):
         visuals = (UI / "RivetVisuals.kt").read_text()
-        backdrop = visuals.split("fun RivetBackdrop")[1].split("@Composable")[0]
+        backdrop = visuals.split("fun RivetBackdrop")[1].split("\n@Composable")[0]
         self.assertIn(".background(MaterialTheme.colorScheme.background)", backdrop)
         self.assertIn("border = BorderStroke(1.dp, MaterialTheme.colorScheme.outline", visuals)
