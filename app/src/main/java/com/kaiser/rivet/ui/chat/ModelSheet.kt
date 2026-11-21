@@ -1,5 +1,11 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.provider.ReasoningLevel
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.layout.width
+import androidx.compose.foundation.layout.height
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.foundation.focusable
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
@@ -8,8 +14,6 @@ import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
 import com.kaiser.rivet.ui.RivetMotion
-import com.kaiser.rivet.ui.EffortMotion
-import com.kaiser.rivet.ui.effortMotion
 import com.kaiser.rivet.ui.motionDisabled
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -125,14 +129,14 @@ fun ModelSheet(
         onDismiss()
     }
 
-    var selectionMotion by remember { mutableStateOf<EffortMotion?>(null) }
+    var selectionMotion by remember { mutableStateOf<ReasoningLevel?>(null) }
     val signalProgress = remember { Animatable(0f) }
     val instant = motionDisabled()
     LaunchedEffect(selectionMotion, instant) {
-        selectionMotion?.let { effect ->
+        selectionMotion?.let {
             if (!instant) {
                 signalProgress.snapTo(0f)
-                signalProgress.animateTo(1f, tween(effect.duration, easing = RivetMotion.easing))
+                signalProgress.animateTo(1f, tween(RivetMotion.EFFORT_MS, easing = RivetMotion.easing))
             }
             close()
         }
@@ -312,24 +316,24 @@ fun ModelSheet(
                         PaneHeader(stringResource(R.string.provider_reasoning_label)) {
                             pane = PickerPane.Root
                         }
-                        Box(Modifier.fillMaxWidth()) {
-                            Column {
-                                reasoningOptions.forEach { level ->
-                                    SelectableRow(
-                                        title = stringResource(level.labelRes()),
-                                        selected = editorConfig.reasoning == level,
-                                    ) {
-                                        if (selectionMotion == null) {
-                                            reasoningTouched = true
-                                            providersViewModel.updateConfig { it.copy(reasoning = level) }
-                                            val effect = effortMotion(level)
-                                            if (instant || effect == null) close() else selectionMotion = effect
+                        Column(Modifier.verticalScroll(rememberScrollState())) {
+                            reasoningOptions.forEach { level ->
+                                SelectableRow(
+                                    title = stringResource(level.labelRes()),
+                                    selected = editorConfig.reasoning == level,
+                                    signal = {
+                                        if (selectionMotion == level && !instant) {
+                                            ReasoningSignal(level, signalProgress.value, Modifier.matchParentSize())
                                         }
+                                    },
+                                ) {
+                                    if (selectionMotion == null) {
+                                        reasoningTouched = true
+                                        providersViewModel.updateConfig { it.copy(reasoning = level) }
+                                        if (instant || effortGraduations(level) == 0) close()
+                                        else selectionMotion = level
                                     }
                                 }
-                            }
-                            selectionMotion?.let {
-                                if (!instant) ReasoningSignal(it, signalProgress.value, Modifier.matchParentSize())
                             }
                         }
                     }
@@ -423,7 +427,12 @@ private fun ProviderJumpRow(name: String, model: String, onClick: () -> Unit) {
 }
 
 @Composable
-private fun SelectableRow(title: String, selected: Boolean, onClick: () -> Unit) {
+private fun SelectableRow(
+    title: String,
+    selected: Boolean,
+    signal: @Composable androidx.compose.foundation.layout.BoxScope.() -> Unit,
+    onClick: () -> Unit,
+) {
     Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
         .selectable(selected = selected, role = Role.RadioButton, onClick = onClick)
         .padding(horizontal = 12.dp),
@@ -431,10 +440,13 @@ private fun SelectableRow(title: String, selected: Boolean, onClick: () -> Unit)
         Text(title, style = MaterialTheme.typography.bodyMedium,
             maxLines = 1, overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f))
-        if (selected) {
-            Text("✓", style = MaterialTheme.typography.titleMedium,
-                color = MaterialTheme.colorScheme.primary,
-                modifier = Modifier.padding(start = 8.dp))
+        Box(Modifier.width(RivetMotion.effortSignalWidth).height(RivetMotion.effortSignalHeight)
+            .clipToBounds(), content = signal)
+        Box(Modifier.width(24.dp), contentAlignment = Alignment.CenterEnd) {
+            if (selected) {
+                Icon(painterResource(R.drawable.ic_check), null, Modifier.size(18.dp),
+                    tint = MaterialTheme.colorScheme.primary)
+            }
         }
     }
 }

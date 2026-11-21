@@ -70,3 +70,12 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("copy(hasMessages = cursor.getInt(7) != 0)", storage)
         self.assertIn("reuseEmpty = true", source("chat/ChatViewModel.kt"))
         self.assertIn("session.hasMessages && session.title.contains", source("ui/history/HistoryScreen.kt"))
+
+    def test_reasoning_signal_is_drawn_in_its_own_fixed_row_slot(self):
+        picker = source("ui/chat/ModelSheet.kt")
+        self.assertIn("selectionMotion == level && !instant", picker)
+        self.assertIn("RivetMotion.effortSignalWidth", picker)
+        self.assertIn(".clipToBounds(), content = signal", picker)
+        signal = source("ui/chat/ReasoningSignal.kt")
+        self.assertIn("repeat(count)", signal)
+        self.assertNotIn("EffortPattern", signal)
