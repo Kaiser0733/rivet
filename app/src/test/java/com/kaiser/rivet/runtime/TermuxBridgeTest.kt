@@ -11,7 +11,9 @@ class TermuxBridgeTest {
         assertEquals("/data/data/com.termux/files/usr/bin/bash", intent.path)
         assertEquals(listOf("-c", "git status"), intent.arguments)
         assertEquals("/storage/emulated/0/Project", intent.cwd)
-        assertFalse(intent.background)
+        // Termux 0.118.0 has no RUN_COMMAND_RUNNER extra; this flag is the only way to
+        // reach its app-shell runner, the one runner that captures stdout and stderr.
+        assertTrue(intent.background)
     }
 
     @Test fun rejectsInvalidCommandsAndBoundsTheTimeout() {
@@ -31,5 +33,52 @@ class TermuxBridgeTest {
         assertTrue(wrapped.contains("> \"\$folder/out.txt\" 2>&1"))
         assertTrue(wrapped.contains("code.tmp"))
         assertTrue(wrapped.contains("\"\$folder/code\""))
+    }
+
+    @Test fun successfulResultKeepsStdoutStderrAndExitCode() {
+        val outcome = parseTermuxResult(TermuxResultBundle(
+            err = 0, errmsg = null, stdout = "bridge ok 42\n", stderr = "",
+            exitCode = 0, stdoutOriginalLength = "13", stderrOriginalLength = "0",
+        ))
+        assertEquals("bridge ok 42\n", outcome.stdout)
+        assertEquals(0, outcome.exitCode)
+        assertNull(outcome.error)
+        assertFalse(outcome.truncated)
+    }
+
+    @Test fun stringOriginalLengthsDriveTheTruncationFlag() {
+        // Termux puts these in the bundle as strings; reading them as ints always
+        // produced 0 and a Bundle type warning, so truncation was never reported.
+        val outcome = parseTermuxResult(TermuxResultBundle(
+            err = 0, stdout = "short", exitCode = 0,
+            stdoutOriginalLength = "9000", stderrOriginalLength = "0",
+        ))
+        assertTrue(outcome.truncated)
+    }
+
+    @Test fun termuxReportedFailureKeepsItsOwnMessage() {
+        val outcome = parseTermuxResult(TermuxResultBundle(
+            err = 1, errmsg = "executable not found", stdout = "", stderr = "",
+        ))
+        assertEquals("termux_command_failed", outcome.error)
+        assertEquals("executable not found", outcome.detail)
+    }
+
+    @Test fun policyViolationStillMapsToItsSetupCode() {
+        val outcome = parseTermuxResult(TermuxResultBundle(
+            err = 1, errmsg = "Set allow-external-apps=true in termux.properties", stdout = "",
+        ))
+        assertEquals("termux_external_apps_off", outcome.error)
+    }
+
+    @Test fun missingOriginalLengthsDoNotClaimTruncation() {
+        val outcome = parseTermuxResult(TermuxResultBundle(err = 0, stdout = "full", stderr = "warn"))
+        assertFalse(outcome.truncated)
+    }
+
+    @Test fun errStoredAsTextStillCountsAsAFailure() {
+        val outcome = parseTermuxResult(TermuxResultBundle(err = "1", errmsg = "boom"))
+        assertEquals("termux_command_failed", outcome.error)
+        assertEquals("boom", outcome.detail)
     }
 }

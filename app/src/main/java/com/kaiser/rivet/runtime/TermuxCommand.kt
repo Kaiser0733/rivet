@@ -12,9 +12,12 @@ internal data class TermuxRunCommandIntent(
 internal fun buildRunCommandIntent(command: String, cwd: String): TermuxRunCommandIntent {
     require(command.isNotBlank() && '\u0000' !in command && command.toByteArray(Charsets.UTF_8).size <= 8192)
     require(cwd.length <= 4096 && '\u0000' !in cwd)
+    // Termux only captures stdout/stderr for its background app-shell runner. Before
+    // EXTRA_RUNNER existed (0.118.0 and older) this boolean was the only selector, and
+    // false ran the command in a terminal session that returns no output at all.
     return TermuxRunCommandIntent(
         "com.termux.RUN_COMMAND", "com.termux.app.RunCommandService",
-        TermuxCommand.BASH, listOf("-c", command), cwd, background = false,
+        TermuxCommand.BASH, listOf("-c", command), cwd, background = true,
     )
 }
 

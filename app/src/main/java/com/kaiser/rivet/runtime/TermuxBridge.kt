@@ -86,7 +86,10 @@ internal class TermuxBridge(context: Context) {
     suspend fun test(): String {
         if (!installed()) return requireNotNull(AgentToolError.action("termux_missing"))
         val result = execute(Arguments("echo rivet-ok", "", 10_000), Location(""))
-        return result.error?.let { AgentToolError.action(it) } ?: listOf(result.stdout, result.stderr)
+        return result.error?.let { code ->
+            listOfNotNull(AgentToolError.action(code), result.detail?.takeIf { it.isNotBlank() })
+                .joinToString("\n")
+        } ?: listOf(result.stdout, result.stderr)
             .filter { it.isNotBlank() }.joinToString("\n").trim()
             .ifBlank { "Termux returned no text (exit ${result.exitCode ?: "unknown"})." }
     }
@@ -134,20 +137,23 @@ internal class TermuxBridge(context: Context) {
         val receiver = object : BroadcastReceiver() {
             override fun onReceive(context: Context, intent: Intent) {
                 if (intent.action != action) return
-                val data = intent.getBundleExtra("result") ?: return
-                val error = if (data.getInt("err") != 0) {
-                    if (data.getString("errmsg").orEmpty().contains("allow-external-apps", ignoreCase = true))
-                        "termux_external_apps_off" else "termux_command_failed"
-                } else null
-                val stdout = data.getString("stdout").orEmpty()
-                val stderr = data.getString("stderr").orEmpty()
-                returned.complete(Result(
-                    stdout = stdout, stderr = stderr,
-                    exitCode = data.getInt("exitCode").takeIf { data.containsKey("exitCode") },
-                    truncated = data.getInt("stdout_original_length") > stdout.length ||
-                        data.getInt("stderr_original_length") > stderr.length,
-                    error = error,
-                ))
+                val data = intent.getBundleExtra("result")
+                if (data == null) {
+                    // Termux answered without a result bundle. With a file fallback the
+                    // files are the real result, so keep waiting for them; otherwise say
+                    // so now instead of letting a timeout blur the reason.
+                    if (fallback == null) returned.complete(Result(error = TERMUX_NO_RESULT))
+                    return
+                }
+                returned.complete(parseTermuxResult(TermuxResultBundle(
+                    err = data.get("err"),
+                    errmsg = data.get("errmsg")?.toString(),
+                    stdout = data.get("stdout")?.toString(),
+                    stderr = data.get("stderr")?.toString(),
+                    exitCode = data.get("exitCode"),
+                    stdoutOriginalLength = data.get("stdout_original_length"),
+                    stderrOriginalLength = data.get("stderr_original_length"),
+                )).toResult())
             }
         }
         val mutable = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
@@ -189,7 +195,7 @@ internal class TermuxBridge(context: Context) {
                 }
             }
             result ?: (fallback?.result(null)?.copy(error = "termux_timeout")
-                ?: Result(error = "termux_external_apps_off"))
+                ?: Result(error = "termux_timeout"))
         } catch (_: SecurityException) {
             Result(error = "termux_permission_required")
         } catch (_: IllegalStateException) {
@@ -231,8 +237,14 @@ internal class TermuxBridge(context: Context) {
         val stderr: String = "",
         val exitCode: Int? = null,
         val error: String? = null,
+        val detail: String? = null,
         val outputPath: String? = null,
         val truncated: Boolean = false,
+    )
+
+    private fun TermuxOutcome.toResult() = Result(
+        stdout = stdout, stderr = stderr, exitCode = exitCode, error = error,
+        detail = detail, truncated = truncated,
     )
 
     private fun failure(call: AgentToolCall, code: String) = toolResult(call, Result(error = code))
@@ -245,6 +257,7 @@ internal class TermuxBridge(context: Context) {
                 result.error?.let { code ->
                     put("error", code)
                     AgentToolError.action(code)?.let { put("required_action", it) }
+                    result.detail?.let { put("detail", it.take(400)) }
                 }
                 result.exitCode?.let { put("exit_code", it) }
                 put("stdout", result.stdout.take(limit).dropLastWhile { it.isHighSurrogate() })
