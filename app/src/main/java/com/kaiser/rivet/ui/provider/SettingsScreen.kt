@@ -81,6 +81,7 @@ import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.RivetThemeMode
+import com.kaiser.rivet.ui.RivetLayout
 import com.kaiser.rivet.ui.chat.displaySafeText
 import com.kaiser.rivet.runtime.TermuxBridge
 import com.kaiser.rivet.runtime.TermuxCommand
@@ -355,27 +356,27 @@ private fun SectionList(
     onSelect: (SettingsSection) -> Unit,
     onSendFeedback: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(16.dp)) {
+    Column(Modifier.fillMaxWidth().padding(horizontal = RivetLayout.pageGutter, vertical = RivetLayout.pageGutter),
+        verticalArrangement = Arrangement.spacedBy(RivetLayout.sectionGap)) {
         SettingsGroup {
             SectionListItem(R.drawable.ic_profile, SettingsSection.Providers.title(), providerSummary,
                 { onSelect(SettingsSection.Providers) }, true)
-            SectionListItem(R.drawable.ic_files, SettingsSection.Phone.title(), "",
+            SectionListItem(R.drawable.ic_phone_access, SettingsSection.Phone.title(), "",
                 { onSelect(SettingsSection.Phone) }, false)
         }
         SettingsGroup {
-            SectionListItem(R.drawable.ic_files, SettingsSection.Skills.title(), skillSummary,
+            SectionListItem(R.drawable.ic_skills, SettingsSection.Skills.title(), skillSummary,
                 { onSelect(SettingsSection.Skills) }, true)
-            SectionListItem(R.drawable.ic_history, SettingsSection.Memory.title(), memorySummary,
+            SectionListItem(R.drawable.ic_memory, SettingsSection.Memory.title(), memorySummary,
                 { onSelect(SettingsSection.Memory) }, true)
-            SectionListItem(R.drawable.ic_processes, SettingsSection.Subagents.title(), subagentSummary,
+            SectionListItem(R.drawable.ic_subagents, SettingsSection.Subagents.title(), subagentSummary,
                 { onSelect(SettingsSection.Subagents) }, true)
-            SectionListItem(R.drawable.ic_visibility, SettingsSection.Appearance.title(), themeSummary,
+            SectionListItem(R.drawable.ic_appearance, SettingsSection.Appearance.title(), themeSummary,
                 { onSelect(SettingsSection.Appearance) }, false)
         }
         SettingsGroup {
-            SectionListItem(R.drawable.ic_edit, "Send feedback", "", onSendFeedback, true)
-            SectionListItem(R.drawable.ic_settings, SettingsSection.About.title(), versionSummary,
+            SectionListItem(R.drawable.ic_feedback, "Send feedback", "", onSendFeedback, true)
+            SectionListItem(R.drawable.ic_info, SettingsSection.About.title(), versionSummary,
                 { onSelect(SettingsSection.About) }, false)
         }
     }

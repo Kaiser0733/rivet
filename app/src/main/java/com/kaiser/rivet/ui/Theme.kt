@@ -8,6 +8,8 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.lightColorScheme
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
@@ -32,7 +34,7 @@ private val HighDark = Color(0xFF2D3844)
 private val HighestLight = Color(0xFFE1E8EE)
 private val HighestDark = Color(0xFF35424E)
 
-private val RivetDarkColors = darkColorScheme(
+private val ProtectedDarkColors = darkColorScheme(
     primary = AccentDark,
     onPrimary = BaseDark,
     primaryContainer = HighestDark,
@@ -68,7 +70,7 @@ private val RivetDarkColors = darkColorScheme(
     onErrorContainer = Color(0xFFFFD9DF),
 )
 
-private val RivetLightColors = lightColorScheme(
+private val ProtectedLightColors = lightColorScheme(
     primary = AccentLight,
     onPrimary = BaseLight,
     primaryContainer = HighLight,
@@ -104,16 +106,100 @@ private val RivetLightColors = lightColorScheme(
     onErrorContainer = Color(0xFF4A111A),
 )
 
+private val CanvasLight = Color(0xFFF4F5F3)
+private val PaperLight = Color(0xFFFBFCFA)
+private val InkLight = Color(0xFF182321)
+private val MutedLight = Color(0xFF495C57)
+private val SignalLight = Color(0xFF225F6B)
+private val LayerLight = Color(0xFFE9EDEB)
+private val RaisedLight = Color(0xFFE1E7E4)
+private val TopLight = Color(0xFFD6E0DC)
+
+private val CanvasDark = Color(0xFF1A2020)
+private val PaperDark = Color(0xFF212A29)
+private val InkDark = Color(0xFFF0F5F3)
+private val MutedDark = Color(0xFFBCD0CA)
+private val SignalDark = Color(0xFF91CBD2)
+private val LayerDark = Color(0xFF283230)
+private val RaisedDark = Color(0xFF303D3A)
+private val TopDark = Color(0xFF3A4945)
+
+private val RivetLightColors = ProtectedLightColors.copy(
+    primary = SignalLight,
+    onPrimary = PaperLight,
+    primaryContainer = LayerLight,
+    onPrimaryContainer = InkLight,
+    secondary = MutedLight,
+    onSecondary = PaperLight,
+    secondaryContainer = RaisedLight,
+    onSecondaryContainer = InkLight,
+    tertiary = MutedLight,
+    onTertiary = PaperLight,
+    tertiaryContainer = TopLight,
+    onTertiaryContainer = InkLight,
+    background = CanvasLight,
+    onBackground = InkLight,
+    surface = PaperLight,
+    onSurface = InkLight,
+    surfaceVariant = RaisedLight,
+    onSurfaceVariant = MutedLight,
+    surfaceContainerLowest = CanvasLight,
+    surfaceContainerLow = PaperLight,
+    surfaceContainer = LayerLight,
+    surfaceContainerHigh = RaisedLight,
+    surfaceContainerHighest = TopLight,
+    surfaceTint = SignalLight,
+    outline = Color(0xFF677E77),
+    outlineVariant = Color(0xFFCCD7D2),
+    inverseSurface = InkLight,
+    inverseOnSurface = CanvasLight,
+    inversePrimary = SignalDark,
+    errorContainer = Color(0xFFF7CDD4),
+    onErrorContainer = Color(0xFF4A111A),
+)
+
+private val RivetDarkColors = ProtectedDarkColors.copy(
+    primary = SignalDark,
+    onPrimary = CanvasDark,
+    primaryContainer = LayerDark,
+    onPrimaryContainer = InkDark,
+    secondary = MutedDark,
+    onSecondary = CanvasDark,
+    secondaryContainer = RaisedDark,
+    onSecondaryContainer = InkDark,
+    tertiary = MutedDark,
+    onTertiary = CanvasDark,
+    tertiaryContainer = TopDark,
+    onTertiaryContainer = InkDark,
+    background = CanvasDark,
+    onBackground = InkDark,
+    surface = PaperDark,
+    onSurface = InkDark,
+    surfaceVariant = RaisedDark,
+    onSurfaceVariant = MutedDark,
+    surfaceContainerLowest = CanvasDark,
+    surfaceContainerLow = PaperDark,
+    surfaceContainer = LayerDark,
+    surfaceContainerHigh = RaisedDark,
+    surfaceContainerHighest = TopDark,
+    surfaceTint = SignalDark,
+    outline = Color(0xFF95ADA6),
+    outlineVariant = Color(0xFF3E504B),
+    inverseSurface = InkDark,
+    inverseOnSurface = CanvasDark,
+    inversePrimary = SignalLight,
+    errorContainer = Color(0xFF5A2734),
+    onErrorContainer = Color(0xFFFFD9DF),
+)
+
 internal fun rivetColors(themeMode: RivetThemeMode, dark: Boolean): ColorScheme =
     if (themeMode == RivetThemeMode.Light || (themeMode == RivetThemeMode.System && !dark)) {
-        RivetLightColors
+        ProtectedLightColors
     } else {
-        RivetDarkColors
+        ProtectedDarkColors
     }
 
-// Spec type scale: system sans only (the cursive identity retires with S1), body 15-16sp
-// with generous line heights; mono is reserved for code/command surfaces.
-private val RivetTypography = Typography(
+private val ProtectedTypography = Typography(
     displayLarge = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 40.sp,
         lineHeight = 48.sp, fontWeight = FontWeight.Normal),
     displayMedium = TextStyle(fontFamily = FontFamily.SansSerif, fontSize = 34.sp,
@@ -146,7 +232,7 @@ private val RivetTypography = Typography(
         lineHeight = 16.sp, fontWeight = FontWeight.Medium),
 )
 
-private val RivetShapes = Shapes(
+private val ProtectedShapes = Shapes(
     extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(8.dp),
     small = androidx.compose.foundation.shape.RoundedCornerShape(12.dp),
     medium = androidx.compose.foundation.shape.RoundedCornerShape(16.dp),
@@ -154,15 +240,52 @@ private val RivetShapes = Shapes(
     extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(28.dp),
 )
 
+private val RivetTypography = ProtectedTypography.copy(
+    headlineMedium = ProtectedTypography.headlineMedium.copy(fontSize = 28.sp, lineHeight = 34.sp,
+        fontWeight = FontWeight.SemiBold, letterSpacing = (-0.55).sp),
+    headlineSmall = ProtectedTypography.headlineSmall.copy(fontSize = 24.sp, lineHeight = 31.sp,
+        fontWeight = FontWeight.SemiBold, letterSpacing = (-0.35).sp),
+    titleLarge = ProtectedTypography.titleLarge.copy(fontSize = 20.sp, lineHeight = 28.sp, fontWeight = FontWeight.Medium),
+    titleSmall = ProtectedTypography.titleSmall.copy(fontWeight = FontWeight.SemiBold),
+)
+
+private val RivetShapes = Shapes(
+    extraSmall = androidx.compose.foundation.shape.RoundedCornerShape(5.dp),
+    small = androidx.compose.foundation.shape.RoundedCornerShape(9.dp),
+    medium = androidx.compose.foundation.shape.RoundedCornerShape(14.dp),
+    large = androidx.compose.foundation.shape.RoundedCornerShape(19.dp),
+    extraLarge = androidx.compose.foundation.shape.RoundedCornerShape(25.dp),
+)
+
+internal object RivetLayout {
+    val pageGutter = 20.dp
+    val sectionGap = 16.dp
+    val controlSize = 48.dp
+    val sheetWidth = 320.dp
+}
+
+private val LocalProtectedColors = staticCompositionLocalOf<ColorScheme?> { null }
+
+@Composable
+internal fun ProtectedControls(content: @Composable () -> Unit) {
+    val palette = LocalProtectedColors.current
+    if (palette == null) content() else MaterialTheme(
+        colorScheme = palette,
+        typography = ProtectedTypography,
+        shapes = ProtectedShapes,
+        content = content,
+    )
+}
+
 @Composable
 fun RivetTheme(themeMode: RivetThemeMode = RivetThemeMode.Dark,
                content: @Composable () -> Unit) {
-    MaterialTheme(
-        colorScheme = rivetColors(themeMode, isSystemInDarkTheme()),
-        typography = RivetTypography,
-        shapes = RivetShapes,
-        content = content,
-    )
+    val dark = isSystemInDarkTheme()
+    val legacy = if (themeMode == RivetThemeMode.Light ||
+        (themeMode == RivetThemeMode.System && !dark)) ProtectedLightColors else ProtectedDarkColors
+    CompositionLocalProvider(LocalProtectedColors provides legacy) {
+        MaterialTheme(rivetColors(themeMode, dark), RivetTypography, RivetShapes, content)
+    }
 }
 
 internal object RivetMotion {
@@ -172,6 +295,7 @@ internal object RivetMotion {
     const val PROCESS_MS = 200
     const val COMPLETE_MS = 660
     val pageShift = 24.dp
+    val pageBackShift = (-16).dp
     val messageRise = 10.dp
     val completionStroke = 3.dp
     val completionLength = 78.dp

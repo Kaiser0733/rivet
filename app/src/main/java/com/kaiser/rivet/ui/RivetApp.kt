@@ -35,7 +35,6 @@ import androidx.compose.runtime.saveable.rememberSaveableStateHolder
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.toArgb
-import androidx.compose.ui.unit.dp
 import androidx.compose.ui.zIndex
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalView
@@ -250,7 +249,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val page = if (browserState.visible) "browser" else if (editing) "provider" else destination.name
         val progress = entryProgress(page, animate = page != RivetDestination.Terminal.name,
             duration = RivetMotion.PAGE_MS)
-        val offset = if (destination == RivetDestination.Chat && !browserState.visible) (-16).dp
+        val offset = if (destination == RivetDestination.Chat && !browserState.visible) RivetMotion.pageBackShift
             else RivetMotion.pageShift
         RivetBackdrop {
             if (!browserState.visible) {
@@ -310,9 +309,11 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 checkpointNotice = conversation.runCheckpointNotice,
                             )
                         }
-                        RivetDestination.Terminal -> TerminalPane(chatViewModel.terminalSession, terminalStateLine,
-                            onClose = { destination = RivetDestination.Tools },
-                            modifier = Modifier.fillMaxSize())
+                        RivetDestination.Terminal -> ProtectedControls {
+                            TerminalPane(chatViewModel.terminalSession, terminalStateLine,
+                                onClose = { destination = RivetDestination.Tools },
+                                modifier = Modifier.fillMaxSize())
+                        }
                         RivetDestination.Workers -> {
                             val workers by chatViewModel.subagents.collectAsState()
                             val sheet by chatViewModel.workerSheet.collectAsState()

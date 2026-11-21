@@ -45,6 +45,7 @@ import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.ui.workspaceFolderPath
+import com.kaiser.rivet.ui.RivetLayout
 
 @OptIn(ExperimentalFoundationApi::class)
 @Composable
@@ -73,7 +74,7 @@ internal fun RivetSidebar(
     }
     val rows = state.sessions.filter { session -> session.title.contains(search.trim(), ignoreCase = true) }
 
-    Column(Modifier.fillMaxSize().imePadding().padding(horizontal = 18.dp)) {
+    Column(Modifier.fillMaxSize().imePadding().padding(horizontal = RivetLayout.pageGutter)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Rivet", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
             IconButton(onClick = {
@@ -93,7 +94,7 @@ internal fun RivetSidebar(
             shape = MaterialTheme.shapes.small) {
             Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                Icon(painterResource(R.drawable.ic_files), null)
+                Icon(painterResource(R.drawable.ic_folder), null)
                 Column(Modifier.weight(1f)) {
                     Text(state.projectName ?: "Choose a working folder",
                         style = MaterialTheme.typography.titleSmall,
@@ -108,8 +109,8 @@ internal fun RivetSidebar(
             }
         }
         Spacer(Modifier.size(8.dp))
-        SidebarLink("Tools", R.drawable.ic_processes, onOpenTools)
-        SidebarLink("Browser", R.drawable.ic_browser, onOpenBrowser)
+        SidebarLink("Tools", R.drawable.ic_tools, onOpenTools)
+        SidebarLink("Browser", R.drawable.ic_web, onOpenBrowser)
         SidebarLink("Models", R.drawable.ic_models, onOpenModels)
         HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
         LazyColumn(Modifier.weight(1f)) {
@@ -185,7 +186,7 @@ internal fun RivetSidebar(
                 Text("New chat")
             }
             Surface(onClick = onOpenSettings,
-                modifier = Modifier.size(48.dp).semantics { contentDescription = "Settings" },
+                modifier = Modifier.size(RivetLayout.controlSize).semantics { contentDescription = "Settings" },
                 shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
                 Box(contentAlignment = Alignment.Center) {
                     if (profileInitial != null) Text(profileInitial, style = MaterialTheme.typography.titleMedium)

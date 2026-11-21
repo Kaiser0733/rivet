@@ -17,15 +17,15 @@ def contrast(first, second):
 
 
 class SoulPaletteTest(unittest.TestCase):
-    def test_workbench_roles_and_readable_pairs_in_both_themes(self):
+    def test_redesign_roles_and_readable_pairs_in_both_themes(self):
         theme = (UI / "Theme.kt").read_text()
         named = dict(re.findall(r"val (\w+) = Color\(0xFF([\dA-F]{6})\)", theme))
         roles = ("background", "surface", "surfaceContainerLow", "surfaceContainer",
                  "surfaceContainerHigh", "surfaceContainerHighest", "onSurface", "onSurfaceVariant",
                  "outlineVariant", "outline", "primary", "onPrimary", "errorContainer", "onErrorContainer")
         for mode, expected in {
-            "Light": "FFFFFF F8FAFC F8FAFC F0F4F7 E8EEF3 E1E8EE 17212B 536271 DCE3E9 6C7A88 3567A7 FFFFFF F7CDD4 4A111A",
-            "Dark": "15191F 1E252D 1E252D 252E38 2D3844 35424E F3F6F9 B8C3CE 39444F 8998A7 89B5F2 15191F 5A2734 FFD9DF",
+            "Light": "F4F5F3 FBFCFA FBFCFA E9EDEB E1E7E4 D6E0DC 182321 495C57 CCD7D2 677E77 225F6B FBFCFA F7CDD4 4A111A",
+            "Dark": "1A2020 212A29 212A29 283230 303D3A 3A4945 F0F5F3 BCD0CA 3E504B 95ADA6 91CBD2 1A2020 5A2734 FFD9DF",
         }.items():
             scheme = theme.split(f"val Rivet{mode}Colors = ")[1].split("\n)")[0]
             values = dict(re.findall(r"^    (\w+) = ([^,]+),", scheme, re.M))

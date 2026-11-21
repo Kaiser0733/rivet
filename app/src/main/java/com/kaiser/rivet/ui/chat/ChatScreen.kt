@@ -53,6 +53,7 @@ import androidx.compose.animation.core.tween
 import androidx.compose.ui.focus.onFocusChanged
 import androidx.compose.ui.graphics.StrokeCap
 import com.kaiser.rivet.ui.RivetMotion
+import com.kaiser.rivet.ui.ProtectedControls
 import com.kaiser.rivet.ui.entryProgress
 import com.kaiser.rivet.ui.messageEntry
 import com.kaiser.rivet.ui.motionDisabled
@@ -253,15 +254,17 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     }
 
     if (modelSheetVisible) {
-        ModelSheet(
-            providersViewModel = providersViewModel,
-            activeId = providers.activeId,
-            onDismiss = { modelSheetVisible = false },
-            onManageProviders = {
-                modelSheetVisible = false
-                onOpenSettings()
-            },
-        )
+        ProtectedControls {
+            ModelSheet(
+                providersViewModel = providersViewModel,
+                activeId = providers.activeId,
+                onDismiss = { modelSheetVisible = false },
+                onManageProviders = {
+                    modelSheetVisible = false
+                    onOpenSettings()
+                },
+            )
+        }
     }
 
     val canStartChat = state.ready && !state.projectLoading && !state.streaming &&
@@ -327,7 +330,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             }
             val modelSelector: (@Composable () -> Unit)? =
                 if (providers.configs.isNotEmpty()) {
-                    { ModelSelector(providersViewModel) { modelSheetVisible = true } }
+                    { ProtectedControls { ModelSelector(providersViewModel) { modelSheetVisible = true } } }
                 } else null
             val sharedContent by chatViewModel.sharedContent.collectAsState()
             InputBar(streaming = state.streaming,
@@ -359,13 +362,13 @@ private fun ChatHeader(title: String, canStartChat: Boolean, onOpenSidebar: () -
     Row(Modifier.fillMaxWidth().padding(horizontal = 8.dp, vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically) {
         IconButton(onClick = onOpenSidebar) {
-            Icon(painterResource(R.drawable.ic_history), "Open sidebar")
+            Icon(painterResource(R.drawable.ic_sidebar), "Open sidebar")
         }
         Text(title, Modifier.weight(1f).padding(horizontal = 8.dp),
             style = MaterialTheme.typography.titleMedium, maxLines = 1,
             overflow = TextOverflow.Ellipsis)
         IconButton(onClick = onNewChat, enabled = canStartChat) {
-            Icon(painterResource(R.drawable.ic_add), stringResource(R.string.new_conversation))
+            Icon(painterResource(R.drawable.ic_new_chat), stringResource(R.string.new_conversation))
         }
     }
 }
@@ -374,7 +377,7 @@ private fun ChatHeader(title: String, canStartChat: Boolean, onOpenSidebar: () -
 private fun WorkingFolder(name: String?, onOpen: () -> Unit) {
     TextButton(onClick = onOpen, modifier = Modifier.widthIn(max = 132.dp),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(horizontal = 8.dp)) {
-        Icon(painterResource(R.drawable.ic_files), null, Modifier.size(17.dp))
+        Icon(painterResource(R.drawable.ic_folder), null, Modifier.size(17.dp))
         Spacer(Modifier.width(5.dp))
         Text(name ?: "Projects", maxLines = 1, overflow = TextOverflow.Ellipsis,
             style = MaterialTheme.typography.labelMedium)
