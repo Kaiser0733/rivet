@@ -75,7 +75,7 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertIn("val (running, finished) = processItems.partition", tools)
         self.assertIn("if (showFinished) items(finished", tools)
         self.assertIn("mutableStateOf(false)", tools.split("private fun ProcessRow(", 1)[1])
-        header = tools.split("commandFirstLine(process.label)", 1)[1].split("if (expanded)", 1)[0]
+        header = tools.split("commandFirstLine(command)", 1)[1].split("if (expanded)", 1)[0]
         self.assertIn("maxLines = 1", header)
         self.assertIn("TextOverflow.Ellipsis", header)
 

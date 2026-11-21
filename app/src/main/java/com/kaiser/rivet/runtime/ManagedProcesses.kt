@@ -47,6 +47,7 @@ data class ManagedProcessInfo(
     val finishedAtMillis: Long? = null,
     val rootPath: String? = null,
     val entryPath: String? = null,
+    val commandForDisplay: String? = null,
 )
 
 /** App-process ownership for live commands, loopback previews, and active agent turns. */
@@ -95,7 +96,7 @@ class ManagedProcesses {
         val entry = Entry(
             ManagedProcessInfo(id, ManagedProcessKind.Command, projectName?.take(100) ?: "Selected project",
                 (safeCommand + suffix).take(MAX_LABEL_CHARS), ManagedProcessStatus.Running,
-                System.currentTimeMillis()),
+                System.currentTimeMillis(), commandForDisplay = CommandRedactor.redact(command, oneLine = false)),
             workspaceIdentity,
             persistent = false,
         ) { job.cancel(CancellationException("Stopped from Processes")) }
@@ -254,7 +255,8 @@ class ManagedProcesses {
             ManagedProcessInfo(id, ManagedProcessKind.Background,
                 projectName?.take(100) ?: "Selected project",
                 redactCommand(label).take(MAX_LABEL_CHARS),
-                ManagedProcessStatus.Starting, System.currentTimeMillis()),
+                ManagedProcessStatus.Starting, System.currentTimeMillis(),
+                commandForDisplay = CommandRedactor.redact(label, oneLine = false)),
             workspaceIdentity,
             persistent = true,
             stop = stop,

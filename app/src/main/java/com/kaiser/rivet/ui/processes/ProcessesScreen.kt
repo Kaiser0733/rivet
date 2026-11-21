@@ -215,7 +215,7 @@ private fun CheckpointList(checkpoints: List<RunCheckpointInfo>, checkpointNotic
     }
 }
 
-internal fun commandFirstLine(command: String): String = command.lineSequence().first().ifBlank { "—" }
+internal fun commandFirstLine(command: String): String = command.lineSequence().first()
 
 @Composable
 private fun ProcessRow(
@@ -227,6 +227,7 @@ private fun ProcessRow(
 ) {
     var expanded by rememberSaveable(process.id) { mutableStateOf(false) }
     val active = process.status in ACTIVE
+    val command = process.commandForDisplay ?: process.label
     val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.small) {
         Column(Modifier.fillMaxWidth().animateContentSize(tween(RivetMotion.PROCESS_MS, easing = RivetMotion.easing))) {
@@ -236,7 +237,7 @@ private fun ProcessRow(
                 .padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
-                Text(commandFirstLine(process.label), Modifier.weight(1f), style = mono,
+                Text(commandFirstLine(command), Modifier.weight(1f), style = mono,
                     maxLines = 1, overflow = TextOverflow.Ellipsis)
                 Icon(painterResource(if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right),
                     null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -244,7 +245,8 @@ private fun ProcessRow(
             if (expanded) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text(process.label, style = mono)
+                    Text(command, Modifier.fillMaxWidth().heightIn(max = 220.dp)
+                        .verticalScroll(rememberScrollState()), style = mono)
                     val elapsed = (process.finishedAtMillis ?: now) - process.startedAtMillis
                     val exit = process.exitCode?.let { " (exit $it)" }.orEmpty()
                     Text("${statusLabel(process.status)} $exit\n${process.projectName} · ${duration(elapsed)}",

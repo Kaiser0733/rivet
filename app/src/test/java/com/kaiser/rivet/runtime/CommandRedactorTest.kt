@@ -1,5 +1,6 @@
 package com.kaiser.rivet.runtime
 
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -23,4 +24,10 @@ class CommandRedactorTest {
         val quotedBearer = CommandRedactor.redact("curl -H 'Authorization: \"Bearer tok_xyz\"' https://api.example.com")
         assertFalse(quotedBearer, quotedBearer.contains("tok_xyz"))
     }
+    @Test fun expandedCommandKeepsLineBoundariesWithoutShowingCredentials() {
+        val command = "printf start\r\nTOKEN=secret-value echo done"
+        assertEquals("printf start  TOKEN=[redacted] echo done", CommandRedactor.redact(command, oneLine = true))
+        assertEquals("printf start\nTOKEN=[redacted] echo done", CommandRedactor.redact(command, oneLine = false))
+    }
+
 }

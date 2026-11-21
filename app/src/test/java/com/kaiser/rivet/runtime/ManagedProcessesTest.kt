@@ -122,6 +122,15 @@ class ManagedProcessesTest {
         assertEquals(second, processes.processes.value.first { it.id == second }.id)
     }
 
+    @Test fun commandDetailKeepsTheCompleteRedactedCommandButTheLabelStaysBounded() {
+        val processes = ManagedProcesses()
+        val longLine = "print " + "x".repeat(ManagedProcesses.MAX_LABEL_CHARS + 10)
+        val id = processes.registerCommand("$longLine\necho token=hide-me", "", "tree", "Project", Job())!!
+        val item = processes.processes.value.single { it.id == id }
+        assertTrue(item.label.length <= ManagedProcesses.MAX_LABEL_CHARS)
+        assertEquals("$longLine\necho token=[redacted]", item.commandForDisplay)
+    }
+
     @Test fun outputAndDisplayMetadataAreBounded() {
         val processes = ManagedProcesses()
         val id = processes.registerCommand(
