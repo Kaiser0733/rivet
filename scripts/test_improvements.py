@@ -36,3 +36,11 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("maxWidth >= RivetLayout.columnBreakpoint", source("ui/UtilitySurfaces.kt"))
         for name in ["provider/SettingsScreen", "workspace/ProjectsScreen", "browser/BrowserScreen", "local/ModelsScreen"]:
             self.assertIn("UtilityColumns(", source(f"ui/{name}.kt"))
+
+    def test_completed_plain_assistant_text_uses_the_unspanned_renderer(self):
+        chat = source("ui/chat/ChatScreen.kt").split("private fun InlineMarkdown", 1)[1]
+        self.assertIn("if (annotated.spanStyles.isEmpty())", chat)
+        self.assertIn("Text(annotated.text, modifier", chat)
+        runs = source("ui/chat/AssistantInlineText.kt")
+        self.assertIn("if (!run.code && !run.bold && !run.italic)", runs)
+        self.assertIn("append(content)", runs)

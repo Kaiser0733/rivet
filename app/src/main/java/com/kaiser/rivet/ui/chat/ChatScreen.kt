@@ -1458,20 +1458,12 @@ private fun InlineMarkdown(text: String, modifier: Modifier = Modifier, style: T
     val runs = remember(text) { parseInlineMarkdown(text) }
     val color = MaterialTheme.colorScheme.onBackground
     val codeBackground = MaterialTheme.colorScheme.surfaceContainer
-    val annotated = remember(runs, color, codeBackground, textStyle) {
-        buildAnnotatedString {
-            runs.forEach { run ->
-                withStyle(SpanStyle(
-                    color = color,
-                    fontFamily = if (run.code) FontFamily.Monospace else null,
-                    fontWeight = if (run.bold) FontWeight.SemiBold else textStyle.fontWeight,
-                    fontStyle = if (run.italic) FontStyle.Italic else textStyle.fontStyle,
-                    background = if (run.code) codeBackground else Color.Transparent,
-                )) { append(displaySafeText(run.text)) }
-            }
-        }
+    val annotated = remember(runs, codeBackground) { assistantInlineText(runs, codeBackground) }
+    if (annotated.spanStyles.isEmpty()) {
+        Text(annotated.text, modifier = modifier, style = textStyle.copy(color = color))
+    } else {
+        Text(annotated, modifier = modifier, style = textStyle.copy(color = color))
     }
-    Text(annotated, modifier = modifier, style = textStyle.copy(color = color))
 }
 
 internal fun approvalTitle(request: AgentApprovalRequest): String = when {
