@@ -578,6 +578,16 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         }
                         DropdownMenu(expanded = feedbackMenu,
                             onDismissRequest = { feedbackMenu = false }) {
+                            DropdownMenuItem(text = { Text(CHOOSE_DIFFERENT_PROJECT_LABEL) },
+                                enabled = canChooseProject, onClick = {
+                                    feedbackMenu = false
+                                    chooseProject()
+                                })
+                            DropdownMenuItem(text = { Text(STARTER_CHIP_LABEL) },
+                                enabled = canChooseProject, onClick = {
+                                    feedbackMenu = false
+                                    showStarterGallery = true
+                                })
                             DropdownMenuItem(text = { Text("Send feedback") }, onClick = {
                                 feedbackMenu = false
                                 onSendFeedback()
@@ -738,9 +748,13 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         "Rivet is restoring access to the folder you selected.",
                         null, {}, Modifier.weight(1f))
                 } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null && !state.interruptedTurn && state.goalLine == null) {
+                    val ready = readyEntryPoints(projectBound = state.projectName != null)
                     EmptyState(RivetDoodle.Ready, "Tell Rivet what you want to change.",
                         "Rivet can inspect this project and will ask before changing files.",
-                        null, {}, Modifier.weight(1f))
+                        null, {}, Modifier.weight(1f),
+                        secondaryAction = ready?.chooseProjectLabel,
+                        onSecondaryAction = ::chooseProject,
+                        starterAction = if (ready?.showStarters == true) ({ showStarterGallery = true }) else null)
                 } else {
                     val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
                         state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
