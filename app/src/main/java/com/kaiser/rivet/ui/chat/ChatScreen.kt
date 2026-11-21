@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.chat
 
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.runtime.rememberCoroutineScope
 import com.kaiser.rivet.ui.RivetLayout
 import com.kaiser.rivet.chat.ContextMeterReading
 import androidx.compose.ui.input.key.Key
@@ -298,6 +300,22 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         !state.undoing && !state.recoveringProjectChanges
 
     val preview = remember(state.currentSessionId, state.currentSessionWorkspaceId, state.projectIdentity) { PreviewTabs() }
+    val linkDoor = if (projectBinding == ProjectBindingState.Matched) {
+        remember(preview, state.streaming, state.undoing, state.lastTurnFiles, state.runCheckpoints) {
+            val identity = state.currentSessionWorkspaceId
+            val session = state.currentSessionId
+            AssistantFileLinks(
+                resolve = { paths -> chatViewModel.existingProjectFiles(paths, identity) },
+                open = { path ->
+                    val exists = path in chatViewModel.existingProjectFiles(setOf(path), identity)
+                    if (exists && chatViewModel.uiState.value.currentSessionId == session) {
+                        preview.open(path)
+                        true
+                    } else false
+                },
+            )
+        }
+    } else null
     ChatWithPreview(preview, load = { path ->
         chatViewModel.previewProjectFile(path, state.currentSessionWorkspaceId)
     }) {
@@ -339,18 +357,20 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     }
                     val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
                         state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
-                    key(state.currentSessionId) {
-                        MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
-                            onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
-                            onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
-                            onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
-                            onAttachGoal = chatViewModel::attachGoalToProject,
-                            onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
-                            onRetryTurn = chatViewModel::retryFailedTurn,
-                            onChooseReasoning = chatViewModel::chooseReasoningLevel,
-                        onOpenPreview = preview::open,
-                        missingFiles = preview.missing,
-                            modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                    CompositionLocalProvider(LocalAssistantFileLinks provides linkDoor) {
+                        key(state.currentSessionId) {
+                            MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
+                                onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
+                                onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
+                                onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
+                                onAttachGoal = chatViewModel::attachGoalToProject,
+                                onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
+                                onRetryTurn = chatViewModel::retryFailedTurn,
+                                onChooseReasoning = chatViewModel::chooseReasoningLevel,
+                                onOpenPreview = preview::open,
+                                missingFiles = preview.missing,
+                                modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                        }
                     }
                 }
                 if (state.undoCheckpointId != null || state.undoing) {
@@ -1416,10 +1436,25 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
     // re-parses only that block, with the same result (see MarkdownBlocks).
     val parser = remember { MarkdownBlocks() }
     val blocks = parser.forText(text)
+    val links = LocalAssistantFileLinks.current
+    val paths = remember(blocks, links != null) {
+        if (links == null) emptySet() else fileReferencePaths(blocks)
+    }
+    var files by remember(links, paths) { mutableStateOf<Set<String>>(emptySet()) }
+    LaunchedEffect(links, paths) {
+        if (links != null && paths.isNotEmpty()) files = links.resolve(paths)
+    }
+    val linkScope = rememberCoroutineScope()
+    val open: ((String) -> Unit)? = if (links == null) null else remember(links, paths) {
+        { path ->
+            linkScope.launch { if (!links.open(path)) files = files - path }
+            Unit
+        }
+    }
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is ChatMarkdownBlock.Paragraph -> InlineMarkdown(block.text)
+                is ChatMarkdownBlock.Paragraph -> InlineMarkdown(block.text, files = files, open = open)
                 is ChatMarkdownBlock.Heading -> {
                     val style = when (block.level) {
                         1 -> MaterialTheme.typography.titleLarge
@@ -1427,19 +1462,20 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                         else -> MaterialTheme.typography.titleSmall
                     }
                     InlineMarkdown(block.text, style = style.copy(fontFamily = FontFamily.Default,
-                        fontWeight = FontWeight.SemiBold))
+                        fontWeight = FontWeight.SemiBold), files = files, open = open)
                 }
                 is ChatMarkdownBlock.Quote -> Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
                     shape = RoundedCornerShape(4.dp),
-                ) { InlineMarkdown(block.text, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp)) }
+                ) { InlineMarkdown(block.text, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
+                    files = files, open = open) }
                 is ChatMarkdownBlock.ListItems -> Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     block.items.forEachIndexed { index, item ->
                         Row(verticalAlignment = Alignment.Top) {
                             Text(if (block.ordered) "${block.start + index}." else "•",
                                 modifier = Modifier.widthIn(min = 24.dp),
                                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
-                            InlineMarkdown(item, modifier = Modifier.weight(1f))
+                            InlineMarkdown(item, modifier = Modifier.weight(1f), files = files, open = open)
                         }
                     }
                 }
@@ -1477,12 +1513,22 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
 }
 
 @Composable
-private fun InlineMarkdown(text: String, modifier: Modifier = Modifier, style: TextStyle? = null) {
+private fun InlineMarkdown(
+    text: String,
+    modifier: Modifier = Modifier,
+    style: TextStyle? = null,
+    files: Set<String> = emptySet(),
+    open: ((String) -> Unit)? = null,
+) {
     val textStyle = style ?: MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)
     val runs = remember(text) { parseInlineMarkdown(text) }
     val color = MaterialTheme.colorScheme.onBackground
     val codeBackground = MaterialTheme.colorScheme.surfaceContainer
-    val annotated = remember(runs, codeBackground) { assistantInlineText(runs, codeBackground) }
+    val linkColor = MaterialTheme.colorScheme.primary
+    val annotated = remember(runs, codeBackground, files, linkColor, open) {
+        if (open == null) assistantInlineText(runs, codeBackground)
+        else assistantInlineText(runs, codeBackground, files, linkColor, open)
+    }
     if (annotated.spanStyles.isEmpty()) {
         Text(annotated.text, modifier = modifier, style = textStyle.copy(color = color))
     } else {

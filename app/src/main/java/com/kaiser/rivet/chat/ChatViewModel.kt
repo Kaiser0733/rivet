@@ -855,20 +855,37 @@ class ChatViewModel private constructor(
         }
     }
 
+    private suspend fun previewIdentityMatches(identity: String): Boolean =
+        workspaceSelection.currentIdentity() == identity && _uiState.value.currentSessionWorkspaceId == identity
+
+    private suspend fun previewWorkspace(identity: String): SafWorkspace? {
+        if (!previewIdentityMatches(identity)) return null
+        return workspaceSelection.restore()?.first?.takeIf { it.tree.toString() == identity }
+    }
+
     internal suspend fun previewProjectFile(path: String, identity: String?): FilePreviewResult {
-        if (identity == null || _uiState.value.currentSessionWorkspaceId != identity) {
-            return FilePreviewResult.WrongProject
-        }
+        if (identity == null) return FilePreviewResult.WrongProject
         return try {
-            val workspace = workspaceSelection.restore()?.first ?: return FilePreviewResult.WrongProject
-            if (workspace.tree.toString() != identity) return FilePreviewResult.WrongProject
+            val workspace = previewWorkspace(identity) ?: return FilePreviewResult.WrongProject
             val content = WorkspaceFilePreview.read(workspace, path)
-            if (workspaceSelection.currentIdentity() == identity &&
-                _uiState.value.currentSessionWorkspaceId == identity) content else FilePreviewResult.WrongProject
+            if (previewIdentityMatches(identity)) content else FilePreviewResult.WrongProject
         } catch (cancelled: CancellationException) {
             throw cancelled
         } catch (_: Exception) {
             FilePreviewResult.Unavailable(null, "Rivet couldn't read this file.")
+        }
+    }
+
+    internal suspend fun existingProjectFiles(paths: Set<String>, identity: String?): Set<String> {
+        if (identity == null || paths.isEmpty()) return emptySet()
+        return try {
+            val workspace = previewWorkspace(identity) ?: return emptySet()
+            val found = paths.filterTo(mutableSetOf()) { WorkspaceFilePreview.isFile(workspace, it) }
+            if (previewIdentityMatches(identity)) found else emptySet()
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            emptySet()
         }
     }
 

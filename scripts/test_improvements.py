@@ -148,3 +148,16 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("if (presentAvailable)", model)
         self.assertIn("phoneAccess = false, presentAvailable = false", model)
         self.assertIn("append(PRESENT_DELIVERABLES_RULE)", source("local/LocalToolProtocol.kt"))
+
+    def test_only_bound_project_files_are_linked_to_the_existing_preview(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        self.assertIn("LocalAssistantFileLinks provides linkDoor", chat)
+        self.assertIn("if (exists && chatViewModel.uiState.value.currentSessionId == session)", chat)
+        self.assertIn("preview.open(path)", chat)
+        text = source("ui/chat/AssistantInlineText.kt")
+        self.assertIn("it in existingFiles", text)
+        self.assertIn("LinkAnnotation.Clickable", text)
+        self.assertIn("WorkspaceFilePreview.isFile", source("chat/ChatViewModel.kt"))
+        workspace = source("workspace/WorkspaceFilePreview.kt")
+        self.assertIn("workspace.stat(path).takeUnless { it.directory }", workspace)
+        self.assertIn("val entry = statFile(workspace, path)", workspace)
