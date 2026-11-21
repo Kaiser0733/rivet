@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.ui.UtilityLead
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Column
@@ -127,9 +128,10 @@ internal fun SubagentsSettings(
             }
             Switch(checked = state.allowAgentChoice, onCheckedChange = onAllowAgentChoice)
         }
-        Text(SUBAGENT_WARNING,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        UtilityFold(R.drawable.ic_info, "How subagents work") {
+            Text(SUBAGENT_WARNING, style = MaterialTheme.typography.bodyMedium)
+            Text(SUBAGENT_FACTS, style = MaterialTheme.typography.bodySmall)
+        }
         Spacer(Modifier.height(12.dp))
         if (state.allowAgentChoice) {
             if (configs.isEmpty()) {
@@ -137,22 +139,21 @@ internal fun SubagentsSettings(
                     style = MaterialTheme.typography.bodyMedium)
             }
             subagentModelRows(state, configs).forEach { (group, rows) ->
-                Text(group, style = MaterialTheme.typography.titleSmall,
-                    color = MaterialTheme.colorScheme.primary,
-                    modifier = Modifier.padding(top = 10.dp, bottom = 2.dp))
-                rows.forEach { (config, checked) ->
-                    Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
-                        .clickable { onToggleModel(config) },
-                        verticalAlignment = Alignment.CenterVertically) {
-                        Checkbox(checked = checked, onCheckedChange = null)
-                        Column(Modifier.weight(1f).padding(start = 4.dp)) {
-                            Text(config.model.ifBlank { "Model" }, style = MaterialTheme.typography.bodyLarge)
-                            Text(config.name, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                UtilityFold(R.drawable.ic_models, group,
+                    "${rows.count { it.second }} selected") {
+                    rows.forEach { (config, checked) ->
+                        Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
+                            .clickable { onToggleModel(config) },
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Checkbox(checked = checked, onCheckedChange = null)
+                            Column(Modifier.weight(1f).padding(start = 4.dp)) {
+                                Text(config.model.ifBlank { "Model" }, style = MaterialTheme.typography.bodyLarge)
+                                Text(config.name, style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
                         }
                     }
                 }
-                HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.4f))
             }
             if (pool.entries.isEmpty()) {
                 Text("No models selected. Tick at least one below.",
@@ -182,9 +183,5 @@ internal fun SubagentsSettings(
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
         }
-        Spacer(Modifier.height(20.dp))
-        Text(SUBAGENT_FACTS,
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.ui.UtilityGlyph
 import com.kaiser.rivet.ui.UtilityLead
 import com.kaiser.rivet.ui.UtilityRow
@@ -381,15 +382,14 @@ private fun MemoryDetail(
             if (!hasProject) "Open a project to view its memory." else if (lines.isEmpty()) "No facts saved" else "${lines.size} saved")
         Spacer(Modifier.height(16.dp))
         SectionListItem(R.drawable.ic_processes, "Permissions & spending", "", onOpenAgent, true)
-        Text("Rivet compacts older conversation history to make room in the model's context.",
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(vertical = 12.dp))
-        Text("Project memory", style = MaterialTheme.typography.titleMedium)
-        Spacer(Modifier.height(6.dp))
-        Text("Stored in .rivet/memory.md and covered by project checkpoints. AGENTS.md outranks it when they disagree.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(10.dp))
+        UtilityFold(R.drawable.ic_memory, "How memory works") {
+            Text("Stored in .rivet/memory.md and covered by project checkpoints. AGENTS.md takes priority when they disagree.")
+            Text("Rivet saves durable facts here when it learns something worth keeping.")
+        }
+        UtilityFold(R.drawable.ic_models, "How compaction works") {
+            Text("Rivet compacts older conversation history to make room in the model's context.")
+        }
+        Spacer(Modifier.height(12.dp))
         if (!hasProject) {
             Text("Open a project to view its memory.", style = MaterialTheme.typography.bodyMedium)
         } else {
@@ -399,11 +399,6 @@ private fun MemoryDetail(
                 }
             }
             Spacer(Modifier.height(10.dp))
-            if (lines.isEmpty()) {
-                Text("No durable facts yet. Rivet adds them with the remember tool when it learns something worth keeping.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
             lines.forEachIndexed { index, line ->
                 Row(Modifier.fillMaxWidth().padding(vertical = 4.dp),
                     verticalAlignment = Alignment.CenterVertically) {
@@ -526,10 +521,9 @@ private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
         UtilityLead(R.drawable.ic_phone_access, "Share to Rivet", "Available in the Android share sheet")
         Spacer(Modifier.height(16.dp))
 
-        SectionHeading("Screen capture", icon = R.drawable.ic_expand)
-        Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.",
-            modifier = Modifier.padding(top = 8.dp, bottom = 24.dp),
-            style = MaterialTheme.typography.bodyMedium)
+        UtilityFold(R.drawable.ic_expand, "Screen capture", "Asks before each capture") {
+            Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.")
+        }
 
         GrantedFoldersSettings()
         TermuxSettings()
@@ -548,10 +542,16 @@ private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
 @Composable
 private fun PhoneAddOnDetail() {
     DetailScroll {
-        Text("Not installed", style = MaterialTheme.typography.labelLarge)
-        Text("The separate add-on would let Rivet read notifications and read or tap in other apps with your permission.")
-        Text("On Android 13 and later, if Android blocks a setting, open Settings → Apps → the add-on → More → Allow restricted settings. Follow the on-screen instructions and grant access only if you trust the add-on.")
-        Text("Google Play Protect may scan, warn about, or block apps installed outside Google Play. Keep Play Protect on and review any warning before proceeding.")
+        UtilityLead(R.drawable.ic_phone_access, "Phone access add-on", "Not installed")
+        UtilityFold(R.drawable.ic_info, "What the add-on can do") {
+            Text("The separate add-on would let Rivet read notifications and read or tap in other apps with your permission.")
+        }
+        UtilityFold(R.drawable.ic_settings, "Allow restricted settings") {
+            Text("On Android 13 and later, if Android blocks a setting, open Settings, Apps, the add-on, then More and Allow restricted settings. Grant access only if you trust the add-on.")
+        }
+        UtilityFold(R.drawable.ic_info, "Google Play Protect") {
+            Text("Google Play Protect may scan, warn about, or block apps installed outside Google Play. Keep Play Protect on and review any warning.")
+        }
     }
 }
 
@@ -590,31 +590,33 @@ private fun GrantedFoldersSettings() {
             scope.launch { update("Couldn't keep access to that folder. Choose it again.") { registry.add(uri, data.flags) } }
         }
     }
-    SectionHeading("Granted folders", icon = R.drawable.ic_folder)
-    if (folders.isEmpty()) Text("No folders added.", style = MaterialTheme.typography.bodyMedium)
-    folders.forEach { grant ->
-        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text(grantDisplayPath(grant.treeUri, grant.label),
-                    style = MaterialTheme.typography.bodyMedium)
-                Text(when {
-                    grant.revoked -> "Revoked — add the folder again to restore access"
-                    grant.write -> "Read and write"
-                    else -> "Read-only"
-                }, style = MaterialTheme.typography.bodySmall)
+    UtilityFold(R.drawable.ic_folder, "Granted folders",
+        if (folders.isEmpty()) "No folders added" else "${folders.size} added") {
+        if (folders.isEmpty()) Text("No folders added.", style = MaterialTheme.typography.bodyMedium)
+        folders.forEach { grant ->
+            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                Column(Modifier.weight(1f)) {
+                    Text(grantDisplayPath(grant.treeUri, grant.label),
+                        style = MaterialTheme.typography.bodyMedium)
+                    Text(when {
+                        grant.revoked -> "Revoked — add the folder again to restore access"
+                        grant.write -> "Read and write"
+                        else -> "Read-only"
+                    }, style = MaterialTheme.typography.bodySmall)
+                }
+                TextButton(onClick = {
+                    scope.launch { update("Couldn't remove that folder.") { registry.remove(grant.id) } }
+                }) { Text("Remove") }
             }
-            TextButton(onClick = {
-                scope.launch { update("Couldn't remove that folder.") { registry.remove(grant.id) } }
-            }) { Text("Remove") }
         }
+        TextButton(onClick = {
+            try { picker.launch(AndroidGrantedFolders.pickerIntent()) }
+            catch (_: Exception) { feedback = "Couldn't open the folder picker." }
+        }) { Text("Add folder") }
+        Text("Some system folders can't be shared directly — pick or create a subfolder instead.",
+            style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
-    TextButton(onClick = {
-        try { picker.launch(AndroidGrantedFolders.pickerIntent()) }
-        catch (_: Exception) { feedback = "Couldn't open the folder picker." }
-    }) { Text("Add folder") }
-    Text("Some system folders can't be shared directly — pick or create a subfolder instead.",
-        style = MaterialTheme.typography.bodySmall,
-        color = MaterialTheme.colorScheme.onSurfaceVariant)
     feedback?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     Spacer(Modifier.height(24.dp))
 }
@@ -635,18 +637,18 @@ private fun TermuxSettings() {
         owner?.lifecycle?.addObserver(observer)
         onDispose { owner?.lifecycle?.removeObserver(observer) }
     }
-    SectionHeading("Termux bridge", icon = R.drawable.ic_processes)
-    Text(if (installed) "Installed" else "Not installed", style = MaterialTheme.typography.bodyMedium)
-    Text(TermuxCommand.SETUP, Modifier.padding(top = 8.dp), style = MaterialTheme.typography.bodyMedium)
-    TextButton(enabled = installed && !testing, onClick = {
-        testing = true
-        output = null
-        scope.launch {
-            try { output = bridge.test() } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { output = "Couldn't start the Termux bridge. Try again while Rivet is open." }
-            finally { testing = false }
-        }
-    }) { Text(if (testing) "Testing…" else "Test bridge") }
+    UtilityFold(R.drawable.ic_processes, "Termux bridge", if (installed) "Installed" else "Not installed") {
+        Text(TermuxCommand.SETUP, style = MaterialTheme.typography.bodyMedium)
+        TextButton(enabled = installed && !testing, onClick = {
+            testing = true
+            output = null
+            scope.launch {
+                try { output = bridge.test() } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { output = "Couldn't start the Termux bridge. Try again while Rivet is open." }
+                finally { testing = false }
+            }
+        }) { Text(if (testing) "Testing…" else "Test bridge") }
+    }
     output?.let { Text(it, style = MaterialTheme.typography.bodySmall) }
     Spacer(Modifier.height(24.dp))
 }
@@ -850,34 +852,35 @@ private fun AgentDetail(
             style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 8.dp)) }
 
         Spacer(Modifier.height(22.dp))
-        SectionHeading("Spend guard")
-        Text("Caps pause a run; they never stop it. Blank means no cap. Local models skip this.",
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-        Spacer(Modifier.height(8.dp))
-        OutlinedTextField(value = perRunUsd, onValueChange = { perRunUsd = it },
-            label = { Text("Per-run cap (USD)") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth())
-        OutlinedTextField(value = monthlyUsd, onValueChange = { monthlyUsd = it },
-            label = { Text("Monthly cap (USD)") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-        OutlinedTextField(value = perRunTokens, onValueChange = { perRunTokens = it },
-            label = { Text("Per-run token cap") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-        OutlinedTextField(value = monthlyTokens, onValueChange = { monthlyTokens = it },
-            label = { Text("Monthly token cap") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-        OutlinedTextField(value = price, onValueChange = { price = it },
-            label = { Text("Unknown model price / million tokens (USD)") }, singleLine = true,
-            modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-        TextButton(onClick = {
-            onSaveSpend(SpendCaps(
-                perRunUsd = perRunUsd.toDoubleOrNull()?.takeIf { it > 0 },
-                monthlyUsd = monthlyUsd.toDoubleOrNull()?.takeIf { it > 0 },
-                perRunTokens = perRunTokens.toLongOrNull()?.takeIf { it > 0 },
-                monthlyTokens = monthlyTokens.toLongOrNull()?.takeIf { it > 0 },
-            ), price.toDoubleOrNull()?.takeIf { it > 0 })
-        }) { Text("Save spend limits") }
+        UtilityFold(R.drawable.ic_memory, "Spend guard") {
+            Text("Caps pause a run; they never stop it. Blank means no cap. Local models skip this.",
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.height(8.dp))
+            OutlinedTextField(value = perRunUsd, onValueChange = { perRunUsd = it },
+                label = { Text("Per-run cap (USD)") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth())
+            OutlinedTextField(value = monthlyUsd, onValueChange = { monthlyUsd = it },
+                label = { Text("Monthly cap (USD)") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+            OutlinedTextField(value = perRunTokens, onValueChange = { perRunTokens = it },
+                label = { Text("Per-run token cap") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+            OutlinedTextField(value = monthlyTokens, onValueChange = { monthlyTokens = it },
+                label = { Text("Monthly token cap") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+            OutlinedTextField(value = price, onValueChange = { price = it },
+                label = { Text("Unknown model price / million tokens (USD)") }, singleLine = true,
+                modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
+            TextButton(onClick = {
+                onSaveSpend(SpendCaps(
+                    perRunUsd = perRunUsd.toDoubleOrNull()?.takeIf { it > 0 },
+                    monthlyUsd = monthlyUsd.toDoubleOrNull()?.takeIf { it > 0 },
+                    perRunTokens = perRunTokens.toLongOrNull()?.takeIf { it > 0 },
+                    monthlyTokens = monthlyTokens.toLongOrNull()?.takeIf { it > 0 },
+                ), price.toDoubleOrNull()?.takeIf { it > 0 })
+            }) { Text("Save spend limits") }
+        }
     }
 }
 

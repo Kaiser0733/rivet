@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.ui.UtilityLead
 import com.kaiser.rivet.ui.UtilityGlyph
 import com.kaiser.rivet.ui.RivetOutlinedButton
@@ -100,7 +101,9 @@ internal fun SkillsSettings(
                     Text("Loading skills…", style = MaterialTheme.typography.bodyMedium,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
-                skillsAreEmpty(catalog) -> DetailScroll(Modifier.weight(1f)) { EmptySkills() }
+                skillsAreEmpty(catalog) -> DetailScroll(Modifier.weight(1f)) {
+                    UtilityFold(R.drawable.ic_info, "How to add skills", "No skills installed") { EmptySkills() }
+                }
                 else -> SkillsList(skillPageSections(catalog), onSelect, Modifier.weight(1f))
             }
         }
@@ -212,33 +215,23 @@ private fun SkillDetail(skill: Skill, onLoadFiles: suspend (Skill) -> List<Strin
     var files by remember(skill.name) { mutableStateOf<List<String>>(emptyList()) }
     LaunchedEffect(skill.name) { files = onLoadFiles(skill) }
     DetailScroll {
-        Text(displaySafeText(skill.description), style = MaterialTheme.typography.bodyLarge)
-        Text(displaySafeText(skill.source?.baseDir.orEmpty()),
-            style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 8.dp))
-        SectionHeading("Invocation", Modifier.padding(top = 20.dp, bottom = 4.dp))
-        Text(
-            if (skill.disableModelInvocation) "Manual only: the assistant cannot load this skill."
-            else "The assistant can load this skill when a task matches it.",
-            style = MaterialTheme.typography.bodyMedium,
-        )
-        Text(
-            if (skill.userInvocable) "You can run it with /${skill.name}."
-            else "The assistant is the only way to load it.",
-            style = MaterialTheme.typography.bodyMedium,
-            color = MaterialTheme.colorScheme.onSurfaceVariant,
-            modifier = Modifier.padding(top = 4.dp),
-        )
+        UtilityLead(R.drawable.ic_skills, skill.name, manualOnlyLabel(skill))
+        UtilityFold(R.drawable.ic_info, "Description") {
+            Text(displaySafeText(skill.description))
+            Text(displaySafeText(skill.source?.baseDir.orEmpty()), style = MaterialTheme.typography.bodySmall)
+        }
+        UtilityFold(R.drawable.ic_processes, "Invocation") {
+            Text(if (skill.disableModelInvocation) "Manual only: the assistant cannot load this skill."
+                else "The assistant can load this skill when a task matches it.")
+            Text(if (skill.userInvocable) "You can run it with /${skill.name}."
+                else "The assistant is the only way to load it.")
+        }
         if (skill.allowedTools.isNotEmpty()) {
-            SectionHeading("Allowed tools", Modifier.padding(top = 20.dp, bottom = 4.dp))
-            Text(skill.allowedTools.joinToString(", "),
-                style = MaterialTheme.typography.bodyMedium)
+            UtilityFold(R.drawable.ic_tools, "Allowed tools") { Text(skill.allowedTools.joinToString(", ")) }
         }
         if (files.isNotEmpty()) {
-            SectionHeading("Bundled files", Modifier.padding(top = 20.dp, bottom = 4.dp))
-            files.forEach { file ->
-                Text(file, style = MaterialTheme.typography.bodyMedium)
+            UtilityFold(R.drawable.ic_folder, "Bundled files") {
+                files.forEach { file -> Text(file) }
             }
         }
     }

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityFold
 import android.content.ClipData
 import android.content.ClipboardManager
 import android.content.Context
@@ -32,8 +33,9 @@ private const val UPI_ID = "maybeamardeep@fam"
 internal fun SupportSection() {
     val context = LocalContext.current
     Column(Modifier.fillMaxWidth()) {
-        Text(stringResource(R.string.support_body), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
+        UtilityFold(R.drawable.ic_info, "About support") {
+            Text(stringResource(R.string.support_body), style = MaterialTheme.typography.bodyMedium)
+        }
         RivetOutlinedButton(onClick = { openSupport(context) },
             modifier = Modifier.padding(top = 8.dp)) {
             Text(stringResource(R.string.support_coffee))

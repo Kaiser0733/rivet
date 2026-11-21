@@ -1,5 +1,18 @@
 package com.kaiser.rivet.ui
 
+import androidx.compose.animation.core.FiniteAnimationSpec
+import androidx.compose.ui.unit.IntSize
+import androidx.compose.animation.AnimatedVisibility
+import androidx.compose.animation.core.snap
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.expandVertically
+import androidx.compose.animation.shrinkVertically
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.mutableStateOf
+import androidx.compose.runtime.saveable.rememberSaveable
+import androidx.compose.runtime.setValue
+import androidx.compose.ui.semantics.semantics
+import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
@@ -94,5 +107,34 @@ internal fun UtilityLead(
             }
             content()
         }
+    }
+}
+
+@Composable
+internal fun UtilityFold(
+    icon: Int,
+    title: String,
+    value: String = "",
+    modifier: Modifier = Modifier,
+    content: @Composable ColumnScope.() -> Unit,
+) {
+    var expanded by rememberSaveable { mutableStateOf(false) }
+    val sizeSpec: FiniteAnimationSpec<IntSize> = if (motionDisabled()) snap() else tween(
+        durationMillis = RivetMotion.DISCLOSURE_MS, easing = RivetMotion.easing,
+    )
+    Column(modifier.fillMaxWidth()) {
+        UtilityRow(icon, title, value, divider = false,
+            modifier = Modifier.semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
+            trailingIcon = if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right,
+            onClick = { expanded = !expanded })
+        AnimatedVisibility(
+            visible = expanded,
+            enter = expandVertically(animationSpec = sizeSpec, expandFrom = Alignment.Top),
+            exit = shrinkVertically(animationSpec = sizeSpec, shrinkTowards = Alignment.Top),
+        ) {
+            Column(Modifier.fillMaxWidth().padding(start = 52.dp, end = 8.dp, bottom = 12.dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
+        }
+        HorizontalDivider(Modifier.padding(start = 52.dp), color = MaterialTheme.colorScheme.outlineVariant)
     }
 }

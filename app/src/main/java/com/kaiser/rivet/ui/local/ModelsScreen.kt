@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.local
 
+import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.R
 import com.kaiser.rivet.ui.UtilityGlyph
 import com.kaiser.rivet.ui.UtilityLead
@@ -353,12 +354,8 @@ private fun ModelCard(
             Text("${entry.params} · ${formatBytes(entry.size)} · ${entry.contextMax / 1024}K context",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
-            if (firstRun) Text(entry.blurb, style = MaterialTheme.typography.bodySmall)
             FitLabel(fit)
-            fit.reason.takeIf { it.isNotBlank() && fit.badge != FitBadge.BestFit }?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            ModelDetails(entry, fit)
             when {
                 installed != null -> {
                     Text(downloadVerificationText(installed.checksumVerified),
@@ -434,13 +431,7 @@ private fun ModelRow(
                 }
                 FitLabel(fit)
             }
-            Text(entry.blurb, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 2,
-                overflow = TextOverflow.Ellipsis)
-            fit.reason.takeIf { it.isNotBlank() && fit.badge != FitBadge.BestFit }?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            ModelDetails(entry, fit)
             Row(verticalAlignment = Alignment.CenterVertically) {
                 when {
                     installed != null -> {
@@ -460,6 +451,14 @@ private fun ModelRow(
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ModelDetails(entry: LocalModelEntry, fit: ModelFit) {
+    UtilityFold(R.drawable.ic_info, "Model details") {
+        Text(entry.blurb)
+        if (fit.reason.isNotBlank()) Text(fit.reason)
     }
 }
 
