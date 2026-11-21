@@ -48,7 +48,7 @@ class CodingSessionsTest {
         val id = sessions.load().id!!
         val full = listOf(AgentMessage.user("x".repeat(6000)), AgentMessage.assistant("Done"))
         val compacted = listOf(AgentMessage.user("Short checkpoint"), full.last())
-        val before = com.kaiser.rivet.provider.AgentRequest("m", full, "system")
+        val before = com.kaiser.rivet.provider.AgentRequest("m", full, "system", com.kaiser.rivet.provider.ReasoningLevel.Default, emptyList())
         val after = before.copy(messages = compacted)
         val budget = com.kaiser.rivet.agent.ContextBudget
         sessions.recordUsage(id, "normal", "p", "m", AgentUsage(inputTokens = 4000), full,
