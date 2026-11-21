@@ -1,5 +1,11 @@
 package com.kaiser.rivet.ui.local
 
+import androidx.compose.foundation.layout.ExperimentalLayoutApi
+import androidx.compose.foundation.layout.FlowRow
+import androidx.compose.foundation.lazy.grid.GridCells
+import androidx.compose.foundation.lazy.grid.GridItemSpan
+import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
+import androidx.compose.foundation.lazy.grid.items
 import com.kaiser.rivet.ui.UtilityColumns
 import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.R
@@ -17,8 +23,6 @@ import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.width
-import androidx.compose.foundation.lazy.LazyColumn
-import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.rememberScrollState
@@ -59,6 +63,8 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
     val installed by viewModel.installed.collectAsState()
     val jobs by viewModel.jobs.collectAsState()
     val installedById = remember(installed) { installed.associateBy { it.entry.id } }
+    val modelEntries = uniqueModelEntries(ui.recommendation.options, ui.entries,
+        installed.map { it.entry }, jobs.values.map { it.entry })
     LaunchedEffect(Unit) { viewModel.refresh() }
     var byoOpen by remember { mutableStateOf(false) }
     var byoUrl by remember { mutableStateOf("") }
@@ -105,14 +111,16 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
 
     Column(Modifier.fillMaxSize()) {
         RivetPageHeader(if (firstRun) "Start offline" else "Models", onClose)
-        LazyColumn(
-            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+        LazyVerticalGrid(
+            columns = GridCells.Adaptive(320.dp),
+            modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                 start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
             verticalArrangement = Arrangement.spacedBy(12.dp),
+            horizontalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             if (ui.staleBytes > 0) {
-                item {
+                item(span = { GridItemSpan(maxLineSpan) }) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("${formatBytes(ui.staleBytes)} of old partial downloads",
                             Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
@@ -121,21 +129,18 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
                     }
                 }
             }
-            item {
+            item(span = { GridItemSpan(maxLineSpan) }) {
                 Text("Runs on this phone. No account, no cloud bill.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            item {
+            item(span = { GridItemSpan(maxLineSpan) }) {
                 UtilityColumns(
                     leading = { DeviceCard(ui.totalRamMb, ui.availableRamMb, ui.freeStorage) },
                     trailing = {
                         Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                             Column(Modifier.weight(1f)) {
                                 Text("Wi-Fi only for large downloads", style = MaterialTheme.typography.bodyMedium)
-                                Text("Keeps a 2.5 GB download off mobile data unless you choose otherwise.",
-                                    style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                             }
                             Switch(checked = ui.wifiOnly, onCheckedChange = viewModel::setWifiOnly)
                         }
@@ -143,10 +148,10 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
                 )
             }
             ui.catalogueError?.let { error ->
-                item { Text(error, color = MaterialTheme.colorScheme.error) }
+                item(span = { GridItemSpan(maxLineSpan) }) { Text(error, color = MaterialTheme.colorScheme.error) }
             }
             ui.notice?.let { notice ->
-                item {
+                item(span = { GridItemSpan(maxLineSpan) }) {
                     Surface(color = MaterialTheme.colorScheme.secondaryContainer,
                         shape = RoundedCornerShape(10.dp)) {
                         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -157,122 +162,52 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
                 }
             }
             if (ui.loading) {
-                item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-            } else if (ui.entries.isNotEmpty()) {
-                item {
-                    val primary = ui.recommendation.primary
-                    if (firstRun) {
-                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text("For your phone", style = MaterialTheme.typography.titleMedium)
-                            primary?.let {
-                                ModelCard(
-                                    entry = it,
-                                    fit = ui.fitFor(it),
-                                    recommended = true,
-                                    installed = installedById[it.id],
-                                    job = jobs[it.id],
-                                    firstRun = true,
-                                    onDownload = { requestDownload(it) },
-                                    onUse = { viewModel.activate(it); onClose() },
-                                    onDelete = { deleteTarget = it },
-                                    modifier = Modifier.fillMaxWidth(),
-                                )
-                                ui.recommendation.why.takeIf { it.isNotBlank() }?.let {
-                                    Text(it, style = MaterialTheme.typography.bodySmall,
-                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                                }
-                            } ?: Text("This phone has less than 4 GB of RAM. Local models need at least 4 GB.")
-                            ui.recommendation.alternative?.let { alt ->
-                                AlternativeRow(
-                                    entry = alt,
-                                    fit = ui.fitFor(alt),
-                                    installed = installedById[alt.id],
-                                    job = jobs[alt.id],
-                                    onDownload = { requestDownload(alt) },
-                                    onUse = { viewModel.activate(alt); onClose() },
-                                )
-                            }
+                item(span = { GridItemSpan(maxLineSpan) }) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            }
+            if (!ui.loading && firstRun && ui.entries.isNotEmpty() && ui.recommendation.primary == null) {
+                item(span = { GridItemSpan(maxLineSpan) }) {
+                    Text(if (ui.totalRamMb in 1 until 4096) "Local models need a phone with at least 4 GB of RAM."
+                    else "Rivet has no model recommendation for this phone.")
+                }
+            }
+            items(modelEntries, key = { it.id }) { entry ->
+                val recommendation = when (entry.id) {
+                    ui.recommendation.primary?.id -> "Recommended for your phone"
+                    ui.recommendation.alternative?.id -> "Lighter option"
+                    else -> null
+                }
+                val installedModel = installedById[entry.id]
+                val job = if (installedModel == null) jobs[entry.id] else null
+                ModelRow(
+                    entry = entry,
+                    fit = ui.fitFor(entry),
+                    installed = installedModel,
+                    recommendation = recommendation,
+                    reason = ui.recommendation.why.takeIf { entry.id == ui.recommendation.primary?.id },
+                    onPrimary = {
+                        if (installedModel != null) {
+                            viewModel.activate(entry)
+                            if (firstRun || recommendation != null || ui.entries.none { it.id == entry.id }) onClose()
+                        } else requestDownload(entry)
+                    },
+                    onDelete = { deleteTarget = entry },
+                    onExport = { exportTarget = entry; exportLauncher.launch("${entry.name}.gguf") },
+                    download = if (job == null) null else {
+                        {
+                            DownloadControls(job, viewModel.storageWarning(job), viewModel.networkProblem(job),
+                                onPause = { viewModel.pause(job) },
+                                onResume = { viewModel.resume(job) },
+                                onMobile = { viewModel.resume(job, allowMobile = true) },
+                                onCancel = { viewModel.cancel(job) })
                         }
-                    } else {
-                        Text("For your phone", style = MaterialTheme.typography.titleMedium)
-                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp),
-                            verticalAlignment = Alignment.Top) {
-                            val options = ui.recommendation.options
-                            options.forEachIndexed { index, entry ->
-                                ModelCard(
-                                    entry = entry,
-                                    fit = ui.fitFor(entry),
-                                    recommended = index == 0,
-                                    installed = installedById[entry.id],
-                                    job = jobs[entry.id],
-                                    firstRun = false,
-                                    onDownload = { requestDownload(entry) },
-                                    onUse = { viewModel.activate(entry); onClose() },
-                                    onDelete = { deleteTarget = entry },
-                                    modifier = Modifier.weight(1f),
-                                )
-                            }
-                        }
-                        ui.recommendation.why.takeIf { it.isNotBlank() }?.let {
-                            Text(it, style = MaterialTheme.typography.bodySmall,
-                                color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        }
-                    }
-                }
+                    },
+                )
             }
-            val activeJobs = jobs.values.filter { installedById[it.entry.id] == null }
-            if (activeJobs.isNotEmpty()) {
-                item { Text("Downloads", style = MaterialTheme.typography.titleMedium) }
-                items(activeJobs, key = { "job-${it.entry.id}" }) { job ->
-                    DownloadCard(job = job,
-                        fit = ui.fitFor(job.entry),
-                        warning = viewModel.storageWarning(job),
-                        network = viewModel.networkProblem(job),
-                        onPause = { viewModel.pause(job) },
-                        onResume = { viewModel.resume(job) },
-                        onMobile = { viewModel.resume(job, allowMobile = true) },
-                        onCancel = { viewModel.cancel(job) })
+            item(span = { GridItemSpan(maxLineSpan) }) {
+                UtilityFold(R.drawable.ic_add, "Bring your own GGUF") {
+                    Text("Paste a Hugging Face repo or file link. Rivet checks for a GGUF before downloading.")
+                    RivetOutlinedButton(onClick = { byoOpen = true }) { Text("Add a model link") }
                 }
-            }
-            val customInstalled = installed.filter { it.byo && ui.entries.none { entry -> entry.id == it.entry.id } }
-            if (customInstalled.isNotEmpty()) {
-                item { Text("Your models", style = MaterialTheme.typography.titleMedium) }
-                items(customInstalled, key = { "installed-${it.entry.id}" }) { model ->
-                    InstalledRow(model = model,
-                        fit = ui.fitFor(model.entry),
-                        onUse = { viewModel.activate(model.entry); onClose() },
-                        onExport = { exportTarget = model.entry; exportLauncher.launch("${model.entry.name}.gguf") },
-                        onDelete = { deleteTarget = model.entry })
-                }
-            }
-            if (ui.entries.isNotEmpty()) {
-                item {
-                    Text("All models", style = MaterialTheme.typography.titleMedium)
-                }
-                items(ui.entries, key = { it.id }) { entry ->
-                    ModelRow(
-                        entry = entry,
-                        fit = ui.fitFor(entry),
-                        installed = installedById[entry.id],
-                        job = jobs[entry.id],
-                        onClick = {
-                            if (installedById[entry.id] != null) viewModel.activate(entry)
-                            else if (ui.fitFor(entry).canDownload) requestDownload(entry)
-                        },
-                        onDelete = { deleteTarget = entry },
-                        onExport = { exportTarget = entry; exportLauncher.launch("${entry.name}.gguf") },
-                    )
-                }
-            }
-            item {
-                HorizontalDivider(Modifier.padding(vertical = 8.dp))
-                Text("Bring your own GGUF", style = MaterialTheme.typography.titleMedium)
-                Text("Paste a Hugging Face repo or file link. Rivet checks for a GGUF before downloading.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Spacer(Modifier.height(6.dp))
-                RivetOutlinedButton(onClick = { byoOpen = true },
-                    modifier = Modifier.fillMaxWidth()) { Text("Add a model link") }
             }
         }
     }
@@ -327,173 +262,54 @@ private fun DeviceCard(totalRamMb: Int, availableRamMb: Int, freeStorage: Long) 
 }
 
 @Composable
-private fun ModelCard(
-    entry: LocalModelEntry,
-    fit: ModelFit,
-    recommended: Boolean,
-    installed: InstalledLocalModel?,
-    job: DownloadJob?,
-    firstRun: Boolean,
-    onDownload: () -> Unit,
-    onUse: () -> Unit,
-    onDelete: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    Surface(
-        modifier = modifier,
-        shape = RoundedCornerShape(14.dp),
-        color = if (recommended) MaterialTheme.colorScheme.primaryContainer
-        else MaterialTheme.colorScheme.surfaceContainerLow,
-    ) {
-        Column(Modifier.padding(if (firstRun) 16.dp else 12.dp),
-            verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            if (recommended) {
-                Text(if (firstRun) "Recommended for your phone" else "Recommended for your phone",
-                    style = MaterialTheme.typography.labelMedium,
-                    color = MaterialTheme.colorScheme.onPrimaryContainer)
-            }
-            Text(entry.name, style = MaterialTheme.typography.titleMedium,
-                maxLines = 2, overflow = TextOverflow.Ellipsis)
-            Text("${entry.params} · ${formatBytes(entry.size)} · ${entry.contextMax / 1024}K context",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            FitLabel(fit)
-            ModelDetails(entry, fit)
-            when {
-                installed != null -> {
-                    Text(downloadVerificationText(installed.checksumVerified),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    Row(verticalAlignment = Alignment.CenterVertically) {
-                        RivetOutlinedButton(onClick = onUse) { Text("Use") }
-                        Spacer(Modifier.width(6.dp))
-                        TextButton(onClick = onDelete) { Text("Delete") }
-                    }
-                }
-                job != null -> Text(job.status.label() + job.error?.let { " · $it" }.orEmpty(),
-                    style = MaterialTheme.typography.bodySmall)
-                !fit.canDownload -> RivetOutlinedButton(onClick = {}, enabled = false) {
-                    Text("Too big for this phone")
-                }
-                else -> RivetOutlinedButton(onClick = onDownload) { Text("Download") }
-            }
-        }
-    }
-}
-
-@Composable
-private fun AlternativeRow(
-    entry: LocalModelEntry,
-    fit: ModelFit,
-    installed: InstalledLocalModel?,
-    job: DownloadJob?,
-    onDownload: () -> Unit,
-    onUse: () -> Unit,
-) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-            Column(Modifier.weight(1f)) {
-                Text("Lighter option", style = MaterialTheme.typography.labelSmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                Text(entry.name, style = MaterialTheme.typography.bodyLarge)
-                Text("${entry.params} · ${formatBytes(entry.size)} · ${fit.badge.label()}",
-                    style = MaterialTheme.typography.bodySmall)
-            }
-            when {
-                installed != null -> TextButton(onClick = onUse) { Text("Use") }
-                job != null -> Text(job.status.label(), style = MaterialTheme.typography.bodySmall)
-                fit.canDownload -> TextButton(onClick = onDownload) { Text("Download") }
-                else -> Text("Too big", style = MaterialTheme.typography.bodySmall)
-            }
-        }
-    }
-}
-
-@Composable
 private fun ModelRow(
     entry: LocalModelEntry,
     fit: ModelFit,
     installed: InstalledLocalModel?,
-    job: DownloadJob?,
-    onClick: () -> Unit,
+    recommendation: String?,
+    reason: String?,
+    onPrimary: () -> Unit,
     onDelete: () -> Unit,
     onExport: () -> Unit,
+    download: (@Composable () -> Unit)?,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.spacedBy(12.dp)) {
-                UtilityGlyph(R.drawable.ic_models)
-                Column(Modifier.weight(1f)) {
-                    Text(entry.name, style = MaterialTheme.typography.bodyLarge)
-                    Text("${entry.params} · ${formatBytes(entry.size)} · ${entry.contextMax / 1024}K context",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                FitLabel(fit)
-            }
-            ModelDetails(entry, fit)
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                when {
-                    installed != null -> {
-                        Text("Installed", style = MaterialTheme.typography.labelMedium,
-                            color = MaterialTheme.colorScheme.primary)
-                        Text(downloadVerificationText(installed.checksumVerified),
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        Spacer(Modifier.width(8.dp))
-                        TextButton(onClick = onClick) { Text("Use") }
-                        TextButton(onClick = onExport) { Text("Export") }
-                        TextButton(onClick = onDelete) { Text("Delete") }
-                    }
-                    job != null -> Text(job.status.label(), style = MaterialTheme.typography.bodySmall)
-                    fit.canDownload -> TextButton(onClick = onClick) { Text("Download") }
-                    else -> Text("Not available on this phone", style = MaterialTheme.typography.bodySmall)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun ModelDetails(entry: LocalModelEntry, fit: ModelFit) {
-    UtilityFold(R.drawable.ic_info, "Model details") {
-        Text(entry.blurb)
-        if (fit.reason.isNotBlank()) Text(fit.reason)
-    }
-}
-
-@Composable
-private fun InstalledRow(
-    model: InstalledLocalModel,
-    fit: ModelFit,
-    onUse: () -> Unit,
-    onExport: () -> Unit,
-    onDelete: () -> Unit,
-) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()) {
-        Row(Modifier.padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+    Column(Modifier.fillMaxWidth().padding(vertical = 4.dp)) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 6.dp), verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+            UtilityGlyph(R.drawable.ic_models)
             Column(Modifier.weight(1f)) {
-                Text(model.entry.name, style = MaterialTheme.typography.bodyLarge)
-                Text(downloadVerificationText(model.checksumVerified),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                FitLabel(fit)
+                Text(entry.name, style = MaterialTheme.typography.titleMedium)
+                Text("${entry.params} · ${formatBytes(entry.size)} · ${entry.contextMax / 1024}K context",
+                    style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+                if (recommendation != null) {
+                    Text(recommendation, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary)
+                }
             }
-            TextButton(onClick = onUse) { Text("Use") }
-            TextButton(onClick = onExport) { Text("Export") }
-            TextButton(onClick = onDelete) { Text("Delete") }
+            if (download == null && (installed != null || fit.canDownload)) {
+                RivetOutlinedButton(onClick = onPrimary) { Text(if (installed != null) "Use" else "Download") }
+            }
+        }
+        if (download != null) download()
+        UtilityFold(R.drawable.ic_info, "Model details", if (installed != null) "Installed" else fit.badge.label()) {
+            Text(entry.blurb)
+            if (!reason.isNullOrBlank()) Text(reason)
+            if (fit.reason.isNotBlank() && fit.reason != reason) Text(fit.reason)
+            if (installed != null) {
+                Text(downloadVerificationText(installed.checksumVerified))
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                    TextButton(onClick = onExport) { Text("Export") }
+                    TextButton(onClick = onDelete) { Text("Delete") }
+                }
+            }
         }
     }
 }
 
+@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun DownloadCard(
+private fun DownloadControls(
     job: DownloadJob,
-    fit: ModelFit,
     warning: String?,
     network: String?,
     onPause: () -> Unit,
@@ -501,55 +317,31 @@ private fun DownloadCard(
     onMobile: () -> Unit,
     onCancel: () -> Unit,
 ) {
-    Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = RoundedCornerShape(12.dp),
-        modifier = Modifier.fillMaxWidth()) {
-        Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(5.dp)) {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Text(job.entry.name, Modifier.weight(1f), style = MaterialTheme.typography.bodyLarge)
-                Text("${(job.fraction * 100).toInt()}%", style = MaterialTheme.typography.bodySmall)
-            }
-            LinearProgressIndicator(progress = { job.fraction }, modifier = Modifier.fillMaxWidth())
-            Text("${formatBytes(job.downloaded)} of ${formatBytes(job.total)} · ${job.status.label()}",
-                style = MaterialTheme.typography.bodySmall)
-            FitLabel(fit)
-            job.error?.let {
-                Text(it, style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.error)
-            }
-            warning?.let { Text(it, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            network?.let { Text(it, style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant) }
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                if (job.status == DownloadStatus.Downloading || job.status == DownloadStatus.Queued ||
-                    job.status == DownloadStatus.Verifying) {
-                    TextButton(onClick = onPause) { Text("Pause") }
-                } else {
-                    TextButton(onClick = onResume) { Text("Resume") }
-                    networkAllowLabel(network)?.let { label ->
-                        TextButton(onClick = onMobile) { Text(label) }
-                    }
+    Column(Modifier.fillMaxWidth().padding(horizontal = 4.dp, vertical = 6.dp),
+        verticalArrangement = Arrangement.spacedBy(5.dp)) {
+        LinearProgressIndicator(progress = { job.fraction }, modifier = Modifier.fillMaxWidth())
+        Text("${formatBytes(job.downloaded)} of ${formatBytes(job.total)} · ${job.status.label()}",
+            style = MaterialTheme.typography.bodySmall)
+        job.error?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.error) }
+        warning?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        network?.let { Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+        FlowRow(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+            if (job.status == DownloadStatus.Downloading || job.status == DownloadStatus.Queued ||
+                job.status == DownloadStatus.Verifying) {
+                TextButton(onClick = onPause) { Text("Pause") }
+            } else {
+                TextButton(onClick = onResume) { Text("Resume") }
+                networkAllowLabel(network)?.let { label ->
+                    TextButton(onClick = onMobile) { Text(label) }
                 }
-                TextButton(onClick = onCancel) { Text("Cancel") }
             }
-            if (job.entry.sha256 == null && job.status != DownloadStatus.Downloading) {
-                Text("No published checksum for this file. Rivet will still check its size.",
-                    style = MaterialTheme.typography.bodySmall,
-                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-            }
+            TextButton(onClick = onCancel) { Text("Cancel") }
+        }
+        if (job.entry.sha256 == null && job.status != DownloadStatus.Downloading) {
+            Text("No published checksum for this file. Rivet will still check its size.",
+                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
     }
-}
-
-@Composable
-private fun FitLabel(fit: ModelFit) {
-    val color = when (fit.badge) {
-        FitBadge.BestFit -> MaterialTheme.colorScheme.primary
-        FitBadge.RunsFine -> MaterialTheme.colorScheme.secondary
-        FitBadge.Heavy -> MaterialTheme.colorScheme.tertiary
-        FitBadge.TooBig -> MaterialTheme.colorScheme.error
-    }
-    Text(fit.badge.label(), style = MaterialTheme.typography.labelMedium, color = color)
 }
 
 internal fun downloadVerificationText(verified: Boolean): String =

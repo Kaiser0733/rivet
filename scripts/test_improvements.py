@@ -101,3 +101,11 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("context.requestFor(noticed)", model)
         self.assertIn("currentEstimate - sampledEstimate", source("storage/ContextUsageDelta.kt"))
         self.assertIn("base_estimated_tokens", source("storage/CodingSessions.kt"))
+
+    def test_models_use_one_grid_and_one_primary_action(self):
+        models = source("ui/local/ModelsScreen.kt")
+        self.assertIn("items(modelEntries, key = { it.id })", models)
+        self.assertIn('RivetOutlinedButton(onClick = onPrimary) { Text(if (installed != null) "Use" else "Download") }', models)
+        self.assertNotIn("AlternativeRow(", models)
+        self.assertNotIn("items(ui.entries", models)
+        self.assertIn(".distinctBy { it.id }", source("ui/local/ModelRows.kt"))
