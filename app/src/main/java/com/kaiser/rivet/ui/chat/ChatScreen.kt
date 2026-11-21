@@ -651,7 +651,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(PROJECT_ACCESS_LOST_MESSAGE, Modifier.weight(1f),
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        TextButton(onClick = ::chooseProject) { Text("Choose project again") }
+                        TextButton(onClick = ::chooseProject) { Text("Choose folder again") }
                     }
                 }
                 if (wrongProject && state.projectName != null && providers.configs.isNotEmpty()) {
@@ -665,7 +665,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     }
                 }
                 if (providers.configs.isEmpty()) {
-                    EmptyState(RivetDoodle.Provider, "Choose a model to get started.",
+                    EmptyState(RivetDoodle.Provider, "Choose a model for this chat.",
                         "Add a provider, use ChatGPT, or run a model on this phone. Then choose a project.",
                         "Open Settings", onOpenSettings, Modifier.weight(1f),
                         secondaryAction = stringResource(R.string.start_free),
@@ -730,17 +730,17 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                             }
                         })
                 } else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty()) {
-                    EmptyState(RivetDoodle.Project, "Rivet no longer has access to this project.",
-                        "Choose the folder again to continue this conversation.",
-                        "Choose project again", ::chooseProject, Modifier.weight(1f))
+                    EmptyState(RivetDoodle.Project, "Rivet lost access to this folder.",
+                        "Select the same folder to continue this chat.",
+                        "Choose folder again", ::chooseProject, Modifier.weight(1f))
                 } else if (state.projectName == null && state.projectError != null && state.messages.isEmpty()) {
                     EmptyState(RivetDoodle.Project, "Rivet couldn't open that project.",
                         "Choose the folder again to continue.",
                         "Choose project again", ::chooseProject, Modifier.weight(1f))
                 } else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading) {
-                    EmptyState(RivetDoodle.Project, "What do you want to work on?",
+                    EmptyState(RivetDoodle.Project, "Which folder do you want to work in?",
                         "Choose the folder that contains your project, then tell Rivet what you want to change.",
-                        "Choose project", ::chooseProject, Modifier.weight(1f),
+                        "Choose a folder", ::chooseProject, Modifier.weight(1f),
                         starterAction = if (offerStarters) ({ showStarterGallery = true }) else null)
                 } else if (state.projectLoading) {
                     EmptyState(RivetDoodle.Project, "Opening your project…",
@@ -749,7 +749,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null && !state.interruptedTurn && state.goalLine == null) {
                     val ready = readyEntryPoints(projectBound = state.projectName != null)
                     EmptyState(RivetDoodle.Ready, "Tell Rivet what you want to change.",
-                        "Rivet can inspect this project and will ask before changing files.",
+                        "Your Agent settings control when Rivet asks before making changes.",
                         null, {}, Modifier.weight(1f),
                         secondaryAction = ready?.chooseProjectLabel,
                         onSecondaryAction = ::chooseProject,

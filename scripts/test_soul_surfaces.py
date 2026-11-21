@@ -22,3 +22,21 @@ class SoulSurfaceTest(unittest.TestCase):
         self.assertEqual(tools.count("stringResource(R.string.close_tools)"), 1)
         self.assertIn("IconButton(onClick = onClose, modifier = Modifier.size(48.dp))", tools)
         self.assertIn("onClose = onClose", tools.split("ProcessesContent(processes, modifier, null")[1])
+
+    def test_chat_setup_copy_follows_its_existing_state_and_action(self):
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        for old_state, mark, phrases in (
+            ("if (providers.configs.isEmpty()) {\n                    EmptyState", "Provider",
+             ("Choose a model for this chat.", "Open Settings", "Start offline")),
+            ("} else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty())", "Project",
+             ("Rivet lost access to this folder.", "Select the same folder to continue this chat.", "Choose folder again")),
+            ("} else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading)", "Project",
+             ("Which folder do you want to work in?", "Choose a folder", "starterAction")),
+            ("val ready = readyEntryPoints(projectBound", "Ready",
+             ("Tell Rivet what you want to change.", "Your Agent settings control when Rivet asks before making changes.")),
+        ):
+            with self.subTest(state=mark, heading=phrases[0]):
+                branch = chat.split(old_state, 1)[1].split("} else if", 1)[0]
+                self.assertIn(f"RivetDoodle.{mark}", branch)
+                for phrase in phrases:
+                    self.assertIn(phrase, branch)
