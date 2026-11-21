@@ -95,9 +95,13 @@ class BrowserSourceSafetyTest {
         assertTrue(screen.contains("focusRequester.requestFocus()"))
         assertTrue(screen.contains("focusManager.clearFocus()"))
         assertTrue(screen.contains("onPageInteraction"))
-        val submit = screen.substringAfter("val submitUrl: () -> Unit = {").substringBefore("var menuOpen")
+        val submit = screen.substringAfter("val submitUrl: () -> Unit = {").substringBefore("val pageOptions")
         assertTrue(submit.contains("clearUrlFocus()"))
-        assertTrue(screen.contains("KeyboardActions(onGo = { submitUrl() })"))
+        // The toolbar's Go key runs the same submit, which clears focus first.
+        assertTrue(screen.contains("KeyboardActions(onGo = { onSubmit() })"))
+        assertTrue(screen.contains("onSubmit = submitUrl"))
+        // Page interaction (the host's touch callback) clears the URL field's focus.
+        assertTrue(screen.contains("hostContent(Modifier.fillMaxSize(), clearUrlFocus)"))
         assertTrue(screen.contains("LaunchedEffect(state.visible)"))
         assertTrue(screen.contains("if (!state.visible)"))
         assertFalse(screen.contains("UrlFieldSelection.Controller"))
