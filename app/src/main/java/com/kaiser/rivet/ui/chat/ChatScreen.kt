@@ -1,5 +1,20 @@
 package com.kaiser.rivet.ui.chat
 
+import androidx.compose.ui.input.key.Key
+import androidx.compose.ui.input.key.KeyEventType
+import androidx.compose.ui.input.key.isAltPressed
+import androidx.compose.ui.input.key.isCtrlPressed
+import androidx.compose.ui.input.key.isMetaPressed
+import androidx.compose.ui.input.key.isShiftPressed
+import androidx.compose.ui.input.key.key
+import androidx.compose.ui.input.key.onPreviewKeyEvent
+import androidx.compose.ui.input.key.type
+import androidx.compose.ui.text.TextRange
+import androidx.compose.ui.text.input.TextFieldValue
+import com.kaiser.rivet.chat.ComposerEnter
+import com.kaiser.rivet.chat.composerEnter
+import com.kaiser.rivet.ui.dismissOnEscape
+import com.kaiser.rivet.ui.utilityClick
 import androidx.compose.foundation.layout.fillMaxHeight
 import androidx.compose.foundation.layout.BoxWithConstraints
 import com.kaiser.rivet.ui.panelEntry
@@ -1190,7 +1205,7 @@ internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messag
                 onLongClick = { menuOpen = !menuOpen },
             ),
         )) {
-            if (selectingText) SelectionContainer { bubble() } else bubble()
+            SelectionContainer { bubble() }
         }
         if (menuOpen) {
             Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
@@ -1692,7 +1707,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                         attachmentsOpen = false
                     }
                 },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
+                    .dismissOnEscape { attachmentsOpen = false },
             ) { Text("Include clipboard text") }
         }
     }
@@ -1748,6 +1764,14 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         if (commandQuery != null) onRequestSkills() else dismissedCommand = null
     }
     BackHandler(enabled = showCommands) { dismissedCommand = draft }
+    var field by rememberSaveable(sessionId, stateSaver = TextFieldValue.Saver) {
+        mutableStateOf(TextFieldValue(draft, TextRange(draft.length)))
+    }
+    val editing = if (field.text == draft) field else TextFieldValue(draft, TextRange(draft.length))
+    val updateField: (TextFieldValue) -> Unit = {
+        field = it
+        drafts = withDraft(drafts, sessionId, it.text)
+    }
     var focused by remember { mutableStateOf(false) }
     val composerEdge by animateColorAsState(
         if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
@@ -1761,7 +1785,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         animationSpec = rivetMotionSpec(RivetMotion.FOCUS_MS), label = "Send press")
     // One container for the whole composer: the field inside carries no outline of its
     // own, and the selector shares the quiet second row with send/stop.
-    Column(modifier.fillMaxWidth().imePadding().padding(horizontal = 14.dp, vertical = 9.dp)) {
+    Column(modifier.fillMaxWidth().imePadding().padding(horizontal = 14.dp, vertical = 9.dp)
+        .dismissOnEscape(showCommands) { dismissedCommand = draft }) {
         if (showCommands) {
             val progress = entryProgress(Unit, animate = true, duration = RivetMotion.PAGE_MS)
             Box(Modifier.clipToBounds()) {
@@ -1798,9 +1823,32 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                         style = MaterialTheme.typography.labelMedium)
                 }
                 OutlinedTextField(
-                    value = draft,
-                    onValueChange = { drafts = withDraft(drafts, sessionId, it) },
-                    modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused },
+                    value = editing,
+                    onValueChange = updateField,
+                    modifier = Modifier.fillMaxWidth().onFocusChanged { focused = it.isFocused }
+                        .onPreviewKeyEvent { event ->
+                            if (event.key != Key.Enter && event.key != Key.NumPadEnter) return@onPreviewKeyEvent false
+                            val native = event.nativeKeyEvent
+                            val action = composerEnter(
+                                hardware = native.flags and android.view.KeyEvent.FLAG_SOFT_KEYBOARD == 0,
+                                shift = event.isShiftPressed,
+                                shortcutModifier = event.isCtrlPressed || event.isMetaPressed || event.isAltPressed,
+                            )
+                            if (action == ComposerEnter.Edit) return@onPreviewKeyEvent false
+                            if (event.type == KeyEventType.KeyDown && native.repeatCount == 0) {
+                                when (action) {
+                                    ComposerEnter.Send -> submit()
+                                    ComposerEnter.Newline -> {
+                                        val from = editing.selection.min
+                                        val to = editing.selection.max
+                                        updateField(TextFieldValue(editing.text.replaceRange(from, to, "\n"),
+                                            TextRange(from + 1)))
+                                    }
+                                    ComposerEnter.Edit -> Unit
+                                }
+                            }
+                            true
+                        },
                     placeholder = { Text("Ask Rivet…") },
                     minLines = 1,
                     maxLines = 6,

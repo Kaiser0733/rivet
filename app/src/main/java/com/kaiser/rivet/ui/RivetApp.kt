@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui
 
+import androidx.activity.compose.LocalOnBackPressedDispatcherOwner
 import androidx.compose.material3.DrawerState
 import android.app.Activity
 import android.net.Uri
@@ -228,7 +229,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
         val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
-        BackHandler(editing || destination != RivetDestination.Chat || browserState.visible || panelOpen) {
+        val canDismissPage = editing || destination != RivetDestination.Chat || browserState.visible || panelOpen
+        val backDispatcher = LocalOnBackPressedDispatcherOwner.current?.onBackPressedDispatcher
+        BackHandler(canDismissPage) {
             when {
                 browserState.visible -> chatViewModel.browser.close()
                 editing -> {
@@ -258,7 +261,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         RivetBackdrop {
             if (!browserState.visible) {
                 Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.background)) {
-                    Box(Modifier.fillMaxSize().pageEntry(progress, offset)) {
+                    Box(Modifier.fillMaxSize().dismissOnEscape(canDismissPage) { backDispatcher?.onBackPressed() }.pageEntry(progress, offset)) {
                         if (editing) {
                             saveableStates.SaveableStateProvider("provider_editor") {
                                 ProviderEditor(viewModel = providersViewModel, onDone = { editing = false })

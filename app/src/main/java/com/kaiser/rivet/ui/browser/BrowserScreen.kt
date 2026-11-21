@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.browser
 
+import com.kaiser.rivet.ui.dismissOnEscape
 import com.kaiser.rivet.ui.UtilityColumns
 import android.app.Activity
 import android.content.Context
@@ -143,7 +144,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
     BackHandler(enabled = state.visible && pageOptions) { pageOptions = false }
     val context = LocalContext.current
 
-    Column(modifier.fillMaxSize().then(
+    Column(modifier.fillMaxSize()
+        .dismissOnEscape(state.visible) { if (pageOptions) pageOptions = false else onClose() }.then(
         if (state.visible) Modifier.background(MaterialTheme.colorScheme.surface).navigationBarsPadding()
         else Modifier)) {
         if (state.visible && !pageOptions) {

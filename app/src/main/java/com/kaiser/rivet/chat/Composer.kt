@@ -24,3 +24,13 @@ internal fun appendClipboardText(draft: String, clipboard: String?): String {
     val separator = if (draft.isEmpty() || draft.endsWith('\n')) "" else "\n"
     return draft + separator + clipboard
 }
+
+
+internal enum class ComposerEnter { Send, Newline, Edit }
+
+internal fun composerEnter(hardware: Boolean, shift: Boolean, shortcutModifier: Boolean): ComposerEnter =
+    when {
+        !hardware || shortcutModifier -> ComposerEnter.Edit
+        shift -> ComposerEnter.Newline
+        else -> ComposerEnter.Send
+    }

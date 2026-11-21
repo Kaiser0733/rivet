@@ -311,6 +311,7 @@ internal object RivetMotion {
     val effortSignalStroke = 1.6.dp
     const val drawerScrim = 0.46f
     const val pressAlpha = 0.16f
+    const val hoverAlpha = 0.08f
     val easing = androidx.compose.animation.core.FastOutSlowInEasing
 }
 

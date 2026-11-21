@@ -44,3 +44,16 @@ class ImprovementsTest(unittest.TestCase):
         runs = source("ui/chat/AssistantInlineText.kt")
         self.assertIn("if (!run.code && !run.bold && !run.italic)", runs)
         self.assertIn("append(content)", runs)
+
+    def test_hardware_input_reaches_the_composer_and_panel_keys(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        self.assertIn("ComposerEnter.Send -> submit()", chat)
+        self.assertIn("ComposerEnter.Newline ->", chat)
+        self.assertIn("FLAG_SOFT_KEYBOARD", chat)
+        self.assertIn("SelectionContainer { bubble() }", chat)
+        self.assertNotIn("if (selectingText) SelectionContainer", chat)
+        self.assertIn("dismissOnEscape(showCommands)", chat)
+        self.assertIn("dismissOnEscape(canDismissPage)", source("ui/RivetApp.kt"))
+        self.assertIn("dismissOnEscape(active != null", source("ui/chat/FilePreview.kt"))
+        self.assertIn("collectIsHoveredAsState", source("ui/UtilitySurfaces.kt"))
+        self.assertIn("collectIsFocusedAsState", source("ui/UtilitySurfaces.kt"))

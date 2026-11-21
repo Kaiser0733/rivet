@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.ui.dismissOnEscape
 import com.kaiser.rivet.ui.RivetMotion
 import com.kaiser.rivet.ui.entryProgress
 import androidx.compose.ui.draw.clipToBounds
@@ -116,12 +117,13 @@ internal fun ChatWithPreview(
     LaunchedEffect(active, tabs.revision) {
         if (active != null) tabs.resolved(active, load(active))
     }
-    BackHandler(enabled = active != null) {
+    val dismissPreview: () -> Unit = {
         if (tabs.fullScreen) tabs.fullScreen = false else tabs.active?.let(tabs::close)
     }
+    BackHandler(enabled = active != null, onBack = dismissPreview)
     var divider by androidx.compose.runtime.saveable.rememberSaveable { androidx.compose.runtime.mutableFloatStateOf(0.54f) }
     val stateHolder = rememberSaveableStateHolder()
-    BoxWithConstraints(Modifier.fillMaxSize()) {
+    BoxWithConstraints(Modifier.fillMaxSize().dismissOnEscape(active != null, dismissPreview)) {
         val availableWidth = maxWidth
         val split = chatPaneFraction(availableWidth.value, divider)
         val widthPx = with(LocalDensity.current) { availableWidth.toPx() }

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.starter
 
+import com.kaiser.rivet.ui.utilityClick
 import android.app.Activity
 import android.content.ActivityNotFoundException
 import androidx.activity.compose.rememberLauncherForActivityResult
@@ -97,7 +98,7 @@ internal fun HomeStarters(viewModel: ChatViewModel, enabled: Boolean, error: Str
         homeStarterGlyphs.forEach { (id, icon) ->
             val row = rows[id] ?: return@forEach
             Row(
-                Modifier.fillMaxWidth().heightIn(min = 48.dp).clickable(enabled = enabled, role = Role.Button) {
+                Modifier.fillMaxWidth().heightIn(min = 48.dp).utilityClick(enabled = enabled) {
                     viewModel.setPendingStarter(row)
                     try {
                         picker.launch(projectFolderPickerIntent())

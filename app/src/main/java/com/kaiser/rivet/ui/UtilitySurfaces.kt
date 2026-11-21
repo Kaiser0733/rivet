@@ -1,5 +1,11 @@
 package com.kaiser.rivet.ui
 
+import androidx.compose.foundation.interaction.collectIsFocusedAsState
+import androidx.compose.foundation.interaction.collectIsHoveredAsState
+import androidx.compose.foundation.hoverable
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.unit.Dp
 import androidx.compose.foundation.layout.BoxWithConstraints
 import androidx.compose.foundation.layout.widthIn
@@ -152,17 +158,30 @@ internal fun DisclosureBody(expanded: Boolean, content: @Composable () -> Unit) 
 internal fun Modifier.utilityClick(enabled: Boolean = true, onClick: () -> Unit): Modifier {
     val source = remember { MutableInteractionSource() }
     val pressed by source.collectIsPressedAsState()
-    return pressLayer(pressed).clickable(
+    val focused by source.collectIsFocusedAsState()
+    val hovered by source.collectIsHoveredAsState()
+    return pressLayer(pressed, hovered, focused).hoverable(source, enabled).clickable(
         enabled = enabled, role = Role.Button, onClick = onClick, interactionSource = source, indication = null,
     )
 }
 
 @Composable
-internal fun Modifier.pressLayer(pressed: Boolean): Modifier {
+internal fun Modifier.pressLayer(pressed: Boolean, hovered: Boolean = false, focused: Boolean = false): Modifier {
     val ink = MaterialTheme.colorScheme.primary
-    val amount by animateFloatAsState(if (pressed) RivetMotion.pressAlpha else 0f,
-        animationSpec = rivetMotionSpec(RivetMotion.FOCUS_MS), label = "Pressed")
-    return drawBehind { if (amount > 0f) drawRect(ink.copy(alpha = amount)) }
+    val target = when {
+        pressed -> RivetMotion.pressAlpha
+        hovered || focused -> RivetMotion.hoverAlpha
+        else -> 0f
+    }
+    val amount by animateFloatAsState(target, animationSpec = rivetMotionSpec(RivetMotion.FOCUS_MS), label = "Control feedback")
+    return drawBehind {
+        if (amount > 0f) drawRect(ink.copy(alpha = amount))
+        if (focused && size.width > 2.dp.toPx() && size.height > 2.dp.toPx()) {
+            val inset = 1.dp.toPx()
+            drawRect(ink, topLeft = Offset(inset, inset), size = Size(size.width - 2 * inset, size.height - 2 * inset),
+                style = Stroke(2 * inset))
+        }
+    }
 }
 
 @Composable

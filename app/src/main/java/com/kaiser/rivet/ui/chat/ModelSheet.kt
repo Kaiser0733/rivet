@@ -1,5 +1,9 @@
 package com.kaiser.rivet.ui.chat
 
+import androidx.compose.foundation.focusable
+import androidx.compose.ui.focus.FocusRequester
+import androidx.compose.ui.focus.focusRequester
+import com.kaiser.rivet.ui.dismissOnEscape
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.core.Animatable
 import androidx.compose.animation.core.tween
@@ -157,10 +161,13 @@ fun ModelSheet(
     ) {
         // Back leaves a sub-view first and only dismisses from the root, so the
         // staged save always runs on the way out.
-        BackHandler {
+        val back: () -> Unit = {
             if (pane == PickerPane.Root || selectionMotion != null) close() else pane = PickerPane.Root
         }
-        Box(Modifier.fillMaxSize()) {
+        BackHandler(onBack = back)
+        val panelFocus = remember { FocusRequester() }
+        LaunchedEffect(Unit) { panelFocus.requestFocus() }
+        Box(Modifier.fillMaxSize().dismissOnEscape(dismiss = back)) {
             // Outside tap dismisses, like the retired sheet's scrim.
             Box(Modifier.fillMaxSize().pointerInput(Unit) { detectTapGestures { close() } })
             Column(
@@ -169,7 +176,7 @@ fun ModelSheet(
                     .imePadding()
                     .padding(start = 12.dp, end = 12.dp, bottom = 96.dp)
                     .widthIn(max = 320.dp)
-                    .fillMaxWidth()
+                    .fillMaxWidth().focusRequester(panelFocus).focusable()
                     .shadow(10.dp, cardShape)
                     .background(MaterialTheme.colorScheme.surfaceContainerHigh, cardShape)
                     .border(1.dp, MaterialTheme.colorScheme.outlineVariant, cardShape)

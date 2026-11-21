@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.history
 
+import androidx.compose.foundation.focusable
+import com.kaiser.rivet.ui.utilityClick
 import android.text.format.DateUtils
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
@@ -80,12 +82,15 @@ internal fun RivetSidebar(
         confirmingDelete = false
     }
     val searchFocus = remember { FocusRequester() }
+    val sidebarFocus = remember { FocusRequester() }
     val focus = LocalFocusManager.current
     val keyboard = LocalSoftwareKeyboardController.current
     LaunchedEffect(searching, drawerOpen) {
         if (searching && drawerOpen) {
             searchFocus.requestFocus()
             keyboard?.show()
+        } else if (drawerOpen) {
+            sidebarFocus.requestFocus()
         } else if (searching) {
             focus.clearFocus()
             keyboard?.hide()
@@ -93,7 +98,8 @@ internal fun RivetSidebar(
     }
     val rows = state.sessions.filter { session -> session.title.contains(search.trim(), ignoreCase = true) }
 
-    Column(Modifier.fillMaxSize().imePadding().padding(horizontal = RivetLayout.pageGutter)) {
+    Column(Modifier.fillMaxSize().focusRequester(sidebarFocus).focusable()
+        .imePadding().padding(horizontal = RivetLayout.pageGutter)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Text("Rivet", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
             IconButton(onClick = {
