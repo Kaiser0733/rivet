@@ -1,5 +1,9 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.ui.RivetMotion
+import com.kaiser.rivet.ui.entryProgress
+import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
@@ -146,7 +150,13 @@ internal fun ChatWithPreview(
                         Box(Modifier.width(2.dp).height(28.dp).background(MaterialTheme.colorScheme.onSurfaceVariant))
                     }
                 }
-                Box(Modifier.weight(1f).fillMaxHeight()) { PreviewPane(tabs, active) }
+                val progress = entryProgress(Unit, animate = !tabs.fullScreen, duration = RivetMotion.PAGE_MS)
+                Box(Modifier.weight(1f).fillMaxHeight().clipToBounds()) {
+                    Box(Modifier.fillMaxSize().graphicsLayer {
+                        translationX = RivetMotion.paneTravel.toPx() * (1f - progress)
+                        alpha = 0.65f + 0.35f * progress
+                    }) { PreviewPane(tabs, active) }
+                }
             }
         }
     }

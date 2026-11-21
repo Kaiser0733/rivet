@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.processes
 
+import com.kaiser.rivet.ui.DisclosureBody
+import com.kaiser.rivet.ui.utilityClick
 import com.kaiser.rivet.ui.UtilityLead
 import com.kaiser.rivet.ui.UtilityRow
 import com.kaiser.rivet.ui.UtilityGlyph
@@ -233,10 +235,10 @@ private fun ProcessRow(
     val command = process.commandForDisplay ?: process.label
     val mono = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace)
     Surface(color = MaterialTheme.colorScheme.surfaceContainerLow, shape = MaterialTheme.shapes.small) {
-        Column(Modifier.fillMaxWidth().animateContentSize(tween(RivetMotion.PROCESS_MS, easing = RivetMotion.easing))) {
+        Column(Modifier.fillMaxWidth()) {
             Row(Modifier.fillMaxWidth().heightIn(min = 48.dp)
                 .semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" }
-                .clickable(role = Role.Button) { expanded = !expanded }
+                .utilityClick { expanded = !expanded }
                 .padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
@@ -245,7 +247,7 @@ private fun ProcessRow(
                 Icon(painterResource(if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right),
                     null, Modifier.size(18.dp), tint = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            if (expanded) {
+            DisclosureBody(expanded) {
                 Column(Modifier.padding(start = 12.dp, end = 12.dp, bottom = 10.dp),
                     verticalArrangement = Arrangement.spacedBy(8.dp)) {
                     Text(command, Modifier.fillMaxWidth().heightIn(max = 220.dp)

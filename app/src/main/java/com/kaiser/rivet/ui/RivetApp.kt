@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui
 
+import androidx.compose.material3.DrawerState
 import android.app.Activity
 import android.net.Uri
 import androidx.browser.customtabs.CustomTabsIntent
@@ -161,7 +162,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         LaunchedEffect(processNavigationRequest) {
             if (processNavigationRequest > 0) {
                 // A notification's deep link opens the tools slide cleanly above no stale overlays.
-                if (drawerState.isOpen) drawerState.close()
+                if (drawerState.isOpen || drawerState.targetValue == DrawerValue.Open) drawerState.slideTo(DrawerValue.Closed)
                 destination = RivetDestination.Chat
                 editing = false
                 installZip = null
@@ -174,7 +175,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val sharedContent by chatViewModel.sharedContent.collectAsState()
         LaunchedEffect(sharedContent.values.lastOrNull()?.id) {
             if (sharedContent.isNotEmpty()) {
-                if (drawerState.isOpen) drawerState.close()
+                if (drawerState.isOpen || drawerState.targetValue == DrawerValue.Open) drawerState.slideTo(DrawerValue.Closed)
                 destination = RivetDestination.Chat
                 editing = false
                 installZip = null
@@ -183,7 +184,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         }
         LaunchedEffect(sharedZip) {
             if (sharedZip != null) {
-                drawerState.close()
+                drawerState.slideTo(DrawerValue.Closed)
                 if (browserState.visible) chatViewModel.browser.close()
                 editing = false
                 installReturn = RivetDestination.Chat
@@ -209,10 +210,10 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         val openProjects = remember { { destination = RivetDestination.Projects } }
         val openSettings = remember { { destination = RivetDestination.Settings } }
         val openHistory = remember(coroutineScope, drawerState) {
-            { coroutineScope.launch { drawerState.open() }; Unit }
+            { coroutineScope.launch { drawerState.slideTo(DrawerValue.Open) }; Unit }
         }
         val closeHistory: () -> Unit = remember(coroutineScope, drawerState) {
-            { coroutineScope.launch { drawerState.close() }; Unit }
+            { coroutineScope.launch { drawerState.slideTo(DrawerValue.Closed) }; Unit }
         }
         val openTools = remember { { destination = RivetDestination.Tools } }
         val openModels: () -> Unit = {
@@ -222,7 +223,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
 
         val closeSidebarThen: (() -> Unit) -> Unit = { action ->
             coroutineScope.launch {
-                drawerState.close()
+                drawerState.slideTo(DrawerValue.Closed)
                 action()
             }
         }
@@ -467,4 +468,12 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
         }
     }
+}
+
+@Suppress("DEPRECATION")
+private suspend fun DrawerState.slideTo(value: DrawerValue) {
+    val reducedMotion = kotlinx.coroutines.currentCoroutineContext()[androidx.compose.ui.MotionDurationScale]
+        ?.scaleFactor == 0f
+    if (reducedMotion) snapTo(value)
+    else animateTo(value, androidx.compose.animation.core.tween(RivetMotion.DRAWER_MS, easing = RivetMotion.easing))
 }

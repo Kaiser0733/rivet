@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.chat
 
+import com.kaiser.rivet.ui.panelEntry
+import com.kaiser.rivet.ui.rivetMotionSpec
+import androidx.compose.ui.draw.clipToBounds
 import com.kaiser.rivet.ui.starter.HomeStarters
 import android.graphics.BitmapFactory
 import android.content.ClipData
@@ -1750,31 +1753,36 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     val composerEdge by animateColorAsState(
         if (focused) MaterialTheme.colorScheme.primary.copy(alpha = 0.75f)
         else MaterialTheme.colorScheme.outlineVariant,
-        animationSpec = tween(RivetMotion.FOCUS_MS, easing = RivetMotion.easing),
+        animationSpec = rivetMotionSpec(RivetMotion.FOCUS_MS),
         label = "Composer focus",
     )
     val sendInteraction = remember { MutableInteractionSource() }
     val pressingSend by sendInteraction.collectIsPressedAsState()
     val sendScale by animateFloatAsState(if (pressingSend) 0.91f else 1f,
-        animationSpec = tween(RivetMotion.FOCUS_MS, easing = RivetMotion.easing), label = "Send press")
+        animationSpec = rivetMotionSpec(RivetMotion.FOCUS_MS), label = "Send press")
     // One container for the whole composer: the field inside carries no outline of its
     // own, and the selector shares the quiet second row with send/stop.
     Column(modifier.fillMaxWidth().imePadding().padding(horizontal = 14.dp, vertical = 9.dp)) {
         if (showCommands) {
-            SlashCommandPanel(commandMatches) { row ->
-                dismissedCommand = null
-                val nextDraft = when (row.action) {
-                    SlashAction.Goal -> "/goal "
-                    null -> row.skill?.let { "/${it.name} " } ?: draft
-                    else -> ""
-                }
-                drafts = withDraft(drafts, sessionId, nextDraft)
-                when (row.action) {
-                    SlashAction.Feedback -> onSendFeedback()
-                    SlashAction.Compact -> onCompact()
-                    SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
-                    SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
-                    else -> Unit
+            val progress = entryProgress(Unit, animate = true, duration = RivetMotion.PAGE_MS)
+            Box(Modifier.clipToBounds()) {
+                Box(Modifier.panelEntry(progress)) {
+                    SlashCommandPanel(commandMatches) { row ->
+                        dismissedCommand = null
+                        val nextDraft = when (row.action) {
+                            SlashAction.Goal -> "/goal "
+                            null -> row.skill?.let { "/${it.name} " } ?: draft
+                            else -> ""
+                        }
+                        drafts = withDraft(drafts, sessionId, nextDraft)
+                        when (row.action) {
+                            SlashAction.Feedback -> onSendFeedback()
+                            SlashAction.Compact -> onCompact()
+                            SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
+                            SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
+                            else -> Unit
+                        }
+                    }
                 }
             }
             Spacer(Modifier.padding(bottom = 6.dp))

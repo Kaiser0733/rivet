@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.RivetMotion
+import com.kaiser.rivet.ui.entryProgress
+import com.kaiser.rivet.ui.pageEntry
 import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.ui.UtilityGlyph
 import com.kaiser.rivet.ui.UtilityLead
@@ -185,102 +188,106 @@ fun SettingsScreen(
                 onBack = back,
             )
             HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-            when (section) {
-                null -> Column(Modifier.verticalScroll(rememberScrollState())) {
-                    SectionList(
-                        providerSummary = when {
-                            state.loadError != null -> "Problem loading providers"
-                            active == null -> "Not set"
-                            else -> active.name
-                        },
-                        themeSummary = themeMode.name,
+            val pageProgress = entryProgress(section to shownSkill?.name, animate = true, duration = RivetMotion.PAGE_MS)
+            Box(Modifier.weight(1f).fillMaxWidth().pageEntry(pageProgress,
+                if (section == null) RivetMotion.pageBackShift else RivetMotion.pageShift)) {
+                when (section) {
+                    null -> Column(Modifier.verticalScroll(rememberScrollState())) {
+                        SectionList(
+                            providerSummary = when {
+                                state.loadError != null -> "Problem loading providers"
+                                active == null -> "Not set"
+                                else -> active.name
+                            },
+                            themeSummary = themeMode.name,
+                            subagentSummary = subagentSummary(subagentState, state.configs),
+                            skillSummary = skillCountSummary(skillCatalog),
+                            memorySummary = if (hasProject) "${memoryLines.size} saved" else "No project",
+                            versionSummary = versionName,
+                            onSelect = { section = it },
+                            onSendFeedback = onSendFeedback,
+                        )
+                    }
+                    SettingsSection.Providers -> ProviderDetail(
+                        loadError = state.loadError,
+                        headerNotice = state.headerNotice,
+                        active = active,
+                        saved = saved,
+                        onSelect = { viewModel.setActive(it.id) },
+                        onEdit = { id -> onEditProvider(id) },
+                        onDelete = { provider -> deleteTarget = provider },
+                        onNewProvider = onNewProvider,
+                        setup = { ProviderSetup(viewModel, onOpenModels, showActions = active == null) },
+                        onOpenGitHub = { section = SettingsSection.GitHub },
+                    )
+                    SettingsSection.Appearance -> AppearanceDetail(
+                        themeMode = themeMode,
+                        themeSaving = themeSaving,
+                        onThemeChange = onThemeChange,
+                        appearanceError = appearanceError,
+                    )
+                    SettingsSection.Memory -> MemoryDetail(
+                        lines = memoryLines,
+                        hasProject = hasProject,
+                        onEditMemory = { section = SettingsSection.EditMemory },
+                        onForget = onForgetMemoryLine,
+                        onOpenAgent = { section = SettingsSection.Agent },
+                    )
+                    SettingsSection.EditMemory -> MemoryEditor(memoryMarkdown) { text ->
+                        onUpdateMemory(text)
+                        section = SettingsSection.Memory
+                    }
+                    SettingsSection.Agent -> AgentDetail(
+                        autonomyMode = autonomyMode,
+                        autonomySaving = autonomySaving,
+                        autonomyError = autonomyError,
+                        onAutonomyChange = onAutonomyChange,
+                        spendCaps = spendCaps,
+                        userPricePerMillionUsd = userPricePerMillionUsd,
+                        onSaveSpend = onSaveSpend,
                         subagentSummary = subagentSummary(subagentState, state.configs),
-                        skillSummary = skillCountSummary(skillCatalog),
-                        memorySummary = if (hasProject) "${memoryLines.size} saved" else "No project",
-                        versionSummary = versionName,
-                        onSelect = { section = it },
-                        onSendFeedback = onSendFeedback,
+                        onOpenSubagents = { section = SettingsSection.Subagents },
+                    )
+                    SettingsSection.Phone -> PhoneAccessDetail(onOpenAddOn = { section = SettingsSection.PhoneAddOn })
+                    SettingsSection.PhoneAddOn -> PhoneAddOnDetail()
+                    SettingsSection.Subagents -> SubagentsSettings(
+                        state = subagentState,
+                        configs = state.configs,
+                        error = subagentError,
+                        onAllowAgentChoice = viewModel::setSubagentAllowAgentChoice,
+                        onToggleModel = viewModel::toggleSubagentModel,
+                        onFixedModel = viewModel::setFixedSubagentModel,
+                    )
+                    SettingsSection.GitHub -> GitHubDetail(
+                        connected = gitHubState.connected,
+                        gitAvailable = gitHubState.gitAvailable,
+                        busy = gitHubState.busy,
+                        error = gitHubState.error,
+                        onConnect = { section = SettingsSection.GitHubConnect },
+                        onDisconnect = viewModel::disconnectGitHub,
+                    )
+                    SettingsSection.GitHubConnect -> GitHubConnect(
+                        state = gitHubState,
+                        onConnect = viewModel::connectGitHub,
+                        onConnected = { section = SettingsSection.GitHub },
+                    )
+                    SettingsSection.Skills -> SkillsSettings(
+                        catalog = skillCatalog,
+                        selectedName = selectedSkill,
+                        onSelect = { selectedSkill = it },
+                        onLoadFiles = onLoadSkillFiles,
+                        onInstall = onInstallSkill,
+                    )
+                    SettingsSection.Usage -> DetailScroll {
+                        Text(conversationUsage?.diagnostics() ?: "No usage has been reported for this conversation.")
+                    }
+                    SettingsSection.Updates -> DetailScroll { UpdatesSection(versionName) }
+                    SettingsSection.About -> AboutDetail(
+                        versionName = versionName,
+                        onShowUsage = { section = SettingsSection.Usage },
+                        onOpenUpdates = { section = SettingsSection.Updates },
                     )
                 }
-                SettingsSection.Providers -> ProviderDetail(
-                    loadError = state.loadError,
-                    headerNotice = state.headerNotice,
-                    active = active,
-                    saved = saved,
-                    onSelect = { viewModel.setActive(it.id) },
-                    onEdit = { id -> onEditProvider(id) },
-                    onDelete = { provider -> deleteTarget = provider },
-                    onNewProvider = onNewProvider,
-                    setup = { ProviderSetup(viewModel, onOpenModels, showActions = active == null) },
-                    onOpenGitHub = { section = SettingsSection.GitHub },
-                )
-                SettingsSection.Appearance -> AppearanceDetail(
-                    themeMode = themeMode,
-                    themeSaving = themeSaving,
-                    onThemeChange = onThemeChange,
-                    appearanceError = appearanceError,
-                )
-                SettingsSection.Memory -> MemoryDetail(
-                    lines = memoryLines,
-                    hasProject = hasProject,
-                    onEditMemory = { section = SettingsSection.EditMemory },
-                    onForget = onForgetMemoryLine,
-                    onOpenAgent = { section = SettingsSection.Agent },
-                )
-                SettingsSection.EditMemory -> MemoryEditor(memoryMarkdown) { text ->
-                    onUpdateMemory(text)
-                    section = SettingsSection.Memory
-                }
-                SettingsSection.Agent -> AgentDetail(
-                    autonomyMode = autonomyMode,
-                    autonomySaving = autonomySaving,
-                    autonomyError = autonomyError,
-                    onAutonomyChange = onAutonomyChange,
-                    spendCaps = spendCaps,
-                    userPricePerMillionUsd = userPricePerMillionUsd,
-                    onSaveSpend = onSaveSpend,
-                    subagentSummary = subagentSummary(subagentState, state.configs),
-                    onOpenSubagents = { section = SettingsSection.Subagents },
-                )
-                SettingsSection.Phone -> PhoneAccessDetail(onOpenAddOn = { section = SettingsSection.PhoneAddOn })
-                SettingsSection.PhoneAddOn -> PhoneAddOnDetail()
-                SettingsSection.Subagents -> SubagentsSettings(
-                    state = subagentState,
-                    configs = state.configs,
-                    error = subagentError,
-                    onAllowAgentChoice = viewModel::setSubagentAllowAgentChoice,
-                    onToggleModel = viewModel::toggleSubagentModel,
-                    onFixedModel = viewModel::setFixedSubagentModel,
-                )
-                SettingsSection.GitHub -> GitHubDetail(
-                    connected = gitHubState.connected,
-                    gitAvailable = gitHubState.gitAvailable,
-                    busy = gitHubState.busy,
-                    error = gitHubState.error,
-                    onConnect = { section = SettingsSection.GitHubConnect },
-                    onDisconnect = viewModel::disconnectGitHub,
-                )
-                SettingsSection.GitHubConnect -> GitHubConnect(
-                    state = gitHubState,
-                    onConnect = viewModel::connectGitHub,
-                    onConnected = { section = SettingsSection.GitHub },
-                )
-                SettingsSection.Skills -> SkillsSettings(
-                    catalog = skillCatalog,
-                    selectedName = selectedSkill,
-                    onSelect = { selectedSkill = it },
-                    onLoadFiles = onLoadSkillFiles,
-                    onInstall = onInstallSkill,
-                )
-                SettingsSection.Usage -> DetailScroll {
-                    Text(conversationUsage?.diagnostics() ?: "No usage has been reported for this conversation.")
-                }
-                SettingsSection.Updates -> DetailScroll { UpdatesSection(versionName) }
-                SettingsSection.About -> AboutDetail(
-                    versionName = versionName,
-                    onShowUsage = { section = SettingsSection.Usage },
-                    onOpenUpdates = { section = SettingsSection.Updates },
-                )
             }
         }
     }

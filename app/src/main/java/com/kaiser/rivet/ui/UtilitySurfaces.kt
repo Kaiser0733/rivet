@@ -1,10 +1,13 @@
 package com.kaiser.rivet.ui
 
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.foundation.interaction.MutableInteractionSource
+import androidx.compose.foundation.interaction.collectIsPressedAsState
+import androidx.compose.runtime.remember
+import androidx.compose.ui.draw.drawBehind
 import androidx.compose.animation.core.FiniteAnimationSpec
 import androidx.compose.ui.unit.IntSize
 import androidx.compose.animation.AnimatedVisibility
-import androidx.compose.animation.core.snap
-import androidx.compose.animation.core.tween
 import androidx.compose.animation.expandVertically
 import androidx.compose.animation.shrinkVertically
 import androidx.compose.runtime.getValue
@@ -63,7 +66,7 @@ internal fun UtilityRow(
     Column(modifier.fillMaxWidth()) {
         Row(
             Modifier.fillMaxWidth().heightIn(min = 56.dp)
-                .clickable(enabled = enabled, role = Role.Button, onClick = onClick)
+                .utilityClick(enabled = enabled, onClick = onClick)
                 .padding(horizontal = 4.dp, vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically,
             horizontalArrangement = Arrangement.spacedBy(12.dp),
@@ -119,22 +122,42 @@ internal fun UtilityFold(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
-    val sizeSpec: FiniteAnimationSpec<IntSize> = if (motionDisabled()) snap() else tween(
-        durationMillis = RivetMotion.DISCLOSURE_MS, easing = RivetMotion.easing,
-    )
     Column(modifier.fillMaxWidth()) {
         UtilityRow(icon, title, value, divider = false,
             modifier = Modifier.semantics { stateDescription = if (expanded) "Expanded" else "Collapsed" },
             trailingIcon = if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right,
             onClick = { expanded = !expanded })
-        AnimatedVisibility(
-            visible = expanded,
-            enter = expandVertically(animationSpec = sizeSpec, expandFrom = Alignment.Top),
-            exit = shrinkVertically(animationSpec = sizeSpec, shrinkTowards = Alignment.Top),
-        ) {
+        DisclosureBody(expanded) {
             Column(Modifier.fillMaxWidth().padding(start = 52.dp, end = 8.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
         }
         HorizontalDivider(Modifier.padding(start = 52.dp), color = MaterialTheme.colorScheme.outlineVariant)
     }
+}
+
+@Composable
+internal fun DisclosureBody(expanded: Boolean, content: @Composable () -> Unit) {
+    val spec: FiniteAnimationSpec<IntSize> = rivetMotionSpec(RivetMotion.DISCLOSURE_MS)
+    AnimatedVisibility(
+        visible = expanded,
+        enter = expandVertically(animationSpec = spec, expandFrom = Alignment.Top),
+        exit = shrinkVertically(animationSpec = spec, shrinkTowards = Alignment.Top),
+    ) { content() }
+}
+
+@Composable
+internal fun Modifier.utilityClick(enabled: Boolean = true, onClick: () -> Unit): Modifier {
+    val source = remember { MutableInteractionSource() }
+    val pressed by source.collectIsPressedAsState()
+    return pressLayer(pressed).clickable(
+        enabled = enabled, role = Role.Button, onClick = onClick, interactionSource = source, indication = null,
+    )
+}
+
+@Composable
+internal fun Modifier.pressLayer(pressed: Boolean): Modifier {
+    val ink = MaterialTheme.colorScheme.primary
+    val amount by animateFloatAsState(if (pressed) RivetMotion.pressAlpha else 0f,
+        animationSpec = rivetMotionSpec(RivetMotion.FOCUS_MS), label = "Pressed")
+    return drawBehind { if (amount > 0f) drawRect(ink.copy(alpha = amount)) }
 }
