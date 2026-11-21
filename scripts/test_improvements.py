@@ -62,3 +62,11 @@ class ImprovementsTest(unittest.TestCase):
         sidebar = source("ui/history/HistoryScreen.kt")
         self.assertLess(sidebar.index("R.drawable.ic_launcher_foreground"), sidebar.index('Text("RIVET"'))
         self.assertLess(sidebar.index('Text("RIVET"'), sidebar.index('"Search chats"'))
+
+    def test_empty_draft_is_reusable_and_absent_from_sidebar_recents(self):
+        storage = source("storage/CodingSessions.kt")
+        self.assertIn("reuseEmpty: Boolean = false", storage)
+        self.assertIn("NOT EXISTS(SELECT 1 FROM events WHERE session_id=sessions.id)", storage)
+        self.assertIn("copy(hasMessages = cursor.getInt(7) != 0)", storage)
+        self.assertIn("reuseEmpty = true", source("chat/ChatViewModel.kt"))
+        self.assertIn("session.hasMessages && session.title.contains", source("ui/history/HistoryScreen.kt"))

@@ -447,6 +447,23 @@ class CodingSessionsTest {
         assertEquals(3, CodingSessions(app).fullEventCount(migrated.id!!))
     }
 
+    @Test fun newChatReusesTheEmptyDraftWithoutPublishingItToRecents() = runBlocking {
+        val sessions = CodingSessions(app)
+        val existing = sessions.load().id!!
+        sessions.save(listOf(AgentMessage.user("keep this chat")), interrupted = false)
+        val draft = sessions.create("tree", reuseEmpty = true).id!!
+        val localDrafts = com.kaiser.rivet.chat.withDraft(emptyMap(), draft, "unsent work")
+        assertEquals(draft, sessions.create("tree", reuseEmpty = true).id)
+        assertEquals(listOf(existing), sessions.list().filter { it.hasMessages }.map { it.id })
+        sessions.select(existing)
+        val reopened = sessions.create("tree", reuseEmpty = true).id
+        assertEquals(draft, reopened)
+        assertEquals("unsent work", com.kaiser.rivet.chat.draftFor(localDrafts, reopened))
+        sessions.save(listOf(AgentMessage.user("first message")), interrupted = false)
+        assertEquals(setOf(existing, draft), sessions.list().filter { it.hasMessages }.map { it.id }.toSet())
+        assertNotEquals(draft, sessions.create("tree", reuseEmpty = true).id)
+    }
+
     @Test fun sessionsResumeIndependentlyAndDeletionIsIsolated() = runBlocking {
         val sessions = CodingSessions(app)
         val first = sessions.load()

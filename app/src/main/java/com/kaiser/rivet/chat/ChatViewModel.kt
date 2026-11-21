@@ -1949,7 +1949,13 @@ class ChatViewModel private constructor(
                 rollbackAcceptedUser(acceptedUser)
                 releaseTurn()
                 if (ticket == generation) {
-                    _uiState.update {
+                    val updatedHistory = if (pendingUser != null && sessions != null &&
+                _uiState.value.sessions.none { it.id == turnSessionId && it.hasMessages }) {
+                try { sessions.list() }
+                catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null }
+            } else null
+            _uiState.update {
                         it.copy(streaming = false, pendingApproval = null, activity = null,
                             interruptedTurn = wasInterrupted,
                             error = CONTEXT_LIMIT_ERROR)
@@ -1968,6 +1974,7 @@ class ChatViewModel private constructor(
                 it.copy(
                     // send() already appended the accepted bubble; retries reuse the tail.
                     messages = it.messages,
+                    sessions = updatedHistory ?: it.sessions,
                     streaming = true,
                     error = null, errorAction = null, notice = null, unsupportedReasoning = null,
                     activity = "Working on it…",
@@ -3042,7 +3049,7 @@ class ChatViewModel private constructor(
     }
 
     fun newSession() {
-        changeSession { store -> store.create(workspaceSelection.currentIdentity()) }
+        changeSession { store -> store.create(workspaceSelection.currentIdentity(), reuseEmpty = true) }
     }
 
     fun resumeSession(id: String) {

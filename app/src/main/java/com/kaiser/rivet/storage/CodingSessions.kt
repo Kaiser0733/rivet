@@ -45,6 +45,7 @@ data class CodingSessionHeader(
     val updatedAt: Long,
     val interrupted: Boolean,
     val pinned: Boolean,
+    val hasMessages: Boolean = true,
 )
 
 data class SessionUsage(
@@ -232,13 +233,24 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     suspend fun list(): List<CodingSessionHeader> = onDatabase { db ->
-        db.rawQuery("SELECT id,title,workspace_id,created_at,updated_at,interrupted,pinned " +
-            "FROM sessions ORDER BY pinned DESC, updated_at DESC", null)
-            .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.header()) } }
+        db.rawQuery(
+            """
+            SELECT id,title,workspace_id,created_at,updated_at,interrupted,pinned,
+                EXISTS(SELECT 1 FROM events WHERE session_id=sessions.id
+                    AND payload NOT GLOB '{"role":"context"*')
+            FROM sessions ORDER BY pinned DESC, updated_at DESC
+            """.trimIndent(),
+            null,
+        ).use { cursor ->
+            buildList {
+                while (cursor.moveToNext()) add(cursor.header().copy(hasMessages = cursor.getInt(7) != 0))
+            }
+        }
     }
 
     suspend fun create(
         workspaceId: String?, starterTitle: String? = null, starterBrief: AgentMessage? = null,
+        reuseEmpty: Boolean = false,
     ): AgentSession = onDatabase { db ->
         require((starterTitle == null) == (starterBrief == null))
         if (starterBrief != null) {
@@ -246,6 +258,20 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             require(row != null && row.kind == StarterBrief.KIND && row.workspaceId == workspaceId)
         }
         val title = starterTitle ?: "New session"
+        if (reuseEmpty && starterBrief == null) {
+            val binding = if (workspaceId == null) "workspace_id IS NULL" else "workspace_id=?"
+            val empty = db.rawQuery(
+                "SELECT id FROM sessions WHERE $binding AND title='New session' " +
+                    "AND NOT EXISTS(SELECT 1 FROM events WHERE session_id=sessions.id) " +
+                    "ORDER BY updated_at DESC, rowid DESC LIMIT 1",
+                workspaceId?.let { arrayOf(it) },
+            ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
+            if (empty != null) {
+                setActive(db, empty)
+                summaryBytes = 0
+                return@onDatabase AgentSession(emptyList(), id = empty, title = title, workspaceId = workspaceId)
+            }
+        }
         val id = UUID.randomUUID().toString()
         db.beginTransaction()
         try {

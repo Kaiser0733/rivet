@@ -101,7 +101,9 @@ internal fun RivetSidebar(
             keyboard?.hide()
         }
     }
-    val rows = state.sessions.filter { session -> session.title.contains(search.trim(), ignoreCase = true) }
+    val rows = state.sessions.filter { session ->
+        session.hasMessages && session.title.contains(search.trim(), ignoreCase = true)
+    }
 
     Column(Modifier.fillMaxSize().focusRequester(sidebarFocus).focusable()
         .imePadding().padding(horizontal = RivetLayout.pageGutter)) {
