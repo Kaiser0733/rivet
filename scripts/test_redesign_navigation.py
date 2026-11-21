@@ -17,3 +17,13 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertIn("selector?.invoke()", chat)
         self.assertNotIn("StatusFooter(", chat)
         self.assertNotIn("HistoryPane(", chat)
+
+    def test_sidebar_hosts_project_tools_browser_models_chats_and_settings(self):
+        app = (UI / "RivetApp.kt").read_text()
+        sidebar = (UI / "history/HistoryScreen.kt").read_text()
+        for action in ("onOpenProjects", "onOpenTools", "onOpenBrowser", "onOpenModels", "onOpenSettings"):
+            self.assertIn(action + " =", app.split("RivetSidebar(", 1)[1])
+            self.assertIn(action, sidebar.split("fun RivetSidebar(", 1)[1])
+        self.assertIn("session.title.contains(search.trim(), ignoreCase = true)", sidebar)
+        self.assertIn("relativeRecency(session.updatedAt)", sidebar)
+        self.assertIn('Text("New chat")', sidebar)

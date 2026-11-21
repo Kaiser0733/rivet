@@ -1,31 +1,31 @@
 package com.kaiser.rivet.ui.history
 
 import android.text.format.DateUtils
+import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
-import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.foundation.layout.navigationBarsPadding
+import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
-import androidx.compose.foundation.layout.statusBarsPadding
-import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.shape.CircleShape
+import androidx.compose.material3.Button
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
-import androidx.compose.material3.IconButtonDefaults
-import androidx.compose.material3.LocalContentColor
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -37,191 +37,172 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
-import androidx.compose.ui.text.font.FontFamily
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.ChatViewModel
-import com.kaiser.rivet.storage.CodingSessionHeader
-import com.kaiser.rivet.ui.RivetDoodle
-import com.kaiser.rivet.ui.RivetDoodleMark
-import com.kaiser.rivet.ui.RivetOutlinedButton
+import com.kaiser.rivet.ui.workspaceFolderPath
 
+@OptIn(ExperimentalFoundationApi::class)
 @Composable
-fun HistoryScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
-    HistoryContent(viewModel, Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding(), onBack)
-}
-
-// Panel form. `onNavigate` closes the panel after a conversation is opened or created;
-// the compact layout stays because the panel, not the content, owns the back affordance.
-@Composable
-fun HistoryPane(viewModel: ChatViewModel, modifier: Modifier = Modifier, onNavigate: () -> Unit = {}) {
-    HistoryContent(viewModel, modifier.background(MaterialTheme.colorScheme.surfaceContainerLow),
-        onClose = onNavigate, embedded = true)
-}
-
-@Composable
-private fun HistoryContent(viewModel: ChatViewModel, modifier: Modifier, onClose: (() -> Unit)? = null,
-                           embedded: Boolean = onClose == null) {
-    val state by viewModel.uiState.collectAsState()
-    val actionsEnabled = state.ready && !state.projectLoading && !state.streaming &&
-        !state.undoing && !state.recoveringProjectChanges
-    // Opening a conversation is safe during a turn: the switch waits for it to finish.
-    val openEnabled = state.ready && !state.projectLoading &&
-        !state.undoing && !state.recoveringProjectChanges
-    var renameId by rememberSaveable { mutableStateOf<String?>(null) }
-    var deleteId by rememberSaveable { mutableStateOf<String?>(null) }
-    var title by rememberSaveable { mutableStateOf("") }
-
-    state.sessions.firstOrNull { it.id == renameId }?.let { target ->
-        AlertDialog(
-            onDismissRequest = { renameId = null },
-            title = { Text("Rename conversation", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
-            text = {
-                OutlinedTextField(value = title, onValueChange = { title = it },
-                    label = { Text("Name", fontFamily = FontFamily.Default) }, singleLine = true)
-            },
-            confirmButton = { RivetOutlinedButton(onClick = {
-                viewModel.renameSession(target.id, title)
-                renameId = null
-            }, enabled = title.isNotBlank() && actionsEnabled) { Text("Save") } },
-            dismissButton = { TextButton(onClick = { renameId = null }) { Text("Cancel") } },
-        )
-    }
-    state.sessions.firstOrNull { it.id == deleteId }?.let { target ->
-        AlertDialog(
-            onDismissRequest = { deleteId = null },
-            title = { Text("Delete conversation?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
-            text = { Text("This removes it from Rivet. Project files are not changed.",
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
-            confirmButton = { RivetOutlinedButton(onClick = {
-                viewModel.deleteSession(target.id)
-                deleteId = null
-            }, enabled = actionsEnabled) { Text("Delete") } },
-            dismissButton = { TextButton(onClick = { deleteId = null }) { Text("Cancel") } },
-        )
-    }
-
-    Column(modifier) {
-        Row(Modifier.fillMaxWidth().padding(start = 4.dp, end = 8.dp, top = 4.dp, bottom = 2.dp),
-            verticalAlignment = Alignment.CenterVertically) {
-            if (!embedded) IconButton(onClick = { onClose?.invoke() }) {
-                Icon(painterResource(R.drawable.ic_back), "Back", tint = MaterialTheme.colorScheme.onBackground)
-            } else Spacer(Modifier.size(12.dp))
-            Text("History", style = MaterialTheme.typography.titleLarge)
-            Spacer(Modifier.weight(1f))
-            IconButton(onClick = { viewModel.newSession(); onClose?.invoke() }, enabled = actionsEnabled) {
-                Icon(painterResource(R.drawable.ic_add), "New conversation",
-                    tint = MaterialTheme.colorScheme.onBackground)
-            }
-        }
-        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-
-        if (state.sessions.isEmpty()) {
-            Column(Modifier.fillMaxSize().verticalScroll(rememberScrollState()).padding(20.dp),
-                horizontalAlignment = Alignment.CenterHorizontally,
-                verticalArrangement = Arrangement.Center) {
-                RivetDoodleMark(RivetDoodle.Ready)
-                Text("Your conversations will appear here.",
-                    style = MaterialTheme.typography.headlineSmall,
-                    modifier = Modifier.padding(top = 12.dp))
-                Text("Start a new conversation whenever you want to work on something else.",
-                    color = MaterialTheme.colorScheme.onSurfaceVariant,
-                    modifier = Modifier.padding(top = 8.dp))
-                RivetOutlinedButton(onClick = { viewModel.newSession(); onClose?.invoke() }, enabled = actionsEnabled) {
-                    Text("New conversation")
-                }
-            }
-        } else {
-            LazyColumn(Modifier.widthIn(max = 820.dp).fillMaxSize().align(Alignment.CenterHorizontally),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                start = if (embedded) 12.dp else 20.dp, end = 12.dp, top = 4.dp, bottom = 16.dp)) {
-                items(state.sessions, key = { it.id }) { session ->
-                    HistoryRow(
-                        session = session,
-                        current = session.id == state.currentSessionId,
-                        enabled = openEnabled,
-                        actionsEnabled = actionsEnabled,
-                        compact = embedded,
-                        onOpen = { viewModel.resumeSession(session.id); onClose?.invoke() },
-                        onPin = { viewModel.setSessionPinned(session.id, !session.pinned) },
-                        onRename = {
-                            title = session.title
-                            renameId = session.id
-                        },
-                        onDelete = { deleteId = session.id },
-                    )
-                    HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-                }
-            }
-        }
-    }
-}
-
-@Composable
-private fun HistoryRow(
-    session: CodingSessionHeader,
-    current: Boolean,
-    enabled: Boolean,
-    compact: Boolean,
-    onOpen: () -> Unit,
-    onPin: () -> Unit,
-    onRename: () -> Unit,
-    onDelete: () -> Unit,
-    actionsEnabled: Boolean = enabled,
+internal fun RivetSidebar(
+    viewModel: ChatViewModel,
+    profileInitial: String?,
+    onNavigate: () -> Unit,
+    onOpenProjects: () -> Unit,
+    onOpenTools: () -> Unit,
+    onOpenBrowser: () -> Unit,
+    onOpenModels: () -> Unit,
+    onOpenSettings: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth()
-        .then(if (session.pinned) Modifier.background(
-            MaterialTheme.colorScheme.primary.copy(alpha = 0.12f)) else Modifier)
-        .clickable(enabled = enabled, onClick = onOpen)
-        .padding(start = 4.dp, top = 7.dp, bottom = 7.dp)) {
-        if (compact) {
-            HistoryTitle(session, current, Modifier.fillMaxWidth())
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                HistoryActions(session.pinned, actionsEnabled, onPin, onRename, onDelete)
+    val state by viewModel.uiState.collectAsState()
+    val openEnabled = state.ready && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges
+    val actionsEnabled = openEnabled && !state.streaming
+    var searching by rememberSaveable { mutableStateOf(false) }
+    var search by rememberSaveable { mutableStateOf("") }
+    var managingId by rememberSaveable { mutableStateOf<String?>(null) }
+    var editTitle by rememberSaveable { mutableStateOf<String?>(null) }
+    var confirmingDelete by rememberSaveable { mutableStateOf(false) }
+    val resetActions = {
+        managingId = null
+        editTitle = null
+        confirmingDelete = false
+    }
+    val rows = state.sessions.filter { session -> session.title.contains(search.trim(), ignoreCase = true) }
+
+    Column(Modifier.fillMaxSize().imePadding().padding(horizontal = 18.dp)) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
+            Text("Rivet", Modifier.weight(1f), style = MaterialTheme.typography.headlineMedium)
+            IconButton(onClick = {
+                searching = !searching
+                if (!searching) search = ""
+            }) {
+                Icon(painterResource(if (searching) R.drawable.ic_close else R.drawable.ic_search),
+                    if (searching) "Close search" else "Search chats")
             }
-        } else {
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                HistoryTitle(session, current, Modifier.weight(1f))
-                HistoryActions(session.pinned, actionsEnabled, onPin, onRename, onDelete)
+        }
+        if (searching) {
+            OutlinedTextField(search, { search = it }, Modifier.fillMaxWidth().padding(bottom = 8.dp),
+                placeholder = { Text("Search chats") }, singleLine = true)
+        }
+        Surface(onClick = onOpenProjects, modifier = Modifier.fillMaxWidth(),
+            color = MaterialTheme.colorScheme.surfaceContainer,
+            shape = MaterialTheme.shapes.small) {
+            Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+                verticalAlignment = Alignment.CenterVertically) {
+                Icon(painterResource(R.drawable.ic_files), null)
+                Column(Modifier.weight(1f)) {
+                    Text(state.projectName ?: "Choose a working folder",
+                        style = MaterialTheme.typography.titleSmall,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    workspaceFolderPath(state.projectIdentity)?.let {
+                        Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            style = MaterialTheme.typography.bodySmall,
+                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+                    }
+                }
+                Icon(painterResource(R.drawable.ic_chevron_right), "Change working folder")
+            }
+        }
+        Spacer(Modifier.size(8.dp))
+        SidebarLink("Tools", R.drawable.ic_processes, onOpenTools)
+        SidebarLink("Browser", R.drawable.ic_browser, onOpenBrowser)
+        SidebarLink("Models", R.drawable.ic_models, onOpenModels)
+        HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        LazyColumn(Modifier.weight(1f)) {
+            if (rows.isEmpty()) item {
+                Text(if (search.isBlank()) "Your chats will appear here." else "No matching chats.",
+                    Modifier.padding(vertical = 14.dp),
+                    color = MaterialTheme.colorScheme.onSurfaceVariant,
+                    style = MaterialTheme.typography.bodyMedium)
+            }
+            items(rows, key = { it.id }) { session ->
+                val current = session.id == state.currentSessionId
+                Row(Modifier.fillMaxWidth()
+                    .background(if (current) MaterialTheme.colorScheme.surfaceContainer else
+                        MaterialTheme.colorScheme.surfaceContainerLow, MaterialTheme.shapes.small)
+                    .combinedClickable(
+                        enabled = openEnabled,
+                        onClick = {
+                            resetActions()
+                            viewModel.resumeSession(session.id)
+                            onNavigate()
+                        },
+                        onLongClickLabel = "Manage chat",
+                        onLongClick = if (actionsEnabled) ({ resetActions(); managingId = session.id }) else null,
+                    ).heightIn(min = 50.dp).padding(horizontal = 8.dp, vertical = 5.dp),
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    if (session.pinned) Icon(painterResource(R.drawable.ic_pin_filled), "Pinned", Modifier.size(16.dp))
+                    Text(session.title.replace("New session", "New conversation"), Modifier.weight(1f),
+                        style = MaterialTheme.typography.bodyMedium,
+                        maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    Text(relativeRecency(session.updatedAt), style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
+                if (managingId == session.id) {
+                    when {
+                        confirmingDelete -> Column(Modifier.padding(8.dp)) {
+                            Text("Delete this chat? Project files stay where they are.")
+                            Row {
+                                TextButton(onClick = resetActions) { Text("Cancel") }
+                                TextButton(enabled = actionsEnabled, onClick = {
+                                    viewModel.deleteSession(session.id)
+                                    resetActions()
+                                }) { Text("Delete chat") }
+                            }
+                        }
+                        editTitle != null -> Column(Modifier.padding(8.dp)) {
+                            OutlinedTextField(editTitle.orEmpty(), { editTitle = it },
+                                label = { Text("Chat name") }, singleLine = true)
+                            Row {
+                                TextButton(onClick = resetActions) { Text("Cancel") }
+                                TextButton(enabled = actionsEnabled && !editTitle.isNullOrBlank(), onClick = {
+                                    viewModel.renameSession(session.id, editTitle.orEmpty())
+                                    resetActions()
+                                }) { Text("Save") }
+                            }
+                        }
+                        else -> Row {
+                            TextButton(onClick = {
+                                viewModel.setSessionPinned(session.id, !session.pinned)
+                                resetActions()
+                            }, enabled = actionsEnabled) { Text(if (session.pinned) "Unpin" else "Pin") }
+                            TextButton(onClick = { editTitle = session.title }, enabled = actionsEnabled) { Text("Rename") }
+                            TextButton(onClick = { confirmingDelete = true }, enabled = actionsEnabled) { Text("Delete") }
+                        }
+                    }
+                }
+            }
+        }
+        Row(Modifier.fillMaxWidth().padding(vertical = 10.dp),
+            horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
+            Button(onClick = { viewModel.newSession(); onNavigate() }, enabled = actionsEnabled,
+                shape = MaterialTheme.shapes.small) {
+                Text("New chat")
+            }
+            Surface(onClick = onOpenSettings,
+                modifier = Modifier.size(48.dp).semantics { contentDescription = "Settings" },
+                shape = CircleShape, color = MaterialTheme.colorScheme.surfaceContainerHighest) {
+                Box(contentAlignment = Alignment.Center) {
+                    if (profileInitial != null) Text(profileInitial, style = MaterialTheme.typography.titleMedium)
+                    else Icon(painterResource(R.drawable.ic_profile), null, Modifier.size(22.dp))
+                }
             }
         }
     }
 }
 
 @Composable
-private fun HistoryTitle(session: CodingSessionHeader, current: Boolean, modifier: Modifier) {
-    Column(modifier.padding(end = 8.dp)) {
-        Text(session.title.replace("New session", "New conversation"),
-            style = MaterialTheme.typography.titleSmall,
-            color = MaterialTheme.colorScheme.onSurface,
-            maxLines = 2, overflow = TextOverflow.Ellipsis)
-        Text(listOfNotNull(relativeRecency(session.updatedAt), if (current) "Current" else null)
-            .joinToString(" · "), style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
-    }
-}
-
-@Composable
-private fun HistoryActions(pinned: Boolean, enabled: Boolean,
-                           onPin: () -> Unit, onRename: () -> Unit, onDelete: () -> Unit) {
-    IconButton(onClick = onPin, enabled = enabled, modifier = Modifier.size(48.dp),
-        colors = IconButtonDefaults.iconButtonColors(
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
-        Icon(painterResource(if (pinned) R.drawable.ic_pin_filled else R.drawable.ic_pin),
-            if (pinned) "Unpin conversation" else "Pin conversation",
-            tint = if (pinned && enabled) MaterialTheme.colorScheme.primary
-            else LocalContentColor.current)
-    }
-    IconButton(onClick = onRename, enabled = enabled, modifier = Modifier.size(48.dp),
-        colors = IconButtonDefaults.iconButtonColors(
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
-        Icon(painterResource(R.drawable.ic_edit), "Rename conversation")
-    }
-    IconButton(onClick = onDelete, enabled = enabled, modifier = Modifier.size(48.dp),
-        colors = IconButtonDefaults.iconButtonColors(
-            contentColor = MaterialTheme.colorScheme.onSurfaceVariant)) {
-        Icon(painterResource(R.drawable.ic_delete), "Delete conversation")
+private fun SidebarLink(label: String, icon: Int, onClick: () -> Unit) {
+    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick)
+        .heightIn(min = 48.dp).padding(horizontal = 8.dp),
+        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
+        Icon(painterResource(icon), null, Modifier.size(22.dp))
+        Text(label, style = MaterialTheme.typography.titleSmall)
     }
 }
 

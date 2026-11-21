@@ -158,7 +158,8 @@ import kotlinx.coroutines.launch
 @Composable
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenSidebar: () -> Unit,
-               onOpenProjects: (() -> Unit)? = null) {
+               onOpenProjects: (() -> Unit)? = null,
+               projectPickerRequest: Int = 0, onProjectPickerHandled: () -> Unit = {}) {
     val state by chatViewModel.uiState.collectAsState()
     val userSkills by chatViewModel.userSkills.collectAsState()
     val subagents by chatViewModel.subagents.collectAsState()
@@ -226,6 +227,12 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
         }
     }
     fun chooseProject() = launchProjectPicker(starter = null)
+    LaunchedEffect(projectPickerRequest) {
+        if (projectPickerRequest != 0) {
+            onProjectPickerHandled()
+            chooseProject()
+        }
+    }
     if (showStarterGallery) {
         StarterGallery(
             providerIds = providers.configs.filter { it.type != ProviderType.Local && it.type != ProviderType.ChatGptPlan }

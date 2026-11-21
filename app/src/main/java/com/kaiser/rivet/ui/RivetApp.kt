@@ -45,7 +45,11 @@ import com.kaiser.rivet.ui.browser.findActivity
 import com.kaiser.rivet.ui.terminal.TerminalPane
 import com.kaiser.rivet.ui.chat.ApprovalDialog
 import com.kaiser.rivet.ui.chat.ChatScreen
-import com.kaiser.rivet.ui.history.HistoryPane
+import com.kaiser.rivet.ui.history.RivetSidebar
+import com.kaiser.rivet.provider.ProviderType
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
+import androidx.compose.runtime.produceState
 import com.kaiser.rivet.ui.local.ModelsScreen
 import com.kaiser.rivet.ui.processes.ToolsPane
 import com.kaiser.rivet.ui.provider.ProviderEditor
@@ -100,6 +104,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 }
             }
         }
+        var projectPickerRequest by rememberSaveable { mutableIntStateOf(0) }
         var editing by rememberSaveable { mutableStateOf(false) }
         // Panels: the left slide's state is the drawer's own; the right slide and the
         // settings sheet are booleans, so a swipe-close or a Back-close cannot disagree
@@ -162,6 +167,15 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         }
         val editor by providersViewModel.editorState.collectAsState()
         val providerList by providersViewModel.listState.collectAsState()
+        val planProvider = providerList.configs.firstOrNull { it.type == ProviderType.ChatGptPlan }
+        val profileInitial by produceState<String?>(null, planProvider) {
+            value = planProvider?.let { provider ->
+                withContext(Dispatchers.IO) {
+                    runCatching { providersViewModel.chatGptEmail(provider.id) }.getOrNull()
+                        ?.firstOrNull(Char::isLetterOrDigit)?.uppercaseChar()?.toString()
+                }
+            }
+        }
         if (editing && editor.config.id.isEmpty()) editing = false
         // Stable instances so ChatScreen can skip: these only change shell state, which
         // rememberSaveable keeps across recompositions.
@@ -181,6 +195,12 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
 
+        val closeSidebarThen: (() -> Unit) -> Unit = { action ->
+            coroutineScope.launch {
+                drawerState.close()
+                action()
+            }
+        }
         val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open || processesOpen
         BackHandler(terminalOpen || editing || settingsOpen || modelsOpen || browserState.visible || panelOpen) {
             when {
@@ -207,9 +227,25 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     ModalNavigationDrawer(
                         drawerState = drawerState,
                         drawerContent = {
-                            ModalDrawerSheet {
-                                HistoryPane(chatViewModel, Modifier.fillMaxSize(),
-                                    onNavigate = closeHistory)
+                            ModalDrawerSheet(drawerContainerColor = MaterialTheme.colorScheme.surfaceContainerLow) {
+                                RivetSidebar(
+                                    viewModel = chatViewModel,
+                                    profileInitial = profileInitial,
+                                    onNavigate = closeHistory,
+                                    onOpenProjects = { closeSidebarThen { projectPickerRequest++ } },
+                                    onOpenTools = { closeSidebarThen(openProcesses) },
+                                    onOpenBrowser = {
+                                        closeSidebarThen {
+                                            if (com.kaiser.rivet.browser.BrowserDrivingPolicy.cardVisible(
+                                                    browserState.agentRunActive, browserState.agentVisualActive,
+                                                    browserState.watchVisible, browserState.visible))
+                                                chatViewModel.browser.watch()
+                                            else chatViewModel.browser.userOpen()
+                                        }
+                                    },
+                                    onOpenModels = { closeSidebarThen(openModels) },
+                                    onOpenSettings = { closeSidebarThen(openSettings) },
+                                )
                             }
                         },
                     ) {
@@ -218,7 +254,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 RivetChatBackground()
                                 ChatScreen(chatViewModel, providersViewModel,
                                     onOpenSettings = openSettings,
-                                    onOpenSidebar = openHistory)
+                                    onOpenSidebar = openHistory,
+                                    projectPickerRequest = projectPickerRequest,
+                                    onProjectPickerHandled = { projectPickerRequest = 0 })
                             }
                             RightSlidePanel(open = processesOpen,
                                 onClose = closeProcesses) {
