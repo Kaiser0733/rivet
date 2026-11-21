@@ -34,6 +34,17 @@ class BrowserNoticeCopyTest {
         assertFalse(copy.retry)
     }
 
+    @Test fun aViewTheSessionNeverHeldIsNotReportedAsReleased() {
+        // BrowserResetTest's case: a fresh WebView, no renderer yet. Treating it as
+        // "released" replaced the agent's degenerate-viewport error with the wrong one.
+        val view = Any()
+        assertFalse(rendererWasLost(teardownRequested = false, released = null, current = null, view = view))
+        assertTrue(rendererWasLost(teardownRequested = true, released = null, current = null, view = view))
+        assertTrue(rendererWasLost(teardownRequested = false, released = view, current = null, view = view))
+        assertTrue(rendererWasLost(teardownRequested = false, released = null, current = Any(), view = view))
+        assertFalse(rendererWasLost(teardownRequested = false, released = Any(), current = view, view = view))
+    }
+
     @Test fun layoutWaitDistinguishesLostRendererFromSlowLayout() {
         assertEquals(LayoutWait.Waiting, layoutWait(width = 0, height = 0, rendererLost = false))
         assertEquals(LayoutWait.Ready, layoutWait(width = 2, height = 2, rendererLost = false))

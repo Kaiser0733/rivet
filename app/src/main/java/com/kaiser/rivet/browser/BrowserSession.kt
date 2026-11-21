@@ -283,6 +283,8 @@ class BrowserSession(
     private var activeTitle: String = ""
     private var authLimitStated = false
     private var renderer: WebView? = null
+    /** The view the session last tore down, so a caller can tell "released" from "never mine". */
+    private var releasedRenderer: WebView? = null
     private var pendingModal: PendingModal? = null
     private var teardown = RendererTeardown()
     private val processRegistry = RendererProcessRegistry()
@@ -794,7 +796,12 @@ class BrowserSession(
     internal suspend fun awaitLaidOut(view: WebView, timeoutMs: Long = rendererLayoutTimeoutMs) {
         fun outcome(): LayoutWait = layoutWait(
             width = view.width, height = view.height,
-            rendererLost = renderer !== view || _state.value.teardownRequested,
+            rendererLost = rendererWasLost(
+                teardownRequested = _state.value.teardownRequested,
+                released = releasedRenderer,
+                current = renderer,
+                view = view,
+            ),
         )
         if (withContext(Dispatchers.Main) { outcome() } == LayoutWait.Ready) return
         withContext(Dispatchers.Main) { view.requestLayout() }
@@ -813,7 +820,7 @@ class BrowserSession(
         } ?: false
         if (!finished) {
             throw BrowserFailure("browser_renderer_unavailable",
-                "The page view didn't get a size in time. Open the browser again.")
+                "The browser viewport is degenerate (1x1 or not laid out). Call browser_reset(reopen=true) to rebuild the renderer.")
         }
     }
 
@@ -1882,6 +1889,7 @@ class BrowserSession(
         }
         rendererFailure = null
         resolvePageModal()
+        releasedRenderer = null
         renderer = view
         recordRenderProcess(view)
         baselineAvailMem = availableMemBytes() ?: 0L
@@ -3052,6 +3060,7 @@ class BrowserSession(
         android.util.Log.d("BrowserHost", "finishRendererTeardown failure=${failure != null}")
         scrollLayoutListener?.let { renderer?.removeOnLayoutChangeListener(it) }
         scrollLayoutListener = null
+        renderer?.let { releasedRenderer = it }
         renderer = null
         readerSampleJob?.cancel()
         readerSampleJob = null

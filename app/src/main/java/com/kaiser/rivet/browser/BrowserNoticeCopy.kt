@@ -33,3 +33,16 @@ internal fun layoutWait(width: Int, height: Int, rendererLost: Boolean): LayoutW
     width > 1 && height > 1 -> LayoutWait.Ready
     else -> LayoutWait.Waiting
 }
+
+/**
+ * True only when this session held the view and let it go. A view it never held —
+ * or a session with no renderer yet — is "not laid out", not "released", and must
+ * keep the agent-facing degenerate-viewport outcome.
+ */
+internal fun rendererWasLost(
+    teardownRequested: Boolean,
+    released: Any?,
+    current: Any?,
+    view: Any?,
+): Boolean = teardownRequested || (released != null && released === view) ||
+    (current != null && current !== view)
