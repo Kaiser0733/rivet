@@ -15,70 +15,53 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 
-// Both ladders are dsh's product tokens: label-primary / label-secondary / label-tertiary
-// from @deepseek-ai/dsh-client-ui-theme/lib/client.js (bluish-50/300/400 dark,
-// bluish-1000/700/600 light). Dark and light differ, so the ladders are separate.
-private val TextPrimaryDark = Color(0xFFF9FAFB)
-private val TextSecondaryDark = Color(0xFFCFD3D6)
-private val TextMetaDark = Color(0xFFADB2B8)
-private val TextPrimaryLight = Color(0xFF0F1115)
-private val TextSecondaryLight = Color(0xFF61666B)
-private val TextMetaLight = Color(0xFF81858C)
-
-// dsh's one accent is its link blue: deepseek-600 light, deepseek-400 dark. Its
-// brand-primary is the monochrome contrast fill (near-black/near-white), which would leave
-// Rivet without the spec's single accent, so primary takes the link value instead. Light
-// uses one ramp step deeper than the link so white content on the filled accent clears the
-// palette's 4.5 readability bar.
-private val AccentLight = Color(0xFF4868B2)
-private val AccentDark = Color(0xFF7AAAFF)
-
-// bg-base: bluish-00 light, bluish-950 dark.
+private val TextPrimaryDark = Color(0xFFF3F6F9)
+private val TextSecondaryDark = Color(0xFFB8C3CE)
+private val TextPrimaryLight = Color(0xFF17212B)
+private val TextSecondaryLight = Color(0xFF536271)
+private val AccentLight = Color(0xFF3567A7)
+private val AccentDark = Color(0xFF89B5F2)
 private val BaseLight = Color(0xFFFFFFFF)
-private val BaseDark = Color(0xFF151517)
-
-// border-l1: the product's hairline in each theme.
-private val HairlineLight = Color(0x0A000000)
-private val HairlineDark = Color(0x0FFFFFFF)
+private val BaseDark = Color(0xFF15191F)
+private val SurfaceLight = Color(0xFFF8FAFC)
+private val SurfaceDark = Color(0xFF1E252D)
+private val ContainerLight = Color(0xFFF0F4F7)
+private val ContainerDark = Color(0xFF252E38)
+private val HighLight = Color(0xFFE8EEF3)
+private val HighDark = Color(0xFF2D3844)
+private val HighestLight = Color(0xFFE1E8EE)
+private val HighestDark = Color(0xFF35424E)
 
 private val RivetDarkColors = darkColorScheme(
     primary = AccentDark,
     onPrimary = BaseDark,
-    // No product "primary container"; the raised step it uses for selected fills.
-    primaryContainer = Color(0xFF43454A),
+    primaryContainer = HighestDark,
     onPrimaryContainer = TextPrimaryDark,
     secondary = TextSecondaryDark,
     onSecondary = BaseDark,
-    // No product secondary container; the raised step below layer-3.
-    secondaryContainer = Color(0xFF353638),
+    secondaryContainer = HighDark,
     onSecondaryContainer = TextPrimaryDark,
-    tertiary = TextMetaDark,
+    tertiary = TextSecondaryDark,
     onTertiary = BaseDark,
-    tertiaryContainer = Color(0xFF2C2C2E),
+    tertiaryContainer = ContainerDark,
     onTertiaryContainer = TextPrimaryDark,
     background = BaseDark,
     onBackground = TextPrimaryDark,
-    // bg-layer-1.
-    surface = Color(0xFF232324),
+    surface = SurfaceDark,
     onSurface = TextPrimaryDark,
-    surfaceVariant = Color(0xFF353638),
+    surfaceVariant = HighDark,
     onSurfaceVariant = TextSecondaryDark,
-    // bg-base, bg-layer-1..3, then the next ramp step.
     surfaceContainerLowest = BaseDark,
-    surfaceContainerLow = Color(0xFF232324),
-    surfaceContainer = Color(0xFF2C2C2E),
-    surfaceContainerHigh = Color(0xFF353638),
-    surfaceContainerHighest = Color(0xFF43454A),
+    surfaceContainerLow = SurfaceDark,
+    surfaceContainer = ContainerDark,
+    surfaceContainerHigh = HighDark,
+    surfaceContainerHighest = HighestDark,
     surfaceTint = AccentDark,
-    // The product's borders are alphas; M3 wants an opaque outline, so its mid ramp step
-    // (bluish-500) is used, and border-l1 for the hairline.
-    outline = Color(0xFF979DA6),
-    outlineVariant = HairlineDark,
+    outline = Color(0xFF8998A7),
+    outlineVariant = Color(0xFF39444F),
     inverseSurface = TextPrimaryDark,
     inverseOnSurface = BaseDark,
-    inversePrimary = AccentDark,
-    // state-error-primary (red-400). The product has no error container, so the S1
-    // pair is kept for the container roles.
+    inversePrimary = AccentLight,
     error = Color(0xFFF25A5A),
     onError = BaseDark,
     errorContainer = Color(0xFF5A2734),
@@ -88,36 +71,33 @@ private val RivetDarkColors = darkColorScheme(
 private val RivetLightColors = lightColorScheme(
     primary = AccentLight,
     onPrimary = BaseLight,
-    primaryContainer = Color(0xFFEBEEF2),
+    primaryContainer = HighLight,
     onPrimaryContainer = TextPrimaryLight,
     secondary = TextSecondaryLight,
     onSecondary = BaseLight,
-    secondaryContainer = Color(0xFFF1F3F5),
+    secondaryContainer = ContainerLight,
     onSecondaryContainer = TextPrimaryLight,
-    tertiary = TextMetaLight,
+    tertiary = TextSecondaryLight,
     onTertiary = BaseLight,
-    tertiaryContainer = Color(0xFFE9ECF2),
+    tertiaryContainer = HighestLight,
     onTertiaryContainer = TextPrimaryLight,
     background = BaseLight,
     onBackground = TextPrimaryLight,
-    // bg-layer-2 is pure white in the product's light theme, as are layers 1 and 3.
-    surface = BaseLight,
+    surface = SurfaceLight,
     onSurface = TextPrimaryLight,
-    surfaceVariant = Color(0xFFEBEEF2),
+    surfaceVariant = HighLight,
     onSurfaceVariant = TextSecondaryLight,
     surfaceContainerLowest = BaseLight,
-    // The quiet fills the product uses above white (bluish-60/75/100/150).
-    surfaceContainerLow = Color(0xFFF9FAFB),
-    surfaceContainer = Color(0xFFF1F3F5),
-    surfaceContainerHigh = Color(0xFFEBEEF2),
-    surfaceContainerHighest = Color(0xFFE9ECF2),
+    surfaceContainerLow = SurfaceLight,
+    surfaceContainer = ContainerLight,
+    surfaceContainerHigh = HighLight,
+    surfaceContainerHighest = HighestLight,
     surfaceTint = AccentLight,
-    outline = Color(0xFFADB2B8),
-    outlineVariant = HairlineLight,
+    outline = Color(0xFF6C7A88),
+    outlineVariant = Color(0xFFDCE3E9),
     inverseSurface = TextPrimaryLight,
     inverseOnSurface = BaseLight,
-    inversePrimary = AccentLight,
-    // state-error-primary (red-600), with the S1 container pair kept.
+    inversePrimary = AccentDark,
     error = Color(0xFFEC1313),
     onError = BaseLight,
     errorContainer = Color(0xFFF7CDD4),

@@ -13,6 +13,7 @@ import androidx.compose.ui.test.ExperimentalTestApi
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
+import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -32,7 +33,7 @@ class FoldRevealTest {
     val compose = createComposeRule(effectContext = ZeroMotionScale)
 
     @Test
-    fun zeroSystemMotionScaleStillShowsIntermediateFoldFrames() {
+    fun zeroSystemMotionScaleJumpsToTheFullHeight() {
         var expanded by mutableStateOf(false)
         compose.mainClock.autoAdvance = false
         compose.setContent {
@@ -43,14 +44,14 @@ class FoldRevealTest {
         compose.mainClock.advanceTimeByFrame()
         compose.runOnUiThread { expanded = true }
         compose.waitForIdle()
-        compose.mainClock.advanceTimeBy(90)
+        compose.mainClock.advanceTimeByFrame()
         compose.waitForIdle()
 
-        val partial = compose.onNodeWithTag("fold").fetchSemanticsNode().size.height
+        val first = compose.onNodeWithTag("fold").fetchSemanticsNode().size.height
         compose.mainClock.advanceTimeBy(200)
         val full = compose.onNodeWithTag("fold").fetchSemanticsNode().size.height
 
         assertTrue("body should have a non-zero height", full > 0)
-        assertTrue("fold must not jump from zero to full in one frame", partial in 1 until full)
+        assertEquals("fold is open on the first frame", full, first)
     }
 }

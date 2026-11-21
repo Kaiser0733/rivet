@@ -23,6 +23,8 @@ import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.semantics.selected
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
@@ -46,16 +48,24 @@ internal fun WorkerSheet(
         sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
     ) {
         Column(Modifier.fillMaxWidth().height(560.dp).padding(horizontal = 16.dp)) {
-            Text(worker.job, style = MaterialTheme.typography.titleMedium)
-            Text("${worker.modelLabel} · ${workerStateLabel(worker)}",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text(worker.job, style = MaterialTheme.typography.titleSmall,
+                color = MaterialTheme.colorScheme.onSurface)
+            FlowRow(verticalArrangement = Arrangement.Center) {
+                Text("${worker.modelLabel} · ", style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Text(workerStateLabel(worker), style = MaterialTheme.typography.labelMedium,
+                    color = MaterialTheme.colorScheme.onSurface)
+            }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 workers.forEach { entry ->
-                    AssistChip(onClick = { onSelect(entry.id) }, label = {
-                        Text(if (entry.id == worker.id) entry.job
-                            else "${entry.job} · ${workerSheetState(entry)}")
-                    })
+                    AssistChip(
+                        onClick = { onSelect(entry.id) },
+                        modifier = Modifier.semantics { selected = entry.id == worker.id },
+                        label = {
+                            Text(if (entry.id == worker.id) entry.job
+                                else "${entry.job} · ${workerSheetState(entry)}")
+                        },
+                    )
                 }
             }
             HorizontalDivider(Modifier.padding(vertical = 8.dp),

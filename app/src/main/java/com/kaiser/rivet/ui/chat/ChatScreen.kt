@@ -73,6 +73,7 @@ import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
@@ -104,13 +105,8 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
@@ -128,6 +124,7 @@ import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
 import com.kaiser.rivet.chat.withDraft
 import com.kaiser.rivet.chat.liveStatusLine
+import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.parseGoalCommand
@@ -150,6 +147,7 @@ import com.kaiser.rivet.chat.PROJECT_ACCESS_LOST_MESSAGE
 import com.kaiser.rivet.chat.PROJECT_BINDING_MISMATCH_MESSAGE
 import com.kaiser.rivet.chat.projectBindingState
 import com.kaiser.rivet.ui.FoldReveal
+import com.kaiser.rivet.ui.foldOutcomeProgress
 import com.kaiser.rivet.ui.foldChevronRotation
 import com.kaiser.rivet.ui.RivetDoodle
 import com.kaiser.rivet.ui.RivetDoodleMark
@@ -559,9 +557,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         Icon(painterResource(R.drawable.ic_browser), "Browser",
                             tint = MaterialTheme.colorScheme.onBackground)
                     }
-                    // Processes action
+                    // Tools action
                     IconButton(onClick = onOpenProcesses, modifier = Modifier.size(48.dp)) {
-                        Icon(painterResource(R.drawable.ic_processes), "Processes",
+                        Icon(painterResource(R.drawable.ic_processes), stringResource(R.string.open_tools),
                             tint = if (hasActiveProcesses) MaterialTheme.colorScheme.primary
                                 else MaterialTheme.colorScheme.onBackground)
                     }
@@ -651,7 +649,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         .padding(horizontal = 16.dp), verticalAlignment = Alignment.CenterVertically) {
                         Text(PROJECT_ACCESS_LOST_MESSAGE, Modifier.weight(1f),
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
-                        TextButton(onClick = ::chooseProject) { Text("Choose project again") }
+                        TextButton(onClick = ::chooseProject) { Text("Choose folder again") }
                     }
                 }
                 if (wrongProject && state.projectName != null && providers.configs.isNotEmpty()) {
@@ -665,7 +663,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     }
                 }
                 if (providers.configs.isEmpty()) {
-                    EmptyState(RivetDoodle.Provider, "Choose a model to get started.",
+                    EmptyState(RivetDoodle.Provider, "Choose a model for this chat.",
                         "Add a provider, use ChatGPT, or run a model on this phone. Then choose a project.",
                         "Open Settings", onOpenSettings, Modifier.weight(1f),
                         secondaryAction = stringResource(R.string.start_free),
@@ -730,17 +728,17 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                             }
                         })
                 } else if (projectBinding == ProjectBindingState.AccessLost && state.messages.isEmpty()) {
-                    EmptyState(RivetDoodle.Project, "Rivet no longer has access to this project.",
-                        "Choose the folder again to continue this conversation.",
-                        "Choose project again", ::chooseProject, Modifier.weight(1f))
+                    EmptyState(RivetDoodle.Project, "Rivet lost access to this folder.",
+                        "Select the same folder to continue this chat.",
+                        "Choose folder again", ::chooseProject, Modifier.weight(1f))
                 } else if (state.projectName == null && state.projectError != null && state.messages.isEmpty()) {
                     EmptyState(RivetDoodle.Project, "Rivet couldn't open that project.",
                         "Choose the folder again to continue.",
                         "Choose project again", ::chooseProject, Modifier.weight(1f))
                 } else if (state.projectName == null && state.messages.isEmpty() && !state.projectLoading) {
-                    EmptyState(RivetDoodle.Project, "What do you want to work on?",
+                    EmptyState(RivetDoodle.Project, "Which folder do you want to work in?",
                         "Choose the folder that contains your project, then tell Rivet what you want to change.",
-                        "Choose project", ::chooseProject, Modifier.weight(1f),
+                        "Choose a folder", ::chooseProject, Modifier.weight(1f),
                         starterAction = if (offerStarters) ({ showStarterGallery = true }) else null)
                 } else if (state.projectLoading) {
                     EmptyState(RivetDoodle.Project, "Opening your project…",
@@ -749,7 +747,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 } else if (state.messages.isEmpty() && !state.streaming && state.error == null && state.notice == null && !state.interruptedTurn && state.goalLine == null) {
                     val ready = readyEntryPoints(projectBound = state.projectName != null)
                     EmptyState(RivetDoodle.Ready, "Tell Rivet what you want to change.",
-                        "Rivet can inspect this project and will ask before changing files.",
+                        "Your Agent settings control when Rivet asks before making changes.",
                         null, {}, Modifier.weight(1f),
                         secondaryAction = ready?.chooseProjectLabel,
                         onSecondaryAction = ::chooseProject,
@@ -1112,7 +1110,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             )
         }
         if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
-            ReasoningRow(streamingReasoning, streaming = true, id = "streaming")
+            ReasoningRow(
+                streamingReasoning, streaming = true, id = "streaming",
+                showWaitFallback = statusLabel == "Thinking" && state.activity == "Working on it…",
+            )
         }
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
@@ -1200,6 +1201,8 @@ private fun LiveStatusRow(label: String, startedAt: Long) {
 @Composable
 private fun TurnProcessRow(
     spec: ChatTurnProcessSpec,
+    label: String,
+    labelColor: Color,
     open: Boolean,
     onToggle: () -> Unit,
     onExportReplay: (() -> Unit)? = null,
@@ -1234,12 +1237,11 @@ private fun TurnProcessRow(
             verticalAlignment = Alignment.CenterVertically,
             modifier = Modifier.weight(1f, fill = false)
         ) {
-            val label = spec.foldLabel()
             if (spec.durationMs != null && label.startsWith("Completed in ")) {
                 Text(
                     text = "Completed in ",
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                    color = MaterialTheme.colorScheme.tertiary,
+                    color = labelColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1249,14 +1251,14 @@ private fun TurnProcessRow(
                         fontSize = 14.sp,
                         fontFamily = FontFamily.Monospace
                     ),
-                    color = MaterialTheme.colorScheme.tertiary,
+                    color = labelColor,
                     maxLines = 1,
                 )
             } else {
                 Text(
                     text = label,
                     style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                    color = MaterialTheme.colorScheme.tertiary,
+                    color = labelColor,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis
                 )
@@ -1300,6 +1302,19 @@ private fun TurnBlockView(
     }
     val isOpen = !turn.spec.canFold || turnOpen
 
+    val lastAnswer = turn.answerItem?.item as? AgentConversationItem.Message
+    val hasAnswer = lastAnswer?.message?.text?.isNotBlank() == true
+    val outcome = FoldOutcomeObservation(
+        turnStartedAt = state.turnStartedAt.takeIf { isLastTurn && turn.userItem != null },
+        acceptedMessageCount = state.acceptedMessageCount,
+        spec = turn.spec,
+        cleanFinish = hasAnswer && state.turnStartedWallClock == null &&
+            state.run?.phase !in setOf(RunPhase.Paused, RunPhase.Stopped, RunPhase.Failed),
+    )
+    var observedOutcome by remember { mutableStateOf<FoldOutcomeObservation?>(null) }
+    val revealOutcome = outcome.revealsAfter(observedOutcome)
+    SideEffect { observedOutcome = outcome }
+
     val replayIndex = turn.userItem?.messageIndex ?: turn.parts.firstNotNullOfOrNull { part ->
         when (part) {
             is TurnPart.Process -> part.items.firstNotNullOfOrNull { it.messageIndex }
@@ -1327,8 +1342,23 @@ private fun TurnBlockView(
 
         if (turn.processItems.isNotEmpty()) {
             if (!turn.spec.isLive) {
+                val stoppedNotice = isLastTurn && (state.notice == "Stopped. Any saved project changes remain." ||
+                    state.notice == "Stopped. Any completed changes remain in the project.")
+                val label = when {
+                    isLastTurn && turn.spec.isStopped && state.runRecovery != null &&
+                        state.run?.phase == RunPhase.Paused -> state.run.plainState().replaceFirstChar { it.titlecase() }
+                    turn.spec.isError -> "Failed"
+                    turn.spec.isStopped || stoppedNotice -> "Stopped"
+                    hasAnswer && turn.spec.durationMs != null -> turn.spec.foldLabel()
+                    else -> stringResource(R.string.open_tools)
+                }
+                val progress = key(outcome.turnStartedAt, outcome.acceptedMessageCount) {
+                    foldOutcomeProgress(revealOutcome && label.startsWith("Completed in "))
+                }
                 TurnProcessRow(
                     spec = turn.spec,
+                    label = label,
+                    labelColor = lerp(MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.onSurface, progress),
                     open = isOpen,
                     onToggle = { if (turn.spec.canFold) turnOpen = !turnOpen },
                     onExportReplay = exportAction,
@@ -1422,20 +1452,6 @@ private fun ProcessGroupHeader(
     modifier: Modifier = Modifier,
 ) {
     val rotation = foldChevronRotation(open)
-    val alphaAnim = if (isLive) {
-        val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
-        val alpha by infiniteTransition.animateFloat(
-            initialValue = 0.55f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(800, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "shimmerAlpha"
-        )
-        alpha
-    } else 1f
-
     val iconRes = when (activityKind) {
         ProcessActivityKind.Read -> R.drawable.ic_files
         ProcessActivityKind.ReadImage -> R.drawable.ic_visibility
@@ -1485,7 +1501,7 @@ private fun ProcessGroupHeader(
         Text(
             text = title,
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-            color = MaterialTheme.colorScheme.tertiary.copy(alpha = alphaAnim),
+            color = if (isLive) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.tertiary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
@@ -1657,7 +1673,7 @@ internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messag
 }
 
 // Assistant reasoning row copied from dsh ReasoningRow: collapsed is exactly one 24dp line
-// ("Think" + 2dp dot + 13sp preview without asterisks, fade shimmer when streaming).
+// ("Think" + 2dp dot + 13sp preview without asterisks).
 // Expanded body is indented 22dp with secondary typography, no Surface and no Show/Hide buttons.
 @Composable
 private fun ReasoningRow(
@@ -1665,28 +1681,17 @@ private fun ReasoningRow(
     streaming: Boolean,
     id: String,
     modifier: Modifier = Modifier,
+    showWaitFallback: Boolean = false,
 ) {
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
     val rotation = foldChevronRotation(expanded)
-    val alphaAnim = if (streaming) {
-        val infiniteTransition = rememberInfiniteTransition(label = "reasoningShimmer")
-        val alpha by infiniteTransition.animateFloat(
-            initialValue = 0.55f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(800, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "reasoningAlpha"
-        )
-        alpha
-    } else 1f
-
     val scan = remember { PreviewScan() }
     val summaryText = remember(text, streaming) {
         val raw = displaySafeText(thinkingPreview(text, streaming, scan))
         raw.replace("**", "").trim()
     }
+
+    val waitingWithoutPreview = showWaitFallback && summaryText.isEmpty()
 
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -1722,7 +1727,7 @@ private fun ReasoningRow(
             }
             Spacer(Modifier.width(6.dp))
             Text(
-                text = "Think",
+                text = if (waitingWithoutPreview) "Waiting for a response" else "Think",
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                 color = MaterialTheme.colorScheme.tertiary
             )
@@ -1736,7 +1741,8 @@ private fun ReasoningRow(
                 Text(
                     text = summaryText,
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alphaAnim),
+                    color = if (streaming) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)

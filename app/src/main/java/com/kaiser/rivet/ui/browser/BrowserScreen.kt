@@ -286,7 +286,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                 } else if (state.url.isBlank() && (!state.rendererVisible || state.activeWindowId == null)) {
                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
                         contentAlignment = Alignment.Center) {
-                        Text("Enter a URL to open the visual browser.",
+                        Text("Enter a web address, then tap Go.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
                 } else if (state.rendererVisible && !state.pageReady) {
