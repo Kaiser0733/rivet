@@ -126,3 +126,17 @@ internal class SkillPayload(
 
 /** A plain, user-facing install failure; [message] is shown verbatim. */
 internal class SkillInstallFailure(message: String) : Exception(message)
+
+/** Zips arrive from providers that do not agree on a MIME type, so accept the common set. */
+internal val SKILL_BUNDLE_MIME_TYPES = arrayOf(
+    "application/zip", "application/x-zip-compressed", "application/octet-stream",
+)
+
+internal fun isSkillBundle(fileName: String?, mime: String?): Boolean =
+    fileName?.trim()?.endsWith(".zip", ignoreCase = true) == true ||
+        mime?.trim()?.lowercase() in setOf("application/zip", "application/x-zip-compressed")
+
+/** Refusal copy for a picked document that is not a zip bundle; null means go ahead. */
+internal fun skillBundleRefusal(fileName: String?, mime: String?): String? =
+    if (isSkillBundle(fileName, mime)) null
+    else "That file isn't a zip skill bundle. Choose a .zip that contains a SKILL.md."

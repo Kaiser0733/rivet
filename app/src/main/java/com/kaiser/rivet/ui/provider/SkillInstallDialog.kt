@@ -1,6 +1,8 @@
 package com.kaiser.rivet.ui.provider
 
 import android.net.Uri
+import androidx.activity.compose.rememberLauncherForActivityResult
+import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Box
@@ -39,6 +41,7 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import com.kaiser.rivet.agent.GitHubSource
+import com.kaiser.rivet.agent.SKILL_BUNDLE_MIME_TYPES
 import com.kaiser.rivet.agent.SkillInstallFailure
 import com.kaiser.rivet.agent.SkillPayload
 import com.kaiser.rivet.agent.copySharedZip
@@ -198,6 +201,7 @@ internal fun SkillInstallDialog(
                             error = current.error,
                             onLinkChange = { link = it },
                             onSubmit = { scope.launch { submitLink() } },
+                            onPickZip = { scope.launch { openZip(it) } },
                             onCancel = onDismiss,
                         )
                         is InstallStep.Busy -> {
@@ -293,8 +297,12 @@ private fun LinkStep(
     error: String?,
     onLinkChange: (String) -> Unit,
     onSubmit: () -> Unit,
+    onPickZip: (Uri) -> Unit,
     onCancel: () -> Unit,
 ) {
+    val pickZip = rememberLauncherForActivityResult(
+        ActivityResultContracts.OpenDocument(),
+    ) { uri -> if (uri != null) onPickZip(uri) }
     Text("Paste a public GitHub repository or a folder link. Rivet finds any folder with a SKILL.md.",
         style = MaterialTheme.typography.bodyMedium,
         color = MaterialTheme.colorScheme.onSurfaceVariant)
@@ -311,6 +319,10 @@ private fun LinkStep(
         Spacer(Modifier.height(8.dp))
         Text(error, style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.error)
+    }
+    Spacer(Modifier.height(8.dp))
+    TextButton(onClick = { pickZip.launch(SKILL_BUNDLE_MIME_TYPES) }) {
+        Text("Install from a file")
     }
     Spacer(Modifier.height(16.dp))
     Row(Modifier.fillMaxWidth()) {
