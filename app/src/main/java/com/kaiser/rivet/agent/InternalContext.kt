@@ -275,7 +275,13 @@ internal object ProjectContext {
         }
         val state = summary ?: priorSummary?.content.orEmpty()
         if (state.isNotBlank()) prefix += InternalContext.summary(state, workspace ?: priorSummary?.workspaceId)
-        return prefix + retained.filter { it.role != AgentRole.Context }
+        // A notice is a display-only row, so it never reaches the model wire; but a
+        // compaction that dropped the earlier ones erased the only sign in a long chat
+        // that compaction had happened at all. Carry every notice through in order.
+        val notices = source.filter { message ->
+            message.validatedContext()?.let { CompactionNotice.isNotice(it.kind) } == true
+        }
+        return prefix + notices + retained.filter { it.role != AgentRole.Context }
     }
 
     fun updates(messages: List<AgentMessage>, workspace: String,

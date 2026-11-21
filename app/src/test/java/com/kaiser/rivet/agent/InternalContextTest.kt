@@ -181,6 +181,26 @@ class InternalContextTest {
         assertEquals(listOf(user), modelMessages(listOf(user, notice)))
     }
 
+    @Test fun everyCompactionNoticeSurvivesLaterCompactionsAndNoneReachTheWire() {
+        val first = InternalContext.compactionNotice(null)
+        val second = InternalContext.compactionNotice(null)
+        val user1 = AgentMessage.user("Start")
+        val user2 = AgentMessage.user("Carry on")
+        val history = listOf(user1, first, user2, second)
+
+        // Second compaction keeps the newest turn but must not retire the notice rows.
+        val projected = ProjectContext.projection(history, listOf(user2), summary = "Earlier work")
+
+        val notices = projected.filter { message ->
+            message.validatedContext()?.let { CompactionNotice.isNotice(it.kind) } == true
+        }
+        assertEquals(2, notices.size)
+        assertTrue(ProjectContext.projection(history, emptyList(), summary = "Earlier work")
+            .any { it.validatedContext()?.kind == CompactionNotice.KIND })
+        assertFalse(modelMessages(projected, workspace).any { it.text.contains(CompactionNotice.TEXT) })
+        assertEquals(1, modelMessages(projected, workspace).count { it.text.contains("Earlier work") })
+    }
+
     @Test fun projectionRetainsSkillCatalogEvenWithoutProjectInstructions() {
         val content = "<available_skills><skill><name>notes</name></skill></available_skills>"
         val skillCatalog = InternalContext(

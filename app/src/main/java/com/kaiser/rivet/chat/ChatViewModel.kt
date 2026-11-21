@@ -2023,7 +2023,7 @@ class ChatViewModel private constructor(
                     val compacted = context.prepare(candidate, force)
                     if (compacted != candidate) {
                         // A completed compaction leaves one visible, persisted marker row;
-                        // modelMessages keeps it off the wire and the next compaction retires it.
+                        // modelMessages keeps it off the wire and projection carries the earlier ones.
                         val noticed = compacted + InternalContext.compactionNotice(workspaceId)
                         durable.clear()
                         durable.addAll(noticed)
