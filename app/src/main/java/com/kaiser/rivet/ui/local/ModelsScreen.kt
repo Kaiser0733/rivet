@@ -15,6 +15,10 @@ import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
+import com.kaiser.rivet.ui.RivetPageHeader
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.LinearProgressIndicator
@@ -67,209 +71,203 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
         if (uri != null && target != null) viewModel.export(target, uri)
     }
 
-    LazyColumn(
-        Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-    ) {
-        if (ui.staleBytes > 0) {
-            item {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Text("${formatBytes(ui.staleBytes)} of old partial downloads",
-                        Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    TextButton(onClick = viewModel::cleanupStale) { Text("Clean up") }
-                }
-            }
-        }
-        item {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text(if (firstRun) "Start offline" else "Models",
-                        style = MaterialTheme.typography.headlineSmall)
-                    Text("Runs on this phone. No account, no cloud bill.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                TextButton(onClick = onClose) { Text("Done") }
-            }
-        }
-        item {
-            DeviceCard(ui.totalRamMb, ui.availableRamMb, ui.freeStorage)
-        }
-        item {
-            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                Column(Modifier.weight(1f)) {
-                    Text("Wi-Fi only for large downloads", style = MaterialTheme.typography.bodyMedium)
-                    Text("Keeps a 2.5 GB download off mobile data unless you choose otherwise.",
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
-                }
-                Switch(checked = ui.wifiOnly, onCheckedChange = viewModel::setWifiOnly)
-            }
-        }
-        ui.catalogueError?.let { error ->
-            item { Text(error, color = MaterialTheme.colorScheme.error) }
-        }
-        ui.notice?.let { notice ->
-            item {
-                Surface(color = MaterialTheme.colorScheme.secondaryContainer,
-                    shape = RoundedCornerShape(10.dp)) {
-                    Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
-                        Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
-                        TextButton(onClick = viewModel::dismissNotice) { Text("Dismiss") }
-                    }
-                }
-            }
-        }
-        if (ui.loading) {
-            item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
-        } else if (ui.entries.isNotEmpty()) {
-            item {
-                val primary = ui.recommendation.primary
-                if (firstRun) {
-                    Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Text("For your phone", style = MaterialTheme.typography.titleMedium)
-                        primary?.let {
-                            ModelCard(
-                                entry = it,
-                                fit = ui.fitFor(it),
-                                recommended = true,
-                                installed = installedById[it.id],
-                                job = jobs[it.id],
-                                firstRun = true,
-                                onDownload = { requestDownload(it) },
-                                onUse = { viewModel.activate(it); onClose() },
-                                onDelete = { deleteTarget = it },
-                                modifier = Modifier.fillMaxWidth(),
-                            )
-                            ui.recommendation.why.takeIf { it.isNotBlank() }?.let {
-                                Text(it, style = MaterialTheme.typography.bodySmall,
-                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
-                            }
-                        } ?: Text("This phone has less than 4 GB of RAM. Local models need at least 4 GB.")
-                        ui.recommendation.alternative?.let { alt ->
-                            AlternativeRow(
-                                entry = alt,
-                                fit = ui.fitFor(alt),
-                                installed = installedById[alt.id],
-                                job = jobs[alt.id],
-                                onDownload = { requestDownload(alt) },
-                                onUse = { viewModel.activate(alt); onClose() },
-                            )
-                        }
-                    }
-                } else {
-                    Text("For your phone", style = MaterialTheme.typography.titleMedium)
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp),
-                        verticalAlignment = Alignment.Top) {
-                        val options = ui.recommendation.options
-                        options.forEachIndexed { index, entry ->
-                            ModelCard(
-                                entry = entry,
-                                fit = ui.fitFor(entry),
-                                recommended = index == 0,
-                                installed = installedById[entry.id],
-                                job = jobs[entry.id],
-                                firstRun = false,
-                                onDownload = { requestDownload(entry) },
-                                onUse = { viewModel.activate(entry); onClose() },
-                                onDelete = { deleteTarget = entry },
-                                modifier = Modifier.weight(1f),
-                            )
-                        }
-                    }
-                    ui.recommendation.why.takeIf { it.isNotBlank() }?.let {
-                        Text(it, style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                }
-            }
-        }
-        val activeJobs = jobs.values.filter { installedById[it.entry.id] == null }
-        if (activeJobs.isNotEmpty()) {
-            item { Text("Downloads", style = MaterialTheme.typography.titleMedium) }
-            items(activeJobs, key = { "job-${it.entry.id}" }) { job ->
-                DownloadCard(job = job,
-                    fit = ui.fitFor(job.entry),
-                    warning = viewModel.storageWarning(job),
-                    network = viewModel.networkProblem(job),
-                    onPause = { viewModel.pause(job) },
-                    onResume = { viewModel.resume(job) },
-                    onMobile = { viewModel.resume(job, allowMobile = true) },
-                    onCancel = { viewModel.cancel(job) })
-            }
-        }
-        val customInstalled = installed.filter { it.byo && ui.entries.none { entry -> entry.id == it.entry.id } }
-        if (customInstalled.isNotEmpty()) {
-            item { Text("Your models", style = MaterialTheme.typography.titleMedium) }
-            items(customInstalled, key = { "installed-${it.entry.id}" }) { model ->
-                InstalledRow(model = model,
-                    fit = ui.fitFor(model.entry),
-                    onUse = { viewModel.activate(model.entry); onClose() },
-                    onExport = { exportTarget = model.entry; exportLauncher.launch("${model.entry.name}.gguf") },
-                    onDelete = { deleteTarget = model.entry })
-            }
-        }
-        if (ui.entries.isNotEmpty()) {
-            item {
-                Text("All models", style = MaterialTheme.typography.titleMedium)
-            }
-            items(ui.entries, key = { it.id }) { entry ->
-                ModelRow(
-                    entry = entry,
-                    fit = ui.fitFor(entry),
-                    installed = installedById[entry.id],
-                    job = jobs[entry.id],
-                    onClick = {
-                        if (installedById[entry.id] != null) viewModel.activate(entry)
-                        else if (ui.fitFor(entry).canDownload) requestDownload(entry)
-                    },
-                    onDelete = { deleteTarget = entry },
-                    onExport = { exportTarget = entry; exportLauncher.launch("${entry.name}.gguf") },
-                )
-            }
-        }
-        item {
-            HorizontalDivider(Modifier.padding(vertical = 8.dp))
-            Text("Bring your own GGUF", style = MaterialTheme.typography.titleMedium)
-            Text("Paste a Hugging Face repo or file link. Rivet checks for a GGUF before downloading.",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-            Spacer(Modifier.height(6.dp))
-            RivetOutlinedButton(onClick = { byoOpen = true },
-                modifier = Modifier.fillMaxWidth()) { Text("Add a model link") }
-        }
-    }
-
     if (byoOpen) {
-        AlertDialog(
-            onDismissRequest = { if (!ui.byoBusy) byoOpen = false },
-            title = { Text("Add a GGUF") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Hugging Face repo or file link", style = MaterialTheme.typography.bodySmall)
-                    OutlinedTextField(
-                        value = byoUrl,
-                        onValueChange = { byoUrl = it; viewModel.dismissByoError() },
-                        modifier = Modifier.fillMaxWidth(),
-                        placeholder = { Text("https://huggingface.co/…") },
-                        singleLine = true,
-                        enabled = !ui.byoBusy,
-                    )
-                    ui.byoError?.let { Text(it, color = MaterialTheme.colorScheme.error,
-                        style = MaterialTheme.typography.bodySmall) }
-                    if (ui.byoBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
-                }
-            },
-            confirmButton = {
+        val closeForm = { if (!ui.byoBusy) byoOpen = false }
+        BackHandler(onBack = closeForm)
+        Column(Modifier.fillMaxSize()) {
+            RivetPageHeader("Add a GGUF", closeForm)
+            Column(Modifier.verticalScroll(rememberScrollState()).padding(20.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Text("Hugging Face repo or file link", style = MaterialTheme.typography.bodySmall)
+                OutlinedTextField(
+                    value = byoUrl,
+                    onValueChange = { byoUrl = it; viewModel.dismissByoError() },
+                    modifier = Modifier.fillMaxWidth(),
+                    placeholder = { Text("https://huggingface.co/…") },
+                    singleLine = true,
+                    enabled = !ui.byoBusy,
+                )
+                ui.byoError?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                    style = MaterialTheme.typography.bodySmall) }
+                if (ui.byoBusy) LinearProgressIndicator(Modifier.fillMaxWidth())
                 TextButton(onClick = { viewModel.addByo(byoUrl) }, enabled = !ui.byoBusy) {
                     Text(if (ui.byoBusy) "Checking…" else "Add")
                 }
-            },
-            dismissButton = { TextButton(onClick = { byoOpen = false }, enabled = !ui.byoBusy) { Text("Cancel") } },
-        )
+            }
+        }
+        return
+    }
+
+    Column(Modifier.fillMaxSize()) {
+        RivetPageHeader(if (firstRun) "Start offline" else "Models", onClose)
+        LazyColumn(
+            Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
+            verticalArrangement = Arrangement.spacedBy(12.dp),
+        ) {
+            if (ui.staleBytes > 0) {
+                item {
+                    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                        Text("${formatBytes(ui.staleBytes)} of old partial downloads",
+                            Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        TextButton(onClick = viewModel::cleanupStale) { Text("Clean up") }
+                    }
+                }
+            }
+            item {
+                Text("Runs on this phone. No account, no cloud bill.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+            item {
+                DeviceCard(ui.totalRamMb, ui.availableRamMb, ui.freeStorage)
+            }
+            item {
+                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                    Column(Modifier.weight(1f)) {
+                        Text("Wi-Fi only for large downloads", style = MaterialTheme.typography.bodyMedium)
+                        Text("Keeps a 2.5 GB download off mobile data unless you choose otherwise.",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    Switch(checked = ui.wifiOnly, onCheckedChange = viewModel::setWifiOnly)
+                }
+            }
+            ui.catalogueError?.let { error ->
+                item { Text(error, color = MaterialTheme.colorScheme.error) }
+            }
+            ui.notice?.let { notice ->
+                item {
+                    Surface(color = MaterialTheme.colorScheme.secondaryContainer,
+                        shape = RoundedCornerShape(10.dp)) {
+                        Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
+                            Text(notice, Modifier.weight(1f), style = MaterialTheme.typography.bodySmall)
+                            TextButton(onClick = viewModel::dismissNotice) { Text("Dismiss") }
+                        }
+                    }
+                }
+            }
+            if (ui.loading) {
+                item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+            } else if (ui.entries.isNotEmpty()) {
+                item {
+                    val primary = ui.recommendation.primary
+                    if (firstRun) {
+                        Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                            Text("For your phone", style = MaterialTheme.typography.titleMedium)
+                            primary?.let {
+                                ModelCard(
+                                    entry = it,
+                                    fit = ui.fitFor(it),
+                                    recommended = true,
+                                    installed = installedById[it.id],
+                                    job = jobs[it.id],
+                                    firstRun = true,
+                                    onDownload = { requestDownload(it) },
+                                    onUse = { viewModel.activate(it); onClose() },
+                                    onDelete = { deleteTarget = it },
+                                    modifier = Modifier.fillMaxWidth(),
+                                )
+                                ui.recommendation.why.takeIf { it.isNotBlank() }?.let {
+                                    Text(it, style = MaterialTheme.typography.bodySmall,
+                                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                                }
+                            } ?: Text("This phone has less than 4 GB of RAM. Local models need at least 4 GB.")
+                            ui.recommendation.alternative?.let { alt ->
+                                AlternativeRow(
+                                    entry = alt,
+                                    fit = ui.fitFor(alt),
+                                    installed = installedById[alt.id],
+                                    job = jobs[alt.id],
+                                    onDownload = { requestDownload(alt) },
+                                    onUse = { viewModel.activate(alt); onClose() },
+                                )
+                            }
+                        }
+                    } else {
+                        Text("For your phone", style = MaterialTheme.typography.titleMedium)
+                        Row(horizontalArrangement = Arrangement.spacedBy(10.dp),
+                            verticalAlignment = Alignment.Top) {
+                            val options = ui.recommendation.options
+                            options.forEachIndexed { index, entry ->
+                                ModelCard(
+                                    entry = entry,
+                                    fit = ui.fitFor(entry),
+                                    recommended = index == 0,
+                                    installed = installedById[entry.id],
+                                    job = jobs[entry.id],
+                                    firstRun = false,
+                                    onDownload = { requestDownload(entry) },
+                                    onUse = { viewModel.activate(entry); onClose() },
+                                    onDelete = { deleteTarget = entry },
+                                    modifier = Modifier.weight(1f),
+                                )
+                            }
+                        }
+                        ui.recommendation.why.takeIf { it.isNotBlank() }?.let {
+                            Text(it, style = MaterialTheme.typography.bodySmall,
+                                color = MaterialTheme.colorScheme.onSurfaceVariant)
+                        }
+                    }
+                }
+            }
+            val activeJobs = jobs.values.filter { installedById[it.entry.id] == null }
+            if (activeJobs.isNotEmpty()) {
+                item { Text("Downloads", style = MaterialTheme.typography.titleMedium) }
+                items(activeJobs, key = { "job-${it.entry.id}" }) { job ->
+                    DownloadCard(job = job,
+                        fit = ui.fitFor(job.entry),
+                        warning = viewModel.storageWarning(job),
+                        network = viewModel.networkProblem(job),
+                        onPause = { viewModel.pause(job) },
+                        onResume = { viewModel.resume(job) },
+                        onMobile = { viewModel.resume(job, allowMobile = true) },
+                        onCancel = { viewModel.cancel(job) })
+                }
+            }
+            val customInstalled = installed.filter { it.byo && ui.entries.none { entry -> entry.id == it.entry.id } }
+            if (customInstalled.isNotEmpty()) {
+                item { Text("Your models", style = MaterialTheme.typography.titleMedium) }
+                items(customInstalled, key = { "installed-${it.entry.id}" }) { model ->
+                    InstalledRow(model = model,
+                        fit = ui.fitFor(model.entry),
+                        onUse = { viewModel.activate(model.entry); onClose() },
+                        onExport = { exportTarget = model.entry; exportLauncher.launch("${model.entry.name}.gguf") },
+                        onDelete = { deleteTarget = model.entry })
+                }
+            }
+            if (ui.entries.isNotEmpty()) {
+                item {
+                    Text("All models", style = MaterialTheme.typography.titleMedium)
+                }
+                items(ui.entries, key = { it.id }) { entry ->
+                    ModelRow(
+                        entry = entry,
+                        fit = ui.fitFor(entry),
+                        installed = installedById[entry.id],
+                        job = jobs[entry.id],
+                        onClick = {
+                            if (installedById[entry.id] != null) viewModel.activate(entry)
+                            else if (ui.fitFor(entry).canDownload) requestDownload(entry)
+                        },
+                        onDelete = { deleteTarget = entry },
+                        onExport = { exportTarget = entry; exportLauncher.launch("${entry.name}.gguf") },
+                    )
+                }
+            }
+            item {
+                HorizontalDivider(Modifier.padding(vertical = 8.dp))
+                Text("Bring your own GGUF", style = MaterialTheme.typography.titleMedium)
+                Text("Paste a Hugging Face repo or file link. Rivet checks for a GGUF before downloading.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                Spacer(Modifier.height(6.dp))
+                RivetOutlinedButton(onClick = { byoOpen = true },
+                    modifier = Modifier.fillMaxWidth()) { Text("Add a model link") }
+            }
+        }
     }
 
     mobileTarget?.let { target ->

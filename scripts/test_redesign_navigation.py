@@ -89,3 +89,11 @@ class RedesignNavigationTest(unittest.TestCase):
             self.assertIn(value, toolbar)
         self.assertNotIn("BrowserWindowCard(", browser)
         self.assertNotIn("AlertDialog(", browser)
+
+    def test_models_opens_as_a_page_and_model_links_use_an_in_page_form(self):
+        app = (UI / "RivetApp.kt").read_text()
+        self.assertNotIn("modelsSheetState", app)
+        self.assertIn("RivetDestination.Models ->", app)
+        models = (UI / "local/ModelsScreen.kt").read_text()
+        self.assertIn('RivetPageHeader("Add a GGUF"', models)
+        self.assertIn("viewModel.addByo(byoUrl)", models)

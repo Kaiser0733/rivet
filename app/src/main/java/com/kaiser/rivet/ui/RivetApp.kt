@@ -17,11 +17,9 @@ import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.ModalBottomSheet
 import androidx.compose.material3.ModalDrawerSheet
 import androidx.compose.material3.ModalNavigationDrawer
 import androidx.compose.material3.rememberDrawerState
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.runtime.Composable
 import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
@@ -119,12 +117,11 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         // settings sheet are booleans, so a swipe-close or a Back-close cannot disagree
         // with a separate flag.
         var destination by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
-        var modelsOpen by rememberSaveable { mutableStateOf(false) }
+        var modelsReturn by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
         var installOpen by rememberSaveable { mutableStateOf(false) }
         var installZip by remember { mutableStateOf<android.net.Uri?>(null) }
         val terminalStateLine by chatViewModel.terminalStatusLine.collectAsState()
         val drawerState = rememberDrawerState(DrawerValue.Closed)
-        val modelsSheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         val browserState by chatViewModel.browser.state.collectAsState()
         val sendFeedback: () -> Unit = {
             coroutineScope.launch {
@@ -164,7 +161,6 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 if (drawerState.isOpen) drawerState.close()
                 destination = RivetDestination.Chat
                 editing = false
-                modelsOpen = false
                 installOpen = false
                 if (browserState.visible) chatViewModel.browser.close()
                 destination = RivetDestination.Tools
@@ -178,7 +174,6 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 if (drawerState.isOpen) drawerState.close()
                 destination = RivetDestination.Chat
                 editing = false
-                modelsOpen = false
                 installOpen = false
                 if (browserState.visible) chatViewModel.browser.close()
             }
@@ -213,10 +208,9 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             { coroutineScope.launch { drawerState.close() }; Unit }
         }
         val openTools = remember { { destination = RivetDestination.Tools } }
-        val openModels = remember {
-            {
-                modelsOpen = true
-            }
+        val openModels: () -> Unit = {
+            modelsReturn = destination
+            destination = RivetDestination.Models
         }
 
         val closeSidebarThen: (() -> Unit) -> Unit = { action ->
@@ -226,14 +220,14 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
         }
         val panelOpen = drawerState.isOpen || drawerState.targetValue == DrawerValue.Open
-        BackHandler(editing || destination != RivetDestination.Chat || modelsOpen || browserState.visible || panelOpen) {
+        BackHandler(editing || destination != RivetDestination.Chat || browserState.visible || panelOpen) {
             when {
                 browserState.visible -> chatViewModel.browser.close()
-                modelsOpen -> modelsOpen = false
                 editing -> {
                     providersViewModel.closeEditor()
                     editing = false
                 }
+                destination == RivetDestination.Models -> destination = modelsReturn
                 destination == RivetDestination.Terminal -> destination = RivetDestination.Tools
                 destination == RivetDestination.Workers -> {
                     chatViewModel.closeWorker()
@@ -332,6 +326,12 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             .filter { it.type != ProviderType.Local && it.type != ProviderType.ChatGptPlan }
                             .map { it.id }, onBack = { destination = RivetDestination.Chat })
                     }
+                    RivetDestination.Models -> saveableStates.SaveableStateProvider("models") {
+                        Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+                            ModelsScreen(modelsViewModel, firstRun = providerList.configs.isEmpty(),
+                                onClose = { destination = modelsReturn })
+                        }
+                    }
                     RivetDestination.Settings -> saveableStates.SaveableStateProvider("settings") {
                         Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                             val conversation by chatViewModel.uiState.collectAsState()
@@ -410,22 +410,6 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
             }
 
         }
-
-        // Models is reachable before any provider exists, so it gets its own sheet
-        // rather than hiding inside Settings.
-        if (modelsOpen) {
-            ModalBottomSheet(
-                onDismissRequest = { modelsOpen = false },
-                sheetState = modelsSheetState,
-            ) {
-                ModelsScreen(
-                    viewModel = modelsViewModel,
-                    firstRun = providerList.configs.isEmpty(),
-                    onClose = { modelsOpen = false },
-                )
-            }
-        }
-
 
         if (installOpen) {
             SkillInstallDialog(
