@@ -104,12 +104,6 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontStyle
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.tween
-import androidx.compose.animation.core.LinearEasing
-import androidx.compose.animation.core.RepeatMode
 import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
@@ -1112,7 +1106,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             )
         }
         if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
-            ReasoningRow(streamingReasoning, streaming = true, id = "streaming")
+            ReasoningRow(
+                streamingReasoning, streaming = true, id = "streaming",
+                showWaitFallback = statusLabel == "Thinking" && state.activity == "Working on it…",
+            )
         }
         if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
             AssistantMessage(displaySafeText(streamingText), streaming = true)
@@ -1422,20 +1419,6 @@ private fun ProcessGroupHeader(
     modifier: Modifier = Modifier,
 ) {
     val rotation = foldChevronRotation(open)
-    val alphaAnim = if (isLive) {
-        val infiniteTransition = rememberInfiniteTransition(label = "shimmer")
-        val alpha by infiniteTransition.animateFloat(
-            initialValue = 0.55f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(800, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "shimmerAlpha"
-        )
-        alpha
-    } else 1f
-
     val iconRes = when (activityKind) {
         ProcessActivityKind.Read -> R.drawable.ic_files
         ProcessActivityKind.ReadImage -> R.drawable.ic_visibility
@@ -1485,7 +1468,7 @@ private fun ProcessGroupHeader(
         Text(
             text = title,
             style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-            color = MaterialTheme.colorScheme.tertiary.copy(alpha = alphaAnim),
+            color = if (isLive) MaterialTheme.colorScheme.onSurface else MaterialTheme.colorScheme.tertiary,
             maxLines = 1,
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
@@ -1657,7 +1640,7 @@ internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messag
 }
 
 // Assistant reasoning row copied from dsh ReasoningRow: collapsed is exactly one 24dp line
-// ("Think" + 2dp dot + 13sp preview without asterisks, fade shimmer when streaming).
+// ("Think" + 2dp dot + 13sp preview without asterisks).
 // Expanded body is indented 22dp with secondary typography, no Surface and no Show/Hide buttons.
 @Composable
 private fun ReasoningRow(
@@ -1665,28 +1648,17 @@ private fun ReasoningRow(
     streaming: Boolean,
     id: String,
     modifier: Modifier = Modifier,
+    showWaitFallback: Boolean = false,
 ) {
     var expanded by rememberSaveable(id) { mutableStateOf(false) }
     val rotation = foldChevronRotation(expanded)
-    val alphaAnim = if (streaming) {
-        val infiniteTransition = rememberInfiniteTransition(label = "reasoningShimmer")
-        val alpha by infiniteTransition.animateFloat(
-            initialValue = 0.55f,
-            targetValue = 1f,
-            animationSpec = infiniteRepeatable(
-                animation = tween(800, easing = LinearEasing),
-                repeatMode = RepeatMode.Reverse
-            ),
-            label = "reasoningAlpha"
-        )
-        alpha
-    } else 1f
-
     val scan = remember { PreviewScan() }
     val summaryText = remember(text, streaming) {
         val raw = displaySafeText(thinkingPreview(text, streaming, scan))
         raw.replace("**", "").trim()
     }
+
+    val waitingWithoutPreview = showWaitFallback && summaryText.isEmpty()
 
     Column(modifier = modifier.fillMaxWidth()) {
         Row(
@@ -1722,7 +1694,7 @@ private fun ReasoningRow(
             }
             Spacer(Modifier.width(6.dp))
             Text(
-                text = "Think",
+                text = if (waitingWithoutPreview) "Waiting for a response" else "Think",
                 style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
                 color = MaterialTheme.colorScheme.tertiary
             )
@@ -1736,7 +1708,8 @@ private fun ReasoningRow(
                 Text(
                     text = summaryText,
                     style = MaterialTheme.typography.bodySmall.copy(fontSize = 13.sp),
-                    color = MaterialTheme.colorScheme.onSurfaceVariant.copy(alpha = alphaAnim),
+                    color = if (streaming) MaterialTheme.colorScheme.onSurface
+                        else MaterialTheme.colorScheme.onSurfaceVariant,
                     maxLines = 1,
                     overflow = TextOverflow.Ellipsis,
                     modifier = Modifier.weight(1f, fill = false)

@@ -49,3 +49,18 @@ class SoulSurfaceTest(unittest.TestCase):
         self.assertIn("RestoreTarget(checkpoint, undoRun = false)", row)
         self.assertIn("Locale.getDefault()", row)
         self.assertNotIn("maxLines", row)
+
+    def test_worker_sheet_selection_uses_the_selected_job_id(self):
+        sheet = (UI / "chat/WorkerSheet.kt").read_text()
+        self.assertIn("selected = entry.id == worker.id", sheet)
+        self.assertIn("onSelect(entry.id)", sheet)
+        self.assertIn("workerStateLabel(worker)", sheet)
+        self.assertIn("Read-only transcript", sheet)
+
+    def test_live_fold_keeps_the_public_preview_and_has_no_shimmer(self):
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        row = chat.split("private fun ReasoningRow(", 1)[1].split("@Composable\nprivate fun", 1)[0]
+        self.assertIn("displaySafeText(thinkingPreview(text, streaming, scan))", row)
+        self.assertIn('if (waitingWithoutPreview) "Waiting for a response" else "Think"', row)
+        self.assertIn("colorScheme.onSurface", row)
+        self.assertNotIn("rememberInfiniteTransition", chat)
