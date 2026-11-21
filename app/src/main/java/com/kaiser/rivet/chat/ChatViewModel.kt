@@ -1008,6 +1008,127 @@ class ChatViewModel private constructor(
         }
     }
 
+    /**
+     * Manual compaction from the slash panel: the same preparation the turn's overflow
+     * path runs, on the idle session's durable projection, leaving the same persisted
+     * notice row. While a reply runs, its turn already owns compaction.
+     */
+    fun compactHistory() {
+        val state = _uiState.value
+        when (compactTrigger(state.streaming, state.messages.isNotEmpty())) {
+            CompactTrigger.RunActive -> {
+                _uiState.update { it.copy(notice = "Cannot compact while a reply is running.",
+                    error = null, commandAckCount = it.commandAckCount + 1) }
+                return
+            }
+            CompactTrigger.NothingToCompact -> {
+                _uiState.update { it.copy(notice = "Nothing to compact yet.",
+                    error = null, commandAckCount = it.commandAckCount + 1) }
+                return
+            }
+            CompactTrigger.Fire -> Unit
+        }
+        if (!state.ready || state.projectLoading || state.undoing || state.recoveringProjectChanges) return
+        val ticket = ++generation
+        _uiState.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
+            activity = "Compacting…", error = null, errorAction = null, notice = null) }
+        val previous = sendJob
+        sendJob = viewModelScope.launch {
+            var store: CodingSessions? = null
+            try {
+                previous?.join()
+                val snapshot = providerSnapshot(_uiState.value.interruptedTurn) ?: return@launch
+                val sessionId = _uiState.value.currentSessionId
+                val sql = sessions
+                if (sessionId == null || sql == null) {
+                    _uiState.update { it.copy(streaming = false, activity = null,
+                        notice = "Nothing to compact yet.") }
+                    return@launch
+                }
+                store = sql
+                val workspaceId = _uiState.value.currentSessionWorkspaceId
+                val hasWorkspace = workspaceId != null
+                val phoneAccess = snapshot.config.type != ProviderType.Local
+                // The request shape the next turn will send, so the estimate and the
+                // compaction budget match the automatic path's.
+                val tools = BrowserTools.definitions +
+                    AgentToolExecutor.definitions.filter {
+                        it.name !in AgentToolExecutor.phoneOnlyNames &&
+                            (hasWorkspace || it.name in UNBOUND_FILE_TOOLS)
+                    } +
+                    (if (phoneAccess) AgentToolExecutor.definitions.filter {
+                        it.name in AgentToolExecutor.phoneOnlyNames
+                    } else emptyList()) +
+                    (if (hasWorkspace) SubagentTools.definitions else emptyList())
+                val context = ContextPreparation(sql, sessionId,
+                    clientFactory(snapshot.config, snapshot.apiKey), snapshot.config,
+                    UUID.randomUUID().toString(), activeSummary, workspaceId) { messages, _ ->
+                    val baseSystem = systemInstruction(hasWorkspace,
+                        runtimeController.terminalStateLine(interactiveTerminalCount(managedProcesses.processes.value))
+                            .takeIf { it != "Terminal: ready" },
+                        browser.contextLine(), phoneAccess = phoneAccess)
+                    val wire = if (snapshot.config.type == ProviderType.Local) {
+                        LocalPrompt.wire(baseSystem, tools, snapshot.config.resolvedContextWindowTokens(), hasWorkspace)
+                    } else null
+                    val projected = modelMessages(messages, workspaceId, enforceWorkspace = true)
+                    val requestMessages = if (snapshot.config.type == ProviderType.Local &&
+                        ProviderVisionAttachments.needsPreparation(projected)) {
+                        ProviderVisionAttachments.prepare(projected, VisionCapability.assess(snapshot.config)) { null }.first
+                    } else projected
+                    AgentRequest(snapshot.config.model, requestMessages, wire?.system ?: baseSystem,
+                        snapshot.config.reasoning, wire?.tools ?: tools)
+                }
+                val compacted = context.prepare(activeMessages, force = true, reason = "manual")
+                if (ticket != generation) return@launch
+                if (compacted == activeMessages) {
+                    _uiState.update { it.copy(streaming = false, activity = null,
+                        notice = "Nothing to compact yet.", error = null) }
+                    return@launch
+                }
+                val notice = InternalContext.compactionNotice(workspaceId)
+                val noticed = compacted + notice
+                try {
+                    sql.save(noticed, interrupted = false, expectedSessionId = sessionId)
+                } catch (e: CancellationException) { throw e
+                } catch (e: Exception) {
+                    // The compaction itself is already durable; only the marker row failed.
+                    val restored = sql.load()
+                    activeMessages = restored.messages
+                    activeSummary = restored.summary
+                    if (ticket == generation) _uiState.update { it.copy(streaming = false, activity = null,
+                        error = if (e is AgentSessionLimitException) CONTEXT_LIMIT_ERROR
+                        else "Could not save the conversation. Check available storage and try again.") }
+                    return@launch
+                }
+                activeMessages = noticed
+                activeSummary = context.summary
+                if (ticket == generation) {
+                    _uiState.update { it.copy(streaming = false, activity = null,
+                        messages = (it.messages + notice).takeLast(100), error = null) }
+                    try {
+                        val estimate = context.estimate(noticed)
+                        _uiState.update { it.copy(contextEstimate = estimate) }
+                    } catch (e: CancellationException) { throw e
+                    } catch (_: Exception) { /* Usage estimates never change the completed compaction. */ }
+                }
+            } catch (e: CancellationException) {
+                withContext(NonCancellable) {
+                    // A committed compaction stays durable even when the wait was cancelled.
+                    try {
+                        store?.load()?.let { activeMessages = it.messages; activeSummary = it.summary }
+                    } catch (_: Exception) { }
+                    if (ticket == generation) _uiState.update { it.copy(streaming = false, activity = null) }
+                }
+                throw e
+            } catch (e: Exception) {
+                Log.w("RivetChat", "manual compaction failed: ${e.javaClass.simpleName}")
+                if (ticket == generation) _uiState.update { it.copy(streaming = false, activity = null,
+                    error = "Rivet could not shorten this session's context. The conversation was kept.",
+                    errorAction = null) }
+            }
+        }
+    }
+
     /** Move a no-project goal into the folder the user just opened. */
     fun attachGoalToProject() {
         val sessionId = _uiState.value.currentSessionId ?: return
