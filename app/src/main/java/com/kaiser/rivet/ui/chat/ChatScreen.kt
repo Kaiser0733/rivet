@@ -120,6 +120,7 @@ import com.kaiser.rivet.chat.liveStatusLabel
 import com.kaiser.rivet.chat.withDraft
 import com.kaiser.rivet.chat.liveStatusLine
 import com.kaiser.rivet.agent.RunPhase
+import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.parseGoalCommand
@@ -159,9 +160,10 @@ import kotlinx.coroutines.launch
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenSidebar: () -> Unit,
                onOpenProjects: (() -> Unit)? = null,
-               projectPickerRequest: Int = 0, onProjectPickerHandled: () -> Unit = {}) {
+               projectPickerRequest: Int = 0, onProjectPickerHandled: () -> Unit = {},
+               onSendFeedback: () -> Unit = {}, onAutonomyChange: (AutonomyMode) -> Unit = {}) {
     val state by chatViewModel.uiState.collectAsState()
-    val userSkills by chatViewModel.userSkills.collectAsState()
+    val skillCatalog by chatViewModel.skillCatalog.collectAsState()
     val subagents by chatViewModel.subagents.collectAsState()
     val workerSheet by chatViewModel.workerSheet.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
@@ -419,8 +421,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             acceptedMessageCount = state.acceptedMessageCount,
             commandAckCount = state.commandAckCount,
             error = state.error, notice = state.notice, sessionId = state.currentSessionId,
-            skills = userSkills,
-            onRequestSkills = chatViewModel::refreshUserSkills,
+            skills = skillCatalog?.skills.orEmpty(),
+            onRequestSkills = chatViewModel::refreshSkillCatalog,
+            onSendFeedback = onSendFeedback,
+            onAutonomyChange = onAutonomyChange,
             folderName = state.projectName,
             onOpenProjects = openProjects,
             selector = modelSelector,
@@ -1719,6 +1723,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
+                     onSendFeedback: () -> Unit,
+                     onAutonomyChange: (AutonomyMode) -> Unit,
                      folderName: String?,
                      onOpenProjects: () -> Unit,
                      selector: (@Composable () -> Unit)? = null,
@@ -1813,7 +1819,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // The "/" picker only appears while the first token is still being typed; picking a
     // row just completes the text, and sending is what loads the skill.
     val commandQuery = skillCommandQuery(draft)
-    val commandMatches = if (commandQuery == null) emptyList() else matchingSkills(skills, commandQuery)
+    val commandMatches = if (commandQuery == null) emptyList() else slashRows(skills, commandQuery)
     var dismissedCommand by rememberSaveable { mutableStateOf<String?>(null) }
     val showCommands = commandQuery != null && dismissedCommand != draft && commandMatches.isNotEmpty()
     LaunchedEffect(commandQuery != null) {
@@ -1824,9 +1830,20 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // own, and the selector shares the quiet second row with send/stop.
     Column(modifier.fillMaxWidth().imePadding().padding(horizontal = 14.dp, vertical = 9.dp)) {
         if (showCommands) {
-            SkillCommandSheet(commandMatches) { skill ->
+            SlashCommandPanel(commandMatches) { row ->
                 dismissedCommand = null
-                drafts = withDraft(drafts, sessionId, "/${skill.name} ")
+                val nextDraft = when (row.action) {
+                    SlashAction.Goal -> "/goal "
+                    null -> row.skill?.let { "/${it.name} " } ?: draft
+                    else -> ""
+                }
+                drafts = withDraft(drafts, sessionId, nextDraft)
+                when (row.action) {
+                    SlashAction.Feedback -> onSendFeedback()
+                    SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
+                    SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
+                    else -> Unit
+                }
             }
             Spacer(Modifier.padding(bottom = 6.dp))
         }

@@ -12,6 +12,9 @@ import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.navigationBarsPadding
 import androidx.compose.material3.Surface
 import androidx.compose.material3.DrawerValue
+import androidx.compose.material3.AlertDialog
+import androidx.compose.material3.Text
+import androidx.compose.material3.TextButton
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.ModalBottomSheet
@@ -128,6 +131,29 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     chatViewModel.browser.openVisual("https://vastraalabs.online/feedback",
                         userInitiated = true)
                 }
+            }
+        }
+        var confirmYolo by rememberSaveable { mutableStateOf(false) }
+        val persistAutonomy: (AutonomyMode) -> Unit = { value ->
+            if (!autonomySaving && value != autonomyMode) {
+                autonomySaving = true
+                autonomyError = null
+                coroutineScope.launch {
+                    try {
+                        autonomyStore.setMode(value)
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        autonomyError = "Rivet couldn't save this setting. Try again."
+                    } finally {
+                        autonomySaving = false
+                    }
+                }
+            }
+        }
+        val requestAutonomy: (AutonomyMode) -> Unit = { value ->
+            if (!autonomySaving && value != autonomyMode) {
+                if (value == AutonomyMode.Yolo) confirmYolo = true else persistAutonomy(value)
             }
         }
         val saveableStates = rememberSaveableStateHolder()
@@ -257,6 +283,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 ChatScreen(chatViewModel, providersViewModel,
                                     onOpenSettings = openSettings,
                                     onOpenSidebar = openHistory,
+                                    onSendFeedback = sendFeedback,
+                                    onAutonomyChange = requestAutonomy,
                                     projectPickerRequest = projectPickerRequest,
                                     onProjectPickerHandled = { projectPickerRequest = 0 })
                             }
@@ -340,23 +368,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             autonomyMode = autonomyMode,
                             autonomySaving = autonomySaving,
                             autonomyError = autonomyError,
-                            onAutonomyChange = { value ->
-                                if (!autonomySaving && value != autonomyMode) {
-                                    autonomySaving = true
-                                    autonomyError = null
-                                    coroutineScope.launch {
-                                        try {
-                                            autonomyStore.setMode(value)
-                                        } catch (e: CancellationException) {
-                                            throw e
-                                        } catch (_: Exception) {
-                                            autonomyError = "Rivet couldn't save this setting. Try again."
-                                        } finally {
-                                            autonomySaving = false
-                                        }
-                                    }
-                                }
-                            },
+                            onAutonomyChange = requestAutonomy,
                         )
                     }
                 }
@@ -403,6 +415,20 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     installZip = null
                 },
                 onInstalled = chatViewModel::refreshSkillCatalog,
+            )
+        }
+
+        if (confirmYolo) {
+            AlertDialog(
+                onDismissRequest = { confirmYolo = false },
+                title = { Text("Enable YOLO?", style = MaterialTheme.typography.titleMedium) },
+                text = { Text("Rivet can edit or delete project files, run project commands, download files, and start allowed processes without asking. Commands run with Rivet's app privileges. Project checkpoints, workspace checks, and Rivet's capability limits still apply.",
+                    style = MaterialTheme.typography.bodyMedium) },
+                confirmButton = { RivetOutlinedButton(onClick = {
+                    confirmYolo = false
+                    persistAutonomy(AutonomyMode.Yolo)
+                }) { Text("Enable YOLO") } },
+                dismissButton = { TextButton(onClick = { confirmYolo = false }) { Text("Cancel") } },
             )
         }
 

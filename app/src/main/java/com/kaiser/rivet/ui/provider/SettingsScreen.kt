@@ -152,7 +152,6 @@ fun SettingsScreen(
         if (section == SettingsSection.Skills) onRefreshSkills()
     }
     var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
-    var confirmYolo by rememberSaveable { mutableStateOf(false) }
     var connectGitHubOpen by rememberSaveable { mutableStateOf(false) }
 
     deleteTarget?.let { provider ->
@@ -171,20 +170,6 @@ fun SettingsScreen(
             } },
         )
     }
-    if (confirmYolo) {
-        AlertDialog(
-            onDismissRequest = { confirmYolo = false },
-            title = { Text("Enable YOLO?", style = MaterialTheme.typography.titleMedium) },
-            text = { Text("Rivet can edit or delete project files, run project commands, download files, and start allowed processes without asking. Commands run with Rivet's app privileges. Project checkpoints, workspace checks, and Rivet's capability limits still apply.",
-                style = MaterialTheme.typography.bodyMedium) },
-            confirmButton = { RivetOutlinedButton(onClick = {
-                confirmYolo = false
-                onAutonomyChange(AutonomyMode.Yolo)
-            }) { Text("Enable YOLO") } },
-            dismissButton = { TextButton(onClick = { confirmYolo = false }) { Text("Cancel") } },
-        )
-    }
-
     if (connectGitHubOpen) {
         // The token lives only in this dialog's composition state; it is never saveable
         // and is discarded when the dialog closes.
@@ -286,7 +271,6 @@ fun SettingsScreen(
                     autonomyMode = autonomyMode,
                     autonomySaving = autonomySaving,
                     autonomyError = autonomyError,
-                    confirmYolo = { confirmYolo = true },
                     onAutonomyChange = onAutonomyChange,
                     spendCaps = spendCaps,
                     userPricePerMillionUsd = userPricePerMillionUsd,
@@ -939,7 +923,6 @@ private fun AgentDetail(
     autonomyMode: AutonomyMode,
     autonomySaving: Boolean,
     autonomyError: String?,
-    confirmYolo: () -> Unit,
     onAutonomyChange: (AutonomyMode) -> Unit,
     spendCaps: SpendCaps,
     userPricePerMillionUsd: Double?,
@@ -980,10 +963,7 @@ private fun AgentDetail(
                         enabled = !autonomySaving,
                         role = Role.RadioButton,
                         onClick = {
-                            when (mode) {
-                                AutonomyMode.Yolo -> if (autonomyMode != mode) confirmYolo()
-                                else -> onAutonomyChange(mode)
-                            }
+                            onAutonomyChange(mode)
                         },
                     ),
                 verticalAlignment = Alignment.CenterVertically

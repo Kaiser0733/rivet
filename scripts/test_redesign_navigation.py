@@ -38,3 +38,15 @@ class RedesignNavigationTest(unittest.TestCase):
             self.assertIn(f'"{name}"', settings)
         self.assertIn("SettingsGroup {", settings)
         self.assertNotIn("ModalBottomSheet(", settings)
+
+    def test_composer_slash_panel_lists_commands_and_uses_existing_actions(self):
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        app = (UI / "RivetApp.kt").read_text()
+        panel = (UI / "chat/SlashMenu.kt").read_text()
+        self.assertIn('SlashAction.Goal -> "/goal "', chat)
+        self.assertIn("SlashAction.Feedback -> onSendFeedback()", chat)
+        self.assertIn("SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)", chat)
+        self.assertIn("SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)", chat)
+        self.assertIn("onAutonomyChange = requestAutonomy", app)
+        self.assertIn('group = "Skills"', panel)
+        self.assertIn("skill.description", panel)

@@ -23,18 +23,30 @@ class SkillCommandSheetTest {
     @Test fun filterMatchesTheNamePrefix() {
         val skills = listOf(skill("notes"), skill("release-notes"), skill("explain-error"))
 
-        assertEquals(listOf("notes"), matchingSkills(skills, "no").map { it.name })
-        assertEquals(listOf("notes", "release-notes", "explain-error"), matchingSkills(skills, "").map { it.name })
-        assertTrue(matchingSkills(skills, "zzz").isEmpty())
+        assertEquals(listOf("notes"), slashRows(skills, "no").map { it.name })
+        assertEquals(listOf("notes", "release-notes", "explain-error"), slashRows(skills, "").filter { it.group == "Skills" }.map { it.name })
+        assertTrue(slashRows(skills, "zzz").isEmpty())
     }
 
     @Test fun filterIsCaseInsensitive() {
-        assertEquals(listOf("notes"), matchingSkills(listOf(skill("notes")), "NO").map { it.name })
+        assertEquals(listOf("notes"), slashRows(listOf(skill("notes")), "NO").map { it.name })
     }
 
-    @Test fun filterKeepsOnlyUserInvocableSkills() {
+    @Test fun listsAllSkillsButCanOnlyInvokeUserSkills() {
         val skills = listOf(skill("notes"), skill("manual", userInvocable = false))
 
-        assertEquals(listOf("notes"), matchingSkills(skills, "").map { it.name })
+        val rows = slashRows(skills, "").filter { it.group == "Skills" }
+        assertEquals(listOf("notes", "manual"), rows.map { it.name })
+        assertEquals("Use manual when asked.", rows[1].description)
+        assertTrue(rows[0].enabled)
+        assertFalse(rows[1].enabled)
     }
+    @Test fun builtInsKeepTheirOrderAndFilterByToken() {
+        val actions = slashRows(emptyList(), "")
+        assertEquals(listOf(null, null, "Commands", "Commands", "Commands"), actions.map { it.group })
+        assertEquals(listOf("Goal", "Feedback", "Compact", "YOLO", "Basic YOLO"), actions.map { it.name })
+        assertEquals(listOf(SlashAction.BasicYolo), slashRows(emptyList(), "basic-y").map { it.action })
+        assertFalse(actions.single { it.action == SlashAction.Compact }.enabled)
+    }
+
 }
