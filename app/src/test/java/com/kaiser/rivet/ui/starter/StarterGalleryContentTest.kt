@@ -18,7 +18,6 @@ class StarterGalleryContentTest {
     }
 
     @Test fun usesPlainChipAndSizeCopy() {
-        assertEquals("Start from a starter", STARTER_CHIP_LABEL)
         assertEquals("512 B", starterSize(512))
         assertEquals("1.5 KB", starterSize(1500))
         assertEquals("150.0 KB", starterSize(150000))

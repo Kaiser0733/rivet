@@ -600,7 +600,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
         }
     }
-    LazyColumn(state = listState, modifier = modifier.widthIn(max = 748.dp).fillMaxSize(),
+    LazyColumn(state = listState, modifier = modifier.widthIn(max = CHAT_CONTENT_MAX_WIDTH_DP.dp).fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)) {

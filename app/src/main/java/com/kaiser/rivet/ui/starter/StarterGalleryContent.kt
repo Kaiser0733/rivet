@@ -3,7 +3,6 @@ package com.kaiser.rivet.ui.starter
 import com.kaiser.rivet.starter.StarterOption
 import java.util.Locale
 
-internal const val STARTER_CHIP_LABEL = "Start from a starter"
 
 internal fun starterGalleryEntries(
     bundled: List<StarterOption>, loaded: List<StarterOption>,
