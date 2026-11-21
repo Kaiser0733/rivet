@@ -130,6 +130,7 @@ import com.kaiser.rivet.chat.withDraft
 import com.kaiser.rivet.chat.liveStatusLine
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.Skill
+import com.kaiser.rivet.agent.parseGoalCommand
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.ui.provider.labelRes
@@ -2091,10 +2092,7 @@ private val DRAFT_SAVER: Saver<Map<String, String>, Any> = mapSaver(
     restore = { saved -> saved.mapNotNull { (key, value) -> (value as? String)?.let { key to it } }.toMap() },
 )
 
-internal fun isGoalCommand(text: String): Boolean {
-    val trimmed = text.trimStart()
-    return trimmed == "/goal" || trimmed.startsWith("/goal ")
-}
+internal fun isGoalCommand(text: String): Boolean = parseGoalCommand(text) != null
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable

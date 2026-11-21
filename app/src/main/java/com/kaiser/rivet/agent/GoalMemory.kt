@@ -150,9 +150,11 @@ sealed interface GoalCommand {
 /** `/goal` only; a normal message that starts with a slash is untouched. */
 fun parseGoalCommand(input: String): GoalCommand? {
     val trimmed = input.trim()
-    if (!trimmed.startsWith("/goal")) return null
+    // Keyboards capitalise the first letter of a message, so "/Goal" must be the same
+    // command. It was not, and the reply told people to use the command they just used.
+    if (trimmed.length < 5 || !trimmed.regionMatches(0, "/goal", 0, 5, ignoreCase = true)) return null
     if (trimmed.length > 5 && !trimmed[5].isWhitespace()) return null
-    val rest = trimmed.removePrefix("/goal").trim()
+    val rest = trimmed.substring(5).trim()
     return when {
         rest.isEmpty() || rest.equals("status", true) -> GoalCommand.Status
         rest.equals("pause", true) -> GoalCommand.Pause
