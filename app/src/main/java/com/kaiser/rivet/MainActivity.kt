@@ -105,7 +105,12 @@ class MainActivity : ComponentActivity() {
             if (it.itemCount > 0) it.getItemAt(0).uri else null
         }
         val text = if (action == Intent.ACTION_SEND) intent.getCharSequenceExtra(Intent.EXTRA_TEXT)?.toString() else null
-        val content = SharedContent.classify(action, intent.type, text, uri?.toString())
+        // A direct SEND often carries no type at all, while the gallery share does. Ask the
+        // provider so an image is handled as an image instead of a generic file.
+        val type = intent.type ?: uri?.let {
+            runCatching { contentResolver.getType(it) }.getOrNull()
+        }
+        val content = SharedContent.classify(action, type, text, uri?.toString())
         setIntent(Intent(intent).apply {
             removeExtra(Intent.EXTRA_STREAM)
             removeExtra(Intent.EXTRA_TEXT)

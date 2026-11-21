@@ -45,3 +45,15 @@ internal sealed interface SharedContent {
 }
 
 data class SharedDraft(val id: String, val text: String, val imageName: String? = null)
+
+/**
+ * A shared attachment is read through a transient URI grant. The blanket "couldn't
+ * read this attachment" hid which of the three things went wrong, so say it.
+ */
+internal fun shareFailureNotice(error: Throwable): String = when (error) {
+    is SecurityException ->
+        "Rivet doesn't have permission to read this attachment. Share it again and allow access."
+    is java.io.FileNotFoundException ->
+        "That attachment is no longer available. Share it again."
+    else -> "Rivet couldn't read this attachment. Try sharing it again."
+}

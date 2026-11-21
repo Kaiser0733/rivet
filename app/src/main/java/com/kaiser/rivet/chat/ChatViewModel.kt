@@ -350,8 +350,8 @@ class ChatViewModel private constructor(
                 throw e
             } catch (e: SharedFileCopy.TooLarge) {
                 _uiState.update { it.copy(notice = e.message) }
-            } catch (_: Exception) {
-                _uiState.update { it.copy(notice = "Rivet couldn't read this attachment. Try sharing it again.") }
+            } catch (e: Exception) {
+                _uiState.update { it.copy(notice = shareFailureNotice(e)) }
             }
         }
     }
