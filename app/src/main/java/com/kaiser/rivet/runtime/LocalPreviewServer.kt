@@ -15,7 +15,7 @@ import java.net.URI
 import java.util.concurrent.ArrayBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
-import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -49,7 +49,9 @@ internal class LocalPreviewServer(
 ) : AutoCloseable {
     private val socket = ServerSocket()
     private val active = AtomicBoolean(false)
-    private val activeClients = ConcurrentHashMap.newKeySet<Socket>()
+    // A queue, not a key set: handlers remove their socket while close() drains,
+    // and ConcurrentHashMap's iterator throws NoSuchElementException when that happens.
+    private val activeClients = ConcurrentLinkedQueue<Socket>()
     private val rootPath = root
     private val entryPath = entry
     private lateinit var clients: ThreadPoolExecutor
@@ -270,7 +272,9 @@ internal class LocalPreviewServer(
     override fun close() {
         if (!active.compareAndSet(true, false)) return
         try { socket.close() } catch (_: Exception) { }
-        activeClients.toList().forEach { client -> try { client.close() } catch (_: Exception) { } }
+        drainClients(activeClients).forEach { client ->
+            try { client.close() } catch (_: Exception) { }
+        }
         if (::clients.isInitialized) clients.shutdownNow()
         acceptThread?.interrupt()
     }
@@ -313,4 +317,15 @@ internal class LocalPreviewServer(
             else -> "application/octet-stream"
         }
     }
+}
+
+/**
+ * Drains by polling, never by iterating. Handlers remove their own socket while a
+ * close is in flight, and ConcurrentHashMap's key iterator throws NoSuchElementException
+ * when a key disappears between hasNext() and next().
+ */
+internal fun drainClients(clients: ConcurrentLinkedQueue<Socket>): List<Socket> {
+    val drained = mutableListOf<Socket>()
+    while (true) drained += clients.poll() ?: break
+    return drained
 }
