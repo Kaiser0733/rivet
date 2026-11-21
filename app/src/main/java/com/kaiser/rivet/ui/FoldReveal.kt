@@ -7,6 +7,7 @@ import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableFloatStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.withFrameNanos
 import androidx.compose.ui.Modifier
@@ -26,23 +27,24 @@ internal fun FoldReveal(
     modifier: Modifier = Modifier,
     content: @Composable () -> Unit,
 ) {
-    var progress by remember { mutableFloatStateOf(if (expanded) 1f else 0f) }
+    val instant = foldMotionDisabled()
+    val target = if (expanded) 1f else 0f
+    var progress by remember { mutableFloatStateOf(target) }
     var composed by remember { mutableStateOf(expanded) }
-    LaunchedEffect(expanded) {
+    LaunchedEffect(expanded, instant) {
         if (expanded) composed = true
-        val target = if (expanded) 1f else 0f
         val duration = if (expanded) FoldMotion.EXPAND_MS else FoldMotion.COLLAPSE_MS
         animateFoldValue(progress, target, duration) { progress = it }
         if (!expanded) composed = false
     }
     Layout(
-        content = { if (composed) content() },
+        content = { if (if (instant) expanded else composed) content() },
         modifier = modifier.clipToBounds(),
     ) { measurables, constraints ->
         val placeables = measurables.map { it.measure(constraints.copy(minHeight = 0)) }
         val fullHeight = placeables.maxOfOrNull { it.height } ?: 0
         val fullWidth = placeables.maxOfOrNull { it.width } ?: 0
-        val height = (fullHeight * progress).roundToInt().coerceIn(0, fullHeight)
+        val height = (fullHeight * (if (instant) target else progress)).roundToInt().coerceIn(0, fullHeight)
         layout(fullWidth, height) { placeables.forEach { it.place(0, 0) } }
     }
 }
@@ -57,24 +59,29 @@ internal object FoldMotion {
 
 @Composable
 internal fun foldChevronRotation(open: Boolean): Float {
-    var rotation by remember { mutableFloatStateOf(if (open) 180f else 0f) }
-    LaunchedEffect(open) {
-        val target = if (open) 180f else 0f
+    val instant = foldMotionDisabled()
+    val target = if (open) 180f else 0f
+    var rotation by remember { mutableFloatStateOf(target) }
+    LaunchedEffect(open, instant) {
         val duration = if (open) FoldMotion.EXPAND_MS else FoldMotion.COLLAPSE_MS
         animateFoldValue(rotation, target, duration) { rotation = it }
     }
-    return rotation
+    return if (instant) target else rotation
 }
-
 
 @Composable
 internal fun foldOutcomeProgress(reveal: Boolean): Float {
-    var progress by remember { mutableFloatStateOf(if (reveal) 0f else 1f) }
-    LaunchedEffect(Unit) {
+    val instant = foldMotionDisabled()
+    var progress by remember { mutableFloatStateOf(if (reveal && !instant) 0f else 1f) }
+    LaunchedEffect(instant) {
         animateFoldValue(progress, 1f, FoldMotion.EXPAND_MS) { progress = it }
     }
-    return progress
+    return if (instant) 1f else progress
 }
+
+@Composable
+private fun foldMotionDisabled(): Boolean =
+    rememberCoroutineScope().coroutineContext[MotionDurationScale]?.scaleFactor == 0f
 
 private suspend fun animateFoldValue(from: Float, target: Float, duration: Int, update: (Float) -> Unit) {
     val motion = currentCoroutineContext()[MotionDurationScale]

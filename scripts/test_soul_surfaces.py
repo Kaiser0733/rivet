@@ -90,3 +90,10 @@ class SoulSurfaceTest(unittest.TestCase):
         for path, anchor, expected in cases:
             with self.subTest(path=path, copy=expected):
                 self.assertIn(expected, (UI / path).read_text().split(anchor, 1)[1])
+
+    def test_zero_motion_uses_final_values_during_composition(self):
+        motion = (UI / "FoldReveal.kt").read_text()
+        self.assertIn("if (instant) expanded else composed", motion)
+        self.assertIn("if (instant) target else progress", motion)
+        self.assertIn("return if (instant) target else rotation", motion)
+        self.assertIn("return if (instant) 1f else progress", motion)
