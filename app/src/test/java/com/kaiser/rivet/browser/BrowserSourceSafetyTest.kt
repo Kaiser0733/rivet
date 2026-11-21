@@ -126,10 +126,17 @@ class BrowserSourceSafetyTest {
 
         val screen = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt"),
             File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt")).first { it.isFile }.readText()
-        assertTrue(screen.contains("Box(Modifier.weight(1f).fillMaxWidth().clipToBounds())"))
-        val noticeBlock = screen.substringAfter("state.error != null || state.notice != null || state.budgetCloseAction")
-        assertTrue(noticeBlock.trimStart().startsWith(")"))
-        assertTrue(screen.contains("BrowserNotice(\n                    if (state.error != null)"))
+        val host = "Box(Modifier.weight(1f).fillMaxWidth().clipToBounds())"
+        assertTrue(screen.contains(host))
+        // Errors and notices still sit in the column above the host, so nothing can
+        // cover them, and BrowserNotice is an opaque full-width band.
+        val noticeAt = screen.indexOf("state.error != null || state.notice != null || state.budgetCloseAction")
+        val hostAt = screen.indexOf(host)
+        assertTrue("notice band is rendered above the host", noticeAt in 0 until hostAt)
+        assertTrue(screen.contains("private fun BrowserNotice(color: Color"))
+        assertTrue(screen.contains("Surface(Modifier.fillMaxWidth(), color = color)"))
+        assertTrue(screen.contains("state.error?.let { error ->"))
+        assertTrue(screen.contains("state.notice?.let {"))
     }
 
     @Test fun teardownTerminatesTrackedProcessesAndClearsPendingRestart() {
