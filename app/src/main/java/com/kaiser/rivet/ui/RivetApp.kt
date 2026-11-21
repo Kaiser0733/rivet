@@ -231,12 +231,12 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                     providersViewModel.closeEditor()
                     editing = false
                 }
-                destination == RivetDestination.Models -> destination = modelsReturn
+                destination == RivetDestination.Models -> destination = destination.backDestination(modelsReturn)
                 destination == RivetDestination.SkillInstall -> {
                     installZip = null
-                    destination = installReturn
+                    destination = destination.backDestination(installReturn)
                 }
-                destination == RivetDestination.Terminal -> destination = RivetDestination.Tools
+                destination == RivetDestination.Terminal -> destination = destination.backDestination()
                 destination == RivetDestination.Workers -> {
                     chatViewModel.closeWorker()
                     destination = RivetDestination.Tools
@@ -351,7 +351,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             initialZip = installZip,
                             onDismiss = {
                                 installZip = null
-                                destination = installReturn
+                                destination = destination.backDestination(installReturn)
                             },
                             onInstalled = chatViewModel::refreshSkillCatalog,
                         )

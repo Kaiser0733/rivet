@@ -24,7 +24,6 @@ import androidx.compose.foundation.verticalScroll
 import android.content.Intent
 import android.net.Uri
 import androidx.activity.compose.BackHandler
-import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.FilterChip
 import androidx.compose.material3.HorizontalDivider
@@ -88,6 +87,18 @@ fun ProviderEditor(
     }
     val filteredModels = remember(state.models, config.model, modelSearch) {
         filterModels(state.models, config.model, modelSearch)
+    }
+
+    if (state.showChatGptIntro) {
+        val closeIntro = { viewModel.dismissChatGptPlanIntro(); onDone() }
+        BackHandler(onBack = closeIntro)
+        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()
+            .verticalScroll(rememberScrollState()).padding(20.dp), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+            Text(stringResource(R.string.chatgpt_plan_intro_title), style = MaterialTheme.typography.headlineSmall)
+            Text(stringResource(R.string.chatgpt_plan_intro_body))
+            RivetOutlinedButton(onClick = closeIntro) { Text(stringResource(R.string.got_it)) }
+        }
+        return
     }
 
     Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
@@ -414,20 +425,7 @@ fun ProviderEditor(
             }
         }
     }
-    if (state.showChatGptIntro) {
-        AlertDialog(
-            onDismissRequest = { viewModel.dismissChatGptPlanIntro(); onDone() },
-            title = { Text(stringResource(R.string.chatgpt_plan_intro_title),
-                style = MaterialTheme.typography.titleMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
-            text = { Text(stringResource(R.string.chatgpt_plan_intro_body),
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
-            confirmButton = {
-                RivetOutlinedButton(onClick = { viewModel.dismissChatGptPlanIntro(); onDone() }) {
-                    Text(stringResource(R.string.got_it))
-                }
-            },
-        )
-    }
+
 }
 
 private fun displaySafeModelId(value: String): String {

@@ -55,6 +55,9 @@ internal fun WorkerScreen(
                 Text(workerStateLabel(worker), style = MaterialTheme.typography.labelMedium,
                     color = MaterialTheme.colorScheme.onSurface)
             }
+            workerActivityLine(worker)?.let {
+                Text(it, style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 workers.forEach { entry ->
                     AssistChip(

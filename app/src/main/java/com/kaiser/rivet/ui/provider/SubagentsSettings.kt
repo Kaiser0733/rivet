@@ -10,8 +10,6 @@ import androidx.compose.foundation.layout.heightIn
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.material3.Checkbox
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.MaterialTheme
@@ -163,21 +161,16 @@ internal fun SubagentsSettings(
             Text("Subagent model", style = MaterialTheme.typography.titleSmall,
                 color = MaterialTheme.colorScheme.primary,
                 modifier = Modifier.padding(top = 8.dp, bottom = 4.dp))
-            Column {
-                TextButton(onClick = { pickerOpen = true }, modifier = Modifier.fillMaxWidth()) {
-                    Text(fixedLabel, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
-                    Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(20.dp))
-                }
-                DropdownMenu(expanded = pickerOpen, onDismissRequest = { pickerOpen = false }) {
-                    configs.forEach { config ->
-                        DropdownMenuItem(
-                            text = { Text("${config.name} · ${config.model}") },
-                            onClick = {
-                                pickerOpen = false
-                                onFixedModel(config)
-                            },
-                        )
-                    }
+            TextButton(onClick = { pickerOpen = !pickerOpen }, modifier = Modifier.fillMaxWidth()) {
+                Text(fixedLabel, modifier = Modifier.weight(1f), textAlign = androidx.compose.ui.text.style.TextAlign.Start)
+                Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(20.dp))
+            }
+            if (pickerOpen) configs.forEach { config ->
+                TextButton(onClick = {
+                    pickerOpen = false
+                    onFixedModel(config)
+                }, modifier = Modifier.fillMaxWidth()) {
+                    Text("${config.name} · ${config.model}", Modifier.weight(1f))
                 }
             }
             if (pool.fixed == null) {

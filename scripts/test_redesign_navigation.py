@@ -134,3 +134,13 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertIn("ReasoningSignal(", pane)
         self.assertNotIn("ReasoningSignal(", (UI / "chat/ChatScreen.kt").read_text())
         self.assertIn("motionDisabled()", model)
+
+    def test_secondary_forms_use_pages_and_message_actions_stay_in_the_transcript(self):
+        settings = (UI / "provider/SettingsScreen.kt").read_text()
+        for page in ("GitHubConnect", "EditMemory"):
+            self.assertIn(f"SettingsSection.{page} ->", settings)
+        subagents = (UI / "provider/SubagentsSettings.kt").read_text()
+        self.assertNotIn("DropdownMenu(", subagents)
+        message = (UI / "chat/ChatScreen.kt").read_text().split("internal fun MessageRow(", 1)[1]
+        self.assertNotIn("DropdownMenu(", message)
+        self.assertIn('Text("Copy message")', message)

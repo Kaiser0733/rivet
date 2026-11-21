@@ -70,8 +70,6 @@ import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.OutlinedTextFieldDefaults
 import androidx.compose.material3.Surface
-import androidx.compose.material3.DropdownMenu
-import androidx.compose.material3.DropdownMenuItem
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
@@ -270,7 +268,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val canStartChat = state.ready && !state.projectLoading && !state.streaming &&
         !state.undoing && !state.recoveringProjectChanges
 
-    val preview = remember(state.currentSessionId, state.currentSessionWorkspaceId) { PreviewTabs() }
+    val preview = remember(state.currentSessionId, state.currentSessionWorkspaceId, state.projectIdentity) { PreviewTabs() }
     ChatWithPreview(preview, load = { path ->
         chatViewModel.previewProjectFile(path, state.currentSessionWorkspaceId)
     }) {
@@ -1141,8 +1139,6 @@ private suspend fun scrollToConversationBottom(state: androidx.compose.foundatio
 internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messageKey: Int = 0) {
     val context = LocalContext.current
     val copyText = if (message.role == AgentRole.User) message.text else displaySafeText(message.text)
-    // Long-press opens a visible menu. Copying used to happen with nothing on screen,
-    // so nothing showed that it had worked.
     var menuOpen by remember(messageKey) { mutableStateOf(false) }
     var selectingText by remember(messageKey) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -1175,20 +1171,22 @@ internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messag
             if (selectingText) Modifier else Modifier.combinedClickable(
                 onClick = {},
                 onLongClickLabel = "Copy or select text",
-                onLongClick = { menuOpen = true },
+                onLongClick = { menuOpen = !menuOpen },
             ),
         )) {
             if (selectingText) SelectionContainer { bubble() } else bubble()
-            DropdownMenu(expanded = menuOpen, onDismissRequest = { menuOpen = false }) {
-                DropdownMenuItem(text = { Text("Copy message") }, onClick = {
+        }
+        if (menuOpen) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                TextButton(onClick = {
                     menuOpen = false
                     copyToClipboard(context, copyText)
                     Toast.makeText(context, "Message copied.", Toast.LENGTH_SHORT).show()
-                })
-                DropdownMenuItem(text = { Text("Select text") }, onClick = {
+                }) { Text("Copy message") }
+                TextButton(onClick = {
                     menuOpen = false
                     selectingText = true
-                })
+                }) { Text("Select text") }
             }
         }
         if (selectingText) {

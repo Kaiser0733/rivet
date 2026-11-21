@@ -284,7 +284,8 @@ fun RivetTheme(themeMode: RivetThemeMode = RivetThemeMode.Dark,
     val legacy = if (themeMode == RivetThemeMode.Light ||
         (themeMode == RivetThemeMode.System && !dark)) ProtectedLightColors else ProtectedDarkColors
     CompositionLocalProvider(LocalProtectedColors provides legacy) {
-        MaterialTheme(rivetColors(themeMode, dark), RivetTypography, RivetShapes, content)
+        MaterialTheme(colorScheme = rivetColors(themeMode, dark), typography = RivetTypography,
+            shapes = RivetShapes, content = content)
     }
 }
 

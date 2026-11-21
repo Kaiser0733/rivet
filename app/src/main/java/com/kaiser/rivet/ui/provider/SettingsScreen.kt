@@ -94,7 +94,7 @@ import kotlinx.coroutines.launch
 private val MAX_WIDTH = 680.dp
 
 internal enum class SettingsSection {
-    Providers, Appearance, Agent, Phone, PhoneAddOn, Subagents, Memory, GitHub, Skills, Updates, About, Usage,
+    Providers, Appearance, Agent, Phone, PhoneAddOn, Subagents, Memory, GitHub, GitHubConnect, Skills, Updates, About, Usage, EditMemory,
 }
 
 @Composable
@@ -139,9 +139,10 @@ fun SettingsScreen(
         when {
             shownSkill != null -> selectedSkill = null
             section == SettingsSection.PhoneAddOn -> section = SettingsSection.Phone
+            section == SettingsSection.GitHubConnect -> if (!gitHubState.busy) section = SettingsSection.GitHub
             section == SettingsSection.GitHub -> section = SettingsSection.Providers
             section == SettingsSection.Updates || section == SettingsSection.Usage -> section = SettingsSection.About
-            section == SettingsSection.Agent -> section = SettingsSection.Memory
+            section == SettingsSection.Agent || section == SettingsSection.EditMemory -> section = SettingsSection.Memory
             section != null -> section = null
             else -> onClose()
         }
@@ -152,7 +153,6 @@ fun SettingsScreen(
         if (section == SettingsSection.Skills) onRefreshSkills()
     }
     var deleteTarget by remember { mutableStateOf<ProviderConfig?>(null) }
-    var connectGitHubOpen by rememberSaveable { mutableStateOf(false) }
 
     deleteTarget?.let { provider ->
         AlertDialog(
@@ -170,49 +170,6 @@ fun SettingsScreen(
             } },
         )
     }
-    if (connectGitHubOpen) {
-        // The token lives only in this dialog's composition state; it is never saveable
-        // and is discarded when the dialog closes.
-        var token by remember { mutableStateOf("") }
-        LaunchedEffect(gitHubState.connected) {
-            if (gitHubState.connected) connectGitHubOpen = false
-        }
-        AlertDialog(
-            onDismissRequest = { if (!gitHubState.busy) connectGitHubOpen = false },
-            title = { Text("Connect GitHub", style = MaterialTheme.typography.titleMedium) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
-                    Text("Paste a personal access token. Prefer a fine-grained token limited to the repositories you push to. Rivet stores it encrypted on this device and never puts it in chat, a command, or the command environment.",
-                        style = MaterialTheme.typography.bodyMedium)
-                    OutlinedTextField(
-                        value = token,
-                        onValueChange = { token = it },
-                        singleLine = true,
-                        enabled = !gitHubState.busy,
-                        visualTransformation = PasswordVisualTransformation(),
-                        label = { Text("Token") },
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    gitHubState.error?.let {
-                        Text(displaySafeText(it), color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            },
-            confirmButton = {
-                TextButton(
-                    onClick = { viewModel.connectGitHub(token) },
-                    enabled = token.isNotBlank() && !gitHubState.busy,
-                ) { Text(if (gitHubState.busy) "Connecting…" else "Connect") }
-            },
-            dismissButton = {
-                TextButton(onClick = { connectGitHubOpen = false }, enabled = !gitHubState.busy) {
-                    Text("Cancel")
-                }
-            },
-        )
-    }
-
     val active = state.configs.firstOrNull { it.id == state.activeId }
     val saved = state.configs.filterNot { it.id == active?.id }
 
@@ -261,12 +218,15 @@ fun SettingsScreen(
                 )
                 SettingsSection.Memory -> MemoryDetail(
                     lines = memoryLines,
-                    markdown = memoryMarkdown,
                     hasProject = hasProject,
-                    onUpdate = onUpdateMemory,
+                    onEditMemory = { section = SettingsSection.EditMemory },
                     onForget = onForgetMemoryLine,
                     onOpenAgent = { section = SettingsSection.Agent },
                 )
+                SettingsSection.EditMemory -> MemoryEditor(memoryMarkdown) { text ->
+                    onUpdateMemory(text)
+                    section = SettingsSection.Memory
+                }
                 SettingsSection.Agent -> AgentDetail(
                     autonomyMode = autonomyMode,
                     autonomySaving = autonomySaving,
@@ -293,8 +253,13 @@ fun SettingsScreen(
                     gitAvailable = gitHubState.gitAvailable,
                     busy = gitHubState.busy,
                     error = gitHubState.error,
-                    onConnect = { connectGitHubOpen = true },
+                    onConnect = { section = SettingsSection.GitHubConnect },
                     onDisconnect = viewModel::disconnectGitHub,
+                )
+                SettingsSection.GitHubConnect -> GitHubConnect(
+                    state = gitHubState,
+                    onConnect = viewModel::connectGitHub,
+                    onConnected = { section = SettingsSection.GitHub },
                 )
                 SettingsSection.Skills -> SkillsSettings(
                     catalog = skillCatalog,
@@ -339,6 +304,8 @@ internal fun SettingsSection.title(): String = when (this) {
     SettingsSection.Subagents -> "Subagents"
     SettingsSection.Memory -> "Memory & compaction"
     SettingsSection.GitHub -> "GitHub"
+    SettingsSection.GitHubConnect -> "Connect GitHub"
+    SettingsSection.EditMemory -> "Edit project memory"
     SettingsSection.Skills -> "Skills"
     SettingsSection.Updates -> "Updates"
     SettingsSection.About -> "About"
@@ -436,39 +403,11 @@ private fun SectionListItem(
 @Composable
 private fun MemoryDetail(
     lines: List<String>,
-    markdown: String,
     hasProject: Boolean,
-    onUpdate: (String) -> Unit,
+    onEditMemory: () -> Unit,
     onForget: (Int) -> Unit,
     onOpenAgent: () -> Unit,
 ) {
-    var editing by remember { mutableStateOf(false) }
-    var draft by remember(markdown) { mutableStateOf(markdown) }
-    if (editing) {
-        AlertDialog(
-            onDismissRequest = { editing = false },
-            title = { Text("Edit project memory") },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("One durable fact per line. No secrets, transcripts, or task progress.",
-                        style = MaterialTheme.typography.bodySmall)
-                    OutlinedTextField(
-                        value = draft,
-                        onValueChange = { draft = it },
-                        modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 360.dp),
-                        textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                    )
-                }
-            },
-            confirmButton = {
-                RivetOutlinedButton(onClick = {
-                    onUpdate(draft)
-                    editing = false
-                }) { Text("Save") }
-            },
-            dismissButton = { TextButton(onClick = { editing = false }) { Text("Cancel") } },
-        )
-    }
     DetailScroll {
         SectionListItem(R.drawable.ic_processes, "Permissions & spending", "", onOpenAgent, true)
         Text("Rivet compacts older conversation history to make room in the model's context.",
@@ -484,7 +423,7 @@ private fun MemoryDetail(
             Text("Open a project to view its memory.", style = MaterialTheme.typography.bodyMedium)
         } else {
             Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                RivetOutlinedButton(onClick = { draft = markdown; editing = true }) {
+                RivetOutlinedButton(onClick = onEditMemory) {
                     Text(if (lines.isEmpty()) "Write memory" else "Edit")
                 }
             }
@@ -502,6 +441,49 @@ private fun MemoryDetail(
                     TextButton(onClick = { onForget(index) }) { Text("Forget") }
                 }
             }
+        }
+    }
+}
+
+@Composable
+private fun MemoryEditor(markdown: String, onSave: (String) -> Unit) {
+    var draft by remember(markdown) { mutableStateOf(markdown) }
+    DetailScroll {
+        Text("One durable fact per line. No secrets, transcripts, or task progress.",
+            style = MaterialTheme.typography.bodySmall)
+        OutlinedTextField(
+            value = draft,
+            onValueChange = { draft = it },
+            modifier = Modifier.fillMaxWidth().heightIn(min = 180.dp, max = 360.dp),
+            textStyle = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
+        )
+        RivetOutlinedButton(onClick = { onSave(draft) }) { Text("Save") }
+    }
+}
+
+@Composable
+private fun GitHubConnect(state: GitHubUiState, onConnect: (String) -> Unit, onConnected: () -> Unit) {
+    var token by remember { mutableStateOf("") }
+    LaunchedEffect(state.connected) {
+        if (state.connected) onConnected()
+    }
+    DetailScroll {
+        Text("Paste a personal access token. Prefer a fine-grained token limited to the repositories you push to. Rivet stores it encrypted on this device and never puts it in chat, a command, or the command environment.",
+            style = MaterialTheme.typography.bodyMedium)
+        OutlinedTextField(
+            value = token,
+            onValueChange = { token = it },
+            singleLine = true,
+            enabled = !state.busy,
+            visualTransformation = PasswordVisualTransformation(),
+            label = { Text("Token") },
+            modifier = Modifier.fillMaxWidth(),
+        )
+        state.error?.let {
+            Text(displaySafeText(it), color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall)
+        }
+        TextButton(onClick = { onConnect(token) }, enabled = token.isNotBlank() && !state.busy) {
+            Text(if (state.busy) "Connecting…" else "Connect")
         }
     }
 }

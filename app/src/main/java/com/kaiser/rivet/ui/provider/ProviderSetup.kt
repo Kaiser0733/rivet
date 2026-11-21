@@ -8,7 +8,7 @@ import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.fillMaxWidth
-import androidx.compose.material3.AlertDialog
+import androidx.compose.foundation.layout.padding
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.OutlinedTextField
 import androidx.compose.material3.Text
@@ -20,11 +20,9 @@ import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.rememberCoroutineScope
 import androidx.compose.runtime.setValue
-import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.stringResource
-import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.provider.ChatGptSignInResult
@@ -123,103 +121,69 @@ internal fun ProviderSetup(providersViewModel: ProvidersViewModel, onOpenModels:
         TextButton(onClick = onOpenModels) { Text("Start offline") }
     }
     if (showStartFree) {
-        val context = LocalContext.current
-        AlertDialog(onDismissRequest = { showStartFree = false },
-            title = { Text(stringResource(R.string.start_free_title),
-                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
-            text = { Text(stringResource(R.string.start_free_body),
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
-            confirmButton = {
-                FlowRow(
-                    horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.CenterHorizontally),
-                    verticalArrangement = Arrangement.spacedBy(8.dp),
-                ) {
-                    TextButton(onClick = {
-                        try {
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://openrouter.ai"))
-                                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
-                        } catch (_: Exception) { }
-                    }) { Text(stringResource(R.string.open_openrouter)) }
-                    RivetOutlinedButton(onClick = { showStartFree = false; onIHaveAKey() }) {
-                        Text(stringResource(R.string.i_have_a_key))
-                    }
+        Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.start_free_title), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.start_free_body), style = MaterialTheme.typography.bodyMedium)
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                TextButton(onClick = {
+                    try {
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://openrouter.ai"))
+                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK))
+                    } catch (_: Exception) { }
+                }) { Text(stringResource(R.string.open_openrouter)) }
+                RivetOutlinedButton(onClick = { showStartFree = false; onIHaveAKey() }) {
+                    Text(stringResource(R.string.i_have_a_key))
                 }
-            },
-            dismissButton = { TextButton(onClick = { showStartFree = false }) {
-                Text(stringResource(R.string.close))
-            } })
+                TextButton(onClick = { showStartFree = false }) { Text(stringResource(R.string.close)) }
+            }
+        }
     }
     if (showKeyInput) {
         val blankKeyMessage = stringResource(R.string.free_key_blank)
-        AlertDialog(onDismissRequest = { showKeyInput = false; keyInput = ""; keyError = null },
-            title = { Text(stringResource(R.string.free_key_title),
-                style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
-            text = {
-                Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    OutlinedTextField(
-                        value = keyInput,
-                        onValueChange = { keyInput = it; keyError = null },
-                        label = { Text(stringResource(R.string.free_key_label)) },
-                        placeholder = { Text(stringResource(R.string.free_key_hint)) },
-                        singleLine = true,
-                        visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
-                        keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
-                            keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
-                            autoCorrect = false,
-                        ),
-                        modifier = Modifier.fillMaxWidth(),
-                    )
-                    keyError?.let { message ->
-                        Text(message, color = MaterialTheme.colorScheme.error,
-                            style = MaterialTheme.typography.bodySmall)
-                    }
-                }
-            },
-            confirmButton = {
+        fun closeKeyInput() {
+            showKeyInput = false
+            keyInput = ""
+            keyError = null
+        }
+        Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.free_key_title), style = MaterialTheme.typography.titleMedium)
+            OutlinedTextField(
+                value = keyInput,
+                onValueChange = { keyInput = it; keyError = null },
+                label = { Text(stringResource(R.string.free_key_label)) },
+                placeholder = { Text(stringResource(R.string.free_key_hint)) },
+                singleLine = true,
+                visualTransformation = androidx.compose.ui.text.input.PasswordVisualTransformation(),
+                keyboardOptions = androidx.compose.foundation.text.KeyboardOptions(
+                    keyboardType = androidx.compose.ui.text.input.KeyboardType.Password,
+                    autoCorrect = false,
+                ),
+                modifier = Modifier.fillMaxWidth(),
+            )
+            keyError?.let { Text(it, color = MaterialTheme.colorScheme.error,
+                style = MaterialTheme.typography.bodySmall) }
+            FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 RivetOutlinedButton(onClick = {
-                    val trimmed = keyInput.trim()
-                    if (trimmed.isBlank()) {
-                        keyError = blankKeyMessage
-                        return@RivetOutlinedButton
-                    }
-                    providersViewModel.saveFreeProvider(
-                        trimmed,
-                        onSaved = {
-                            showKeyInput = false
-                            keyInput = ""
-                            keyError = null
-                        },
-                        onError = { message -> keyError = message },
+                    val key = keyInput.trim()
+                    if (key.isBlank()) keyError = blankKeyMessage else providersViewModel.saveFreeProvider(
+                        key, onSaved = ::closeKeyInput, onError = { keyError = it },
                     )
                 }) { Text(stringResource(R.string.provider_save)) }
-            },
-            dismissButton = { TextButton(onClick = { showKeyInput = false; keyInput = ""; keyError = null }) {
-                Text(stringResource(R.string.provider_cancel))
-            } })
+                TextButton(onClick = ::closeKeyInput) { Text(stringResource(R.string.provider_cancel)) }
+            }
+        }
     }
-    if (showChatGptSignInError != null) {
-        AlertDialog(
-            onDismissRequest = { showChatGptSignInError = null },
-            text = { Text(showChatGptSignInError.orEmpty()) },
-            confirmButton = {
-                TextButton(onClick = { showChatGptSignInError = null }) {
-                    Text(stringResource(R.string.close))
-                }
-            },
-        )
+    showChatGptSignInError?.let { message ->
+        Column(Modifier.padding(vertical = 8.dp)) {
+            Text(message, color = MaterialTheme.colorScheme.error)
+            TextButton(onClick = { showChatGptSignInError = null }) { Text(stringResource(R.string.close)) }
+        }
     }
     if (showChatGptIntro) {
-        AlertDialog(
-            onDismissRequest = { showChatGptIntro = false },
-            title = { Text(stringResource(R.string.chatgpt_plan_intro_title),
-                style = MaterialTheme.typography.titleMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
-            text = { Text(stringResource(R.string.chatgpt_plan_intro_body),
-                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = androidx.compose.ui.text.font.FontFamily.Default)) },
-            confirmButton = {
-                RivetOutlinedButton(onClick = { showChatGptIntro = false }) {
-                    Text(stringResource(R.string.got_it))
-                }
-            },
-        )
+        Column(Modifier.padding(vertical = 8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            Text(stringResource(R.string.chatgpt_plan_intro_title), style = MaterialTheme.typography.titleMedium)
+            Text(stringResource(R.string.chatgpt_plan_intro_body))
+            RivetOutlinedButton(onClick = { showChatGptIntro = false }) { Text(stringResource(R.string.got_it)) }
+        }
     }
 }
