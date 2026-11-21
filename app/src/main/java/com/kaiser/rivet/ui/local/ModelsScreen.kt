@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.local
 
+import com.kaiser.rivet.ui.UtilityColumns
 import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.R
 import com.kaiser.rivet.ui.UtilityGlyph
@@ -126,18 +127,20 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             item {
-                DeviceCard(ui.totalRamMb, ui.availableRamMb, ui.freeStorage)
-            }
-            item {
-                Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                    Column(Modifier.weight(1f)) {
-                        Text("Wi-Fi only for large downloads", style = MaterialTheme.typography.bodyMedium)
-                        Text("Keeps a 2.5 GB download off mobile data unless you choose otherwise.",
-                            style = MaterialTheme.typography.bodySmall,
-                            color = MaterialTheme.colorScheme.onSurfaceVariant)
-                    }
-                    Switch(checked = ui.wifiOnly, onCheckedChange = viewModel::setWifiOnly)
-                }
+                UtilityColumns(
+                    leading = { DeviceCard(ui.totalRamMb, ui.availableRamMb, ui.freeStorage) },
+                    trailing = {
+                        Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                            Column(Modifier.weight(1f)) {
+                                Text("Wi-Fi only for large downloads", style = MaterialTheme.typography.bodyMedium)
+                                Text("Keeps a 2.5 GB download off mobile data unless you choose otherwise.",
+                                    style = MaterialTheme.typography.bodySmall,
+                                    color = MaterialTheme.colorScheme.onSurfaceVariant)
+                            }
+                            Switch(checked = ui.wifiOnly, onCheckedChange = viewModel::setWifiOnly)
+                        }
+                    },
+                )
             }
             ui.catalogueError?.let { error ->
                 item { Text(error, color = MaterialTheme.colorScheme.error) }

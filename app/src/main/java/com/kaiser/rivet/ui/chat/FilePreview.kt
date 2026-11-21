@@ -123,11 +123,12 @@ internal fun ChatWithPreview(
     val stateHolder = rememberSaveableStateHolder()
     BoxWithConstraints(Modifier.fillMaxSize()) {
         val availableWidth = maxWidth
+        val split = chatPaneFraction(availableWidth.value, divider)
         val widthPx = with(LocalDensity.current) { availableWidth.toPx() }
         val dividerWidth = 14.dp.coerceAtMost(availableWidth)
         Row(Modifier.fillMaxSize()) {
             if (!tabs.fullScreen || active == null) {
-                val chat = if (active == null) Modifier.weight(1f) else Modifier.width((availableWidth - dividerWidth) * divider)
+                val chat = if (active == null) Modifier.weight(1f) else Modifier.width((availableWidth - dividerWidth) * split)
                 Box(chat.fillMaxHeight()) {
                     stateHolder.SaveableStateProvider("conversation") { content() }
                 }
@@ -138,13 +139,13 @@ internal fun ChatWithPreview(
                         .background(MaterialTheme.colorScheme.surfaceContainer)
                         .semantics {
                             contentDescription = "Resize file preview"
-                            progressBarRangeInfo = ProgressBarRangeInfo(divider, 0.32f..0.72f)
-                            setProgress { fraction -> divider = fraction.coerceIn(0.32f, 0.72f); true }
+                            progressBarRangeInfo = ProgressBarRangeInfo(split, 0.32f..0.72f)
+                            setProgress { fraction -> divider = chatPaneFraction(availableWidth.value, fraction); true }
                         }
                         .pointerInput(widthPx) {
                             detectHorizontalDragGestures { change, delta ->
                                 change.consume()
-                                if (widthPx > 0f) divider = (divider + delta / widthPx).coerceIn(0.32f, 0.72f)
+                                if (widthPx > 0f) divider = chatPaneFraction(availableWidth.value, chatPaneFraction(availableWidth.value, divider) + delta / widthPx)
                             }
                         }, contentAlignment = Alignment.Center) {
                         Box(Modifier.width(2.dp).height(28.dp).background(MaterialTheme.colorScheme.onSurfaceVariant))

@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.processes
 
+import com.kaiser.rivet.ui.RivetLayout
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.lazy.LazyListScope
 import com.kaiser.rivet.ui.DisclosureBody
 import com.kaiser.rivet.ui.utilityClick
 import com.kaiser.rivet.ui.UtilityLead
@@ -102,9 +105,7 @@ internal fun ToolsScreen(
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.statusBarsPadding().navigationBarsPadding()) {
             RivetPageHeader("Tools", onBack)
-            LazyColumn(Modifier.widthIn(max = 760.dp).fillMaxSize().align(Alignment.CenterHorizontally),
-                contentPadding = PaddingValues(horizontal = 20.dp, vertical = 12.dp),
-                verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            val actions: LazyListScope.() -> Unit = {
                 item {
                     UtilityLead(R.drawable.ic_processes, "Terminal") {
                         RivetOutlinedButton(onClick = { terminal.open(); onOpenTerminal() }) {
@@ -115,6 +116,13 @@ internal fun ToolsScreen(
                 if (onOpenWorkers != null) item {
                     UtilityRow(R.drawable.ic_subagents, "Subagents", onClick = onOpenWorkers)
                 }
+            }
+            val checkpointsPane: LazyListScope.() -> Unit = {
+                item {
+                    CheckpointList(checkpoints, checkpointNotice, onRestore = { restoreTarget = it })
+                }
+            }
+            val processPane: LazyListScope.() -> Unit = {
                 item {
                     Row(Modifier.padding(top = 8.dp), verticalAlignment = Alignment.CenterVertically,
                         horizontalArrangement = Arrangement.spacedBy(12.dp)) {
@@ -133,9 +141,6 @@ internal fun ToolsScreen(
                         onOpen = { process.url?.let { openPreview(context, it) } },
                         onCopy = { process.url?.let { copyPreview(context, it) } })
                 }
-                item {
-                    CheckpointList(checkpoints, checkpointNotice, onRestore = { restoreTarget = it })
-                }
                 if (finished.isNotEmpty()) item {
                     HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
                     TextButton(onClick = { showFinished = !showFinished }) {
@@ -148,6 +153,26 @@ internal fun ToolsScreen(
                     ProcessRow(process, now, onStop = {}, onOpen = {}, onCopy = {})
                 }
             }
+            val padding = PaddingValues(horizontal = 20.dp, vertical = 12.dp)
+            val gaps = Arrangement.spacedBy(8.dp)
+            BoxWithConstraints(Modifier.fillMaxSize()) {
+                if (maxWidth >= RivetLayout.columnBreakpoint) {
+                    Row(Modifier.widthIn(max = RivetLayout.utilityMaxWidth).fillMaxSize().align(Alignment.TopCenter)) {
+                        LazyColumn(Modifier.weight(1f), contentPadding = padding, verticalArrangement = gaps) {
+                            actions()
+                            checkpointsPane()
+                        }
+                        LazyColumn(Modifier.weight(1f), contentPadding = padding, verticalArrangement = gaps, content = processPane)
+                    }
+                } else {
+                    LazyColumn(contentPadding = padding, verticalArrangement = gaps) {
+                        actions()
+                        processPane()
+                        checkpointsPane()
+                    }
+                }
+            }
+
         }
     }
     restoreTarget?.let { target ->

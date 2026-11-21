@@ -24,3 +24,15 @@ class ImprovementsTest(unittest.TestCase):
         motion = source("ui/EntryMotion.kt")
         self.assertIn("if (motionDisabled()) snap()", motion)
         self.assertIn("translationY = RivetMotion.panelRise.toPx() * (1f - progress)", motion)
+
+    def test_chat_and_composer_share_the_measured_width_and_wide_pages_split(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        self.assertIn("val lane = conversationWidth(maxWidth.value).dp", chat)
+        lane = chat.split("Column(Modifier.width(lane)", 1)[1].split("private fun ChatHeader", 1)[0]
+        self.assertIn("MessageList(visibleState", lane)
+        self.assertIn("InputBar(streaming", lane)
+        self.assertNotIn("widthIn(max = CHAT_CONTENT_MAX_WIDTH_DP", chat)
+        self.assertIn("chatPaneFraction(availableWidth.value, divider)", source("ui/chat/FilePreview.kt"))
+        self.assertIn("maxWidth >= RivetLayout.columnBreakpoint", source("ui/UtilitySurfaces.kt"))
+        for name in ["provider/SettingsScreen", "workspace/ProjectsScreen", "browser/BrowserScreen", "local/ModelsScreen"]:
+            self.assertIn("UtilityColumns(", source(f"ui/{name}.kt"))

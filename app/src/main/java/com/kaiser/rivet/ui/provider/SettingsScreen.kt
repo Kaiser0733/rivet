@@ -1,5 +1,6 @@
 package com.kaiser.rivet.ui.provider
 
+import com.kaiser.rivet.ui.UtilityColumns
 import com.kaiser.rivet.ui.RivetMotion
 import com.kaiser.rivet.ui.entryProgress
 import com.kaiser.rivet.ui.pageEntry
@@ -98,8 +99,6 @@ import com.kaiser.rivet.workspace.grantDisplayPath
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
-private val MAX_WIDTH = 680.dp
-
 internal enum class SettingsSection {
     Providers, Appearance, Agent, Phone, PhoneAddOn, Subagents, Memory, GitHub, GitHubConnect, Skills, Updates, About, Usage, EditMemory,
 }
@@ -181,7 +180,7 @@ fun SettingsScreen(
     val saved = state.configs.filterNot { it.id == active?.id }
 
     Box(Modifier.fillMaxSize(), contentAlignment = Alignment.TopCenter) {
-        Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxSize()) {
+        Column(Modifier.widthIn(max = RivetLayout.utilityMaxWidth).fillMaxSize()) {
             SettingsTopBar(
                 section = section,
                 title = if (section == SettingsSection.Skills) shownSkill?.name else null,
@@ -334,30 +333,32 @@ private fun SectionList(
     onSelect: (SettingsSection) -> Unit,
     onSendFeedback: () -> Unit,
 ) {
-    Column(Modifier.fillMaxWidth().padding(horizontal = RivetLayout.pageGutter, vertical = RivetLayout.pageGutter),
-        verticalArrangement = Arrangement.spacedBy(RivetLayout.sectionGap)) {
-        SettingsGroup {
-            SectionListItem(R.drawable.ic_profile, SettingsSection.Providers.title(), providerSummary,
-                { onSelect(SettingsSection.Providers) }, true)
-            SectionListItem(R.drawable.ic_phone_access, SettingsSection.Phone.title(), "",
-                { onSelect(SettingsSection.Phone) }, false)
-        }
-        SettingsGroup {
-            SectionListItem(R.drawable.ic_skills, SettingsSection.Skills.title(), skillSummary,
-                { onSelect(SettingsSection.Skills) }, true)
-            SectionListItem(R.drawable.ic_memory, SettingsSection.Memory.title(), memorySummary,
-                { onSelect(SettingsSection.Memory) }, true)
-            SectionListItem(R.drawable.ic_subagents, SettingsSection.Subagents.title(), subagentSummary,
-                { onSelect(SettingsSection.Subagents) }, true)
-            SectionListItem(R.drawable.ic_appearance, SettingsSection.Appearance.title(), themeSummary,
-                { onSelect(SettingsSection.Appearance) }, false)
-        }
-        SettingsGroup {
-            SectionListItem(R.drawable.ic_feedback, "Send feedback", "", onSendFeedback, true)
-            SectionListItem(R.drawable.ic_info, SettingsSection.About.title(), versionSummary,
-                { onSelect(SettingsSection.About) }, false)
-        }
-    }
+    UtilityColumns(
+        modifier = Modifier.padding(RivetLayout.pageGutter),
+        leading = {
+            SettingsGroup {
+                SectionListItem(R.drawable.ic_profile, SettingsSection.Providers.title(), providerSummary,
+                    { onSelect(SettingsSection.Providers) }, true)
+                SectionListItem(R.drawable.ic_phone_access, SettingsSection.Phone.title(), "",
+                    { onSelect(SettingsSection.Phone) }, true)
+                SectionListItem(R.drawable.ic_skills, SettingsSection.Skills.title(), skillSummary,
+                    { onSelect(SettingsSection.Skills) }, true)
+                SectionListItem(R.drawable.ic_memory, SettingsSection.Memory.title(), memorySummary,
+                    { onSelect(SettingsSection.Memory) }, false)
+            }
+        },
+        trailing = {
+            SettingsGroup {
+                SectionListItem(R.drawable.ic_subagents, SettingsSection.Subagents.title(), subagentSummary,
+                    { onSelect(SettingsSection.Subagents) }, true)
+                SectionListItem(R.drawable.ic_appearance, SettingsSection.Appearance.title(), themeSummary,
+                    { onSelect(SettingsSection.Appearance) }, true)
+                SectionListItem(R.drawable.ic_feedback, "Send feedback", "", onSendFeedback, true)
+                SectionListItem(R.drawable.ic_info, SettingsSection.About.title(), versionSummary,
+                    { onSelect(SettingsSection.About) }, false)
+            }
+        },
+    )
 }
 
 @Composable
@@ -525,23 +526,19 @@ internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable Co
 @Composable
 private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
     DetailScroll {
-        UtilityLead(R.drawable.ic_phone_access, "Share to Rivet", "Available in the Android share sheet")
-        Spacer(Modifier.height(16.dp))
-
-        UtilityFold(R.drawable.ic_expand, "Screen capture", "Asks before each capture") {
-            Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.")
-        }
-
-        GrantedFoldersSettings()
-        TermuxSettings()
-
-        SectionHeading("Advanced")
-        SectionListItem(
-            iconRes = R.drawable.ic_settings,
-            title = "Phone access add-on",
-            summary = "Not installed",
-            onClick = onOpenAddOn,
-            showDivider = false,
+        UtilityColumns(
+            leading = {
+                UtilityLead(R.drawable.ic_phone_access, "Share to Rivet", "Available in the Android share sheet")
+                Spacer(Modifier.height(16.dp))
+                UtilityFold(R.drawable.ic_expand, "Screen capture", "Asks before each capture") {
+                    Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.")
+                }
+                SectionListItem(R.drawable.ic_settings, "Phone access add-on", "Not installed", onOpenAddOn, false)
+            },
+            trailing = {
+                GrantedFoldersSettings()
+                TermuxSettings()
+            },
         )
     }
 }
@@ -741,12 +738,14 @@ private fun AppearanceDetail(
 ) {
     DetailScroll {
         
-        UtilityLead(R.drawable.ic_appearance, "Theme", themeMode.name)
-        Spacer(Modifier.height(16.dp))
-        RivetThemeMode.entries.forEach { mode ->
-            ThemeRow(mode, themeMode == mode, enabled = !themeSaving) { onThemeChange(mode) }
-        }
-        
+        UtilityColumns(
+            leading = { UtilityLead(R.drawable.ic_appearance, "Theme", themeMode.name) },
+            trailing = {
+                RivetThemeMode.entries.forEach { mode ->
+                    ThemeRow(mode, themeMode == mode, enabled = !themeSaving) { onThemeChange(mode) }
+                }
+            },
+        )
         appearanceError?.let { error ->
             Text(displaySafeText(error), color = MaterialTheme.colorScheme.error,
                 style = MaterialTheme.typography.bodySmall, modifier = Modifier.padding(top = 16.dp))

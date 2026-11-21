@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui.workspace
 
+import com.kaiser.rivet.ui.UtilityColumns
+import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.verticalScroll
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.ui.UtilityLead
 import com.kaiser.rivet.ui.UtilityRow
@@ -131,25 +134,29 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
                     }
                 }
             } else {
-                LazyColumn(contentPadding = PaddingValues(horizontal = 20.dp, vertical = 10.dp)) {
-                    item {
-                        UtilityLead(R.drawable.ic_folder, state.projectName ?: "No folder selected",
-                            workspaceFolderPath(state.projectIdentity)) {
-                            state.projectError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                            if (state.projectLoading) Text("Opening folder…")
-                            RivetOutlinedButton(onClick = { chooseProject() }, enabled = enabled) {
-                                Text("Open another folder")
+                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 10.dp)) {
+                    UtilityColumns(
+                        leading = {
+                            UtilityLead(R.drawable.ic_folder, state.projectName ?: "No folder selected",
+                                workspaceFolderPath(state.projectIdentity)) {
+                                state.projectError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                                if (state.projectLoading) Text("Opening folder…")
+                                RivetOutlinedButton(onClick = { chooseProject() }, enabled = enabled) {
+                                    Text("Open another folder")
+                                }
                             }
-                        }
-                    }
-                    if (recent.isNotEmpty()) {
-                        item { FolderHeading("Recent folders") }
-                        items(recent, key = { "folder:$it" }) { identity ->
-                            val path = workspaceFolderPath(identity) ?: identity
-                            FolderRow(path.trimEnd('/').substringAfterLast('/'), R.drawable.ic_files, enabled,
-                                detail = path, onClick = { openRecent(identity) })
-                        }
-                    }
+                        },
+                        trailing = {
+                            if (recent.isNotEmpty()) {
+                                FolderHeading("Recent folders")
+                                recent.forEach { identity ->
+                                    val path = workspaceFolderPath(identity) ?: identity
+                                    FolderRow(path.trimEnd('/').substringAfterLast('/'), R.drawable.ic_files, enabled,
+                                        detail = path, onClick = { openRecent(identity) })
+                                }
+                            }
+                        },
+                    )
                 }
             }
         }

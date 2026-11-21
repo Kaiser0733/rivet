@@ -1,5 +1,7 @@
 package com.kaiser.rivet.ui.chat
 
+import androidx.compose.foundation.layout.fillMaxHeight
+import androidx.compose.foundation.layout.BoxWithConstraints
 import com.kaiser.rivet.ui.panelEntry
 import com.kaiser.rivet.ui.rivetMotionSpec
 import androidx.compose.ui.draw.clipToBounds
@@ -278,87 +280,92 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     ChatWithPreview(preview, load = { path ->
         chatViewModel.previewProjectFile(path, state.currentSessionWorkspaceId)
     }) {
-        Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-            ChatHeader(
-                title = state.currentSessionTitle ?: state.projectName ?: "Rivet",
-                canStartChat = canStartChat,
-                onOpenSidebar = onOpenSidebar,
-                onNewChat = chatViewModel::newSession,
-            )
+        BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
+            val lane = conversationWidth(maxWidth.value).dp
+            val starterRoom = (maxHeight * 0.48f).coerceAtMost(215.dp)
+            Column(Modifier.width(lane).fillMaxHeight().align(Alignment.TopCenter)) {
+                ChatHeader(
+                    title = state.currentSessionTitle ?: state.projectName ?: "Rivet",
+                    canStartChat = canStartChat,
+                    onOpenSidebar = onOpenSidebar,
+                    onNewChat = chatViewModel::newSession,
+                )
 
-            val setupNotice = when {
-                state.projectLoading -> "Opening your project…"
-                projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE
-                wrongProject -> PROJECT_BINDING_MISMATCH_MESSAGE
-                state.projectError != null -> state.projectError
-                providers.configs.isEmpty() -> "Connect a model in Settings to start."
-                state.projectName == null && !state.streaming -> "Choose a working folder to start."
-                else -> null
-            }
-            val emptyConversation = state.messages.isEmpty() && !state.streaming && state.error == null &&
-                state.notice == null && !state.interruptedTurn && state.goalLine == null
-            if (emptyConversation) {
-                Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
-                    Text(setupNotice ?: "What do you want to work on?",
-                        modifier = Modifier.padding(horizontal = 24.dp),
-                        style = MaterialTheme.typography.titleLarge,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant,
-                        textAlign = TextAlign.Center)
+                val setupNotice = when {
+                    state.projectLoading -> "Opening your project…"
+                    projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE
+                    wrongProject -> PROJECT_BINDING_MISMATCH_MESSAGE
+                    state.projectError != null -> state.projectError
+                    providers.configs.isEmpty() -> "Connect a model in Settings to start."
+                    state.projectName == null && !state.streaming -> "Choose a working folder to start."
+                    else -> null
                 }
-            } else {
-                setupNotice?.let {
-                    Text(it, Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
-                        style = MaterialTheme.typography.bodySmall,
-                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                val emptyConversation = state.messages.isEmpty() && !state.streaming && state.error == null &&
+                    state.notice == null && !state.interruptedTurn && state.goalLine == null
+                if (emptyConversation) {
+                    Box(Modifier.weight(1f).fillMaxWidth(), contentAlignment = Alignment.Center) {
+                        Text(setupNotice ?: "What do you want to work on?",
+                            modifier = Modifier.padding(horizontal = 24.dp),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant,
+                            textAlign = TextAlign.Center)
+                    }
+                } else {
+                    setupNotice?.let {
+                        Text(it, Modifier.padding(horizontal = 20.dp, vertical = 8.dp),
+                            style = MaterialTheme.typography.bodySmall,
+                            color = MaterialTheme.colorScheme.onSurfaceVariant)
+                    }
+                    val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
+                        state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
+                    key(state.currentSessionId) {
+                        MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
+                            onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
+                            onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
+                            onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
+                            onAttachGoal = chatViewModel::attachGoalToProject,
+                            onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
+                            onRetryTurn = chatViewModel::retryFailedTurn,
+                            onChooseReasoning = chatViewModel::chooseReasoningLevel,
+                        onOpenPreview = preview::open,
+                        missingFiles = preview.missing,
+                            modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                    }
                 }
-                val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
-                    state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
-                key(state.currentSessionId) {
-                    MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
-                        onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
-                        onRetryInterruptedTurn = chatViewModel::retryInterruptedTurn,
-                        onDismissInterruptedTurn = chatViewModel::dismissInterruptedTurn,
-                        onAttachGoal = chatViewModel::attachGoalToProject,
-                        onRaiseBudget = chatViewModel::raiseBudgetCapForThisRun,
-                        onRetryTurn = chatViewModel::retryFailedTurn,
-                        onChooseReasoning = chatViewModel::chooseReasoningLevel,
-                    onOpenPreview = preview::open,
-                    missingFiles = preview.missing,
-                        modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
+                if (state.undoCheckpointId != null || state.undoing) {
+                    ChangeSummary(state, onUndo = { confirmUndo = true },
+                        onDismissUndo = chatViewModel::dismissUndoBar,
+                        onOpenPreview = preview::open, missingFiles = preview.missing,
+                        modifier = Modifier.fillMaxWidth())
                 }
-            }
-            if (state.undoCheckpointId != null || state.undoing) {
-                ChangeSummary(state, onUndo = { confirmUndo = true },
-                    onDismissUndo = chatViewModel::dismissUndoBar,
-                    onOpenPreview = preview::open, missingFiles = preview.missing,
+                val modelSelector: (@Composable () -> Unit)? =
+                    if (providers.configs.isNotEmpty()) {
+                        { ProtectedControls { ModelSelector(providersViewModel) { modelSheetVisible = true } } }
+                    } else null
+                val sharedContent by chatViewModel.sharedContent.collectAsState()
+                if (emptyConversation) HomeStarters(chatViewModel, canStartChat, state.starterError,
+                    modifier = Modifier.heightIn(max = starterRoom).verticalScroll(rememberScrollState()))
+                InputBar(streaming = state.streaming,
+                    sharedDraft = sharedContent[state.currentSessionId],
+                    phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
+                    ready = state.ready && !state.projectLoading && !state.undoing &&
+                        !state.recoveringProjectChanges,
+                    hasProject = state.projectName != null && projectBinding == ProjectBindingState.Matched,
+                    hasProvider = providers.configs.isNotEmpty(),
+                    acceptedMessageCount = state.acceptedMessageCount,
+                    commandAckCount = state.commandAckCount,
+                    error = state.error, notice = state.notice, sessionId = state.currentSessionId,
+                    skills = skillCatalog?.skills.orEmpty(),
+                    onRequestSkills = chatViewModel::refreshSkillCatalog,
+                    onSendFeedback = onSendFeedback,
+                    onCompact = chatViewModel::compactHistory,
+                    onAutonomyChange = onAutonomyChange,
+                    folderName = state.projectName,
+                    onOpenProjects = onOpenProjects,
+                    selector = modelSelector,
+                    onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
                     modifier = Modifier.fillMaxWidth())
             }
-            val modelSelector: (@Composable () -> Unit)? =
-                if (providers.configs.isNotEmpty()) {
-                    { ProtectedControls { ModelSelector(providersViewModel) { modelSheetVisible = true } } }
-                } else null
-            val sharedContent by chatViewModel.sharedContent.collectAsState()
-            if (emptyConversation) HomeStarters(chatViewModel, canStartChat, state.starterError)
-            InputBar(streaming = state.streaming,
-                sharedDraft = sharedContent[state.currentSessionId],
-                phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
-                ready = state.ready && !state.projectLoading && !state.undoing &&
-                    !state.recoveringProjectChanges,
-                hasProject = state.projectName != null && projectBinding == ProjectBindingState.Matched,
-                hasProvider = providers.configs.isNotEmpty(),
-                acceptedMessageCount = state.acceptedMessageCount,
-                commandAckCount = state.commandAckCount,
-                error = state.error, notice = state.notice, sessionId = state.currentSessionId,
-                skills = skillCatalog?.skills.orEmpty(),
-                onRequestSkills = chatViewModel::refreshSkillCatalog,
-                onSendFeedback = onSendFeedback,
-                onCompact = chatViewModel::compactHistory,
-                onAutonomyChange = onAutonomyChange,
-                folderName = state.projectName,
-                onOpenProjects = onOpenProjects,
-                selector = modelSelector,
-                onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
-                modifier = Modifier.fillMaxWidth())
         }
     }
 }
@@ -609,7 +616,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
         }
     }
-    LazyColumn(state = listState, modifier = modifier.widthIn(max = CHAT_CONTENT_MAX_WIDTH_DP.dp).fillMaxSize(),
+    LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
         contentPadding = androidx.compose.foundation.layout.PaddingValues(
             start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
         verticalArrangement = Arrangement.spacedBy(6.dp)) {

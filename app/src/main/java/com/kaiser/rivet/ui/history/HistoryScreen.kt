@@ -113,31 +113,33 @@ internal fun RivetSidebar(
                 .focusRequester(searchFocus),
                 placeholder = { Text("Search chats") }, singleLine = true)
         }
-        Surface(onClick = onOpenProjects, modifier = Modifier.fillMaxWidth(),
-            color = MaterialTheme.colorScheme.surfaceContainer,
-            shape = MaterialTheme.shapes.small) {
-            Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
-                verticalAlignment = Alignment.CenterVertically) {
-                Icon(painterResource(R.drawable.ic_folder), null)
-                Column(Modifier.weight(1f)) {
-                    Text(state.projectName ?: "Choose a working folder",
-                        style = MaterialTheme.typography.titleSmall,
-                        maxLines = 1, overflow = TextOverflow.Ellipsis)
-                    workspaceFolderPath(state.projectIdentity)?.let {
-                        Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
-                            style = MaterialTheme.typography.bodySmall,
-                            maxLines = 2, overflow = TextOverflow.Ellipsis)
+        LazyColumn(Modifier.weight(1f)) {
+            item(key = "sidebar-links") {
+                Surface(onClick = onOpenProjects, modifier = Modifier.fillMaxWidth(),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = MaterialTheme.shapes.small) {
+                    Row(Modifier.padding(12.dp), horizontalArrangement = Arrangement.spacedBy(12.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Icon(painterResource(R.drawable.ic_folder), null)
+                        Column(Modifier.weight(1f)) {
+                            Text(state.projectName ?: "Choose a working folder",
+                                style = MaterialTheme.typography.titleSmall,
+                                maxLines = 1, overflow = TextOverflow.Ellipsis)
+                            workspaceFolderPath(state.projectIdentity)?.let {
+                                Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
+                                    style = MaterialTheme.typography.bodySmall,
+                                    maxLines = 2, overflow = TextOverflow.Ellipsis)
+                            }
+                        }
+                        Icon(painterResource(R.drawable.ic_chevron_right), "Change working folder")
                     }
                 }
-                Icon(painterResource(R.drawable.ic_chevron_right), "Change working folder")
+                Spacer(Modifier.size(8.dp))
+                SidebarLink("Tools", R.drawable.ic_tools, onOpenTools)
+                SidebarLink("Browser", R.drawable.ic_web, onOpenBrowser)
+                SidebarLink("Models", R.drawable.ic_models, onOpenModels)
+                HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
             }
-        }
-        Spacer(Modifier.size(8.dp))
-        SidebarLink("Tools", R.drawable.ic_tools, onOpenTools)
-        SidebarLink("Browser", R.drawable.ic_web, onOpenBrowser)
-        SidebarLink("Models", R.drawable.ic_models, onOpenModels)
-        HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
-        LazyColumn(Modifier.weight(1f)) {
             if (rows.isEmpty()) item {
                 Text(if (search.isBlank()) "Your chats will appear here." else "No matching chats.",
                     Modifier.padding(vertical = 14.dp),

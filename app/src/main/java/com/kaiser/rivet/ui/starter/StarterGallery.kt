@@ -80,7 +80,7 @@ private val homeStarterGlyphs = linkedMapOf(
 )
 
 @Composable
-internal fun HomeStarters(viewModel: ChatViewModel, enabled: Boolean, error: String?) {
+internal fun HomeStarters(viewModel: ChatViewModel, enabled: Boolean, error: String?, modifier: Modifier = Modifier) {
     val listing = rememberStarterListing()
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val starter = viewModel.takePendingStarter()
@@ -91,7 +91,7 @@ internal fun HomeStarters(viewModel: ChatViewModel, enabled: Boolean, error: Str
         }
     }
     val rows = listing.rows.associateBy { it.starter.id }
-    Column(Modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp)) {
+    Column(modifier.fillMaxWidth().padding(horizontal = 18.dp, vertical = 4.dp)) {
         error?.let { Text(it, color = MaterialTheme.colorScheme.error, style = MaterialTheme.typography.bodySmall) }
         if (rows.isEmpty()) Text(listing.emptyMessage, style = MaterialTheme.typography.bodySmall)
         homeStarterGlyphs.forEach { (id, icon) ->

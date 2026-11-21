@@ -1,5 +1,8 @@
 package com.kaiser.rivet.ui
 
+import androidx.compose.ui.unit.Dp
+import androidx.compose.foundation.layout.BoxWithConstraints
+import androidx.compose.foundation.layout.widthIn
 import androidx.compose.animation.core.animateFloatAsState
 import androidx.compose.foundation.interaction.MutableInteractionSource
 import androidx.compose.foundation.interaction.collectIsPressedAsState
@@ -160,4 +163,26 @@ internal fun Modifier.pressLayer(pressed: Boolean): Modifier {
     val amount by animateFloatAsState(if (pressed) RivetMotion.pressAlpha else 0f,
         animationSpec = rivetMotionSpec(RivetMotion.FOCUS_MS), label = "Pressed")
     return drawBehind { if (amount > 0f) drawRect(ink.copy(alpha = amount)) }
+}
+
+@Composable
+internal fun UtilityColumns(
+    modifier: Modifier = Modifier,
+    stackedGap: Dp = RivetLayout.sectionGap,
+    leading: @Composable ColumnScope.() -> Unit,
+    trailing: @Composable ColumnScope.() -> Unit,
+) {
+    BoxWithConstraints(modifier.fillMaxWidth()) {
+        if (maxWidth >= RivetLayout.columnBreakpoint) {
+            Row(horizontalArrangement = Arrangement.spacedBy(RivetLayout.sectionGap)) {
+                Column(Modifier.weight(1f), content = leading)
+                Column(Modifier.weight(1f), content = trailing)
+            }
+        } else {
+            Column(verticalArrangement = Arrangement.spacedBy(stackedGap)) {
+                leading()
+                trailing()
+            }
+        }
+    }
 }
