@@ -43,6 +43,7 @@ import com.kaiser.rivet.ui.browser.BrowserHost
 import com.kaiser.rivet.ui.browser.BrowserScreen
 import com.kaiser.rivet.ui.browser.findActivity
 import com.kaiser.rivet.ui.terminal.TerminalPane
+import com.kaiser.rivet.ui.chat.ApprovalDialog
 import com.kaiser.rivet.ui.chat.ChatScreen
 import com.kaiser.rivet.ui.history.HistoryPane
 import com.kaiser.rivet.ui.local.ModelsScreen
@@ -373,6 +374,13 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 },
                 onInstalled = chatViewModel::refreshSkillCatalog,
             )
+        }
+
+        // Hosted after every sheet and dialog so a pending approval is the top-most
+        // window: composed earlier it could sit underneath one and never be seen.
+        val approvalState by chatViewModel.uiState.collectAsState()
+        approvalState.pendingApproval?.let { approval ->
+            ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
         }
     }
 }

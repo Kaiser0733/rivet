@@ -418,9 +418,6 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 Text(stringResource(R.string.provider_cancel))
             } })
     }
-    state.pendingApproval?.let { approval ->
-        ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
-    }
     if (showChatGptSignInError != null) {
         AlertDialog(
             onDismissRequest = { showChatGptSignInError = null },
@@ -1938,11 +1935,14 @@ internal fun approvalTitle(request: AgentApprovalRequest): String = when {
 }
 
 @Composable
-private fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> Unit,
-                           onDeny: (Long) -> Unit) {
+internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> Unit,
+                            onDeny: (Long) -> Unit) {
     val command = request.call.name == "run_command"
     val delete = request.call.name == "delete_path"
-    AlertDialog(onDismissRequest = { onDeny(request.approvalToken) },
+    // A tap outside or Back keeps the card pending; only the buttons answer for the user.
+    AlertDialog(onDismissRequest = {
+        if (approvalResponse(ApprovalEvent.Dismiss) == ApprovalResponse.Deny) onDeny(request.approvalToken)
+    },
         title = { Text(displaySafeText(approvalTitle(request)),
             style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
         text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
