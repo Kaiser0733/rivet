@@ -24,6 +24,7 @@ internal object AgentContext {
     private const val TOOL_RESULT_HEAD = 4096
     private const val TOOL_RESULT_TAIL = 1024
     private const val TOOL_RESULT_PRUNE_MARKER = "\n[Tool result middle omitted.]\n"
+    private const val WORKER_RESULT_TOOL = "await_subagents"
     private val serializer = ListSerializer(AgentMessage.serializer())
     private val secretPattern = Regex("(?i)(sk-[a-z0-9_-]{12,}|gh[pousr]_[a-z0-9]{20,}|AIza[a-z0-9_-]{20,}|AKIA[A-Z0-9]{16})")
     private val bearerPattern = Regex("(?i)\\bBearer\\s+[a-z0-9._~+/-]{12,}")
@@ -83,6 +84,10 @@ internal object AgentContext {
     private fun pruneToolGroup(group: List<AgentMessage>): List<AgentMessage> {
         val assistant = group[0]
         val tool = group[1]
+        // A worker's delivered result is the coordinator's whole reason for waiting;
+        // stubbing it silently deletes finished subagent work. Keep it intact and let
+        // the existing MAX_TOOL_RESULT_BYTES cap (with its own truncation note) apply.
+        if (tool.toolResults.any { it.name == WORKER_RESULT_TOOL }) return group
         val prunedCalls = assistant.toolCalls.zip(tool.toolResults).map { (call, result) ->
             if (result.error || call.arguments.toByteArray(Charsets.UTF_8).size < 2048 ||
                 call.name == "run_command" && !runCommandCanPrune(result)) call
