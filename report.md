@@ -1,50 +1,106 @@
-# Rivet UI redesign
+# Manual compaction from the slash panel
 
-Branch `redesign` starts at `caee0bda` from `batch/surface-fix`. The shell moves work out of chat into Projects, Tools, Browser, Models, and Settings. The design uses mineral neutrals, a petrol-blue accent, and thin-stroke navigation icons. The chat-facing picker and terminal use their prior controls and theme roles. The finished-turn fold keeps its original controls, with the export entry removed. The completion signal draws at the edge of the turn.
+Branch `manual-compact` starts at `c0f9dfc2` (redesign head). The slash
+panel's Compact row is now a real, user-triggered compaction of the current
+session, usable when no run is active. It runs the same preparation and
+checkpoint machinery the automatic flow uses — `ContextPreparation.prepare`
+into `CodingSessions.compact`, with the same six-section checkpoint, the
+same merge-don't-re-summarise behaviour and the goal pinned verbatim — and
+leaves the same persisted compaction notice row. No second, parallel
+compaction implementation was added.
 
-## Changes by area
+## Changes by item
 
-| Area | Commits | What moved and where |
+| Item | Commits | What changed |
 | --- | --- | --- |
-| Home | `61dce743`, `48c81a14` | `ui/chat/ChatScreen.kt` keeps the sidebar button, title and new chat in the header. The working-folder button sits alongside the existing selector. Setup shows a short, actionable message. `ui/provider/ProviderSetup.kt` carries the old provider setup actions in Settings. `ChatLayout.kt`, `RivetVisuals.kt`, and the removed `ChatEntryPoints.kt` retire the prior landscape pane, empty-state doodles and replaced entry points. |
-| Sidebar | `8f7432c8`, `f40fa051` | `ui/RivetApp.kt` and `ui/history/HistoryScreen.kt` add the folder card, Tools, Browser and Models, search over recent chat titles with times, New chat and the Settings avatar. The avatar uses the initial from the existing plan email when available. Its fallback is a profile glyph. Pin, rename and delete use a long press on a chat row. |
-| Settings | `8898708f`, `06601df6` | `ui/RivetApp.kt`, `ui/RivetDestination.kt`, `ui/provider/SettingsScreen.kt`, `ProviderSetup.kt`, `ProviderEditor.kt`, and `SubagentsSettings.kt` group account and providers, phone access, skills, memory, subagents, appearance, feedback and About. GitHub connection, memory editing, usage, updates, and phone add-on information have page navigation. Consent and destructive confirmations retain their existing controls. |
-| Slash menu | `eb475888` | `ui/chat/SlashMenu.kt`, `SkillCommandSheet.kt`, `ChatScreen.kt`, and `ui/RivetApp.kt` group and filter Goal, Feedback, Commands and installed skills. Both YOLO presets share Settings' persistence action and one-time full-YOLO confirmation. Goal and skill entries fill the composer with their existing slash syntax. Agent-only skills are visible and disabled. Compact is disabled, with “Runs automatically” exposed to accessibility services. |
-| Projects | `0952aa01`, `5f45de05` | `ui/workspace/ProjectsScreen.kt`, `ui/WorkspaceFolderPath.kt`, `ui/RivetPageHeader.kt`, `ui/starter/StarterGallery.kt`, `ui/chat/ChatScreen.kt`, and shell routing host the folder and starter picker. Recent folders come from session history. A recent folder with access uses the existing binding call and returns to chat after the new folder is bound. A folder without access opens Android's picker at that folder because the current binding flow releases old grants. Provider-managed folders display their document URI where Android supplies no filesystem path. |
-| Tools and workers | `fa13e4ad`, `02b15474`, `70fcb15e` | `ui/processes/ProcessesScreen.kt`, `ui/chat/WorkerSheet.kt`, `ui/RivetApp.kt`, `runtime/ManagedProcesses.kt`, and `runtime/CommandRedactor.kt` put active work above collapsed finished history. Each process opens from a single first-line label into its redacted command, retained output and actions. Run checkpoints retain Undo and Restore. Terminal and worker transcripts open as pages from Tools. Existing help and failure copy points to Tools in `AgentToolError.kt`, `AgentToolExecutor.kt`, `ChatViewModel.kt`, and `ProviderRuntimeSource.kt`. |
-| Browser | `25686a9e`, `48c81a14`, `5f45de05` | `ui/browser/BrowserScreen.kt`, `BrowserTabs.kt`, `browser/BrowserSession.kt`, and `ui/RivetApp.kt` show a tab strip, a single domain/address toolbar and a full-width page. Existing tabs use WebView-supplied favicons when available. Each tab has close, the strip has new tab, and the browser menu has Share link, Close tab and Page options. Existing page controls live in the Page options screen. The shell keeps the mounted browser behind the foreground page when offscreen. |
-| Models and skill installation | `e0d90b0b`, `8378fc90` | `ui/local/ModelsScreen.kt`, `ui/provider/SkillInstallDialog.kt`, `ui/RivetDestination.kt`, and `ui/RivetApp.kt` turn the on-device models list, its link form, and skill installation into screens. Shared ZIPs use the same review screen. |
-| Deliverables and preview | `b1b19afa`, `06601df6`, `220cd9e8` | `agent/PresentedFile.kt`, `AgentToolExecutor.kt`, `AgentProtocol.kt`, `AgentActivityProjection.kt`, `local/LocalToolProtocol.kt`, and `subagent/WorkerRunner.kt` register the read-only coordinator tool and validate one to four exact project paths and one-line descriptions. `chat/ChatViewModel.kt`, `workspace/WorkspaceFilePreview.kt`, and `ui/chat/{ChatScreen,FilePreview,PresentedFiles}.kt` place cards under the corresponding turn and open changed files through the same SAF project resolver. The split has a draggable divider, tabs, refresh and full screen. Code uses a read-only monospace surface and unsupported types show the known file size. Missing files mark both the pane and card. Markdown is rendered with nested file images left as alt text. Text and raster images use bounded previews. |
-| Run export removal | `60df7361` | Removed the `replay/` runtime and unit tests, `ui/chat/ReplayExportSheet.kt`, `storage/ReplaySettingsStore.kt`, the export action, watermark row, replay-specific session bookkeeping in `CodingSessions.kt` and `ChatViewModel.kt`, and the export path in `res/xml/shared_file_paths.xml`. The deletion is source-only. The user's existing exports remain on device. |
-| Motion and icons | `5f770f82`, `5769157b`, `9838655e`, `be1b2e47` | `ui/{Theme,EntryMotion,RivetApp}.kt`, `ui/chat/{ChatScreen,ModelSheet,ReasoningSignal}.kt`, and `ui/processes/ProcessesScreen.kt` add page entry, rising new messages, composer focus and press feedback, fold transitions for commands, and a visible finish stroke gated on the live completion outcome. Low through Ultra draw six distinct, progressively stronger signals inside the reasoning pane. Main layout, shape, color and motion tokens live in `Theme.kt`. The new vector glyphs live under `app/src/main/res/drawable/`. A compiler check caught and prompted restoration of the existing reasoning retry row’s `FlowRow` import in `ChatScreen.kt`. |
+| Trigger decision | `8cb92994` | `chat/ManualCompaction.kt` adds the pure seam: `CompactTrigger { Fire, RunActive, NothingToCompact }`, `compactTrigger(streaming, hasMessages)` and `compactRowEnabled(streaming)`. A running reply owns the transcript and already compacts inside its turn; an empty session is a plain no-op. `chat/ManualCompactionTest.kt` covers all three outcomes on the JVM. |
+| Manual compaction | `8845b967` | `chat/ChatViewModel.kt` adds `compactHistory()` (+121 lines, nothing else in the file changed). It calls `ContextPreparation.prepare(activeMessages, force = true, reason = "manual")` with the request shape the next turn will send (same `systemInstruction`, the same tool-definition filter, local wire and vision preparation), so the estimate and budget match the automatic path. The compacted projection is committed by the existing `ContextStore.compact`; the marker row is `InternalContext.compactionNotice(workspaceId)`, persisted with `CodingSessions.save(..., expectedSessionId)` bound to the current session — the same pattern `recordTerminalRestoreNotice` uses — and appended to the visible transcript. `activeSummary` and the context estimate refresh afterwards. While it runs, `streaming = true` with activity "Compacting…" reuses the turn-busy pattern: send, session switch, project switch, undo and retry all refuse, and the composer's Stop cancels it through `sendJob`. Six Robolectric tests in `chat/ChatViewModelTest.kt` cover the summarise, fresh-session no-op, nothing-worth-compacting no-op, run-active refusal, failure and cancellation behaviours. |
+| Compact row | `70157a75` | `ui/chat/SlashMenu.kt`: `SlashRow.enabled` is now set at construction; `slashRows` takes `compactEnabled` and the Compact row is enabled by default with dsh's description "Compact older conversation history". `ui/chat/SkillCommandSheet.kt`: the "Runs automatically" copy is gone; a disabled Compact row (run active) exposes "Wait for the reply to finish" to accessibility, the same unavailable-row pattern agent-only skills use. `ui/chat/ChatScreen.kt`: the panel wires `SlashAction.Compact -> onCompact()`, `InputBar` passes `compactEnabled = compactRowEnabled(streaming)`, and `ChatScreen` binds `onCompact = chatViewModel::compactHistory`. `ui/chat/SkillCommandSheetTest.kt` flips the old disabled assertion and adds the run-active row test. `scripts/test_manual_compact.py` is the source-level JiTTest for the whole wiring. |
 
-Paths without an explicit prefix in the table are relative to `app/src/main/java/com/kaiser/rivet/` and the directory named for that area. Tests live in `app/src/test/java/com/kaiser/rivet/` and `scripts/`.
+Paths without a prefix are relative to `app/src/main/java/com/kaiser/rivet/`
+(tests under `app/src/test/java/com/kaiser/rivet/`).
 
-## Your additions
+## Edge cases
 
-- `f40fa051` focuses the sidebar search field immediately and leaves the chat edge visible beside the drawer, so a person can start typing after one tap or close the drawer by tapping outside it.
+- Run active: the row is disabled with a plain state description; a tap that
+  races a starting reply gets the notice "Cannot compact while a reply is
+  running." and nothing else happens.
+- Fresh/empty session: "Nothing to compact yet." before any provider or
+  storage call. A short session with content goes through the real
+  preparation; when it returns the transcript unchanged the same plain
+  notice appears — no fake success, no crash, no provider call.
+- Failure inside preparation: the existing error copy "Rivet could not
+  shorten this session's context. The conversation was kept." surfaces; the
+  session is untouched (the store only writes on a successful commit, and
+  `prepare` records its own diagnostics). Provider-configuration failures
+  use the existing `providerSnapshot`/`failBeforeStart` path.
+- Stop during compaction: a committed compaction stays durable; the view
+  model resynchronises from the store. A cancelled summariser leaves the
+  session exactly as it was.
+- If only the marker row's save fails after a committed compaction, the view
+  model resynchronises from the store and surfaces the existing storage
+  error copy (or `CONTEXT_LIMIT_ERROR` for a limit failure).
 
-## Overlays retained
+## Verification — real results
 
-- The left sidebar, agent approval, composer slash panel, and browser's small menu are the specified overlays. The model and reasoning picker retains its protected control and the composer + retains its clipboard sheet.
-- Existing confirmations for restoring or undoing files, discarding pending changes, removing a provider or model, allowing a metered download, and enabling full YOLO stay modal so users can resolve those decisions before the action. The battery optimization and provider usage-limit prompts stay modal because their live warning and existing system-settings links are attached to those prompts. Platform pickers, sharing and text selection remain Android system UI.
-
-## Verification
-
-- `python3 -m unittest discover -s scripts -p 'test_*.py'` — 61 tests passed. Sixteen focused navigation checks ran against their respective parent and feature-commit source trees. Each was red on its parent and green on its feature commit. The reasoning retry row separately failed Compose compilation on `9838655e` and compiled with the restored import in `be1b2e47`.
-- Isolated Kotlin/JUnit — 27 tests passed across slash rows, browser tabs, reasoning profiles, command redaction, presentation path and transcript metadata, turn segmentation, and destination routing. The harness used production source slices for protocol and workspace types and a stand-in for unrelated internal context. The full executor and Activity tests depend on the Android suite.
-- AAPT2 `compile --dir app/src/main/res` passed for the app's resource tree.
-- A focused Kotlin/Compose compile passed for the theme, motion primitives, chat history, browser screen, slash panel, and file preview. It compiled the production UI with app-state stand-ins against Android 35 and the app's Compose versions.
-- `git grep -inE 'run.replay|Replay(Store|Export|Story|Frame|Video|Settings|Schedule|Share|Transcript)|recordReplayRun|latestReplayUserEvent|replayTurn\(|ReplayFormat|export replay|Rivet-replay|GifWriter' -- app` returned zero matches. Ordinary uses of the word replay in session recovery and authentication are separate from the export feature.
-- `git diff --check caee0bda..HEAD` passed. The terminal implementation, updater paths, app build file and manifest match the base. No APK was generated. No merge, release, or PR was made.
-
-- Gradle `testDebugUnitTest` on the branch stopped during terminal module configuration. This environment lacks the pinned NDK `27.2.12479018` and its SDK license. A scratch copy with only native build configuration omitted reached `:app:processDebugResources`, where the available ARM64 AAPT2 rejected the Android 35 resource table. Neither Gradle attempt executed the Android unit suite. The branch keeps its original build configuration.
-
-- A separate full-source Kotlin/Compose compile found the missing reasoning-row import. After the fix it reached code generation and timed out after seven minutes without producing a jar. The focused Compose checks passed. Full app compilation and the Android executor and process tests still need the CI gate.
+- `python3 -m unittest discover -s scripts -p 'test_*.py'` on the branch:
+  **67 tests, all passed** (61 pre-existing + 6 new in
+  `test_manual_compact.py`). The same new file run against a `c0f9dfc2`
+  tree: **6/6 red** (3 assertion failures, 3 errors from the missing
+  `compactHistory` path).
+- Isolated Kotlin/JUnit harness (JDK 17.0.13, embeddable kotlinc 2.0.21,
+  JUnit 4.13.2), compiling the production slices `agent/Skill.kt`,
+  `ui/chat/SlashMenu.kt`, `chat/ManualCompaction.kt` with
+  `SkillCommandSheetTest` and `ManualCompactionTest`: **9 tests, all
+  passed**. Red on the parent: `ManualCompactionTest` does not compile
+  against `c0f9dfc2` (the seam does not exist — unresolved references), and
+  the flipped `builtInsKeepTheirOrderAndFilterByToken` assertion fails at
+  runtime against the parent's `SlashMenu.kt` (Compact disabled there);
+  the other four row tests pass on both trees.
+- The six new Robolectric tests and the updated row tests are part of
+  `testDebugUnitTest`; they were **not executed here** (see gaps). They
+  follow the neighbouring compaction tests' fixtures; the summary test's
+  goal size was checked against the real summary budget: the no-workspace
+  tool set measures 30 definitions / 15,438 bytes ≈ 5,146 tokens (extracted
+  production definitions, measured with the `ContextBudget` formula), which
+  leaves the 2,010-byte pinned goal comfortably inside the budget.
+- Parse/profile checks: `ChatViewModel.kt`, `ChatViewModelTest.kt`,
+  `ChatScreen.kt` and `SkillCommandSheet.kt` were compiled with the
+  embeddable compiler without the Android classpath and their diagnostics
+  diffed against the parent files. No parse errors; every new diagnostic is
+  an unresolved Android/classpath reference inside the inserted regions
+  (the parent shows the same classes of error), and the seam references
+  resolve when their definitions are included. This is a syntax and
+  reference-shape check, not a type check.
+- `git diff --check c0f9dfc2..HEAD` passed. The code diff against the base
+  (excluding this report) is 9 files, +472/−9; `ChatViewModel.kt` changes
+  are purely additive. The app build files, manifest, gradle wrapper and
+  updater code are byte-identical to the base. No version change, no new
+  dependencies, no APK, no merge, no PR, no tag.
 
 ## Honest gaps
 
-- The base has no manual Compact command. `ContextPreparation.prepare(force = true)` is called within the active run and overflow flow, with provider configuration and durable context supplied by the run. A standalone trigger would add a new lifecycle and persistence entry. The menu leaves Compact disabled and the existing automatic compaction remains available.
-- A skill tap stages `/name ` using Rivet's existing gesture. The user adds their task and sends it. `agent/SkillGesture.kt` requires task text, and the menu does not fabricate one or bypass an agent-only skill's flag.
-- Reviewed all four ChatGPT references under `chatgpt reference/`. Muse, dsh, and annotated reasoning photos were absent from the shared Rivet directory. Their supplied written interaction specifications guided those surfaces.
-- Phone checks include drawer gestures and typing, restored drafts across destinations, narrow and large-text layouts, existing SAF-grant return and starter install flows, browser tab and address focus behaviour, split divider drag and refresh against a real provider, and reduced-motion and visible completion timing. The reasoning signatures need side-by-side visual review. Hermes owns the Android Build gate.
+- **The Gradle/Android suite did not run in this environment.** There is no
+  Android SDK or NDK here (`ANDROID_HOME` unset, no `local.properties`, no
+  SDK directory), and the Gradle 8.13 daemon fails to start at all: three
+  attempts at `:app:testDebugUnitTest` (including `--no-daemon` and a
+  reduced heap) each ended with "Could not receive a message from the
+  daemon" before configuration, with ~700 MB of RAM available. The six new
+  Robolectric tests, the updated `SkillCommandSheetTest`, and the rest of
+  the unit suite need CI ("Android Build") as their gate.
+- The Kotlin harness used compiler 2.0.21 while the repo pins 2.1.10; it
+  compiled only the pure slices, which use no 2.1-specific language
+  features. The Compose files (`ChatScreen.kt`, `SkillCommandSheet.kt`)
+  were parse/profile-checked only — no full Compose compilation was
+  attempted here.
+- No on-device check of the tap flow, the notice row's rendering, the
+  disabled row's accessibility description, or Stop during a compaction.
+- Typing `/compact` and pressing Send still shows "Unknown command", as it
+  does for the other built-in rows (`/yolo`, `/feedback`); the brief's
+  trigger is the row tap, and `send()` was left unchanged.
+- Manual compaction takes no run checkpoint: it changes only the transcript,
+  never project files, matching `recordTerminalRestoreNotice`. The
+  automatic in-run compaction keeps riding its turn's checkpoint; that
+  path is untouched.
+- The tool-size measurement used kotlinx-serialization-json 1.6.2 (repo:
+  1.7.3); `JsonObject.toString()` output is equivalent for the estimate.
