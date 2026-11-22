@@ -1807,14 +1807,17 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // send is allowed so the view model can explain what to choose instead of the
     // button silently refusing the tap.
     val builtInCommand = SlashCommands.builtIn(draft) != null
-    val canSend = ready && !streaming && (draft.isNotBlank() || attachment != null) && pendingText == null &&
-        (builtInCommand || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
-            !hasProvider)
-    // Trailing newlines and spaces are noise; the model never wanted them.
+    fun canSubmit(text: String, builtIn: Boolean): Boolean =
+        ready && !streaming && (text.isNotBlank() || attachment != null) && pendingText == null &&
+            (builtIn || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
+                !hasProvider)
+    val canSend = canSubmit(draft, builtInCommand)
     val submit = {
-        val text = if (canSend && attachment != null && draft.isBlank()) "" else draftToSend(draft, canSend)
+        val latest = draftFor(drafts, sessionId)
+        val allowed = canSubmit(latest, SlashCommands.builtIn(latest) != null)
+        val text = if (allowed && attachment != null && latest.isBlank()) "" else draftToSend(latest, allowed)
         if (text != null) {
-            pendingText = draft
+            pendingText = latest
             submittedAt = ackCount
             onSend(text)
         }
@@ -1915,12 +1918,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                         placeholder = { Text("Ask Rivet…") },
                         minLines = 1,
                         maxLines = 6,
-                        keyboardOptions = if (draft.startsWith("/")) KeyboardOptions(
+                        keyboardOptions = KeyboardOptions(
                             capitalization = KeyboardCapitalization.None,
-                            autoCorrect = false,
-                            imeAction = ImeAction.Send,
-                        ) else KeyboardOptions(
-                            capitalization = KeyboardCapitalization.Sentences,
                             imeAction = ImeAction.Send,
                         ),
                         keyboardActions = KeyboardActions(onSend = { submit() }),
