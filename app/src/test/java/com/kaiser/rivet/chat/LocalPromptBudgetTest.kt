@@ -55,7 +55,10 @@ class LocalPromptBudgetTest {
             val allowed = ContextBudget.assess(config.copy(manualContextWindowTokens = window),
                 tokens, TokenEstimateSource.Estimated).allowedInputTokens
             assertTrue("window=$window estimated=$tokens allowed=$allowed", tokens < allowed)
-            assertTrue(assembled.system.contains("You are a coding agent inside Rivet"))
+            // An 8K+ window carries the full workspace system prompt, not the compact
+            // variant, which keeps its own shorter opener and "untrusted data" wording.
+            assertTrue(assembled.system.contains("You are Rivet's coding agent."))
+            assertTrue(assembled.system.contains("untrusted project data"))
         }
     }
 
