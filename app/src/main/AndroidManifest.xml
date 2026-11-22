@@ -83,6 +83,9 @@
                 android:name="android.support.FILE_PROVIDER_PATHS"
                 android:resource="@xml/shared_file_paths" />
         </provider>
+        <receiver
+            android:name=".runtime.TermuxResultReceiver"
+            android:exported="false" />
         <service
             android:name=".runtime.PersistentProcessService"
             android:exported="false"

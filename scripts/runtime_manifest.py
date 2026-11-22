@@ -12,6 +12,7 @@ FILE_PROVIDER = "androidx.core.content.FileProvider"
 SHARED_FILES_SUFFIX = ".shared-files"
 PHONE_CAPTURE_SERVICE = "com.kaiser.rivet.ui.phone.PhoneCaptureService"
 TERMUX_PACKAGE = "com.termux"
+TERMUX_RECEIVER = "com.kaiser.rivet.runtime.TermuxResultReceiver"
 ALLOWED_PERMISSIONS = {
     "android.permission.INTERNET",
     "android.permission.FOREGROUND_SERVICE",
@@ -165,13 +166,15 @@ def verify_apk_runtime_manifest(xmltree: str, permissions: set[str]) -> None:
     assert "BOOT_COMPLETED" not in xmltree, "process service must not resume on boot"
     receivers = _elements(xmltree, "receiver")
     providers = _elements(xmltree, "provider")
-    assert len(receivers) == 1 and EXISTING_PROFILE_RECEIVER in receivers[0], (
-        "only the existing AndroidX profile receiver may be present"
+    profile = [item for item in receivers if _own_attribute(item, "android:name") == EXISTING_PROFILE_RECEIVER]
+    callbacks = [item for item in receivers if _own_attribute(item, "android:name") == TERMUX_RECEIVER]
+    assert len(profile) == 1 and len(callbacks) <= 1 and len(receivers) == len(profile) + len(callbacks), (
+        "only the existing AndroidX profile receiver and private Termux callback may be present"
     )
-    receiver_permission = _attribute(receivers[0], "android:permission") or ""
-    assert "android.permission.DUMP" in receiver_permission, (
-        "the existing AndroidX profile receiver must remain protected by DUMP"
-    )
+    assert _own_attribute(profile[0], "android:permission") == "android.permission.DUMP"
+    for callback in callbacks:
+        assert _is_false(_own_attribute(callback, "android:exported")) and not _elements(callback, "intent-filter"), (
+            "the Termux callback must be private and explicit")
     assert len(providers) in (1, 2), (
         "only the existing AndroidX startup provider may be present"
     )
@@ -249,9 +252,15 @@ def verify_release_runtime_manifest(manifest_xml: str) -> None:
                    for node in manifest.iter()), "release must not resume processes on boot"
     receivers = application.findall("receiver")
     providers = application.findall("provider")
-    assert len(receivers) == 1 and receivers[0].get(ANDROID + "name", "").endswith(
-        ".profileinstaller.ProfileInstallReceiver"), "release may contain only the existing AndroidX profile receiver"
-    assert receivers[0].get(ANDROID + "permission") == "android.permission.DUMP"
+    profile = [item for item in receivers if item.get(ANDROID + "name") == EXISTING_PROFILE_RECEIVER]
+    callbacks = [item for item in receivers if item.get(ANDROID + "name") in (
+        TERMUX_RECEIVER, ".runtime.TermuxResultReceiver")]
+    assert len(profile) == 1 and len(callbacks) <= 1 and len(receivers) == len(profile) + len(callbacks), (
+        "release may contain only the existing AndroidX profile receiver and private Termux callback")
+    assert profile[0].get(ANDROID + "permission") == "android.permission.DUMP"
+    for callback in callbacks:
+        assert callback.get(ANDROID + "exported") == "false" and callback.find("intent-filter") is None, (
+            "the Termux callback must be private and explicit")
     assert len(providers) in (1, 2), (
         "release may contain only the existing AndroidX startup provider")
     startup = [provider for provider in providers if provider.get(ANDROID + "name", "").endswith(
