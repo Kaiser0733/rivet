@@ -43,7 +43,7 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("if (annotated.spanStyles.isEmpty())", chat)
         self.assertIn("Text(annotated.text, modifier", chat)
         runs = source("ui/chat/AssistantInlineText.kt")
-        self.assertIn("if (!showCode && !run.bold && !run.italic)", runs)
+        self.assertIn("if (path == null && !showCode && !run.bold && !run.italic)", runs)
         self.assertIn("append(content)", runs)
 
     def test_hardware_input_reaches_the_composer_and_panel_keys(self):
@@ -124,7 +124,7 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("reuseEmpty: Boolean = false", storage)
         self.assertIn("NOT EXISTS(SELECT 1 FROM events WHERE session_id=sessions.id)", storage)
         self.assertIn("copy(hasMessages = cursor.getInt(7) != 0)", storage)
-        self.assertIn("reuseEmpty = true", source("chat/ChatViewModel.kt"))
+        self.assertIn("reuseEmpty = _uiState.value.goal == null", source("chat/ChatViewModel.kt"))
         self.assertIn("session.hasMessages && session.title.contains", source("ui/history/HistoryScreen.kt"))
 
     def test_reasoning_signal_is_drawn_in_its_own_fixed_row_slot(self):
