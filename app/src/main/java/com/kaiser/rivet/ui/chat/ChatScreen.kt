@@ -25,7 +25,6 @@ import com.kaiser.rivet.ui.panelEntry
 import com.kaiser.rivet.ui.rivetMotionSpec
 import androidx.compose.ui.draw.clipToBounds
 import com.kaiser.rivet.ui.starter.HomeStarters
-import android.graphics.BitmapFactory
 import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
@@ -85,8 +84,6 @@ import com.kaiser.rivet.ui.motionDisabled
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -97,7 +94,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -141,14 +137,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
-import com.kaiser.rivet.browser.BrowserDrivingPolicy
 import com.kaiser.rivet.workspace.FilePreviewResult
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
 import com.kaiser.rivet.chat.compactRowEnabled
 import com.kaiser.rivet.chat.ComposerAttachment
 import com.kaiser.rivet.chat.SharedDraft
-import com.kaiser.rivet.chat.appendClipboardText
 import com.kaiser.rivet.chat.draftFor
 import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
@@ -170,7 +164,6 @@ import com.kaiser.rivet.agent.AgentActivityGroup
 import com.kaiser.rivet.agent.AgentActivityOperation
 import com.kaiser.rivet.agent.ActivityOutcome
 import com.kaiser.rivet.agent.AgentActivityProjection
-import com.kaiser.rivet.agent.AgentToolLifecycle
 import com.kaiser.rivet.agent.AgentToolLifecycleStage
 import com.kaiser.rivet.chat.ChatUiState
 import com.kaiser.rivet.chat.ChatErrorAction
@@ -321,8 +314,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             )
         }
     } else null
+    val openChatImage = remember(preview) { preview::open }
     ChatWithPreview(preview, load = { path ->
-        chatViewModel.previewProjectFile(path, state.currentSessionWorkspaceId)
+        if (isAppChatImagePath(path)) loadAppChatImage(context, path)
+        else chatViewModel.previewProjectFile(path, state.currentSessionWorkspaceId)
     }) {
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             val lane = conversationWidth(maxWidth.value).dp
@@ -362,7 +357,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     }
                     val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
                         state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
-                    CompositionLocalProvider(LocalAssistantFileLinks provides linkDoor) {
+                    CompositionLocalProvider(
+                        LocalAssistantFileLinks provides linkDoor,
+                        LocalOpenChatImage provides openChatImage,
+                    ) {
                         key(state.currentSessionId) {
                             MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
                                 onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
@@ -497,17 +495,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         browser: com.kaiser.rivet.browser.BrowserSession,
                         modifier: Modifier = Modifier) {
     val browserState by browser.state.collectAsState()
-    val showBrowserCard = BrowserDrivingPolicy.chatPreviewVisible(
-        browserState.watchVisible, browserState.rendererVisible && !browserState.teardownRequested,
-        browserState.visible, browserState.handoff != null, browserState.watchSessionId == state.currentSessionId,
-    )
-    val browserKeys = remember(state.messages) {
-        state.messages.asSequence().flatMap { it.toolCalls.asSequence() }
-            .filter { it.name.startsWith("browser_") }
-            .map { AgentToolLifecycle.keyFor(it.id) }.toSet()
-    }
-    val browsing = browserState.agentRunActive && (!browserState.pageReady ||
-        state.toolLifecycle.any { it.correlationKey in browserKeys && it.stage == AgentToolLifecycleStage.Started })
+    val showBrowserCard = browserState.chatPreviewVisible(state.currentSessionId)
     val deliverables = remember(state.messages) { presentedFilesForTurns(state.messages) }
     val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning) {
         val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
@@ -723,7 +711,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         )
                     }
                     if (showBrowserCard) item(key = "live-browser") {
-                        LiveBrowserCard(browser, browserState, browsing)
+                        LiveBrowserCard(browser, browserState)
                     }
                     if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
                         ReasoningRow(
@@ -1386,32 +1374,32 @@ private fun ReasoningRow(
 }
 
 @Composable
-private fun BrowserImage(image: ChatMarkdownBlock.Image, unavailable: String = "Browser screenshot unavailable.") {
+private fun BrowserImage(
+    image: ChatMarkdownBlock.Image,
+    unavailable: String,
+    inline: Boolean = false,
+) {
     val context = LocalContext.current
-    val bitmap = remember(image.source) {
-        val file = java.io.File(image.source.removePrefix("file://"))
-        runCatching {
-            val allowed = file.canonicalPath.startsWith(context.filesDir.canonicalPath + "/") ||
-                file.canonicalPath.startsWith(context.cacheDir.canonicalPath + "/")
-            if (!allowed || !file.isFile) return@runCatching null
-            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.absolutePath, options)
-            val edge = maxOf(options.outWidth, options.outHeight)
-            options.inSampleSize = Integer.highestOneBit((edge / 1024).coerceAtLeast(1))
-            options.inJustDecodeBounds = false
-            BitmapFactory.decodeFile(file.absolutePath, options)
-        }.getOrNull()
+    val openImage = LocalOpenChatImage.current
+    val preview by key(image.source) {
+        produceState<FilePreviewResult?>(null, context, image.source) {
+            value = loadAppChatImage(context, image.source, maxEdge = if (inline) 1280 else 1536)
+        }
     }
-    if (bitmap != null) {
+    val bitmap = (preview as? FilePreviewResult.Image)?.bitmap
+    val description = displaySafeText(image.alt).ifBlank { "Browser screenshot" }
+    if (bitmap == null) {
+        if (preview != null) Text(unavailable, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else if (inline) {
+        InlineChatImage(bitmap, description, openImage?.let { open -> { open(image.source) } })
+    } else {
         Image(
             bitmap = bitmap.asImageBitmap(),
-            contentDescription = image.alt.ifBlank { "Browser screenshot" },
+            contentDescription = description,
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)),
             contentScale = ContentScale.FillWidth,
         )
-    } else {
-        Text(unavailable, style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -1519,8 +1507,8 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                         !showInlineImages -> if (block.alt.isNotBlank()) Text(displaySafeText(block.alt))
                         path != null && path in files && links != null && open != null ->
                             ProjectInlineImage(block, path, links, open)
-                        block.source.startsWith('/') || block.source.startsWith("file://") ->
-                            BrowserImage(block, unavailable = displaySafeText(block.fallbackText()))
+                        isAppChatImagePath(block.source) ->
+                            BrowserImage(block, unavailable = displaySafeText(block.fallbackText()), inline = true)
                         else -> Text(displaySafeText(block.fallbackText()))
                     }
                 }
@@ -1565,10 +1553,7 @@ private fun ProjectInlineImage(image: ChatMarkdownBlock.Image, path: String, lin
     if (bitmap == null) {
         Text(displaySafeText(image.fallbackText()), style = MaterialTheme.typography.bodyMedium)
     } else {
-        Image(bitmap.asImageBitmap(), displaySafeText(image.fallbackText()),
-            modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).clip(MaterialTheme.shapes.small)
-                .clickable(role = Role.Button, onClickLabel = "Open image preview") { onOpen(path) },
-            contentScale = ContentScale.Fit)
+        InlineChatImage(bitmap, displaySafeText(image.fallbackText())) { onOpen(path) }
     }
 }
 
@@ -1790,49 +1775,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     var attachmentsOpen by rememberSaveable(sessionId) { mutableStateOf(false) }
     val pickAttachment = rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)
     if (attachmentsOpen) {
-        val context = LocalContext.current
-        val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
-        var hasClipboardText by remember { mutableStateOf(false) }
-        DisposableEffect(clipboard) {
-            fun refresh() {
-                hasClipboardText = clipboard?.hasPrimaryClip() == true &&
-                    clipboard.primaryClipDescription?.hasMimeType("text/*") == true
-            }
-            val listener = ClipboardManager.OnPrimaryClipChangedListener { refresh() }
-            refresh()
-            clipboard?.addPrimaryClipChangedListener(listener)
-            onDispose { clipboard?.removePrimaryClipChangedListener(listener) }
-        }
-        ModalBottomSheet(
-            onDismissRequest = { attachmentsOpen = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        ) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly) {
-                ComposerPicker.entries.forEach { picker ->
-                    TextButton(onClick = {
-                        attachmentsOpen = false
-                        pickAttachment(picker)
-                    }) { Text(picker.label) }
-                }
-            }
-            TextButton(
-                enabled = hasClipboardText,
-                onClick = {
-                    val clip = clipboard?.primaryClip
-                    val text = if (clip != null && clip.itemCount != 0) clip.getItemAt(0).text?.toString() else null
-                    if (text.isNullOrBlank()) {
-                        hasClipboardText = false
-                    } else {
-                        val current = draftFor(drafts, sessionId)
-                        drafts = withDraft(drafts, sessionId, appendClipboardText(current, text))
-                        attachmentsOpen = false
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                    .dismissOnEscape { attachmentsOpen = false },
-            ) { Text("Include clipboard text") }
-        }
+        AttachmentSheet(onDismiss = { attachmentsOpen = false }, onPick = pickAttachment)
     }
     var appliedShares by rememberSaveable(stateSaver = DRAFT_SAVER) {
         mutableStateOf(emptyMap<String, String>())

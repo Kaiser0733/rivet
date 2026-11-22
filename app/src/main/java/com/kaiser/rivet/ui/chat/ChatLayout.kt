@@ -19,3 +19,15 @@ internal fun chatPaneFraction(availableWidthDp: Float, requested: Float): Float 
     val minimum = 270f / usable
     return requested.coerceIn(maxOf(0.32f, minimum), minOf(0.72f, 1f - minimum))
 }
+
+internal fun inlineMessageImageSize(
+    imageWidth: Float,
+    imageHeight: Float,
+    chatWidth: Float,
+    screenHeight: Float,
+): Pair<Float, Float> {
+    val widthLimit = minOf(chatWidth * 0.55f, 320f)
+    val heightLimit = minOf(screenHeight * 0.46f, 280f)
+    val scale = minOf(1f, widthLimit / imageWidth, heightLimit / imageHeight)
+    return imageWidth * scale to imageHeight * scale
+}

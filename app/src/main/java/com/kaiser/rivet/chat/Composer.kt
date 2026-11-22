@@ -19,13 +19,6 @@ internal fun withDraft(drafts: Map<String, String>, sessionId: String?, text: St
     return if (text.isEmpty()) drafts - key else drafts + (key to text)
 }
 
-internal fun appendClipboardText(draft: String, clipboard: String?): String {
-    if (clipboard.isNullOrBlank()) return draft
-    val separator = if (draft.isEmpty() || draft.endsWith('\n')) "" else "\n"
-    return draft + separator + clipboard
-}
-
-
 internal enum class ComposerEnter { Send, Newline, Edit }
 
 internal fun composerEnter(hardware: Boolean, shift: Boolean, shortcutModifier: Boolean): ComposerEnter =

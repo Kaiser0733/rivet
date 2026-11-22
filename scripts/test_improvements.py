@@ -1,4 +1,5 @@
 from pathlib import Path
+import struct
 import unittest
 
 
@@ -62,6 +63,61 @@ class ImprovementsTest(unittest.TestCase):
         sidebar = source("ui/history/HistoryScreen.kt")
         self.assertLess(sidebar.index("R.drawable.sidebar_rivet_mark"), sidebar.index('Text("RIVET"'))
         self.assertLess(sidebar.index('Text("RIVET"'), sidebar.index('"Search chats"'))
+
+    def test_sidebar_mark_is_prepared_for_its_display_densities(self):
+        sidebar = source("ui/history/HistoryScreen.kt")
+        self.assertIn("Modifier.size(32.dp).clip(CircleShape)", sidebar)
+        resources = SOURCE.parents[3] / "res"
+        for density, pixels in [("ldpi", 24), ("mdpi", 32), ("tvdpi", 43), ("hdpi", 48),
+                                ("xhdpi", 64), ("xxhdpi", 96), ("xxxhdpi", 128)]:
+            with self.subTest(density=density):
+                mark = resources / f"drawable-{density}" / "sidebar_rivet_mark.png"
+                self.assertTrue(mark.is_file(), mark)
+                self.assertEqual((pixels, pixels), struct.unpack(">II", mark.read_bytes()[16:24]))
+        self.assertFalse((resources / "drawable-nodpi/sidebar_rivet_mark.png").exists())
+
+    def test_attachment_sheet_dispatches_only_the_three_icon_rows(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        self.assertNotIn("Include clipboard text", chat)
+        self.assertNotIn("OnPrimaryClipChangedListener", chat)
+        self.assertIn("rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)", chat)
+        self.assertIn("AttachmentSheet(", chat)
+        sheet = source("ui/chat/AttachmentSheet.kt")
+        self.assertIn("Column(", sheet)
+        self.assertIn("ComposerPicker.entries.forEach", sheet)
+        for picker, icon in [("Camera", "camera"), ("Photos", "photo"), ("Files", "attachment")]:
+            self.assertIn(f"ComposerPicker.{picker} -> R.drawable.ic_{icon}", sheet)
+        self.assertIn("CircleShape", sheet)
+        self.assertIn("onPick(picker)", sheet)
+
+    def test_browser_card_follows_page_open_even_without_a_renderer(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        self.assertIn("browserState.chatPreviewVisible(state.currentSessionId)", chat)
+        tools = source("browser/BrowserTools.kt")
+        self.assertIn("session.openForAgent(normalized", tools)
+        session = source("browser/BrowserSession.kt")
+        opened = session.split("suspend fun openForAgent(", 1)[1].split("suspend fun open(", 1)[0]
+        self.assertLess(opened.index("markChatBrowserWork(page)"), opened.index("openText("))
+        self.assertIn("chatPage = BrowserChatPage(result.url, result.title, excerpt)", opened)
+        self.assertIn("BrowserGovernor.canTakeScreenshot(result.tier)", opened)
+        card = source("ui/chat/LiveBrowserCard.kt")
+        self.assertIn("ContentScale.Crop", card)
+        self.assertIn('Text("Open browser"', card)
+
+    def test_only_assistant_inline_images_use_the_bounded_tappable_renderer(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        markdown = chat.split("internal fun AssistantMarkdown(", 1)[1].split("private fun InlineMarkdown(", 1)[0]
+        self.assertIn("inline = true", markdown)
+        self.assertIn("InlineChatImage(bitmap", markdown)
+        app_image = chat.split("private fun BrowserImage(", 1)[1].split("private fun MarkdownTableCell(", 1)[0]
+        self.assertIn("else if (inline)", app_image)
+        self.assertIn("InlineChatImage(bitmap", app_image)
+        self.assertIn("LocalOpenChatImage.current", app_image)
+        self.assertIn("LocalOpenChatImage provides openChatImage", chat)
+        image = source("ui/chat/InlineChatImage.kt")
+        self.assertIn("inlineMessageImageSize(", image)
+        self.assertIn("ContentScale.Fit", image)
+        self.assertIn('onClickLabel = "Open image preview"', image)
 
     def test_empty_draft_is_reusable_and_absent_from_sidebar_recents(self):
         storage = source("storage/CodingSessions.kt")

@@ -3037,6 +3037,7 @@ class ChatViewModel private constructor(
     /** Notification Pause: stop this turn but persist the run as resumable, not stopped. */
     fun pauseCurrentRun(reason: RunPauseReason = RunPauseReason.User) {
         if (!_uiState.value.streaming) return
+        browser.dismissChatPreview()
         pauseRequestedTicket = generation
         pauseReason = reason
         activeSupervisor?.pauseAll(reason)
