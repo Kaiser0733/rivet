@@ -354,7 +354,7 @@ class BrowserSession(
     }
 
     fun beginAgentRun() {
-        _state.update { it.copy(agentRunActive = true, agentRendererUse = false,
+        _state.update { it.copy(agentRunActive = true, agentRendererUse = false, watchVisible = false,
             driving = BrowserDriving.Agent) }
     }
 
@@ -401,7 +401,7 @@ class BrowserSession(
     /** Closing the screen keeps the visual session alive for the watch card, then idle-expires it. */
     fun close() {
         unparkRenderer()
-        _state.update { it.copy(visible = false, readerMode = false) }
+        _state.update { it.copy(visible = false, readerMode = false, watchVisible = false) }
         idleArming.onHidden()
         armIdle()
     }
@@ -469,7 +469,7 @@ class BrowserSession(
         pendingSnapshotRestore = null
         _state.update {
             it.copy(visible = false, readerMode = false,
-                visualScreenshot = null, pageReady = false, driving = BrowserDriving.Agent,
+                visualScreenshot = null, watchVisible = false, pageReady = false, driving = BrowserDriving.Agent,
                 agentRendererUse = false, budgetCloseAction = false,
                 handoff = null, authNotice = null, downloadPrompt = null, loadValveNotice = null)
         }
@@ -2677,7 +2677,7 @@ class BrowserSession(
             }
         }
         _state.update { it.copy(rendererVisible = true,
-            watchVisible = it.watchVisible || showWatch,
+            watchVisible = it.watchVisible || showWatch || (agentAction && it.agentRunActive),
             agentRendererUse = it.agentRendererUse || agentAction) }
         val existing = renderer
         if (existing != null) return existing
@@ -2773,6 +2773,27 @@ class BrowserSession(
 
     private fun jsonString(value: String?): String =
         if (value == null) "null" else org.json.JSONObject.quote(value)
+
+    /** A small, read-only frame of the same WebView owned by BrowserHost. */
+    internal fun chatPreviewFrame(): Bitmap? {
+        val state = _state.value
+        if (!state.watchVisible || state.teardownRequested || !state.pageReady ||
+            state.handoff != null || !BrowserGovernor.canTakeScreenshot(state.tier)) return null
+        val view = renderer ?: return null
+        if (view.width == 0 || view.height == 0) return null
+        val scale = minOf(480f / view.width, 320f / view.height, 1f)
+        val bitmap = Bitmap.createBitmap((view.width * scale).toInt().coerceAtLeast(1),
+            (view.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+        return try {
+            val canvas = Canvas(bitmap)
+            canvas.scale(scale, scale)
+            view.draw(canvas)
+            bitmap
+        } catch (_: RuntimeException) {
+            bitmap.recycle()
+            null
+        }
+    }
 
     private suspend fun captureScreenshot(view: WebView): BrowserShot = withContext(Dispatchers.Main) {
         val width = view.width.coerceAtLeast(1)

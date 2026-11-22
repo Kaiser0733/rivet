@@ -100,7 +100,16 @@ class BrowserTools(private val session: BrowserSession) {
             val result = if (preview) {
                 session.openVisual(normalized, userInitiated = false, projectPreview = true, agentAction = true)
             } else {
-                session.openText(normalized, args.bool("new_window"), projectPreview = false)
+                val read = session.openText(normalized, args.bool("new_window"), projectPreview = false)
+                if (!read.handoff && session.state.value.agentRunActive &&
+                    BrowserGovernor.canOpenRenderer(read.tier, interaction = false)) {
+                    try {
+                        session.openVisual(read.url, userInitiated = false, agentAction = true)
+                    } catch (_: BrowserFailure) {
+                        // The reader result still works when the page cannot paint.
+                    }
+                }
+                read
             }
             value(call, buildJsonObject {
                 put("url", result.url)

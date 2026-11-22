@@ -168,6 +168,7 @@ import com.kaiser.rivet.agent.AgentActivityGroup
 import com.kaiser.rivet.agent.AgentActivityOperation
 import com.kaiser.rivet.agent.ActivityOutcome
 import com.kaiser.rivet.agent.AgentActivityProjection
+import com.kaiser.rivet.agent.AgentToolLifecycle
 import com.kaiser.rivet.agent.AgentToolLifecycleStage
 import com.kaiser.rivet.chat.ChatUiState
 import com.kaiser.rivet.chat.ChatErrorAction
@@ -369,6 +370,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                                 onChooseReasoning = chatViewModel::chooseReasoningLevel,
                                 onOpenPreview = preview::open,
                                 missingFiles = preview.missing,
+                                browser = chatViewModel.browser,
                                 modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
                         }
                     }
@@ -486,7 +488,18 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onChooseReasoning: (ReasoningLevel) -> Unit,
                         onOpenPreview: (String) -> Unit,
                         missingFiles: Set<String>,
+                        browser: com.kaiser.rivet.browser.BrowserSession,
                         modifier: Modifier = Modifier) {
+    val browserState by browser.state.collectAsState()
+    val showBrowserCard = browserState.watchVisible && browserState.rendererVisible &&
+        !browserState.visible && !browserState.teardownRequested && browserState.handoff == null
+    val browserKeys = remember(state.messages) {
+        state.messages.asSequence().flatMap { it.toolCalls.asSequence() }
+            .filter { it.name.startsWith("browser_") }
+            .map { AgentToolLifecycle.keyFor(it.id) }.toSet()
+    }
+    val browsing = browserState.agentRunActive && (!browserState.pageReady ||
+        state.toolLifecycle.any { it.correlationKey in browserKeys && it.stage == AgentToolLifecycleStage.Started })
     val deliverables = remember(state.messages) { presentedFilesForTurns(state.messages) }
     val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning) {
         val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
@@ -593,7 +606,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             hasError = state.error != null,
         )
     }
-    val totalItems = segmentedTurns.size +
+    val totalItems = segmentedTurns.size + (if (showBrowserCard) 1 else 0) +
         (if (state.goalLine != null) 1 else 0) +
         (if (streamingReasoning.isNotBlank()) 1 else 0) +
         (if (streamingText.isNotBlank()) 1 else 0) +
@@ -634,7 +647,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // has to handle rows appearing or disappearing, which move everything at once.
     LaunchedEffect(segmentedTurns.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
-        state.notice) {
+        state.notice, showBrowserCard) {
         if (followBottom && totalItems > 0) {
             programmaticScroll = true
             try {
@@ -696,6 +709,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 missingFiles = missingFiles,
                 onOpenPreview = onOpenPreview,
             )
+        }
+        if (showBrowserCard) item(key = "live-browser") {
+            LiveBrowserCard(browser, browserState, browsing)
         }
         if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
             ReasoningRow(
