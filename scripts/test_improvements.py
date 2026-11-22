@@ -1,4 +1,5 @@
 from pathlib import Path
+import struct
 import unittest
 
 
@@ -62,6 +63,18 @@ class ImprovementsTest(unittest.TestCase):
         sidebar = source("ui/history/HistoryScreen.kt")
         self.assertLess(sidebar.index("R.drawable.sidebar_rivet_mark"), sidebar.index('Text("RIVET"'))
         self.assertLess(sidebar.index('Text("RIVET"'), sidebar.index('"Search chats"'))
+
+    def test_sidebar_mark_is_prepared_for_its_display_densities(self):
+        sidebar = source("ui/history/HistoryScreen.kt")
+        self.assertIn("Modifier.size(32.dp).clip(CircleShape)", sidebar)
+        resources = SOURCE.parents[3] / "res"
+        for density, pixels in [("ldpi", 24), ("mdpi", 32), ("tvdpi", 43), ("hdpi", 48),
+                                ("xhdpi", 64), ("xxhdpi", 96), ("xxxhdpi", 128)]:
+            with self.subTest(density=density):
+                mark = resources / f"drawable-{density}" / "sidebar_rivet_mark.png"
+                self.assertTrue(mark.is_file(), mark)
+                self.assertEqual((pixels, pixels), struct.unpack(">II", mark.read_bytes()[16:24]))
+        self.assertFalse((resources / "drawable-nodpi/sidebar_rivet_mark.png").exists())
 
     def test_empty_draft_is_reusable_and_absent_from_sidebar_recents(self):
         storage = source("storage/CodingSessions.kt")
