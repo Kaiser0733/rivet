@@ -72,3 +72,28 @@ class FixRoundSurfacesTest(unittest.TestCase):
         footer = chat.split("private fun ChangeSummary", 1)[1].split("private fun InterruptedTurnRow", 1)[0]
         self.assertNotIn("spendLabel", footer)
         self.assertIn('spendLabel?.takeUnless { it == "unknown pricing" }', chat)
+
+    def test_archive_fts_finds_stored_text_within_one_session(self):
+        import re
+        import sqlite3
+
+        store = (UI.parent / "storage/CodingSessions.kt").read_text()
+        create = re.search(r'db.execSQL\("(CREATE VIRTUAL TABLE archive_fts [^"]+)"\)', store)
+        self.assertIsNotNone(create)
+        with sqlite3.connect(":memory:") as db:
+            db.execute(create.group(1))
+            rows = [
+                ("chat", "You", 1, 1, 100, "The code word is monsoon-42 and the number is 5000."),
+                ("chat", "Checkpoint", 2, 2, 200, "The earlier story was about a banyan tree."),
+                ("chat", "You", 3, 3, 300, "What was the code word?"),
+                ("other", "You", 4, 1, 400, "The code word is another value."),
+            ]
+            db.executemany("INSERT INTO archive_fts VALUES (?,?,?,?,?,?)", rows)
+            self.assertEqual(db.execute(
+                "SELECT body FROM archive_fts WHERE body MATCH ? AND session_id=? AND CAST(turn AS INTEGER)<=?",
+                ('("code" "word") OR ("number")', "chat", 2),
+            ).fetchall(), [(rows[0][-1],)])
+            self.assertEqual(db.execute(
+                "SELECT source FROM archive_fts WHERE body MATCH ? AND session_id=?",
+                ('"banyan"', "chat"),
+            ).fetchone(), ("Checkpoint",))
