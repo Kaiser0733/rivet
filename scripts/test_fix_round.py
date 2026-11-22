@@ -59,3 +59,10 @@ class FixRoundSurfacesTest(unittest.TestCase):
         self.assertIn('Text("Jump to latest"', chat)
         jump = chat.split("val jumpScope", 1)[1].split("Jump to latest", 1)[0]
         self.assertIn("scrollToConversationBottom(listState, totalItems - 1)", jump)
+
+    def test_landscape_shortcuts_leave_space_for_the_shared_recents(self):
+        sidebar = (UI / "history/HistoryScreen.kt").read_text()
+        self.assertIn("if (landscape) {", sidebar)
+        self.assertIn("SidebarLink(label, icon, open, Modifier.weight(1f), compact = true)", sidebar)
+        self.assertIn('item(key = "recents-heading")', sidebar)
+        self.assertEqual(sidebar.count("relativeRecency(session.updatedAt)"), 1)
