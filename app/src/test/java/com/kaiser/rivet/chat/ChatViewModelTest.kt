@@ -1103,9 +1103,13 @@ class ChatViewModelTest {
         assertFalse(com.kaiser.rivet.agent.modelMessages(compacted.messages).any { copy in it.text })
         assertEquals(1, provider.requests.size)
         assertTrue(provider.requests.single().system.contains("\"DECISIONS + WHY\""))
-        // The goal stays pinned verbatim to the newest user message, as in the run path.
-        assertEquals(history.last { it.role == com.kaiser.rivet.agent.AgentRole.User }.text,
-            com.kaiser.rivet.agent.TaskCheckpoint.parse(sessions.load().summary)?.goal)
+        // The goal is pinned from the newest user message, bounded and redacted by the
+        // checkpoint's clamp. A long single-line request stays in the retained tail.
+        val newestUser = history.last { it.role == com.kaiser.rivet.agent.AgentRole.User }.text
+        val expectedGoal = com.kaiser.rivet.agent.InternalContext.clampUtf8(
+            com.kaiser.rivet.agent.AgentContext.redact(newestUser), 512)
+        assertEquals(expectedGoal, com.kaiser.rivet.agent.TaskCheckpoint.parse(sessions.load().summary)?.goal)
+        assertEquals(512, expectedGoal.toByteArray(Charsets.UTF_8).size)
         assertEquals(1, sessions.load().messages.count {
             it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
         })
