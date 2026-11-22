@@ -1216,7 +1216,8 @@ class ChatViewModel private constructor(
                 val pinnedArchive = sql.archiveTail(sessionId)
                 val context = ContextPreparation(sql, sessionId,
                     clientFactory(snapshot.config, snapshot.apiKey), snapshot.config,
-                    UUID.randomUUID().toString(), activeSummary, workspaceId) { messages, _ ->
+                    UUID.randomUUID().toString(), activeSummary, workspaceId,
+                    useRequestEstimate = true) { messages, _ ->
                     idleContextRequest(snapshot.config, workspaceId, messages, pinnedArchive)
                 }
                 val compacted = context.prepare(activeMessages, force = true, reason = "manual")
@@ -2070,7 +2071,7 @@ class ChatViewModel private constructor(
                 }
             } else emptyList()
             val context = ContextPreparation(sessions, sessionId, client, snapshot.config,
-                turnId, activeSummary, workspaceId, currentRequest = acceptedUser?.text,
+                turnId, activeSummary, workspaceId, currentRequest = acceptedUser?.text, useRequestEstimate = true,
                 onCompactionStarted = {
                     if (ticket == generation) _uiState.update { it.copy(compacting = true) }
                 }) { messages, _ ->

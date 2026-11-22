@@ -48,6 +48,7 @@ internal class ContextPreparation(
     private val workspaceId: String? = null,
     private val currentRequest: String? = null,
     private val onCompactionStarted: () -> Unit = {},
+    private val useRequestEstimate: Boolean = false,
     private val request: (List<AgentMessage>, String) -> AgentRequest,
 ) {
     var summary: String = initialSummary
@@ -62,8 +63,14 @@ internal class ContextPreparation(
     fun footprint(messages: List<AgentMessage>): Long =
         ContextBudget.estimateRequestTokens(requestFor(messages))
 
-    fun estimate(messages: List<AgentMessage>): ContextEstimate =
-        ContextEstimate(footprint(messages), "estimated")
+    suspend fun estimate(messages: List<AgentMessage>): ContextEstimate {
+        if (useRequestEstimate || store == null || sessionId == null) {
+            return ContextEstimate(footprint(messages), "estimated")
+        }
+        val actual = requestFor(messages)
+        return store.contextEstimate(sessionId, config.id, config.model, actual.messages,
+            actual.system, actual.tools, config.baseUrl, actual.reasoning)
+    }
 
     suspend fun prepare(messages: List<AgentMessage>, force: Boolean = false,
                         reason: String = if (force) "overflow" else "automatic"): List<AgentMessage> {
