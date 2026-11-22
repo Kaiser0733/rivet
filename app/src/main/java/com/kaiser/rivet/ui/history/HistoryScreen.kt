@@ -4,7 +4,6 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.Image
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.focusable
@@ -110,11 +109,8 @@ internal fun RivetSidebar(
         .imePadding().padding(horizontal = RivetLayout.pageGutter)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(32.dp).clip(CircleShape), contentAlignment = Alignment.Center) {
-                Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null,
-                    modifier = Modifier.fillMaxSize().graphicsLayer {
-                        scaleX = 1.42f
-                        scaleY = 1.42f
-                    })
+                Image(painterResource(R.drawable.sidebar_rivet_mark), contentDescription = null,
+                    modifier = Modifier.fillMaxSize())
             }
             Spacer(Modifier.size(10.dp))
             Text("RIVET", Modifier.weight(1f),
