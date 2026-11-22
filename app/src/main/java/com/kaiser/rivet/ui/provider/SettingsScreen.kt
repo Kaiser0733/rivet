@@ -541,7 +541,10 @@ private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
     DetailScroll {
         UtilityColumns(
             leading = {
-                UtilityLead(R.drawable.ic_phone_access, "Share to Rivet", "Available in the Android share sheet")
+                SectionHeading("Share to Rivet", icon = R.drawable.ic_phone_access)
+                Text("Choose Rivet in the Android share sheet to bring in text, photos, or files.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
                 UtilityFold(R.drawable.ic_expand, "Screen capture", "Asks before each capture") {
                     Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.")
