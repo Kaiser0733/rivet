@@ -27,6 +27,30 @@ class TurnCheckpointTest {
         assertEquals(null, store.latest())
     }
 
+    @Test fun automaticGoalProgressDoesNotTurnAReadIntoAChangeOrPoisonUndo() = runTest {
+        val root = temp.newFolder("worktree")
+        val goal = File(root, ".rivet/goal.md").apply { parentFile!!.mkdirs(); writeText("goal") }
+        val essay = File(root, "essay.txt").apply { writeText("original") }
+        val store = TurnCheckpoint(temp.newFolder("private-checkpoints"), "workspace-A")
+
+        val read = store.begin(root)
+        store.recordPost(read, root)
+        goal.writeText("progress after read")
+        assertFalse(store.finish(read, root))
+        assertEquals(null, store.latest())
+
+        val write = store.begin(root)
+        essay.writeText("edited")
+        store.recordPost(write, root)
+        goal.writeText("progress after write")
+        assertTrue(store.finish(write, root))
+        val record = requireNotNull(store.latest())
+        assertEquals(listOf("essay.txt"), store.changes(record).map { it.path })
+        val restored = store.stageUndo(record, root)
+        assertEquals("original", File(restored, "essay.txt").readText())
+        assertEquals("progress after write", File(restored, ".rivet/goal.md").readText())
+    }
+
     @Test fun binaryCreateDeleteAndEditRestoreExactlyWithoutGitMetadata() = runTest {
         val root = temp.newFolder("worktree")
         val privateStorage = temp.newFolder("private-checkpoints")

@@ -2617,7 +2617,7 @@ class ChatViewModel private constructor(
                             }
                             TurnCheckpointOutcome.Broken -> {
                                 if (ticket == generation) _uiState.update {
-                                    if (it.error == null) it.copy(error = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
+                                    if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
                                 }
                             }
                             TurnCheckpointOutcome.None -> Unit
@@ -2625,7 +2625,7 @@ class ChatViewModel private constructor(
                     } catch (e: CancellationException) { throw e
                     } catch (_: Exception) {
                         if (ticket == generation) _uiState.update {
-                            if (it.error == null) it.copy(error = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
+                            if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
                         }
                     }
                 }
