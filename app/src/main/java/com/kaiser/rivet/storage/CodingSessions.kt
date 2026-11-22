@@ -198,6 +198,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             db.delete("events", "session_id=?", arrayOf(id))
             db.delete("active_events", "session_id=?", arrayOf(id))
             db.delete("compactions", "session_id=?", arrayOf(id))
+            db.delete("archive_pins", "session_id=?", arrayOf(id))
             db.delete("context_attempts", "session_id=?", arrayOf(id))
             db.delete("usage", "session_id=?", arrayOf(id))
             db.delete("metadata", "key=?", arrayOf(turnMetricsKey(id)))
@@ -445,8 +446,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val hits = db.rawQuery(
             "SELECT source,CAST(turn AS INTEGER),CAST(happened_at AS INTEGER),body FROM archive_fts " +
                 "WHERE body MATCH ? AND session_id=? AND CAST(turn AS INTEGER)<=? " +
-                "ORDER BY CAST(turn AS INTEGER) DESC, CAST(happened_at AS INTEGER) DESC, " +
-                "CAST(source_id AS INTEGER) DESC LIMIT 12",
+                "ORDER BY CAST(turn AS INTEGER) DESC, CASE source WHEN 'Checkpoint' THEN 1 ELSE 0 END, " +
+                "CAST(happened_at AS INTEGER) DESC, CAST(source_id AS INTEGER) DESC LIMIT 12",
             arrayOf(expression, id, lastTurn.toString()),
         ).use { cursor -> buildList {
             while (cursor.moveToNext()) add(Hit(cursor.getString(0), cursor.getInt(1), cursor.getLong(2), cursor.getString(3)))
@@ -471,20 +472,23 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         try {
             val last = db.rawQuery(
                 "SELECT COALESCE(MAX(CAST(source_id AS INTEGER)),0),COALESCE(MAX(CAST(turn AS INTEGER)),0) " +
-                    "FROM archive_fts WHERE session_id=? AND source IN ('You','Rivet')", arrayOf(id),
+                    "FROM archive_fts WHERE session_id=? AND source IN ('You','Rivet','Tool')", arrayOf(id),
             ).use { it.moveToFirst(); it.getLong(0) to it.getInt(1) }
             var turn = last.second
             db.rawQuery("SELECT id,payload,created_at FROM events WHERE session_id=? AND id>? ORDER BY id",
                 arrayOf(id, last.first.toString())).use { cursor ->
                 while (cursor.moveToNext()) {
                     val message = decode(cursor.getString(1))
-                    val source = when (message.role) {
-                        AgentRole.User -> { turn++; "You" }
-                        AgentRole.Assistant -> "Rivet"
-                        else -> continue
+                    if (message.internalContext != null) continue
+                    val (source, body) = when (message.role) {
+                        AgentRole.User -> { turn++; "You" to message.text }
+                        AgentRole.Assistant -> "Rivet" to message.text
+                        AgentRole.Tool -> "Tool" to message.toolResults.joinToString("\n") {
+                            AgentContext.redact("${it.name}: ${it.content}")
+                        }
+                        AgentRole.Context -> continue
                     }
-                    if (message.internalContext != null || message.text.isBlank()) continue
-                    insertArchive(db, id, source, cursor.getLong(0), turn, cursor.getLong(2), message.text)
+                    if (body.isNotBlank()) insertArchive(db, id, source, cursor.getLong(0), turn, cursor.getLong(2), body)
                 }
             }
             db.rawQuery("SELECT id,through_event_id,summary,created_at FROM compactions WHERE session_id=? " +
@@ -513,8 +517,9 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     suspend fun archiveTail(id: String): String = onDatabase { db ->
-        db.rawQuery("SELECT excerpt FROM archive_pins WHERE session_id=? ORDER BY id", arrayOf(id))
-            .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }.joinToString("\n") }
+        db.rawQuery("SELECT excerpt FROM archive_pins WHERE session_id=? ORDER BY id DESC LIMIT 8", arrayOf(id))
+            .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+            .asReversed().joinToString("\n")
     }
 
     suspend fun pinArchive(id: String, windows: List<ArchiveWindow>) = onDatabase { db ->
@@ -523,8 +528,6 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             if (window.match.isNotBlank()) db.execSQL(
                 "INSERT OR IGNORE INTO archive_pins(session_id,excerpt) VALUES(?,?)", arrayOf(id, line))
         }
-        db.execSQL("DELETE FROM archive_pins WHERE session_id=? AND id NOT IN " +
-            "(SELECT id FROM archive_pins WHERE session_id=? ORDER BY id DESC LIMIT 8)", arrayOf(id, id))
     }
 
     suspend fun recent(id: String, limit: Int = 100): List<AgentMessage> = onDatabase { db ->
@@ -1264,7 +1267,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
             "session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, " +
             "excerpt TEXT NOT NULL, UNIQUE(session_id,excerpt))")
         db.execSQL("CREATE TRIGGER unindex_event AFTER DELETE ON events BEGIN " +
-            "DELETE FROM archive_fts WHERE session_id=OLD.session_id AND source IN ('You','Rivet') " +
+            "DELETE FROM archive_fts WHERE session_id=OLD.session_id AND source IN ('You','Rivet','Tool') " +
             "AND CAST(source_id AS INTEGER)=OLD.id; END")
         db.execSQL("CREATE TRIGGER unindex_checkpoint AFTER DELETE ON compactions BEGIN " +
             "DELETE FROM archive_fts WHERE session_id=OLD.session_id AND source='Checkpoint' " +

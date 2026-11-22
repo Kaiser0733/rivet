@@ -404,7 +404,7 @@ class BrowserSession(
         } else userOpen()
     }
 
-    /** Closing the screen keeps the visual session alive for the watch card, then idle-expires it. */
+    /** Closing the screen hides the chat card and lets the visual session idle-expire. */
     fun close() {
         unparkRenderer()
         _state.update { it.copy(visible = false, readerMode = false, watchVisible = false) }

@@ -50,7 +50,7 @@ internal fun rememberComposerPickers(
         try {
             when (picker) {
                 ComposerPicker.Camera -> {
-                    val folder = SharedFileCopy.inbox(context).apply { mkdirs() }
+                    val folder = File(SharedFileCopy.inbox(context), "camera").apply { mkdirs() }
                     val file = File.createTempFile("Photo-", ".jpg", folder)
                     cameraPath = file.path
                     camera.launch(cameraUri(file))
