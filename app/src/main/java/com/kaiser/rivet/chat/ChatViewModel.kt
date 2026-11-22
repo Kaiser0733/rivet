@@ -59,6 +59,7 @@ import com.kaiser.rivet.agent.SpendCaps
 import com.kaiser.rivet.agent.SpendGuard
 import com.kaiser.rivet.agent.SlashCommands
 import com.kaiser.rivet.agent.BuiltInSlash
+import com.kaiser.rivet.agent.lineForSession
 import com.kaiser.rivet.agent.parseGoalCommand
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.InternalContext
@@ -780,7 +781,7 @@ class ChatViewModel private constructor(
         val externalGoal = knownGoalMarkdown != null && projectMarkdown != knownGoalMarkdown
         knownGoalMarkdown = projectMarkdown
         _uiState.update {
-            it.copy(goal = goal, goalLine = goal?.calmLine(),
+            it.copy(goal = goal, goalLine = (goal.takeIf { it?.sessionId == sessionId } ?: sessionGoal).lineForSession(sessionId),
                 goalAttachOffer = workspace != null && projectGoal == null && sessionGoal != null,
                 memoryMarkdown = memoryMarkdown,
                 memoryLines = MemoryFormat.facts(memoryMarkdown),
@@ -1037,7 +1038,7 @@ class ChatViewModel private constructor(
                         sessionGoal = if (files == null) next else sessionGoal
                         if (files != null) knownGoalMarkdown = GoalDocument.render(next)
                         goal = next
-                        _uiState.update { it.copy(goal = next, goalLine = next.calmLine(),
+                        _uiState.update { it.copy(goal = next, goalLine = next.lineForSession(it.currentSessionId),
                             notice = "Goal set: ${next.text.take(160)}", error = null,
                             commandAckCount = it.commandAckCount + 1) }
                     }
@@ -1069,7 +1070,7 @@ class ChatViewModel private constructor(
                         sessionGoal = if (files == null) next.takeIf { state != GoalState.Dropped } else sessionGoal
                         if (files != null) knownGoalMarkdown = renderedGoalOrNull(projectGoal)
                         val shown = if (state == GoalState.Dropped) null else next
-                        _uiState.update { it.copy(goal = shown, goalLine = shown?.calmLine(),
+                        _uiState.update { it.copy(goal = shown, goalLine = shown.lineForSession(it.currentSessionId),
                             notice = when (state) {
                                 GoalState.Paused -> "Goal paused."
                                 GoalState.Active -> "Goal resumed."
@@ -1287,7 +1288,7 @@ class ChatViewModel private constructor(
                 projectState = files
                 projectGoal = attached
                 sessionGoal = null
-                _uiState.update { it.copy(goal = attached, goalLine = attached.calmLine(),
+                _uiState.update { it.copy(goal = attached, goalLine = attached.lineForSession(it.currentSessionId),
                     goalAttachOffer = false, notice = "Goal attached to this project.") }
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
@@ -1387,7 +1388,8 @@ class ChatViewModel private constructor(
             memoryMarkdown = memory
             _uiState.update {
                 if (it.goal == goal && it.memoryMarkdown == memory && !externalGoal) it
-                else it.copy(goal = goal, goalLine = goal?.calmLine(),
+                else it.copy(goal = goal, goalLine = (project.takeIf { project?.sessionId == it.currentSessionId } ?: session)
+                    .lineForSession(it.currentSessionId),
                     memoryMarkdown = memory, memoryLines = MemoryFormat.facts(memory),
                     goalAttachOffer = project == null && session != null,
                     notice = if (externalGoal) "Goal changed outside Rivet; reloaded." else it.notice)
@@ -1625,7 +1627,7 @@ class ChatViewModel private constructor(
         projectGoal = if (files != null) next else projectGoal
         sessionGoal = if (files == null) next else sessionGoal
         if (files != null) knownGoalMarkdown = GoalDocument.render(next)
-        _uiState.update { it.copy(goal = next, goalLine = next.calmLine()) }
+        _uiState.update { it.copy(goal = next, goalLine = next.lineForSession(it.currentSessionId)) }
     }
 
     // The model refused an effort. Saving the chosen level and running the same prompt
@@ -3321,8 +3323,8 @@ class ChatViewModel private constructor(
                     undoCheckpointId = if (keepUndo) project.undoCheckpointId else null,
                     lastTurnFiles = if (keepUndo) project.lastTurnFiles else emptyList(),
                     lastTurnFileCount = if (keepUndo) project.lastTurnFileCount else 0,
-                    goal = project.goal, goalLine = project.goalLine,
-                    goalAttachOffer = project.goalAttachOffer,
+                    goal = project.goal, goalLine = project.goal.lineForSession(selected.id),
+                    goalAttachOffer = project.goalAttachOffer && project.goal?.sessionId == selected.id,
                     memoryMarkdown = project.memoryMarkdown, memoryLines = project.memoryLines,
                     run = project.run, runRecovery = project.runRecovery,
                     spendCaps = spendStore.caps(), userPricePerMillionUsd = spendStore.userPricePerMillionUsd(),

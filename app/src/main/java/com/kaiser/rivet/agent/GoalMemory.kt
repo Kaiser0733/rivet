@@ -281,3 +281,6 @@ internal object GoalMemoryContext {
             content = text, digest = digest).event())
     }
 }
+
+internal fun GoalDocument?.lineForSession(currentSessionId: String?): String? =
+    this?.takeIf { it.sessionId == currentSessionId && it.state != GoalState.Dropped }?.calmLine()
