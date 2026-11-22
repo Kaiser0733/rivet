@@ -43,6 +43,30 @@ class CodingSessionsTest {
         AgentSessionStore(app).clear()
     }
 
+    @Test fun archiveCanFindRawFactsAndOldCheckpointLayers() = runBlocking {
+        val store = CodingSessions(app)
+        store.load()
+        val id = store.create(null).id!!
+        val first = AgentMessage.user("The code word is monsoon-42 and the number is 5000.")
+        val second = AgentMessage.user("Tell a story.")
+        val history = listOf(first, AgentMessage.assistant("Got it."), second)
+        store.save(history, false)
+        val compacted = store.compact(history, listOf(second), "Banyan is the old topic.", null, id)
+        store.compact(compacted, listOf(second), "Cedar is the new topic.", null, id)
+        val reopened = CodingSessions(app)
+        val hits = reopened.searchArchive(id, listOf("code word"))
+        assertEquals(1, hits.first().turn)
+        assertTrue(hits.first().match.contains("monsoon-42"))
+        assertTrue(hits.first().match.contains("5000"))
+        assertTrue(hits.first().nearby.any { it.contains("Tell a story") })
+        assertEquals("Checkpoint", reopened.searchArchive(id, listOf("banyan")).single().source)
+        assertEquals("Checkpoint", reopened.searchArchive(id, listOf("cedar")).single().source)
+        reopened.pinArchive(id, hits)
+        assertTrue(CodingSessions(app).archiveTail(id).contains("monsoon-42"))
+        val another = reopened.create(null).id!!
+        assertTrue(reopened.searchArchive(another, listOf("code word")).isEmpty())
+    }
+
     @Test fun meterAnchorsACompactedProjectionToTheLastMatchingReport() = runBlocking {
         val sessions = CodingSessions(app)
         val id = sessions.load().id!!

@@ -12,6 +12,7 @@ internal data class TaskCheckpoint(
     @SerialName("STATE") val state: List<String> = emptyList(),
     @SerialName("OPEN THREADS") val openThreads: List<String> = emptyList(),
     @SerialName("EXACT VALUES") val exactValues: List<String> = emptyList(),
+    @SerialName("ARCHIVE INDEX") val archiveIndex: List<String> = emptyList(),
 ) {
     fun merge(update: TaskCheckpoint, pinnedGoal: String): TaskCheckpoint {
         val threads = safeItems(update.openThreads)
@@ -25,6 +26,7 @@ internal data class TaskCheckpoint(
             openThreads = (openThreads.filterNot { it in resolved } +
                 threads.filterNot { it.startsWith(RESOLVED) }).distinct(),
             exactValues = (exactValues + safeItems(update.exactValues)).distinct(),
+            archiveIndex = (safeItems(update.archiveIndex) + archiveIndex).distinct().take(8),
         )
     }
 
@@ -51,6 +53,7 @@ internal data class TaskCheckpoint(
         section("STATE", state)
         section("OPEN THREADS", openThreads)
         section("EXACT VALUES", exactValues)
+        section("ARCHIVE INDEX (search words)", archiveIndex)
     }
 
     private fun mergeItems(previous: List<String>, updates: List<String>): List<String> {

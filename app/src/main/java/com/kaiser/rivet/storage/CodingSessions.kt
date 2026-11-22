@@ -7,6 +7,9 @@ import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
 import com.kaiser.rivet.agent.AgentContext
+import com.kaiser.rivet.agent.ArchiveRecall
+import com.kaiser.rivet.agent.ArchiveWindow
+import com.kaiser.rivet.agent.TaskCheckpoint
 import com.kaiser.rivet.agent.AgentToolDefinition
 import com.kaiser.rivet.agent.ContextBudget
 import com.kaiser.rivet.agent.validatedContext
@@ -150,6 +153,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 db.insertOrThrow("events", null, ContentValues().apply {
                     put("session_id", id)
                     put("payload", payload)
+                    put("created_at", System.currentTimeMillis())
                 })
                 db.insertOrThrow("active_events", null, ContentValues().apply {
                     put("session_id", id); put("payload", payload)
@@ -427,6 +431,100 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             (selected.interrupted && hasUnfinishedTurn(currentMessages))
         val messages = recoverInterrupted(db, active, interrupted, currentMessages, summaryBytes)
         AgentSession(messages, interrupted, active, selected.title, selected.workspaceId, summary)
+    }
+
+    suspend fun searchArchive(id: String, queries: List<String>, excludeLastUser: Boolean = false):
+        List<ArchiveWindow> = onDatabase { db ->
+        val expression = ArchiveRecall.matchQuery(queries) ?: return@onDatabase emptyList()
+        indexArchive(db, id)
+        val lastTurn = if (!excludeLastUser) Int.MAX_VALUE else db.rawQuery(
+            "SELECT COALESCE(MAX(CAST(turn AS INTEGER)),0) FROM archive_fts WHERE session_id=? AND source='You'",
+            arrayOf(id),
+        ).use { it.moveToFirst(); it.getInt(0) - 1 }
+        data class Hit(val source: String, val turn: Int, val at: Long, val text: String)
+        val hits = db.rawQuery(
+            "SELECT source,CAST(turn AS INTEGER),CAST(happened_at AS INTEGER),body FROM archive_fts " +
+                "WHERE body MATCH ? AND session_id=? AND CAST(turn AS INTEGER)<=? " +
+                "ORDER BY CAST(turn AS INTEGER) DESC, CAST(happened_at AS INTEGER) DESC, " +
+                "CAST(source_id AS INTEGER) DESC LIMIT 12",
+            arrayOf(expression, id, lastTurn.toString()),
+        ).use { cursor -> buildList {
+            while (cursor.moveToNext()) add(Hit(cursor.getString(0), cursor.getInt(1), cursor.getLong(2), cursor.getString(3)))
+        } }
+        hits.distinctBy { it.source to it.turn }.take(3).map { hit ->
+            val nearby = db.rawQuery(
+                "SELECT CAST(turn AS INTEGER),source,body FROM archive_fts WHERE session_id=? " +
+                    "AND source IN ('You','Rivet') AND CAST(turn AS INTEGER) BETWEEN ? AND ? " +
+                    "ORDER BY CAST(turn AS INTEGER), CAST(source_id AS INTEGER) LIMIT 20",
+                arrayOf(id, (hit.turn - 2).toString(), minOf(hit.turn + 2, lastTurn).toString()),
+            ).use { cursor -> buildList {
+                while (cursor.moveToNext()) {
+                    add("Turn ${cursor.getInt(0)}, ${cursor.getString(1)}: ${cursor.getString(2).take(260)}")
+                }
+            } }
+            ArchiveWindow(hit.source, hit.turn, hit.at, ArchiveRecall.sentence(hit.text, queries), nearby)
+        }
+    }
+
+    private fun indexArchive(db: SQLiteDatabase, id: String) {
+        db.beginTransaction()
+        try {
+            val last = db.rawQuery(
+                "SELECT COALESCE(MAX(CAST(source_id AS INTEGER)),0),COALESCE(MAX(CAST(turn AS INTEGER)),0) " +
+                    "FROM archive_fts WHERE session_id=? AND source IN ('You','Rivet')", arrayOf(id),
+            ).use { it.moveToFirst(); it.getLong(0) to it.getInt(1) }
+            var turn = last.second
+            db.rawQuery("SELECT id,payload,created_at FROM events WHERE session_id=? AND id>? ORDER BY id",
+                arrayOf(id, last.first.toString())).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val message = decode(cursor.getString(1))
+                    val source = when (message.role) {
+                        AgentRole.User -> { turn++; "You" }
+                        AgentRole.Assistant -> "Rivet"
+                        else -> continue
+                    }
+                    if (message.internalContext != null || message.text.isBlank()) continue
+                    insertArchive(db, id, source, cursor.getLong(0), turn, cursor.getLong(2), message.text)
+                }
+            }
+            db.rawQuery("SELECT id,through_event_id,summary,created_at FROM compactions WHERE session_id=? " +
+                "AND id > COALESCE((SELECT MAX(CAST(source_id AS INTEGER)) FROM archive_fts " +
+                "WHERE session_id=? AND source='Checkpoint'),0) ORDER BY id", arrayOf(id, id)).use { cursor ->
+                while (cursor.moveToNext()) {
+                    val through = cursor.getLong(1)
+                    val endTurn = db.rawQuery(
+                        "SELECT COALESCE(MAX(CAST(turn AS INTEGER)),0) FROM archive_fts WHERE session_id=? " +
+                            "AND source='You' AND CAST(source_id AS INTEGER)<=?",
+                        arrayOf(id, through.toString()),
+                    ).use { it.moveToFirst(); it.getInt(0) }
+                    val summary = cursor.getString(2)
+                    insertArchive(db, id, "Checkpoint", cursor.getLong(0), endTurn, cursor.getLong(3),
+                        TaskCheckpoint.parse(summary)?.modelText() ?: summary)
+                }
+            }
+            db.setTransactionSuccessful()
+        } finally { db.endTransaction() }
+    }
+
+    private fun insertArchive(db: SQLiteDatabase, id: String, source: String, sourceId: Long,
+                              turn: Int, at: Long, body: String) {
+        db.execSQL("INSERT INTO archive_fts(session_id,source,source_id,turn,happened_at,body) VALUES(?,?,?,?,?,?)",
+            arrayOf(id, source, sourceId, turn, at, body))
+    }
+
+    suspend fun archiveTail(id: String): String = onDatabase { db ->
+        db.rawQuery("SELECT excerpt FROM archive_pins WHERE session_id=? ORDER BY id", arrayOf(id))
+            .use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) }.joinToString("\n") }
+    }
+
+    suspend fun pinArchive(id: String, windows: List<ArchiveWindow>) = onDatabase { db ->
+        windows.forEach { window ->
+            val line = "Turn ${window.turn} (${window.source}): ${window.match}"
+            if (window.match.isNotBlank()) db.execSQL(
+                "INSERT OR IGNORE INTO archive_pins(session_id,excerpt) VALUES(?,?)", arrayOf(id, line))
+        }
+        db.execSQL("DELETE FROM archive_pins WHERE session_id=? AND id NOT IN " +
+            "(SELECT id FROM archive_pins WHERE session_id=? ORDER BY id DESC LIMIT 8)", arrayOf(id, id))
     }
 
     suspend fun recent(id: String, limit: Int = 100): List<AgentMessage> = onDatabase { db ->
@@ -1112,7 +1210,7 @@ internal object InterruptedTurnRecovery {
     }
 }
 
-private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 7) {
+private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "coding-sessions.db", null, 8) {
     override fun onCreate(db: SQLiteDatabase) {
         db.execSQL("CREATE TABLE sessions (id TEXT PRIMARY KEY, title TEXT NOT NULL, workspace_id TEXT, created_at INTEGER NOT NULL, updated_at INTEGER NOT NULL, interrupted INTEGER NOT NULL DEFAULT 0, summary TEXT NOT NULL DEFAULT '', active_generation INTEGER NOT NULL DEFAULT 0, pinned INTEGER NOT NULL DEFAULT 0)")
         db.execSQL("CREATE TABLE events (id INTEGER PRIMARY KEY AUTOINCREMENT, session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, payload TEXT NOT NULL)")
@@ -1124,6 +1222,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
         createCompaction(db)
         addProjectionHashes(db)
         createContextAttempts(db)
+        createArchive(db)
     }
 
     override fun onConfigure(db: SQLiteDatabase) {
@@ -1132,7 +1231,7 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
     }
 
     override fun onUpgrade(db: SQLiteDatabase, oldVersion: Int, newVersion: Int) {
-        if (oldVersion < 1 || newVersion != 7) throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
+        if (oldVersion < 1 || newVersion != 8) throw IllegalStateException("Unsupported session database upgrade $oldVersion to $newVersion")
         if (oldVersion == 1) createUsage(db)
         if (oldVersion <= 2) {
             db.execSQL("ALTER TABLE sessions ADD COLUMN summary TEXT NOT NULL DEFAULT ''")
@@ -1155,6 +1254,21 @@ private class SessionDatabase(context: Context) : SQLiteOpenHelper(context, "cod
         }
         if (oldVersion <= 5) db.execSQL("ALTER TABLE sessions ADD COLUMN pinned INTEGER NOT NULL DEFAULT 0")
         if (oldVersion <= 6) addMeterUsageColumn(db)
+        if (oldVersion <= 7) createArchive(db)
+    }
+
+    private fun createArchive(db: SQLiteDatabase) {
+        db.execSQL("ALTER TABLE events ADD COLUMN created_at INTEGER NOT NULL DEFAULT 0")
+        db.execSQL("CREATE VIRTUAL TABLE archive_fts USING fts4(session_id,source,source_id,turn,happened_at,body,tokenize=unicode61)")
+        db.execSQL("CREATE TABLE archive_pins (id INTEGER PRIMARY KEY AUTOINCREMENT, " +
+            "session_id TEXT NOT NULL REFERENCES sessions(id) ON DELETE CASCADE, " +
+            "excerpt TEXT NOT NULL, UNIQUE(session_id,excerpt))")
+        db.execSQL("CREATE TRIGGER unindex_event AFTER DELETE ON events BEGIN " +
+            "DELETE FROM archive_fts WHERE session_id=OLD.session_id AND source IN ('You','Rivet') " +
+            "AND CAST(source_id AS INTEGER)=OLD.id; END")
+        db.execSQL("CREATE TRIGGER unindex_checkpoint AFTER DELETE ON compactions BEGIN " +
+            "DELETE FROM archive_fts WHERE session_id=OLD.session_id AND source='Checkpoint' " +
+            "AND CAST(source_id AS INTEGER)=OLD.id; END")
     }
 
     private fun createUsage(db: SQLiteDatabase) {
