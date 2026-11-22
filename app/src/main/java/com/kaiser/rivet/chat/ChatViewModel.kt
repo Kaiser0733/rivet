@@ -2343,7 +2343,7 @@ class ChatViewModel private constructor(
                 recordSkillScriptApproval = skillScriptApprovals::approve,
             )
             try {
-                browser.beginAgentRun()
+                browser.beginAgentRun(sessionId)
                 val runLoop: suspend () -> AgentRunResult = {
                     loop.run(
                         initial = durable,
@@ -3009,6 +3009,7 @@ class ChatViewModel private constructor(
     }
 
     fun cancel() {
+        browser.dismissChatPreview()
         userCancelledTicket = generation
         approvals.cancel()
         sendJob?.cancel()

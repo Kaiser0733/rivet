@@ -141,6 +141,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
+import com.kaiser.rivet.browser.BrowserDrivingPolicy
 import com.kaiser.rivet.workspace.FilePreviewResult
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
@@ -496,8 +497,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         browser: com.kaiser.rivet.browser.BrowserSession,
                         modifier: Modifier = Modifier) {
     val browserState by browser.state.collectAsState()
-    val showBrowserCard = browserState.watchVisible && browserState.rendererVisible &&
-        !browserState.visible && !browserState.teardownRequested && browserState.handoff == null
+    val showBrowserCard = BrowserDrivingPolicy.chatPreviewVisible(
+        browserState.watchVisible, browserState.rendererVisible && !browserState.teardownRequested,
+        browserState.visible, browserState.handoff != null, browserState.watchSessionId == state.currentSessionId,
+    )
     val browserKeys = remember(state.messages) {
         state.messages.asSequence().flatMap { it.toolCalls.asSequence() }
             .filter { it.name.startsWith("browser_") }

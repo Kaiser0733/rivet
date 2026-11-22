@@ -101,6 +101,7 @@ data class BrowserUiState(
     val pageReady: Boolean = false,
     val readerMode: Boolean = false,
     val watchVisible: Boolean = false,
+    val watchSessionId: String? = null,
     val visualScreenshot: String? = null,
     val tier: BrowserTier = BrowserTier.Normal,
     val capMb: Int = 250,
@@ -353,9 +354,14 @@ class BrowserSession(
         }
     }
 
-    fun beginAgentRun() {
-        _state.update { it.copy(agentRunActive = true, agentRendererUse = false, watchVisible = false,
+    fun beginAgentRun(sessionId: String? = null) {
+        _state.update { it.copy(agentRunActive = true, agentRendererUse = false,
+            watchVisible = it.watchVisible && it.watchSessionId == sessionId, watchSessionId = sessionId,
             driving = BrowserDriving.Agent) }
+    }
+
+    internal fun dismissChatPreview() {
+        _state.update { it.copy(watchVisible = false) }
     }
 
     fun endAgentRun() {

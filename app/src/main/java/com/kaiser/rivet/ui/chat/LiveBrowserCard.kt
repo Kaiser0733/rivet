@@ -40,7 +40,13 @@ internal fun LiveBrowserCard(browser: BrowserSession, state: BrowserUiState, wor
     Surface(onClick = browser::watch, modifier = Modifier.fillMaxWidth(),
         shape = MaterialTheme.shapes.small, color = MaterialTheme.colorScheme.surfaceContainerLow) {
         Column(Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
-            Text(if (working) "Browsing…" else if (state.error != null) "Browser paused" else "Browser",
+            val label = when {
+                working -> "Browsing…"
+                state.error != null -> "Browser paused"
+                state.pageReady -> "Page ready"
+                else -> "Browser"
+            }
+            Text(label,
                 style = MaterialTheme.typography.labelMedium,
                 color = MaterialTheme.colorScheme.primary)
             Text(state.title.ifBlank { state.url }, maxLines = 1, overflow = TextOverflow.Ellipsis,
