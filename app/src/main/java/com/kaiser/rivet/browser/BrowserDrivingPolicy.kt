@@ -21,10 +21,6 @@ object BrowserDrivingPolicy {
                     watchVisible: Boolean, screenVisible: Boolean): Boolean =
         agentRunActive && agentVisualActive && watchVisible && !screenVisible
 
-    internal fun chatPreviewVisible(watch: Boolean, rendererAlive: Boolean, browserVisible: Boolean,
-                                    handoff: Boolean, ownsSession: Boolean): Boolean =
-        watch && rendererAlive && !browserVisible && !handoff && ownsSession
-
     fun mayAgentAct(agentRunActive: Boolean, agentVisualActive: Boolean,
                     driving: BrowserDriving): Boolean =
         !agentRunActive || !agentVisualActive || driving == BrowserDriving.Agent

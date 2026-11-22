@@ -43,22 +43,23 @@ class BrowserTools(private val session: BrowserSession) {
                 )
             }
         }
-        return prepare(call, visionSupport)
+        return prepare(call, visionSupport) { lease?.tryAcquireRenderer(owner) != false }
     }
 
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool? =
-        prepare(call) { VisionSupport.Unknown }
+        prepare(call, { VisionSupport.Unknown }) { true }
 
     private suspend fun prepare(
         call: AgentToolCall,
         visionSupport: () -> VisionSupport,
+        claimRenderer: () -> Boolean,
     ): PreparedAgentTool? {
         if (call.name !in NAMES) return null
         return try {
             val args = runCatching { json.parseToJsonElement(call.arguments).jsonObject }
                 .getOrElse { throw BrowserFailure("invalid_arguments", "The browser tool arguments are not JSON.") }
             when (call.name) {
-                "browser_open" -> prepareOpen(call, args)
+                "browser_open" -> prepareOpen(call, args, claimRenderer)
                 "browser_eval" -> readOnly(call) { eval(call, args) }
                 "browser_console" -> readOnly(call) { console(call, args) }
                 "browser_key" -> prepareKey(call, args)
@@ -85,7 +86,11 @@ class BrowserTools(private val session: BrowserSession) {
         }
     }
 
-    private suspend fun prepareOpen(call: AgentToolCall, args: JsonObject): PreparedAgentTool {
+    private suspend fun prepareOpen(
+        call: AgentToolCall,
+        args: JsonObject,
+        claimRenderer: () -> Boolean,
+    ): PreparedAgentTool {
         val previewEntry = args.string("preview_entry")
         val url = if (previewEntry.isNotBlank()) {
             val root = args.string("preview_root")
@@ -97,20 +102,7 @@ class BrowserTools(private val session: BrowserSession) {
         return readOnly(call) {
             val normalized = BrowserOpenPreflight.normalize(url)
             val preview = previewEntry.isNotBlank() || BrowserAuthGuard.isLoopback(normalized)
-            val result = if (preview) {
-                session.openVisual(normalized, userInitiated = false, projectPreview = true, agentAction = true)
-            } else {
-                val read = session.openText(normalized, args.bool("new_window"), projectPreview = false)
-                if (!read.handoff && session.state.value.agentRunActive &&
-                    BrowserGovernor.canOpenRenderer(read.tier, interaction = false)) {
-                    try {
-                        session.openVisual(read.url, userInitiated = false, agentAction = true)
-                    } catch (_: BrowserFailure) {
-                        // The reader result still works when the page cannot paint.
-                    }
-                }
-                read
-            }
+            val result = session.openForAgent(normalized, args.bool("new_window"), preview, claimRenderer)
             value(call, buildJsonObject {
                 put("url", result.url)
                 put("title", result.title)
@@ -619,7 +611,7 @@ class BrowserTools(private val session: BrowserSession) {
 
         val definitions = listOf(
             AgentToolDefinition("browser_open",
-                "Open a public http/https page in the invisible text browser. This never shows browser UI and never starts a renderer. For an agent-built page, pass preview_root/preview_entry instead of url to start the existing local preview server. file:// is not accepted. Sign-in and checkout surfaces stop for handoff.",
+                "Open a public http/https page in Rivet. Browser progress appears in chat automatically, with a visual preview when available. For an agent-built page, pass preview_root/preview_entry instead of url to start the existing local preview server. file:// is not accepted. Sign-in and checkout surfaces stop for handoff.",
                 schema(emptyList(), "url" to string, "new_window" to boolean,
                     "preview_root" to string, "preview_entry" to string)),
             AgentToolDefinition("browser_eval",
@@ -662,7 +654,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "Read browser health without starting a renderer: alive/healthy, renderer or reader mode, URL/title, tier and tier_allows, viewport, JS errors, user-driving and handoff flags. Tier legend: normal | strictdiet | readerfirst | norenderer; loopback previews are cap-exempt. A 1x1 viewport hint names browser_reset(reopen=true).",
                 schema(emptyList())),
             AgentToolDefinition("browser_read",
-                "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. Hidden DOM text is excluded by default; pass visible_only=false only when the user explicitly needs it. If the page needs a DOM, Rivet starts a quiet visual session; use interaction tools to watch it.",
+                "Read the current page as clean chunked text in the invisible text browser. Pass chunk=0 first, then increment. Never returns the whole page at once. Hidden DOM text is excluded by default; pass visible_only=false only when the user explicitly needs it. If the page needs a DOM, Rivet starts a visual session when available.",
                 schema(emptyList(), "chunk" to integer, "visible_only" to boolean)),
             AgentToolDefinition("browser_find",
                 "Find text in the current page's reader text and return bounded snippets with offsets.",
@@ -720,16 +712,13 @@ class BrowserDrivingLease {
         return false
     }
 
-    fun tryAcquire(owner: String, call: AgentToolCall): Boolean {
-        if (!isDrivingCall(call)) return true
-        synchronized(lock) {
-            val current = holder
-            if (current == null || current == owner) {
-                holder = owner
-                return true
-            }
-            return false
-        }
+    fun tryAcquire(owner: String, call: AgentToolCall): Boolean =
+        !isDrivingCall(call) || tryAcquireRenderer(owner)
+
+    internal fun tryAcquireRenderer(owner: String): Boolean = synchronized(lock) {
+        if (holder != null && holder != owner) return@synchronized false
+        holder = owner
+        true
     }
 
     fun release(owner: String) {

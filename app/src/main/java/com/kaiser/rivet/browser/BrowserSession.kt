@@ -36,6 +36,7 @@ import java.io.File
 import java.io.FileOutputStream
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
@@ -85,6 +86,12 @@ internal fun shouldClearPaintError(
 ): Boolean = verdict == PaintVerdict.Painted && state.error == PAINT_WATCHDOG_ERROR &&
     state.url == sampledUrl
 
+class BrowserChatPage internal constructor(
+    val url: String,
+    val title: String = "",
+    val excerpt: String = "",
+)
+
 data class BrowserUiState(
     /** The full-screen visual browser is on screen. */
     val visible: Boolean = false,
@@ -102,6 +109,8 @@ data class BrowserUiState(
     val readerMode: Boolean = false,
     val watchVisible: Boolean = false,
     val watchSessionId: String? = null,
+    val chatPage: BrowserChatPage? = null,
+    val chatBrowserWorking: Boolean = false,
     val visualScreenshot: String? = null,
     val tier: BrowserTier = BrowserTier.Normal,
     val capMb: Int = 250,
@@ -128,7 +137,10 @@ data class BrowserUiState(
     val fidelity: BrowserFidelity? = null,
     val modal: BrowserModalState? = null,
 ) {
-    /** Derived, never written: both the button and the banner/card read this. */
+    internal fun chatPreviewVisible(chatId: String?): Boolean =
+        chatPage != null && chatId != null && watchSessionId == chatId && !visible && handoff == null
+
+    /** Derived, never written: both the button and the banner read this. */
     val agentVisualActive: Boolean
         get() = BrowserDrivingPolicy.visualActive(
             agentRunActive, agentRendererUse, rendererVisible && !teardownRequested)
@@ -357,29 +369,40 @@ class BrowserSession(
     fun beginAgentRun(sessionId: String? = null) {
         _state.update { it.copy(agentRunActive = true, agentRendererUse = false,
             watchVisible = it.watchVisible && it.watchSessionId == sessionId, watchSessionId = sessionId,
-            driving = BrowserDriving.Agent) }
+            chatPage = if (it.watchSessionId == sessionId) it.chatPage else null,
+            chatBrowserWorking = false, driving = BrowserDriving.Agent) }
     }
 
     internal fun dismissChatPreview() {
-        _state.update { it.copy(watchVisible = false) }
+        _state.update { it.copy(watchVisible = false, chatPage = null, chatBrowserWorking = false) }
+    }
+
+    private fun markChatBrowserWork(page: BrowserChatPage? = null) {
+        _state.update {
+            val target = page ?: it.chatPage
+            if (!it.agentRunActive || it.watchSessionId == null || target == null) it
+            else it.copy(chatPage = target, chatBrowserWorking = true)
+        }
     }
 
     fun endAgentRun() {
         releaseJob?.cancel()
         releaseJob = null
         _state.update { it.copy(agentRunActive = false, agentRendererUse = false,
-            driving = BrowserDriving.Agent) }
+            chatBrowserWorking = false, driving = BrowserDriving.Agent) }
     }
 
     /** Human open: always the full-screen visual browser, never the reader face. */
-    fun userOpen() {
+    fun userOpen() = userOpen(activeUrl.ifBlank { _state.value.url })
+
+    private fun userOpen(target: String) {
         idleJob?.cancel(); idleJob = null
         idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
         unparkRenderer()
         _state.update { it.copy(visible = true, readerMode = false, error = null) }
-        val target = activeUrl.ifBlank { _state.value.url }
-        if (target.isNotBlank() && (renderer == null || _state.value.teardownRequested)) {
+        if (target.isNotBlank() &&
+            (renderer == null || _state.value.teardownRequested || _state.value.url != target)) {
             scope.launch {
                 runCatching { openVisual(target, userInitiated = true) }.onFailure { err ->
                     _state.update { state ->
@@ -404,10 +427,27 @@ class BrowserSession(
         } else userOpen()
     }
 
+    internal fun openChatBrowser() {
+        val current = _state.value
+        val page = current.chatPage ?: return
+        if (current.rendererVisible && !current.teardownRequested && current.url == page.url) {
+            watch()
+        } else if (page.url == activeUrl && !BrowserGovernor.canOpenRenderer(budget.tier, interaction = true)) {
+            _state.update { it.copy(visible = true, url = page.url, title = page.title, error = null) }
+            scope.launch {
+                try { showReader() }
+                catch (failure: BrowserFailure) { showError(failure) }
+            }
+        } else {
+            userOpen(page.url)
+        }
+    }
+
     /** Closing the screen hides the chat card and lets the visual session idle-expire. */
     fun close() {
         unparkRenderer()
-        _state.update { it.copy(visible = false, readerMode = false, watchVisible = false) }
+        _state.update { it.copy(visible = false, readerMode = false, watchVisible = false,
+            chatPage = null, chatBrowserWorking = false) }
         idleArming.onHidden()
         armIdle()
     }
@@ -476,6 +516,7 @@ class BrowserSession(
         _state.update {
             it.copy(visible = false, readerMode = false,
                 visualScreenshot = null, watchVisible = false, pageReady = false, driving = BrowserDriving.Agent,
+                chatPage = null, chatBrowserWorking = false,
                 agentRendererUse = false, budgetCloseAction = false,
                 handoff = null, authNotice = null, downloadPrompt = null, loadValveNotice = null)
         }
@@ -609,6 +650,48 @@ class BrowserSession(
             .minByOrNull { it.value.lastUsedAt }?.key ?: return
         windows.remove(farthest)
         _state.update { it.copy(windows = windowSummaries()) }
+    }
+
+    internal suspend fun openForAgent(
+        url: String,
+        newWindow: Boolean,
+        projectPreview: Boolean,
+        claimRenderer: () -> Boolean,
+    ): BrowserOpenResult {
+        val page = BrowserChatPage(url)
+        markChatBrowserWork(page)
+        try {
+            if (projectPreview) {
+                return openVisual(url, userInitiated = false, newWindow = newWindow,
+                    projectPreview = true, agentAction = true)
+            }
+
+            val result = openText(url, newWindow)
+            val excerpt = reader?.text.orEmpty().trim().take(320)
+            _state.update {
+                if (it.chatPage !== page) it
+                else it.copy(chatPage = BrowserChatPage(result.url, result.title, excerpt))
+            }
+            if (!result.handoff && _state.value.agentRunActive &&
+                BrowserGovernor.canTakeScreenshot(result.tier) && claimRenderer()) {
+                try {
+                    openVisual(result.url, userInitiated = false, agentAction = true)
+                } catch (_: BrowserFailure) { }
+            }
+            return result
+        } catch (failure: BrowserFailure) {
+            dismissUnfinishedChatPreview(page)
+            throw failure
+        } catch (cancelled: CancellationException) {
+            dismissUnfinishedChatPreview(page)
+            throw cancelled
+        }
+    }
+
+    private fun dismissUnfinishedChatPreview(page: BrowserChatPage) {
+        _state.update {
+            if (it.chatPage !== page) it else it.copy(chatPage = null, chatBrowserWorking = false)
+        }
     }
 
     suspend fun open(rawUrl: String, newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
@@ -893,6 +976,7 @@ class BrowserSession(
     }
 
     suspend fun reset(reopen: Boolean = true, clearStorage: Boolean = false): BrowserResetResult {
+        if (!reopen) dismissChatPreview()
         val previousUrl = activeUrl.ifBlank { _state.value.url }
         pendingRestart = null
         postLoadBudgetJob?.cancel(); postLoadBudgetJob = null
@@ -966,6 +1050,7 @@ class BrowserSession(
             if (budget.tier == BrowserTier.NoRenderer) {
                 detail = "Renderer reset succeeded, but memory tier norenderer blocks reopening the renderer. Use browser_read or open in the phone's browser."
             } else {
+                markChatBrowserWork(BrowserChatPage(previousUrl))
                 val result = openVisual(previousUrl, userInitiated = false,
                     projectPreview = BrowserAuthGuard.isLoopback(previousUrl), agentAction = true)
                 reopened = true
@@ -1321,6 +1406,7 @@ class BrowserSession(
     """.trimIndent()
 
     suspend fun read(chunk: Int = 0, visibleOnly: Boolean = true): BrowserReadResult = actionLock.withLock {
+        markChatBrowserWork()
         val document = if (renderer != null && activeUrl.isNotBlank()) {
             // A live DOM may have changed since the last read; never serve a stale cache
             // over it just because the URL stayed the same.
@@ -1348,6 +1434,7 @@ class BrowserSession(
     }
 
     suspend fun find(text: String): List<ReaderHit> = actionLock.withLock {
+        markChatBrowserWork()
         val document = if (renderer != null && activeUrl.isNotBlank()) {
             readRenderedDocument(visibleOnly = true)
         } else {
@@ -2124,6 +2211,7 @@ class BrowserSession(
                 url = "", title = "", readerText = "", readerMode = false,
                 chunkIndex = 0, chunkCount = 0, chunkAnchor = "",
                 rendererVisible = false, pageReady = false, visualScreenshot = null,
+                watchVisible = false, chatPage = null, chatBrowserWorking = false,
                 handoff = null, authNotice = null)
         }
     }
@@ -2135,6 +2223,7 @@ class BrowserSession(
     }
 
     fun clearBrowserData() {
+        dismissChatPreview()
         resolvePageModal()
         CookieManager.getInstance().removeAllCookies(null)
         CookieManager.getInstance().flush()
@@ -2545,6 +2634,12 @@ class BrowserSession(
             pageFinished?.complete(Unit)
             pageFinished = null
             _state.update { it.copy(url = actual, title = activeTitle,
+                chatPage = it.chatPage?.let { page ->
+                    if (page.url == it.url && actual != "about:blank") {
+                        if (actual == page.url) BrowserChatPage(actual, activeTitle.ifBlank { page.title }, page.excerpt)
+                        else BrowserChatPage(actual, activeTitle)
+                    } else page
+                },
                 mode = BrowserMode.Renderer, rendererVisible = true, pageReady = true,
                 fidelity = BrowserFidelity.Reloaded, windows = windowSummaries(), activeWindowId = activeWindowId) }
             refreshBudget()
@@ -2682,6 +2777,7 @@ class BrowserSession(
                     "The visual browser is resetting. Try again in a moment.")
             }
         }
+        if (agentAction) markChatBrowserWork()
         _state.update { it.copy(rendererVisible = true,
             watchVisible = it.watchVisible || showWatch || (agentAction && it.agentRunActive),
             agentRendererUse = it.agentRendererUse || agentAction) }
@@ -2783,13 +2879,14 @@ class BrowserSession(
     /** A small, read-only frame of the same WebView owned by BrowserHost. */
     internal fun chatPreviewFrame(): Bitmap? {
         val state = _state.value
-        if (!state.watchVisible || state.teardownRequested || !state.pageReady ||
-            state.handoff != null || !BrowserGovernor.canTakeScreenshot(state.tier)) return null
+        if (state.chatPage?.url != state.url || state.teardownRequested || !state.pageReady ||
+            state.handoff != null || state.error != null || !BrowserGovernor.canTakeScreenshot(state.tier)) return null
         val view = renderer ?: return null
         if (view.width == 0 || view.height == 0) return null
-        val scale = minOf(480f / view.width, 320f / view.height, 1f)
+        val scale = minOf(960f / view.width, 1f)
+        val height = minOf(view.height.toFloat(), view.width * 9f / 16f)
         val bitmap = Bitmap.createBitmap((view.width * scale).toInt().coerceAtLeast(1),
-            (view.height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
+            (height * scale).toInt().coerceAtLeast(1), Bitmap.Config.ARGB_8888)
         return try {
             val canvas = Canvas(bitmap)
             canvas.scale(scale, scale)
@@ -3121,6 +3218,7 @@ class BrowserSession(
         postLoadBudgetJob = null
         processRegistry.terminateAll(rendererTerminateSupported())
         val message = rendererFailure ?: failure?.let { "The browser view could not be closed cleanly." }
+        if (rendererFailure != null && _state.value.chatPage?.excerpt.isNullOrBlank()) dismissChatPreview()
         rendererFailure = null
         _state.update {
             val combined = listOfNotNull(it.error, message).distinct().joinToString(" ")

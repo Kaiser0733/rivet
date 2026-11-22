@@ -90,6 +90,20 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("CircleShape", sheet)
         self.assertIn("onPick(picker)", sheet)
 
+    def test_browser_card_follows_page_open_even_without_a_renderer(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        self.assertIn("browserState.chatPreviewVisible(state.currentSessionId)", chat)
+        tools = source("browser/BrowserTools.kt")
+        self.assertIn("session.openForAgent(normalized", tools)
+        session = source("browser/BrowserSession.kt")
+        opened = session.split("suspend fun openForAgent(", 1)[1].split("suspend fun open(", 1)[0]
+        self.assertLess(opened.index("markChatBrowserWork(page)"), opened.index("openText("))
+        self.assertIn("chatPage = BrowserChatPage(result.url, result.title, excerpt)", opened)
+        self.assertIn("BrowserGovernor.canTakeScreenshot(result.tier)", opened)
+        card = source("ui/chat/LiveBrowserCard.kt")
+        self.assertIn("ContentScale.Crop", card)
+        self.assertIn('Text("Open browser"', card)
+
     def test_empty_draft_is_reusable_and_absent_from_sidebar_recents(self):
         storage = source("storage/CodingSessions.kt")
         self.assertIn("reuseEmpty: Boolean = false", storage)

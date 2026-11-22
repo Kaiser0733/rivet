@@ -6,12 +6,14 @@ import org.junit.Test
 
 class BrowserPreviewTest {
     @Test fun aProjectPreviewIsOpenedOnTheVisualSurface() {
-        val source = listOf(File("src/main/java/com/kaiser/rivet/browser/BrowserTools.kt"),
-            File("app/src/main/java/com/kaiser/rivet/browser/BrowserTools.kt"))
-            .first { it.isFile }.readText()
-        val open = source.substringAfter("private suspend fun prepareOpen")
+        fun source(name: String) = listOf(File("src/main/java/com/kaiser/rivet/browser/$name.kt"),
+            File("app/src/main/java/com/kaiser/rivet/browser/$name.kt")).first { it.isFile }.readText()
+        val open = source("BrowserTools").substringAfter("private suspend fun prepareOpen")
             .substringBefore("private suspend fun prepareClick")
-        assertTrue(open.contains("session.openVisual"))
-        assertTrue(open.contains("preview"))
+        assertTrue(open.contains("session.openForAgent(normalized, args.bool(\"new_window\"), preview, claimRenderer)"))
+        val sessionOpen = source("BrowserSession").substringAfter("suspend fun openForAgent")
+            .substringBefore("val result = openText")
+        assertTrue(sessionOpen.contains("if (projectPreview)"))
+        assertTrue(sessionOpen.contains("return openVisual("))
     }
 }

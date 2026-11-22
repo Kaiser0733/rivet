@@ -1,6 +1,8 @@
 package com.kaiser.rivet.browser
 
+import com.kaiser.rivet.agent.AgentToolCall
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import kotlinx.serialization.json.jsonPrimitive
@@ -55,6 +57,16 @@ class BrowserToolsTest {
         val shot = BrowserTools.definitions.first { it.name == "browser_shot" }
         assertTrue(shot.description.contains("Vision-capable"))
         assertTrue(shot.description.contains("vision_attached=false"))
+    }
+
+    @Test fun autoPreviewCannotClaimARendererAnotherAgentIsDriving() {
+        val lease = BrowserDrivingLease()
+        val open = AgentToolCall("open", "browser_open", """{"url":"https://example.org"}""")
+        assertTrue(lease.tryAcquireRenderer("coordinator"))
+        assertTrue(lease.tryAcquire("worker", open))
+        assertFalse(lease.tryAcquireRenderer("worker"))
+        lease.release("coordinator")
+        assertTrue(lease.tryAcquireRenderer("worker"))
     }
 
     @Test fun everyDefinitionHasAnObjectSchema() {

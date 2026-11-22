@@ -138,7 +138,6 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
-import com.kaiser.rivet.browser.BrowserDrivingPolicy
 import com.kaiser.rivet.workspace.FilePreviewResult
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
@@ -166,7 +165,6 @@ import com.kaiser.rivet.agent.AgentActivityGroup
 import com.kaiser.rivet.agent.AgentActivityOperation
 import com.kaiser.rivet.agent.ActivityOutcome
 import com.kaiser.rivet.agent.AgentActivityProjection
-import com.kaiser.rivet.agent.AgentToolLifecycle
 import com.kaiser.rivet.agent.AgentToolLifecycleStage
 import com.kaiser.rivet.chat.ChatUiState
 import com.kaiser.rivet.chat.ChatErrorAction
@@ -493,17 +491,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         browser: com.kaiser.rivet.browser.BrowserSession,
                         modifier: Modifier = Modifier) {
     val browserState by browser.state.collectAsState()
-    val showBrowserCard = BrowserDrivingPolicy.chatPreviewVisible(
-        browserState.watchVisible, browserState.rendererVisible && !browserState.teardownRequested,
-        browserState.visible, browserState.handoff != null, browserState.watchSessionId == state.currentSessionId,
-    )
-    val browserKeys = remember(state.messages) {
-        state.messages.asSequence().flatMap { it.toolCalls.asSequence() }
-            .filter { it.name.startsWith("browser_") }
-            .map { AgentToolLifecycle.keyFor(it.id) }.toSet()
-    }
-    val browsing = browserState.agentRunActive && (!browserState.pageReady ||
-        state.toolLifecycle.any { it.correlationKey in browserKeys && it.stage == AgentToolLifecycleStage.Started })
+    val showBrowserCard = browserState.chatPreviewVisible(state.currentSessionId)
     val deliverables = remember(state.messages) { presentedFilesForTurns(state.messages) }
     val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning) {
         val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
@@ -719,7 +707,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         )
                     }
                     if (showBrowserCard) item(key = "live-browser") {
-                        LiveBrowserCard(browser, browserState, browsing)
+                        LiveBrowserCard(browser, browserState)
                     }
                     if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
                         ReasoningRow(
