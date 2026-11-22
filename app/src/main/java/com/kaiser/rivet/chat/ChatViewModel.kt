@@ -49,7 +49,6 @@ import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.ArchiveRecall
 import com.kaiser.rivet.agent.ArchiveWindow
 import com.kaiser.rivet.agent.AgentResponse
-import com.kaiser.rivet.agent.ContextBudget
 import com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
 import com.kaiser.rivet.browser.BrowserBookmarkPath
 import com.kaiser.rivet.browser.BrowserRuntime
@@ -1092,28 +1091,18 @@ class ChatViewModel private constructor(
             .filter(String::isNotBlank).take(4).toList()).distinct().take(6)
     }
 
-    private fun idleContextRequest(config: ProviderConfig, workspaceId: String?, messages: List<AgentMessage>): AgentRequest {
-        val hasWorkspace = workspaceId != null
-        val phoneAccess = config.type != ProviderType.Local
-        // The request shape the next turn will send, so the estimate and the
-        // compaction budget match the automatic path's.
-        val tools = BrowserTools.definitions +
-            AgentToolExecutor.definitions.filter {
-                it.name !in AgentToolExecutor.phoneOnlyNames &&
-                    (hasWorkspace || it.name in UNBOUND_FILE_TOOLS)
-            } +
-            (if (phoneAccess) AgentToolExecutor.definitions.filter {
-                it.name in AgentToolExecutor.phoneOnlyNames
-            } else emptyList()) +
-            (if (hasWorkspace) SubagentTools.definitions else emptyList())
-        val baseSystem = systemInstruction(hasWorkspace,
-            runtimeController.terminalStateLine(interactiveTerminalCount(managedProcesses.processes.value))
-                .takeIf { it != "Terminal: ready" },
-            browser.contextLine(), phoneAccess = phoneAccess, presentAvailable = tools.any { it.name == "present" })
+    private fun coordinatorRequest(
+        config: ProviderConfig, workspaceId: String?, messages: List<AgentMessage>,
+        tools: List<com.kaiser.rivet.agent.AgentToolDefinition>, phoneAccess: Boolean,
+        archiveAvailable: Boolean, pinnedArchive: String,
+    ): AgentRequest {
+        val baseSystem = systemInstruction(workspaceId != null, phoneAccess = phoneAccess,
+            presentAvailable = tools.any { it.name == "present" }, archiveAvailable = archiveAvailable)
         val wire = if (config.type == ProviderType.Local) {
-            LocalPrompt.wire(baseSystem, tools, config.resolvedContextWindowTokens(), hasWorkspace)
+            LocalPrompt.wire(baseSystem, tools, config.resolvedContextWindowTokens(), workspaceId != null)
         } else null
-        val projected = modelMessages(messages, workspaceId, enforceWorkspace = true)
+        val projected = ArchiveRecall.splice(modelMessages(messages, workspaceId, enforceWorkspace = true),
+            pinnedArchive, messages.lastOrNull { it.role == AgentRole.User })
         val requestMessages = if (config.type == ProviderType.Local &&
             ProviderVisionAttachments.needsPreparation(projected)) {
             ProviderVisionAttachments.prepare(projected, VisionCapability.assess(config)) { null }.first
@@ -1122,22 +1111,35 @@ class ChatViewModel private constructor(
             config.reasoning, wire?.tools ?: tools)
     }
 
-    private suspend fun readContextMeter(config: ProviderConfig, sessionId: String?, request: AgentRequest): ContextMeterReading {
-        val measured = try {
-            sessionId?.let { sessions?.contextMeterTokens(it, config.id, config.baseUrl, request) }
-        } catch (e: CancellationException) { throw e }
-        catch (_: Exception) { null }
-        return contextReading(config, measured ?: ContextBudget.estimateRequestTokens(request))
+    private fun idleContextRequest(config: ProviderConfig, workspaceId: String?, messages: List<AgentMessage>,
+                                   pinnedArchive: String): AgentRequest {
+        val hasWorkspace = workspaceId != null
+        val phoneAccess = config.type != ProviderType.Local
+        val archiveAvailable = sessions != null
+        val tools = BrowserTools.definitions +
+            AgentToolExecutor.definitions.filter {
+                it.name !in AgentToolExecutor.phoneOnlyNames &&
+                    (hasWorkspace || (phoneAccess && it.name in UNBOUND_FILE_TOOLS))
+            } +
+            (if (phoneAccess) AgentToolExecutor.definitions.filter {
+                it.name in AgentToolExecutor.phoneOnlyNames
+            } else emptyList()) +
+            (if (hasWorkspace) SubagentTools.definitions else emptyList()) +
+            (if (archiveAvailable) listOf(ArchiveRecall.definition) else emptyList())
+        return coordinatorRequest(config, workspaceId, messages, tools, phoneAccess, archiveAvailable, pinnedArchive)
     }
+
+    private fun readContextMeter(config: ProviderConfig, request: AgentRequest): ContextMeterReading =
+        contextReadingForRequest(config, request)
 
     internal suspend fun refreshContextMeter(config: ProviderConfig) {
         val state = _uiState.value
-        if (!state.ready || state.projectLoading || state.streaming || config.model.isBlank() ||
-            state.contextMeter?.matches(config) == true) return
+        if (!state.ready || state.projectLoading || state.streaming) return
         val ticket = generation
-        val meter = readContextMeter(config, state.currentSessionId,
-            idleContextRequest(config, state.currentSessionWorkspaceId, activeMessages))
-        if (ticket == generation) _uiState.update { it.copy(contextMeter = meter) }
+        val pinned = state.currentSessionId?.let { sessions?.archiveTail(it) }.orEmpty()
+        val meter = readContextMeter(config,
+            idleContextRequest(config, state.currentSessionWorkspaceId, activeMessages, pinned))
+        if (ticket == generation && !_uiState.value.streaming) _uiState.update { it.copy(contextMeter = meter) }
     }
 
     /**
@@ -1179,10 +1181,11 @@ class ChatViewModel private constructor(
                 }
                 store = sql
                 val workspaceId = _uiState.value.currentSessionWorkspaceId
+                val pinnedArchive = sql.archiveTail(sessionId)
                 val context = ContextPreparation(sql, sessionId,
                     clientFactory(snapshot.config, snapshot.apiKey), snapshot.config,
                     UUID.randomUUID().toString(), activeSummary, workspaceId) { messages, _ ->
-                    idleContextRequest(snapshot.config, workspaceId, messages)
+                    idleContextRequest(snapshot.config, workspaceId, messages, pinnedArchive)
                 }
                 val compacted = context.prepare(activeMessages, force = true, reason = "manual")
                 if (ticket != generation) return@launch
@@ -1191,7 +1194,7 @@ class ChatViewModel private constructor(
                         notice = "Nothing to compact yet.", error = null) }
                     return@launch
                 }
-                val historyTokens = ContextBudget.estimateHistoryTokens(context.requestFor(compacted).messages)
+                val historyTokens = context.footprint(compacted)
                 val notice = InternalContext.compactionNotice(workspaceId, historyTokens)
                 val noticed = compacted + notice
                 try {
@@ -1213,7 +1216,7 @@ class ChatViewModel private constructor(
                     val estimate = try { context.estimate(noticed) }
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { ContextEstimate(context.footprint(noticed), "estimated") }
-                    val meter = readContextMeter(snapshot.config, sessionId, context.requestFor(noticed))
+                    val meter = readContextMeter(snapshot.config, context.requestFor(noticed))
                     _uiState.update { state ->
                         val visible = (state.messages + notice).takeLast(100)
                         val remapped = com.kaiser.rivet.ui.chat.remapTurnMetadataAfterVisibilityChange(
@@ -2034,26 +2037,8 @@ class ChatViewModel private constructor(
                 onCompactionStarted = {
                     if (ticket == generation) _uiState.update { it.copy(compacting = true) }
                 }) { messages, _ ->
-                val baseSystem = systemInstruction(workspace != null, phoneAccess = phone != null,
-                    archiveAvailable = archive != null,
-                    presentAvailable = tools.any { it.name == "present" })
-                val wire = if (snapshot.config.type == ProviderType.Local) {
-                    LocalPrompt.wire(baseSystem, tools, snapshot.config.resolvedContextWindowTokens(),
-                        workspace != null)
-                } else null
-                val projected = ArchiveRecall.splice(modelMessages(messages, workspaceId, enforceWorkspace = true),
-                    pinnedArchive, messages.lastOrNull { it.role == AgentRole.User })
-                val requestMessages = if (snapshot.config.type == ProviderType.Local &&
-                    ProviderVisionAttachments.needsPreparation(projected)) {
-                    ProviderVisionAttachments.prepare(projected, VisionCapability.assess(snapshot.config)) { null }.first
-                } else projected
-                AgentRequest(
-                    model = snapshot.config.model,
-                    messages = requestMessages,
-                    system = wire?.system ?: baseSystem,
-                    reasoning = snapshot.config.reasoning,
-                    tools = wire?.tools ?: tools,
-                )
+                coordinatorRequest(snapshot.config, workspaceId, messages, tools, phone != null,
+                    archive != null, pinnedArchive)
             }
             // A retry always re-runs the transcript that is already there. The failed
             // request left its user message in it, and a failure after partial output also
@@ -2071,7 +2056,7 @@ class ChatViewModel private constructor(
                     if (reduced != activeMessages) {
                         activeMessages = reduced
                         activeSummary = context.summary
-                        val meter = readContextMeter(snapshot.config, sessionId, context.requestFor(reduced))
+                        val meter = readContextMeter(snapshot.config, context.requestFor(reduced))
                         if (ticket == generation) _uiState.update { it.copy(contextMeter = meter) }
                     }
                 }
@@ -2179,7 +2164,7 @@ class ChatViewModel private constructor(
                         } catch (_: Exception) { /* A completed provider response remains usable if usage storage fails. */ }
                     }
                     if (ticket == generation) {
-                        val meter = readContextMeter(snapshot.config, sessionId, request)
+                        val meter = readContextMeter(snapshot.config, request)
                         _uiState.update { it.copy(contextMeter = meter) }
                     }
                     // Some OpenAI-compatible providers omit usage entirely. Estimate
@@ -2303,13 +2288,13 @@ class ChatViewModel private constructor(
                     if (compacted != candidate) {
                         // A completed compaction leaves one visible, persisted marker row;
                         // modelMessages keeps it off the wire and projection carries the earlier ones.
-                        val historyTokens = ContextBudget.estimateHistoryTokens(context.requestFor(compacted).messages)
+                        val historyTokens = context.footprint(compacted)
                         val noticed = compacted + InternalContext.compactionNotice(workspaceId, historyTokens)
                         durable.clear()
                         durable.addAll(noticed)
                         activeMessages = noticed
                         activeSummary = context.summary
-                        val meter = readContextMeter(snapshot.config, sessionId, context.requestFor(noticed))
+                        val meter = readContextMeter(snapshot.config, context.requestFor(noticed))
                         if (ticket == generation) _uiState.update { it.copy(contextMeter = meter) }
                         noticed
                     } else compacted
@@ -2454,7 +2439,7 @@ class ChatViewModel private constructor(
                     if (sessionId != null && lastSystem.isNotEmpty()) {
                         try {
                             val estimate = context.estimate(durable)
-                            val meter = readContextMeter(snapshot.config, sessionId, context.requestFor(durable))
+                            val meter = readContextMeter(snapshot.config, context.requestFor(durable))
                             _uiState.update { it.copy(contextEstimate = estimate, contextMeter = meter) }
                         } catch (e: CancellationException) { throw e
                         } catch (_: Exception) { /* Usage estimates never change the completed turn. */ }

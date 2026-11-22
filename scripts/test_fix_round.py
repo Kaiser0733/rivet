@@ -29,3 +29,11 @@ class FixRoundSurfacesTest(unittest.TestCase):
         self.assertIn("state.notice, showBrowserCard, state.compacting)", chat)
         self.assertIn("onCompactionStarted = {", model)
         self.assertIn("finally {\n                        if (ticket == generation) _uiState.update { it.copy(compacting = false) }", model)
+
+    def test_meter_and_compaction_use_the_built_request(self):
+        model = (UI.parent / "chat/ChatViewModel.kt").read_text()
+        prepare = (UI.parent / "chat/ContextPreparation.kt").read_text()
+        self.assertNotIn("contextMeterTokens(", model)
+        self.assertIn("contextReadingForRequest(config, request)", model)
+        self.assertIn("ContextEstimate(footprint(messages)", prepare)
+        self.assertIn("val historyTokens = context.footprint(compacted)", model)

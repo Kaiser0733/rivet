@@ -62,13 +62,8 @@ internal class ContextPreparation(
     fun footprint(messages: List<AgentMessage>): Long =
         ContextBudget.estimateRequestTokens(requestFor(messages))
 
-    suspend fun estimate(messages: List<AgentMessage>): ContextEstimate {
-        val actual = requestFor(messages)
-        return if (store != null && sessionId != null) {
-            store.contextEstimate(sessionId, config.id, config.model, actual.messages,
-                actual.system, actual.tools, config.baseUrl, actual.reasoning)
-        } else ContextEstimate(ContextBudget.estimateRequestTokens(actual), "estimated")
-    }
+    fun estimate(messages: List<AgentMessage>): ContextEstimate =
+        ContextEstimate(footprint(messages), "estimated")
 
     suspend fun prepare(messages: List<AgentMessage>, force: Boolean = false,
                         reason: String = if (force) "overflow" else "automatic"): List<AgentMessage> {
