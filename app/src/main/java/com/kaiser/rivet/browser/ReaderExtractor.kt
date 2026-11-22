@@ -110,30 +110,36 @@ object ReaderExtractor {
             val value = text.replace(Regex("[ \\t]+"), " ").trim()
             if (value.isNotEmpty()) out.append(prefix).append(value).append(suffix)
         }
+        fun inline(node: Node): String = when (node) {
+            is TextNode -> node.text()
+            is Element -> when (node.normalName()) {
+                "br" -> " "
+                "a" -> {
+                    val label = node.text().trim()
+                    val href = node.absUrl("href").ifBlank { node.attr("href") }
+                    if (label.isNotEmpty() && isSafeReaderHref(href)) "[$label]($href)" else label
+                }
+                else -> node.childNodes().joinToString("") { inline(it) }
+            }
+            else -> ""
+        }
+
         fun visit(node: Node) {
             when (node) {
                 is TextNode -> out.append(node.text())
                 is Element -> {
                     when (node.tagName().lowercase()) {
-                        "h1" -> block(node.text(), "# ")
-                        "h2" -> block(node.text(), "## ")
-                        "h3" -> block(node.text(), "### ")
-                        "h4" -> block(node.text(), "#### ")
-                        "h5" -> block(node.text(), "##### ")
-                        "h6" -> block(node.text(), "###### ")
-                        "li" -> block(node.text(), "- ")
+                        "h1" -> block(inline(node), "# ")
+                        "h2" -> block(inline(node), "## ")
+                        "h3" -> block(inline(node), "### ")
+                        "h4" -> block(inline(node), "#### ")
+                        "h5" -> block(inline(node), "##### ")
+                        "h6" -> block(inline(node), "###### ")
+                        "li" -> block(inline(node), "- ")
                         "pre" -> block(node.text(), "```\n", "\n```\n\n")
-                        "p", "blockquote" -> block(node.text())
+                        "p", "blockquote" -> block(inline(node))
                         "br" -> out.append('\n')
-                        "a" -> {
-                            val href = node.absUrl("href").ifBlank { node.attr("href") }
-                            val label = node.text().trim()
-                            if (label.isNotEmpty()) {
-                                if (isSafeReaderHref(href)) {
-                                    out.append('[').append(label).append("](").append(href).append(')')
-                                } else out.append(label)
-                            }
-                        }
+                        "a" -> out.append(inline(node))
                         else -> {
                             if (node.tagName().lowercase() in BLOCK_TAGS) {
                                 for (child in node.childNodes()) visit(child)

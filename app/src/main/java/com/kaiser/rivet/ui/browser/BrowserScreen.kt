@@ -30,7 +30,6 @@ import androidx.compose.foundation.layout.Arrangement
 import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
-import androidx.compose.foundation.layout.FlowRow
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
@@ -75,6 +74,12 @@ import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.res.painterResource
+import androidx.compose.ui.semantics.heading
+import androidx.compose.ui.text.LinkAnnotation
+import androidx.compose.ui.text.SpanStyle
+import androidx.compose.ui.text.TextLinkStyles
+import androidx.compose.ui.text.buildAnnotatedString
+import androidx.compose.ui.text.withLink
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -272,7 +277,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             hostContent(Modifier.fillMaxSize(), clearUrlFocus)
             if (state.visible && !pageOptions) {
                 if (state.readerMode) {
-                    ReaderPane(state.readerText, Modifier.fillMaxSize()) { url ->
+                    ReaderPane(state.readerText, state.title, Modifier.fillMaxSize()) { url ->
                         scope.launch { runCatching { session.openVisual(url, userInitiated = true) } }
                     }
                 } else if (state.url.isBlank() || state.url == "about:blank") {
@@ -485,7 +490,7 @@ private fun BrowserSwitch(label: String, checked: Boolean, onChange: (Boolean) -
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun ReaderPane(text: String, modifier: Modifier = Modifier, onLink: (String) -> Unit) {
+private fun ReaderPane(text: String, title: String, modifier: Modifier = Modifier, onLink: (String) -> Unit) {
     val blocks = remember(text) { ReaderBlocks.parse(text) }
     Surface(modifier.background(MaterialTheme.colorScheme.surface)) {
         if (blocks.isEmpty()) {
@@ -494,16 +499,19 @@ private fun ReaderPane(text: String, modifier: Modifier = Modifier, onLink: (Str
             }
         } else {
             LazyColumn(Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp)) {
+                if (title.isNotBlank() && blocks.none { it.kind == ReaderBlockKind.Heading && it.level == 1 }) {
+                    item { Text(title, style = MaterialTheme.typography.titleLarge, modifier = Modifier.semantics { heading() }) }
+                }
                 items(blocks) { block ->
                     when (block.kind) {
-                        ReaderBlockKind.Heading -> Text(
-                            spansText(block),
+                        ReaderBlockKind.Heading -> InlineSpans(
+                            block, onLink,
                             style = MaterialTheme.typography.titleLarge.copy(
                                 fontSize = when (block.level) {
                                     1 -> 28.sp; 2 -> 23.sp; 3 -> 20.sp; else -> 18.sp
                                 },
                                 fontWeight = FontWeight.SemiBold),
-                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp),
+                            modifier = Modifier.padding(top = 12.dp, bottom = 4.dp).semantics { heading() },
                         )
                         ReaderBlockKind.Bullet -> Row(Modifier.padding(vertical = 2.dp)) {
                             Text("• ", style = MaterialTheme.typography.bodyLarge)
@@ -527,25 +535,25 @@ private fun ReaderPane(text: String, modifier: Modifier = Modifier, onLink: (Str
     }
 }
 
-@OptIn(ExperimentalLayoutApi::class)
 @Composable
-private fun InlineSpans(block: ReaderBlock, onLink: (String) -> Unit) {
-    FlowRow(horizontalArrangement = Arrangement.Start) {
+private fun InlineSpans(
+    block: ReaderBlock,
+    onLink: (String) -> Unit,
+    style: TextStyle = MaterialTheme.typography.bodyLarge,
+    modifier: Modifier = Modifier,
+) {
+    val linkColor = MaterialTheme.colorScheme.primary
+    val text = buildAnnotatedString {
         block.spans.forEach { span ->
             val url = span.url
-            if (url != null) {
-                Text(
-                    span.text,
-                    color = MaterialTheme.colorScheme.primary,
-                    textDecoration = TextDecoration.Underline,
-                    style = MaterialTheme.typography.bodyLarge,
-                    modifier = Modifier.clickable { onLink(url) },
-                )
-            } else {
-                Text(span.text, style = MaterialTheme.typography.bodyLarge)
-            }
+            if (url == null) append(span.text)
+            else withLink(LinkAnnotation.Clickable(url,
+                styles = TextLinkStyles(SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+                linkInteractionListener = { onLink(url) },
+            )) { append(span.text) }
         }
     }
+    Text(text, modifier = modifier, style = style)
 }
 
 private fun spansText(block: ReaderBlock): String = block.spans.joinToString(" ") { it.text }

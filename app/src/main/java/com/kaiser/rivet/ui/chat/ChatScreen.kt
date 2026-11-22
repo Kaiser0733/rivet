@@ -602,7 +602,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             hasError = state.error != null,
         )
     }
-    val totalItems = segmentedTurns.size + (if (showBrowserCard) 1 else 0) +
+    val transcriptItems = segmentedTurns.sumOf { turn ->
+        1 + turn.replyTail.size + deliverables[turn.userItem?.messageIndex].orEmpty().size
+    }
+    val totalItems = transcriptItems + (if (showBrowserCard) 1 else 0) +
         (if (state.goalLine != null) 1 else 0) +
         (if (streamingReasoning.isNotBlank()) 1 else 0) +
         (if (streamingText.isNotBlank()) 1 else 0) +
@@ -699,16 +702,21 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                             onDismiss = onDismissInterruptedTurn,
                         )
                     }
-                    items(segmentedTurns, key = { it.turnIndex }) { turn ->
-                        TurnBlockView(
-                            turn = turn,
-                            state = state,
-                            isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
-                            messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
-                            fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
-                            missingFiles = missingFiles,
-                            onOpenPreview = onOpenPreview,
-                        )
+                    segmentedTurns.forEach { turn ->
+                        item(key = turn.turnIndex) {
+                            TurnBlockView(
+                                turn = turn,
+                                state = state,
+                                isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
+                                messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
+                            )
+                        }
+                        turn.replyTail.forEachIndexed { index, part ->
+                            item(key = "reply-${turn.turnIndex}-$index") { TurnTextPart(part, state) }
+                        }
+                        items(deliverables[turn.userItem?.messageIndex].orEmpty()) { file ->
+                            ProjectFileCard(file, missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
+                        }
                     }
                     if (showBrowserCard) item(key = "live-browser") {
                         LiveBrowserCard(browser, browserState)
@@ -918,9 +926,6 @@ private fun TurnBlockView(
     state: ChatUiState,
     isLastTurn: Boolean,
     messageProgress: Float,
-    fileCards: List<PresentedFile>,
-    missingFiles: Set<String>,
-    onOpenPreview: (String) -> Unit,
 ) {
     var turnOpen by rememberSaveable(turn.turnIndex) {
         mutableStateOf(initialFoldOpen(turn.spec.canFold))
@@ -997,7 +1002,7 @@ private fun TurnBlockView(
                 )
             }
             val lastProcess = turn.parts.lastOrNull { it is TurnPart.Process }
-            turn.parts.forEach { part ->
+            turn.processBody.forEach { part ->
                 when (part) {
                     is TurnPart.Process -> {
                         FoldReveal(expanded = isOpen) {
@@ -1015,53 +1020,30 @@ private fun TurnBlockView(
                             }
                         }
                     }
-                    is TurnPart.Answer -> {
-                        val item = part.item.item
-                        if (item is AgentConversationItem.Message) {
-                            val owned = splitMessageReasoning(
-                                item.message,
-                                part.item.messageIndex?.let { state.messageReasoning[it] },
-                            )
-                            MessageRow(
-                                message = item.message,
-                                reasoning = owned.forAnswer,
-                                messageKey = part.item.messageIndex ?: item.message.hashCode(),
-                            )
-                        }
-                    }
-                    is TurnPart.Notice -> {
-                        (part.item.item as? AgentConversationItem.SystemNotice)?.let {
-                            SystemNoticeRow(it.text)
-                        }
-                    }
-                }
-            }
-        } else {
-            turn.parts.forEach { part ->
-                if (part is TurnPart.Answer) {
-                    val item = part.item.item
-                    if (item is AgentConversationItem.Message) {
-                        val owned = splitMessageReasoning(
-                            item.message,
-                            part.item.messageIndex?.let { state.messageReasoning[it] },
-                        )
-                        MessageRow(
-                            message = item.message,
-                            reasoning = owned.forAnswer,
-                            messageKey = part.item.messageIndex ?: item.message.hashCode(),
-                        )
-                    }
-                }
-                if (part is TurnPart.Notice) {
-                    (part.item.item as? AgentConversationItem.SystemNotice)?.let {
-                        SystemNoticeRow(it.text)
-                    }
+                    is TurnPart.Answer, is TurnPart.Notice -> TurnTextPart(part, state)
                 }
             }
         }
-        fileCards.forEach { file ->
-            ProjectFileCard(file, missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
+    }
+}
+
+@Composable
+private fun TurnTextPart(part: TurnPart<TimelineDisplayEntry>, state: ChatUiState) {
+    when (part) {
+        is TurnPart.Answer -> {
+            val entry = part.item
+            val item = entry.item as? AgentConversationItem.Message ?: return
+            val owned = splitMessageReasoning(item.message, entry.messageIndex?.let { state.messageReasoning[it] })
+            MessageRow(
+                message = item.message,
+                reasoning = owned.forAnswer,
+                messageKey = entry.messageIndex ?: item.message.hashCode(),
+            )
         }
+        is TurnPart.Notice -> (part.item.item as? AgentConversationItem.SystemNotice)?.let {
+            SystemNoticeRow(it.text)
+        }
+        is TurnPart.Process -> Unit
     }
 }
 
@@ -1807,14 +1789,17 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // send is allowed so the view model can explain what to choose instead of the
     // button silently refusing the tap.
     val builtInCommand = SlashCommands.builtIn(draft) != null
-    val canSend = ready && !streaming && (draft.isNotBlank() || attachment != null) && pendingText == null &&
-        (builtInCommand || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
-            !hasProvider)
-    // Trailing newlines and spaces are noise; the model never wanted them.
+    fun canSubmit(text: String, builtIn: Boolean): Boolean =
+        ready && !streaming && (text.isNotBlank() || attachment != null) && pendingText == null &&
+            (builtIn || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
+                !hasProvider)
+    val canSend = canSubmit(draft, builtInCommand)
     val submit = {
-        val text = if (canSend && attachment != null && draft.isBlank()) "" else draftToSend(draft, canSend)
+        val latest = draftFor(drafts, sessionId)
+        val allowed = canSubmit(latest, SlashCommands.builtIn(latest) != null)
+        val text = if (allowed && attachment != null && latest.isBlank()) "" else draftToSend(latest, allowed)
         if (text != null) {
-            pendingText = draft
+            pendingText = latest
             submittedAt = ackCount
             onSend(text)
         }
@@ -1915,12 +1900,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                         placeholder = { Text("Ask Rivet…") },
                         minLines = 1,
                         maxLines = 6,
-                        keyboardOptions = if (draft.startsWith("/")) KeyboardOptions(
+                        keyboardOptions = KeyboardOptions(
                             capitalization = KeyboardCapitalization.None,
-                            autoCorrect = false,
-                            imeAction = ImeAction.Send,
-                        ) else KeyboardOptions(
-                            capitalization = KeyboardCapitalization.Sentences,
                             imeAction = ImeAction.Send,
                         ),
                         keyboardActions = KeyboardActions(onSend = { submit() }),

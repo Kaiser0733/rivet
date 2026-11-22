@@ -14,6 +14,7 @@ import java.util.UUID
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 
@@ -59,7 +60,16 @@ internal class PhoneCaptureCoordinator(context: Context) {
                     return@withContext error(failure)
                 }
             }
-            withTimeoutOrNull(180_000) { request.result.await() } ?: error("phone_shot_cancelled")
+            val beforeArm = withTimeoutOrNull(180_000) {
+                select {
+                    request.result.onAwait { it }
+                    request.armed.onAwait { null }
+                }
+            }
+            beforeArm ?: if (request.armed.isCompleted) {
+                withTimeoutOrNull(PhoneCaptureService.ACTION_TIMEOUT_MS + 15_000) { request.result.await() }
+                    ?: error("phone_shot_timeout")
+            } else error("phone_shot_timeout")
         } finally {
             if (active === request) active = null
             if (request.startedService) app.stopService(Intent(app, PhoneCaptureService::class.java))
@@ -123,6 +133,7 @@ internal class PhoneCaptureCoordinator(context: Context) {
     fun notificationPosted(id: String) {
         val request = active?.takeIf { it.id == id } ?: return
         request.notificationPosted = true
+        request.armed.complete(Unit)
         request.onStatus("phone_shot_armed")
     }
 
@@ -139,6 +150,7 @@ internal class PhoneCaptureCoordinator(context: Context) {
 
     private class Capture(val id: String, val onStatus: (String) -> Unit) {
         val result = CompletableDeferred<PhoneCaptureResult>()
+        val armed = CompletableDeferred<Unit>()
         var state = PhoneCaptureState.Idle
             private set
         var startedService = false

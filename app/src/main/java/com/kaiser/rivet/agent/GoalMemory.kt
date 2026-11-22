@@ -269,18 +269,20 @@ internal object GoalMemoryContext {
     fun updates(messages: List<AgentMessage>, workspace: String?, goal: GoalDocument?,
                 memory: String): List<AgentMessage> {
         val text = content(goal, memory)
-        if (text.isEmpty()) return emptyList()
         val digest = InternalContext.digest(text)
         val current = messages.asReversed().firstNotNullOfOrNull { message ->
             message.validatedContext()?.takeIf {
                 it.kind == KIND && it.workspaceId == workspace
             }?.digest
         }
-        if (current == digest) return emptyList()
+        if (current == digest || current == null && text.isEmpty()) return emptyList()
         return listOf(InternalContext(kind = KIND, workspaceId = workspace,
             content = text, digest = digest).event())
     }
 }
 
+internal fun GoalDocument?.ownedBy(sessionId: String?): GoalDocument? =
+    this?.takeIf { sessionId != null && it.sessionId == sessionId && it.state != GoalState.Dropped }
+
 internal fun GoalDocument?.lineForSession(currentSessionId: String?): String? =
-    this?.takeIf { it.sessionId == currentSessionId && it.state != GoalState.Dropped }?.calmLine()
+    ownedBy(currentSessionId)?.calmLine()

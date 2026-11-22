@@ -20,6 +20,17 @@ class ReaderExtractorTest {
         assertFalse(doc.needsRenderer)
     }
 
+    @Test fun headingAndParagraphKeepTheirInlineLinks() {
+        val html = """<body><main><h1>Example <a href="/help">Domain</a></h1>
+            <p>For details, <a href="/more">learn more</a>.</p></main></body>"""
+        val doc = ReaderExtractor.extract(html, "https://example.com")
+        val blocks = ReaderBlocks.parse(doc.text)
+        assertEquals(ReaderBlockKind.Heading, blocks[0].kind)
+        assertEquals("Example Domain", blocks[0].spans.joinToString("") { it.text })
+        assertEquals("https://example.com/help", blocks[0].spans.single { it.text == "Domain" }.url)
+        assertEquals("https://example.com/more", blocks[1].spans.single { it.text == "learn more" }.url)
+    }
+
     @Test fun chunksLongTextWithHeadingAnchors() {
         val text = buildString {
             repeat(20) { append("## Section $it\n").append("word ".repeat(1200)).append("\n") }

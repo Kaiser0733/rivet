@@ -133,15 +133,13 @@ internal class TermuxBridge(context: Context) {
         val returned = CompletableDeferred<Result>()
         val action = app.packageName + ".TERMUX_RESULT." + UUID.randomUUID()
         val mutable = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
-        // Package-scoped, not component-scoped: the receiver exists only while this command
-        // waits, so nothing about it is declared for the system to resolve.
-        val callback = PendingIntent.getBroadcast(app, 0, Intent(action).setPackage(app.packageName),
+        val callback = PendingIntent.getBroadcast(app, 0,
+            Intent(app, TermuxResultReceiver::class.java).setAction(action)
+                .addFlags(Intent.FLAG_RECEIVER_FOREGROUND),
             PendingIntent.FLAG_ONE_SHOT or mutable)
-        var receiver: TermuxResultReceiver? = null
         try {
-            receiver = TermuxResultReceiver.register(app, action) { outcome ->
-                if (outcome != null) returned.complete(outcome.toResult())
-                else if (fallback == null) returned.complete(Result(error = TERMUX_NO_RESULT))
+            TermuxResultReceiver.register(action) { outcome ->
+                if (outcome.error != TERMUX_NO_RESULT || fallback == null) returned.complete(outcome.toResult())
             }
             val command = fallback?.let { TermuxCommand.withFileOutput(args.command, it.absolute) } ?: args.command
             val spec = buildRunCommandIntent(args.command, location.cwd)
@@ -161,8 +159,9 @@ internal class TermuxBridge(context: Context) {
                     try {
                         select {
                             returned.onAwait { fromTermux ->
-                                if (fromTermux.error == null) fallback.result(fromTermux.exitCode) ?: fromTermux
-                                else fromTermux
+                                if (fromTermux.error == null && fromTermux.stdout.isEmpty() && fromTermux.stderr.isEmpty()) {
+                                    fallback.completedResult() ?: fromTermux
+                                } else fromTermux
                             }
                             files.onAwait { it }
                         }
@@ -170,14 +169,14 @@ internal class TermuxBridge(context: Context) {
                 }
             }
             result ?: (fallback?.result(null)?.copy(error = "termux_timeout")
-                ?: Result(error = TERMUX_NO_RESULT))
+                ?: Result(error = "termux_timeout"))
         } catch (_: SecurityException) {
             Result(error = "termux_permission_required")
         } catch (_: IllegalStateException) {
             Result(error = "termux_unavailable")
         } finally {
             callback.cancel()
-            receiver?.let { runCatching { app.unregisterReceiver(it) } }
+            TermuxResultReceiver.unregister(action)
         }
     }
 
@@ -189,10 +188,14 @@ internal class TermuxBridge(context: Context) {
     ) {
         suspend fun awaitResult(): Result {
             while (true) {
-                val code = read { workspace.readTextFile(path.child("code")).text.trim().toIntOrNull() }
-                if (code != null) return result(code) ?: Result(exitCode = code)
+                completedResult()?.let { return it }
                 delay(500)
             }
+        }
+
+        suspend fun completedResult(): Result? {
+            val code = read { workspace.readTextFile(path.child("code")).text.trim().toIntOrNull() } ?: return null
+            return result(code)
         }
 
         suspend fun result(exitCode: Int?): Result? {

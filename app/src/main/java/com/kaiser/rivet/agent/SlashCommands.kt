@@ -12,9 +12,12 @@ internal object SlashCommands {
     private val formatting = Regex("[\\p{Cf}]")
 
     fun normalize(input: String): String {
-        val text = input.trim()
-        val prefix = text.takeWhile { !it.isWhitespace() }
-        return prefix.replace(formatting, "").replace('／', '/') + text.drop(prefix.length)
+        val text = input.trim().trimStart { formatting.matches(it.toString()) }
+        val slashes = text.takeWhile { it == '/' || it == '／' }.length
+        if (slashes == 0) return text
+        val body = text.drop(slashes).trimStart()
+        val token = body.takeWhile { !it.isWhitespace() }
+        return "/" + token.replace(formatting, "") + body.drop(token.length)
     }
 
     fun builtIn(input: String): BuiltInSlash? {

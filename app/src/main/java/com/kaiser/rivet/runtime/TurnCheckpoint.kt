@@ -48,6 +48,7 @@ data class CheckpointRecord(
     val sessionId: String? = null,
     // The user closed the banner. The checkpoint itself is untouched.
     val barDismissed: Boolean = false,
+    val ignoresGoalProgress: Boolean = false,
 )
 
 data class CheckpointChange(val path: String, val kind: String, val beforeSize: Long?, val afterSize: Long?)
@@ -67,7 +68,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
             val before = FileOutputStream(archive).use { file ->
                 ZipOutputStream(file).use { zip ->
                     zip.setLevel(1)
-                    val snapshot = scan(worktree, zip, skipped)
+                    val snapshot = scan(worktree, zip, skipped, ignoresGoalProgress = true)
                     zip.finish()
                     zip.flush()
                     file.fd.sync()
@@ -75,7 +76,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
                 }
             }
             writeRecord(staging, CheckpointRecord(id, workspace, System.currentTimeMillis(), before,
-                skipped = skipped, runId = runId, sessionId = sessionId))
+                skipped = skipped, runId = runId, sessionId = sessionId, ignoresGoalProgress = true))
             Files.move(staging.toPath(), File(directory, id).toPath(), StandardCopyOption.ATOMIC_MOVE)
             id
         } catch (error: Exception) {
@@ -88,7 +89,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         val folder = folder(id)
         val record = readRecord(folder)
         if (record.complete) return@withContext record.before != record.after
-        val after = scan(worktree)
+        val after = scan(worktree, ignoresGoalProgress = record.ignoresGoalProgress)
         if (record.after != null && record.after != after) throw CheckpointFailure("undo_conflict")
         if (record.before == after) {
             removeTree(folder)
@@ -103,12 +104,12 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
         val folder = folder(id)
         val record = readRecord(folder)
         if (record.complete) throw CheckpointFailure("checkpoint_closed")
-        writeRecord(folder, record.copy(after = scan(worktree)))
+        writeRecord(folder, record.copy(after = scan(worktree, ignoresGoalProgress = record.ignoresGoalProgress)))
     }
 
     suspend fun matchesPost(id: String, worktree: File): Boolean = withContext(Dispatchers.IO) {
-        val post = readRecord(folder(id)).after
-        post == null || scan(worktree) == post
+        val record = readRecord(folder(id))
+        record.after == null || scan(worktree, ignoresGoalProgress = record.ignoresGoalProgress) == record.after
     }
 
     suspend fun record(id: String): CheckpointRecord? = withContext(Dispatchers.IO) {
@@ -152,7 +153,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
 
     suspend fun stageUndo(record: CheckpointRecord, current: File): File = withContext(Dispatchers.IO) {
         if (record.undone || !record.complete || record.after == null) throw CheckpointFailure("undo_unavailable")
-        if (scan(current) != record.after) throw CheckpointFailure("undo_conflict")
+        if (scan(current, ignoresGoalProgress = record.ignoresGoalProgress) != record.after) throw CheckpointFailure("undo_conflict")
         val folder = folder(record.id)
         val stage = File(folder, "restore-worktree")
         if (stage.exists()) removeTree(stage)
@@ -186,7 +187,16 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
             }
             preserveGitDirectories(current, stage)
             preserveIgnoredDirectories(current, stage, record.before.keys)
-            if (scan(stage) != record.before) throw CheckpointFailure("corrupt")
+            if (record.ignoresGoalProgress) {
+                val goal = File(current, GOAL_PATH)
+                if (Files.isRegularFile(goal.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS) &&
+                    !Files.isSymbolicLink(goal.parentFile!!.toPath())) {
+                    goal.copyTo(File(stage, GOAL_PATH))
+                }
+            }
+            if (scan(stage, ignoresGoalProgress = record.ignoresGoalProgress) != record.before) {
+                throw CheckpointFailure("corrupt")
+            }
             stage
         } catch (error: Exception) {
             removeTree(stage)
@@ -256,7 +266,8 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
     }
 
     private suspend fun scan(root: File, zip: ZipOutputStream? = null,
-                             skipped: MutableList<String>? = null): Map<String, CheckpointEntry> {
+                             skipped: MutableList<String>? = null,
+                             ignoresGoalProgress: Boolean = true): Map<String, CheckpointEntry> {
         if (!root.isDirectory || Files.isSymbolicLink(root.toPath())) throw CheckpointFailure("unsafe_entry")
         val entries = linkedMapOf<String, CheckpointEntry>()
         val context = currentCoroutineContext()
@@ -313,6 +324,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
                     return FileVisitResult.CONTINUE
                 }
                 val path = relative(root, file)
+                if (ignoresGoalProgress && path == GOAL_PATH) return FileVisitResult.CONTINUE
                 bytes += attrs.size()
                 if (bytes > MAX_CONTENT_BYTES || entries.size >= MAX_ENTRIES) throw CheckpointFailure("checkpoint_limit")
                 val digest = MessageDigest.getInstance("SHA-256")
@@ -484,6 +496,7 @@ class TurnCheckpoint(private val storage: File, private val workspace: String) {
     }
 
     companion object {
+        private const val GOAL_PATH = com.kaiser.rivet.agent.GoalDocument.PATH
         private const val MAX_ENTRIES = 50_000
         private const val MAX_CONTENT_BYTES = 500L * 1024 * 1024
         private const val MAX_HISTORY_BYTES = 500L * 1024 * 1024

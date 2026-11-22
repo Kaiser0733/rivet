@@ -38,6 +38,20 @@ class AssistantInlineTextTest {
         assertEquals("docs/notes.md", opened)
     }
 
+    @Test fun plainFileNamesLinkOnlyWhenResolved() {
+        val source = "Wrote essay.txt. See **docs/notes.md**, ghost-file.md or https://example.org/ignore.txt."
+        assertEquals(setOf("essay.txt", "docs/notes.md", "ghost-file.md"),
+            fileReferencePaths(parseAssistantMarkdown(source)))
+        var opened: String? = null
+        val text = assistantInlineText(parseInlineMarkdown(source), Color.Gray, setOf("essay.txt")) { opened = it }
+        val range = text.getLinkAnnotations(0, text.length).single()
+        assertEquals("essay.txt", text.text.substring(range.start, range.end))
+        val link = range.item as androidx.compose.ui.text.LinkAnnotation.Clickable
+        link.linkInteractionListener!!.onClick(link)
+        assertEquals("essay.txt", opened)
+        assertTrue(text.text.contains("ghost-file.md"))
+    }
+
     @Test fun ghostFilesHaveNeitherCodeHighlightNorLinkStyle() {
         val text = assistantInlineText(parseInlineMarkdown("See `ghost-file.md`"), Color.Gray,
             existingFiles = setOf("real.md"), linkColor = Color.Blue)

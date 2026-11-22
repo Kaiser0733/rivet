@@ -33,6 +33,7 @@ import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 
@@ -44,6 +45,9 @@ internal class PhoneCaptureService : Service() {
     private var projection: MediaProjection? = null
     private var display: VirtualDisplay? = null
     private var reader: ImageReader? = null
+    private val captureDeadline = Runnable {
+        finish(PhoneCaptureResult(error = "phone_shot_timeout"))
+    }
     private val projectionCallback = object : MediaProjection.Callback() {
         override fun onStop() = finish(PhoneCaptureResult(error = "phone_shot_cancelled"))
     }
@@ -55,6 +59,7 @@ internal class PhoneCaptureService : Service() {
         when {
             intent?.action == ARM && id != null && captureId == null && coordinator.canArm(id) -> arm(id, intent)
             intent?.action == CAPTURE && id != null && id == captureId && coordinator.beginFrame(id) -> {
+                main.removeCallbacks(captureDeadline)
                 // The notification action can leave the shade open. Give the user time to close it.
                 main.postDelayed({ capture() }, 1_500)
             }
@@ -78,7 +83,25 @@ internal class PhoneCaptureService : Service() {
             projection = requireNotNull(manager.getMediaProjection(Activity.RESULT_OK, consent)).also {
                 it.registerCallback(projectionCallback, main)
             }
-            coordinator.notificationPosted(id)
+            val notifications = getSystemService(NotificationManager::class.java)
+            if (!notifications.areNotificationsEnabled() ||
+                notifications.getNotificationChannel(CHANNEL).importance == NotificationManager.IMPORTANCE_NONE) {
+                finish(PhoneCaptureResult(error = "phone_shot_notifications_off"))
+                return
+            }
+            notifications.notify(NOTIFICATION_ID, notification)
+            main.postDelayed(captureDeadline, ACTION_TIMEOUT_MS)
+            scope.launch {
+                repeat(20) {
+                    if (captureId != id) return@launch
+                    if (notifications.activeNotifications.any { it.id == NOTIFICATION_ID }) {
+                        coordinator.notificationPosted(id)
+                        return@launch
+                    }
+                    delay(100)
+                }
+                finish(PhoneCaptureResult(error = "phone_shot_notification_missing"))
+            }
         } catch (_: Exception) {
             finish(PhoneCaptureResult(error = "phone_shot_unavailable"))
         }
@@ -96,6 +119,7 @@ internal class PhoneCaptureService : Service() {
             .setContentTitle("Rivet is ready to capture")
             .setStyle(Notification.BigTextStyle().bigText("Switch apps, tap Capture now, then close the notification shade."))
             .setContentText("Switch apps, then tap Capture now.")
+            .setOngoing(true)
             .setForegroundServiceBehaviorCompat()
             .setDeleteIntent(cancel)
             .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_camera, "Capture now", action(CAPTURE)).build())
@@ -207,6 +231,7 @@ internal class PhoneCaptureService : Service() {
     companion object {
         const val CHANNEL = "rivet_phone_capture"
         private const val NOTIFICATION_ID = 648
+        internal const val ACTION_TIMEOUT_MS = 120_000L
         const val ARM = "com.kaiser.rivet.phone.ARM"
         const val CONSENT = "consent"
         private const val CAPTURE = "com.kaiser.rivet.phone.CAPTURE"

@@ -157,7 +157,7 @@ class AgentLoop(
                         messages.clear()
                         messages.addAll(reduced)
                     }
-                    if (contextFootprint(messages.toList()) >= before * 9 / 10) throw overflow
+                    if (contextFootprint(messages.toList()) >= before) throw overflow
                     requestOnce()
                 }
             } catch (incomplete: ProviderError.IncompleteGeneration) {

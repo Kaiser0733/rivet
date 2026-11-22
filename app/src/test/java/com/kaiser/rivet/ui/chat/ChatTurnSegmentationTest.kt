@@ -7,6 +7,20 @@ import org.junit.Test
 
 class ChatTurnSegmentationTest {
 
+    @Test fun finalRepliesHaveTheirOwnRowsBeyondTheTurnProcess() {
+        val first = "I opened the page."
+        val full = "First paragraph.\n\nSecond paragraph.\n\nThird paragraph."
+        val turn = segmentTurnItems(listOf(
+            TurnItem("Open the page", isUser = true, isAnswer = false, isProcess = false),
+            TurnItem(first, isUser = false, isAnswer = true, isProcess = false),
+            TurnItem("Browser", isUser = false, isAnswer = false, isProcess = true),
+            TurnItem(full, isUser = false, isAnswer = true, isProcess = false),
+        ), false, mapOf(0 to 27_000L), false, false).single()
+        assertEquals(listOf(TurnPart.Answer(first), TurnPart.Process(listOf("Browser"))), turn.processBody)
+        assertEquals(listOf(TurnPart.Answer(full)), turn.replyTail)
+        assertEquals("Completed in 27s", turn.spec.foldLabel())
+    }
+
     @Test
     fun onlyObservedSameTurnWithFreshSuccessfulDurationReveals() {
         val live = FoldOutcomeObservation(100L, 2L, ChatTurnProcessSpec(1, isLive = true), false)
