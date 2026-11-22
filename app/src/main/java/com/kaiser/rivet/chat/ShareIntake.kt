@@ -58,9 +58,9 @@ internal fun shareFailureNotice(error: Throwable): String = when (error) {
     else -> "Rivet couldn't read this attachment. Try sharing it again."
 }
 
-internal data class ComposerAttachment(val name: String, val image: Boolean) {
+internal data class ComposerAttachment(val name: String, val image: Boolean, val fileContext: String? = null) {
     fun messageText(draft: String): String {
         if (image) return draft.ifBlank { "Attached image: $name" }
-        return listOf(draft, "Attached file: inbox/$name").filter(String::isNotBlank).joinToString("\n\n")
+        return listOf(draft, fileContext ?: "Attached file: inbox/$name").filter(String::isNotBlank).joinToString("\n\n")
     }
 }

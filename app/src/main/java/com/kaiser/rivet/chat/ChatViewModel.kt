@@ -336,12 +336,15 @@ class ChatViewModel private constructor(
             val app = getApplication<Application>()
             var copy: File? = null
             try {
-                val image = photo || app.contentResolver.getType(source)?.startsWith("image/") == true
+                val mime = app.contentResolver.getType(source).orEmpty()
+                val image = photo || mime.startsWith("image/")
                 copy = SharedFileCopy.copy(app, source, if (image) "Photo.jpg" else "Attachment")
-                val saved = withContext(Dispatchers.IO) {
-                    SharedFileCopy.moveToSession(app, requireNotNull(copy), sessionId)
+                val staged = withContext(Dispatchers.IO) {
+                    val saved = SharedFileCopy.moveToSession(app, requireNotNull(copy), sessionId)
+                    ComposerAttachment(saved.name, image,
+                        if (image) null else SharedFileCopy.draft(saved, mime))
                 }
-                _composerAttachments.update { it + (sessionId to ComposerAttachment(saved.name, image)) }
+                _composerAttachments.update { it + (sessionId to staged) }
             } catch (e: CancellationException) {
                 throw e
             } catch (e: SharedFileCopy.TooLarge) {
@@ -1132,7 +1135,7 @@ class ChatViewModel private constructor(
         val tools = BrowserTools.definitions +
             AgentToolExecutor.definitions.filter {
                 it.name !in AgentToolExecutor.phoneOnlyNames &&
-                    (hasWorkspace || (phoneAccess && it.name in UNBOUND_FILE_TOOLS))
+                    (hasWorkspace || it.name in UNBOUND_FILE_TOOLS)
             } +
             (if (phoneAccess) AgentToolExecutor.definitions.filter {
                 it.name in AgentToolExecutor.phoneOnlyNames
@@ -1916,9 +1919,12 @@ class ChatViewModel private constructor(
             fun createExecutor(loadedSkills: Set<String>, coordinator: Boolean = false): AgentToolExecutor? {
                 val selectedWorkspace = workspace
                 val projectFiles = selectedWorkspace?.let(::SafAgentWorkspace)
-                val files = if (coordinator && phone != null) RoutedAgentWorkspace(
+                val files = if (coordinator) RoutedAgentWorkspace(
                     projectFiles,
-                    grant = { id, write -> SafAgentWorkspace(liveGrant(id, write)) },
+                    grant = { id, write ->
+                        if (phone == null) throw com.kaiser.rivet.agent.AgentWorkspaceFailure("grant_missing")
+                        SafAgentWorkspace(liveGrant(id, write))
+                    },
                     inbox = SharedFileCopy.sessionInbox(getApplication<Application>(), _uiState.value.currentSessionId),
                 ) else projectFiles ?: return null
                 if (selectedWorkspace == null) return AgentToolExecutor(
