@@ -956,7 +956,7 @@ class ChatViewModel private constructor(
         val command = SlashCommands.builtIn(trimmed)
         if (command != null) {
             when (command) {
-                BuiltInSlash.Goal -> handleGoalCommand(requireNotNull(parseGoalCommand(SlashCommands.normalize(trimmed))))
+                BuiltInSlash.Goal -> handleGoalCommand(trimmed, requireNotNull(parseGoalCommand(SlashCommands.normalize(trimmed))))
                 BuiltInSlash.Compact -> compactHistory()
                 BuiltInSlash.Feedback -> onFeedback()
                 BuiltInSlash.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
@@ -1019,14 +1019,26 @@ class ChatViewModel private constructor(
         startTurn(accepted.text.trim(), retryingInterrupted = false, acceptedUser = accepted)
     }
 
-    private fun handleGoalCommand(command: GoalCommand) {
+    private suspend fun appendCommandReply(sessionId: String?, command: String, reply: String) {
+        val state = _uiState.value
+        val row = InternalContext.commandReply(command, reply, state.currentSessionWorkspaceId)
+        if (sessionId != null) sessions?.appendCommandReply(sessionId, row)
+        _uiState.update {
+            if (it.currentSessionId != sessionId) it
+            else it.copy(messages = (it.messages + row).takeLast(100), notice = null, error = null,
+                commandAckCount = it.commandAckCount + 1)
+        }
+    }
+
+    private fun handleGoalCommand(input: String, command: GoalCommand) {
+        val sessionId = _uiState.value.currentSessionId ?: return
         viewModelScope.launch {
             try {
                 val workspace = workspaceSelection.restore()?.first
                 val files = workspace?.let(::ProjectStateFiles)
                 projectState = files
                 runJournal = files?.let { RunJournal(ProjectRunStorage(it)) }
-                val sessionId = _uiState.value.currentSessionId ?: return@launch
+                if (_uiState.value.currentSessionId != sessionId) return@launch
                 val projectStored = files?.loadGoal()?.takeIf { it.state != GoalState.Dropped }
                 val sessionStored = sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped }
                 val projectOwned = projectStored.ownedBy(sessionId)
@@ -1044,20 +1056,17 @@ class ChatViewModel private constructor(
                         projectGoal = if (goalFiles != null) next else projectGoal
                         sessionGoal = if (goalFiles == null) next else sessionGoal
                         if (goalFiles != null) knownGoalMarkdown = GoalDocument.render(next)
-                        _uiState.update { it.copy(goal = next, goalLine = next.lineForSession(it.currentSessionId),
-                            notice = "Goal set: ${next.text.take(160)}", error = null,
-                            commandAckCount = it.commandAckCount + 1) }
+                        _uiState.update {
+                            if (it.currentSessionId != sessionId) it
+                            else it.copy(goal = next, goalLine = next.lineForSession(sessionId))
+                        }
+                        appendCommandReply(sessionId, input, "Goal set: ${next.text.take(160)}")
                     }
-                    GoalCommand.Status -> _uiState.update {
-                        it.copy(notice = goal?.statusLine()
-                            ?: "No goal is set. Use /goal <what you want to achieve>.",
-                            error = null,
-                            commandAckCount = it.commandAckCount + 1)
-                    }
+                    GoalCommand.Status -> appendCommandReply(sessionId, input, goal?.statusLine()
+                        ?: "No goal is set. Use /goal <what you want to achieve>.")
                     GoalCommand.Pause, GoalCommand.Resume, GoalCommand.Done, GoalCommand.Clear -> {
                         if (goal == null) {
-                            _uiState.update { it.copy(notice = "No goal is set.", error = null,
-                                commandAckCount = it.commandAckCount + 1) }
+                            appendCommandReply(sessionId, input, "No goal is set.")
                             return@launch
                         }
                         val state = when (command) {
@@ -1076,13 +1085,16 @@ class ChatViewModel private constructor(
                         sessionGoal = if (goalFiles == null) next.takeIf { state != GoalState.Dropped } else sessionGoal
                         if (goalFiles != null) knownGoalMarkdown = renderedGoalOrNull(projectGoal)
                         val shown = if (state == GoalState.Dropped) null else next
-                        _uiState.update { it.copy(goal = shown, goalLine = shown.lineForSession(it.currentSessionId),
-                            notice = when (state) {
-                                GoalState.Paused -> "Goal paused."
-                                GoalState.Active -> "Goal resumed."
-                                GoalState.Done -> "Goal marked done."
-                                GoalState.Dropped -> "Goal cleared."
-                            }, error = null, commandAckCount = it.commandAckCount + 1) }
+                        _uiState.update {
+                            if (it.currentSessionId != sessionId) it
+                            else it.copy(goal = shown, goalLine = shown.lineForSession(sessionId))
+                        }
+                        appendCommandReply(sessionId, input, when (state) {
+                            GoalState.Paused -> "Goal paused."
+                            GoalState.Active -> "Goal resumed."
+                            GoalState.Done -> "Goal marked done."
+                            GoalState.Dropped -> "Goal cleared."
+                        })
                     }
                 }
             } catch (e: CancellationException) { throw e

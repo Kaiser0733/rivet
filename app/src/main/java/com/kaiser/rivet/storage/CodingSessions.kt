@@ -1,5 +1,6 @@
 package com.kaiser.rivet.storage
 
+import com.kaiser.rivet.agent.CompactionNotice
 import com.kaiser.rivet.agent.isTranscriptEvent
 import android.content.ContentValues
 import android.content.Context
@@ -164,6 +165,15 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                     System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
+    }
+
+    internal suspend fun appendCommandReply(id: String, message: AgentMessage) = onDatabase { db ->
+        require(message.validatedContext()?.kind == CompactionNotice.COMMAND_KIND)
+        db.insertOrThrow("events", null, ContentValues().apply {
+            put("session_id", id)
+            put("payload", json.encodeToString(AgentMessage.serializer(), message))
+            put("created_at", System.currentTimeMillis())
+        })
     }
 
     override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean =
@@ -373,7 +383,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         try {
             val claimed = db.delete("metadata", "key=? AND value=?", arrayOf("auto_title-$id", "eligible")) == 1
             val eligible = claimed && header(db, id).title == "New session" &&
-                db.rawQuery("SELECT 1 FROM events WHERE session_id=? LIMIT 1", arrayOf(id)).use { !it.moveToFirst() }
+                db.rawQuery("SELECT 1 FROM active_events WHERE session_id=? LIMIT 1", arrayOf(id)).use { !it.moveToFirst() }
             if (eligible) putMeta(db, "auto_title-$id", "pending")
             db.setTransactionSuccessful()
             eligible
@@ -973,7 +983,9 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         db.rawQuery("SELECT payload FROM events WHERE session_id=? AND id>? ORDER BY id",
             arrayOf(id, through.toString())).use { cursor ->
             while (cursor.moveToNext()) {
-                if (index >= activeSuffix.size || decode(cursor.getString(0)) != activeSuffix[index]) return false
+                val message = decode(cursor.getString(0))
+                if (message.internalContext?.kind == CompactionNotice.COMMAND_KIND) continue
+                if (index >= activeSuffix.size || message != activeSuffix[index]) return false
                 index++
             }
         }
@@ -989,7 +1001,9 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                     val payload = cursor.getString(0)
                     val size = payload.toByteArray(Charsets.UTF_8).size
                     if (isNotEmpty() && bytes + size > 1024 * 1024) break
-                    add(decode(payload))
+                    val message = decode(payload)
+                    if (message.internalContext?.kind == CompactionNotice.COMMAND_KIND) continue
+                    add(message)
                     bytes += size
                 }
             }.asReversed()

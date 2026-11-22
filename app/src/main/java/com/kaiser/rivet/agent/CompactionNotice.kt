@@ -10,10 +10,12 @@ internal object CompactionNotice {
 
     fun display(text: String): String = if (text == LEGACY_TEXT) TEXT else text
 
+    const val COMMAND_KIND = "command_reply"
+
     const val RESTORE_KIND = "restore_notice"
     const val RESTORE_TEXT = "Terminal restarted by restore — earlier scrollback was cleared."
 
-    fun isNotice(kind: String?): Boolean = kind == KIND || kind == RESTORE_KIND
+    fun isNotice(kind: String?): Boolean = kind == KIND || kind == RESTORE_KIND || kind == COMMAND_KIND
 }
 
 internal fun AgentMessage.isTranscriptEvent(): Boolean =

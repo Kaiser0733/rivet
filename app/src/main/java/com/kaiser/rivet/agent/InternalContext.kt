@@ -31,7 +31,7 @@ data class InternalContext(
                 SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND, ToolchainContext.KIND,
                 GoalMemoryContext.KIND, RunContext.KIND, "rollback",
                 SubagentContext.POOL_KIND, SubagentContext.RESULT_KIND, CompactionNotice.KIND,
-                CompactionNotice.RESTORE_KIND, StarterBrief.KIND) ||
+                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND, StarterBrief.KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
@@ -39,7 +39,7 @@ data class InternalContext(
         if (kind == "summary" && content.toByteArray(Charsets.UTF_8).size > TaskState.MAX_BYTES) return false
         if (workspaceId != null && workspaceId.isBlank()) return false
         if (kind !in setOf("summary", GoalMemoryContext.KIND, CompactionNotice.KIND,
-                CompactionNotice.RESTORE_KIND) && workspaceId == null) return false
+                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND) && workspaceId == null) return false
         if (removed && content.isNotEmpty()) return false
         if (kind == "project_snapshot") {
             if (projectFiles.size > ProjectInstructions.MAX_FILES || content.isNotEmpty() ||
@@ -143,6 +143,12 @@ data class InternalContext(
         }
 
         /** A display-only transcript row; modelMessages keeps it off the wire. */
+        fun commandReply(command: String, reply: String, workspace: String?): AgentMessage {
+            val text = clampUtf8("$command\n$reply", MAX_CONTENT_BYTES)
+            return InternalContext(kind = CompactionNotice.COMMAND_KIND, workspaceId = workspace,
+                content = text, digest = digest(text)).event()
+        }
+
         fun compactionNotice(workspace: String?, tokens: Long? = null): AgentMessage {
             val value = tokens?.let(CompactionNotice::completed) ?: CompactionNotice.TEXT
             return InternalContext(kind = CompactionNotice.KIND, workspaceId = workspace,

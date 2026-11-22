@@ -2065,14 +2065,14 @@ class ChatViewModelTest {
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withTimeout(5_000) { viewModel.uiState.first(predicate) }
 
-    private class RejectingPersistence : AgentSessionPersistence {
+    private class RejectingPersistence(private val sessionId: String? = null) : AgentSessionPersistence {
         private var messages = emptyList<AgentMessage>()
         private var interrupted = false
         var saveAttempts = 0
         var markInterruptedCalls = 0
         var failOnAssistant: String? = null
 
-        override suspend fun load() = AgentSession(messages, interrupted)
+        override suspend fun load() = AgentSession(messages, interrupted, id = sessionId)
 
         override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) {
             saveAttempts++
@@ -2134,7 +2134,7 @@ class ChatViewModelTest {
     }
 
     @Test fun goalCommandWorksWithoutAProjectOrProvider() = runBlocking {
-        val viewModel = newChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence("goal-test"),
             ProviderRuntimeSource { ProviderRuntimeResult.Failure("No provider") },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready }
@@ -2278,21 +2278,23 @@ class ChatViewModelTest {
         assertEquals(0, provider.requests.size)
     }
 
-    @Test fun goalCommandIncrementsCommandAckCountEvenWhenNoticeUnchanged() = runBlocking {
+    @Test fun repeatedGoalCommandsAppendEvenWhenTheAnswerIsIdentical() = runBlocking {
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = newChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence("goal-test"),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready }
 
         viewModel.send("/goal status")
         val first = await(viewModel) { it.commandAckCount == 1L }
-        val firstNotice = first.notice
+        assertEquals(1, first.messages.size)
 
         viewModel.send("/goal status")
         val second = await(viewModel) { it.commandAckCount == 2L }
-        assertEquals(firstNotice, second.notice)
+        assertEquals(2, second.messages.size)
+        assertEquals(first.messages.single(), second.messages.first())
+        assertTrue(second.messages.last().internalContext!!.content.contains("/goal status"))
         assertNull(second.runRecovery)
     }
 
