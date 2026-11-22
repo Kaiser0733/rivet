@@ -567,13 +567,13 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     val startsWriting = remember(state.turnStartedAt, textArrived) { textArrived && !hadText }
     SideEffect { hadText = textArrived }
     val answerProgress = entryProgress(state.turnStartedAt to textArrived, startsWriting, RivetMotion.MESSAGE_MS)
-    val streaming = state.streaming && !state.compacting
+    val streaming = state.streaming && state.turnStartedAt != null
     // While a turn runs the status line is always shown, so a long tool call and a
     // stalled stream never look the same. Outside a turn the plain activity text is
     // still used for recovery messages. The clock's start comes from the turn; without one
     // there is no clock to show, and both the item count and the item itself read this one
     // value so they cannot disagree about whether the row exists.
-    val liveStatusStart = if (streaming) state.turnStartedAt else null
+    val liveStatusStart = if (streaming && !state.compacting) state.turnStartedAt else null
     val toolRunning = liveOperation != null
     val writing = streamingText.isNotBlank()
     val waitingForApproval = state.pendingApproval != null || liveOperation?.stage ==
@@ -652,7 +652,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // has to handle rows appearing or disappearing, which move everything at once.
     LaunchedEffect(segmentedTurns.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
-        state.notice, showBrowserCard) {
+        state.notice, showBrowserCard, state.compacting) {
         if (followBottom && totalItems > 0) {
             programmaticScroll = true
             try {

@@ -22,3 +22,10 @@ class FixRoundSurfacesTest(unittest.TestCase):
         self.assertRegex(messages, r"SelectionContainer\s*\{\s*LazyColumn")
         for custom_action in ("combinedClickable", "Done selecting", "Copy or select text"):
             self.assertNotIn(custom_action, row)
+
+    def test_compaction_publishes_start_and_scrolls_to_the_row(self):
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        model = (UI.parent / "chat/ChatViewModel.kt").read_text()
+        self.assertIn("state.notice, showBrowserCard, state.compacting)", chat)
+        self.assertIn("onCompactionStarted = {", model)
+        self.assertIn("finally {\n                        if (ticket == generation) _uiState.update { it.copy(compacting = false) }", model)

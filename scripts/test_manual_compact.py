@@ -43,7 +43,7 @@ class ManualCompactTest(unittest.TestCase):
         self.assertIn("sql.save(noticed, interrupted = false, expectedSessionId = sessionId)", body)
         self.assertIn("activeSummary = context.summary", body)
         # The automatic path keeps the same machinery; the manual one adds no second checkpoint.
-        self.assertIn("val compacted = context.prepare(candidate, force)", model)
+        self.assertIn("context.prepare(candidate, force)", model)
         self.assertNotIn("TaskCheckpoint(", body)
 
     def test_edge_cases_get_plain_outcomes_and_the_existing_error_copy(self):

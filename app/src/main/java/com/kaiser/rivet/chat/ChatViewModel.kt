@@ -2030,7 +2030,10 @@ class ChatViewModel private constructor(
                 }
             } else emptyList()
             val context = ContextPreparation(sessions, sessionId, client, snapshot.config,
-                turnId, activeSummary, workspaceId, currentRequest = acceptedUser?.text) { messages, _ ->
+                turnId, activeSummary, workspaceId, currentRequest = acceptedUser?.text,
+                onCompactionStarted = {
+                    if (ticket == generation) _uiState.update { it.copy(compacting = true) }
+                }) { messages, _ ->
                 val baseSystem = systemInstruction(workspace != null, phoneAccess = phone != null,
                     archiveAvailable = archive != null,
                     presentAvailable = tools.any { it.name == "present" })
@@ -2060,7 +2063,11 @@ class ChatViewModel private constructor(
                 else listOf(acceptedUser ?: AgentMessage.user(prompt))
             if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
                 try {
-                    val reduced = context.prepare(activeMessages, force = true, reason = "storage_pressure")
+                    val reduced = try {
+                        context.prepare(activeMessages, force = true, reason = "storage_pressure")
+                    } finally {
+                        if (ticket == generation) _uiState.update { it.copy(compacting = false) }
+                    }
                     if (reduced != activeMessages) {
                         activeMessages = reduced
                         activeSummary = context.summary
@@ -2288,7 +2295,11 @@ class ChatViewModel private constructor(
                 },
                 failureState = runtime::agentFailureState,
                 compactContext = { candidate, force ->
-                    val compacted = context.prepare(candidate, force)
+                    val compacted = try {
+                        context.prepare(candidate, force)
+                    } finally {
+                        if (ticket == generation) _uiState.update { it.copy(compacting = false) }
+                    }
                     if (compacted != candidate) {
                         // A completed compaction leaves one visible, persisted marker row;
                         // modelMessages keeps it off the wire and projection carries the earlier ones.

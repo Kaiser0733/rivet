@@ -33,6 +33,10 @@ import kotlinx.coroutines.withContext
 internal fun projectionCanBeSent(after: Long, baseline: Long, ceiling: Long): Boolean =
     after < ceiling && after < baseline
 
+/** Leave room above irreducible input while ensuring a manual request actually shrinks. */
+internal fun manualCompactionTarget(current: Long, floor: Long): Long =
+    floor + (current - floor).coerceAtLeast(0) / 2
+
 /** Builds the request that is actually sent, then changes only its durable active projection. */
 internal class ContextPreparation(
     private val store: ContextStore?,
@@ -43,6 +47,7 @@ internal class ContextPreparation(
     initialSummary: String,
     private val workspaceId: String? = null,
     private val currentRequest: String? = null,
+    private val onCompactionStarted: () -> Unit = {},
     private val request: (List<AgentMessage>, String) -> AgentRequest,
 ) {
     var summary: String = initialSummary
@@ -123,7 +128,10 @@ internal class ContextPreparation(
             else budget.compactToTokens.toLong()
         val marginTokens = minOf((ceilingTokens - idealTarget).coerceAtLeast(0L), usableTokens / 2)
         // Below the ceiling by a whole margin, and reachable even when fixed costs dominate.
-        val targetTokens = ceilingTokens - marginTokens
+        val reachableTarget = ceilingTokens - marginTokens
+        val targetTokens = if (force) minOf(reachableTarget,
+            manualCompactionTarget(baseline, floorTokens)) else reachableTarget
+        if (baseline > floorTokens) onCompactionStarted()
         val roomAfterMinimum = targetTokens - minimumTokens - summaryEnvelopeTokens - 256L
         val summaryBudgetTokens = minOf(TaskState.MAX_BYTES / 3L, roomAfterMinimum / 2)
             .coerceAtLeast(0)
