@@ -1,6 +1,6 @@
 # Rivet fix round
 
-Branch `fix-round` starts at `e3d5f620`, the fetched `origin/batch/surface-fix` head. The plan is the first commit, `69acf8a5` (`fixround_plan.md)). The active checkout is `/storage/emulated/0/Rivet/rivet-redesign` and follows the shared workspace's `AGENTS.md`. The pre-existing deletions in this checkout were eleven app-resource PNGs. They stayed unstaged and out of the branch.
+Branch `fix-round` starts at `e3d5f620`, the fetched `origin/batch/surface-fix` head. The plan is the first commit, `69acf8a5` (`fixround_plan.md)). The active checkout is `/storage/emulated/0/Rivet/rivet-redesign` and follows the shared workspace's `AGENTS.md`. The pre-existing deletions in this checkout were twelve app-resource PNGs. They stayed unstaged and out of the branch.
 
 ## Changes by section
 
