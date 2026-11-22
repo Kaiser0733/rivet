@@ -218,7 +218,7 @@ fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
             ?.takeIf { !CompactionNotice.isNotice(it.kind) &&
                 (it.kind != SKILL_CATALOG_KIND || message === lastCatalog) &&
                 (it.kind != ToolchainContext.KIND || message === lastToolchain) &&
-                (it.kind != GoalMemoryContext.KIND || message === lastGoalMemory) &&
+                (it.kind != GoalMemoryContext.KIND || message === lastGoalMemory && it.content.isNotBlank()) &&
                 (it.kind != RunContext.KIND || message === lastRun) &&
                 (it.kind != "rollback" || message === lastRollback) &&
                 (it.kind != SubagentContext.POOL_KIND || message === lastSubagentPool) }

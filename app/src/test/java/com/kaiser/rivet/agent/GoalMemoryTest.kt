@@ -76,6 +76,15 @@ class GoalMemoryTest {
         assertTrue(changed.single().internalContext!!.content.contains("paused"))
     }
 
+    @Test fun anEmptyScopedSnapshotRetiresAnOldGoalFromTheRequest() {
+        val old = GoalDocument.newGoal("finish the tea essay", "chat-a")
+        val previous = GoalMemoryContext.updates(emptyList(), "tree://p", old, "")
+        val updated = previous + GoalMemoryContext.updates(previous, "tree://p", null, "")
+        assertTrue(modelMessages(updated, "tree://p", enforceWorkspace = true).isEmpty())
+        assertNull(old.lineForSession("chat-b"))
+        assertNotNull(old.lineForSession("chat-a"))
+    }
+
     @Test fun goalMemoryStaysValidAtMaxFactsAndWithoutWorkspace() {
         val goal = GoalDocument.newGoal("ship safely", "s1")
         val hugeMemory = (1..200).joinToString("\n") { i -> "- fact $i: ${"é".repeat(280)}" }

@@ -60,6 +60,7 @@ import com.kaiser.rivet.agent.SpendGuard
 import com.kaiser.rivet.agent.SlashCommands
 import com.kaiser.rivet.agent.BuiltInSlash
 import com.kaiser.rivet.agent.lineForSession
+import com.kaiser.rivet.agent.ownedBy
 import com.kaiser.rivet.agent.parseGoalCommand
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.InternalContext
@@ -777,7 +778,7 @@ class ChatViewModel private constructor(
             currentRun = try { runJournal?.recoverLatest() }
                 catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         }
-        val goal = projectGoal ?: sessionGoal
+        val goal = projectGoal.ownedBy(sessionId) ?: sessionGoal.ownedBy(sessionId)
         val run = currentRun
         val resumable = run?.resumable == true
         runResumeContext = resumable
@@ -785,7 +786,7 @@ class ChatViewModel private constructor(
         val externalGoal = knownGoalMarkdown != null && projectMarkdown != knownGoalMarkdown
         knownGoalMarkdown = projectMarkdown
         _uiState.update {
-            it.copy(goal = goal, goalLine = (goal.takeIf { it?.sessionId == sessionId } ?: sessionGoal).lineForSession(sessionId),
+            it.copy(goal = goal, goalLine = goal.lineForSession(sessionId),
                 goalAttachOffer = workspace != null && projectGoal == null && sessionGoal != null,
                 memoryMarkdown = memoryMarkdown,
                 memoryLines = MemoryFormat.facts(memoryMarkdown),
@@ -1025,10 +1026,12 @@ class ChatViewModel private constructor(
                 val files = workspace?.let(::ProjectStateFiles)
                 projectState = files
                 runJournal = files?.let { RunJournal(ProjectRunStorage(it)) }
-                val sessionId = _uiState.value.currentSessionId
+                val sessionId = _uiState.value.currentSessionId ?: return@launch
                 val projectStored = files?.loadGoal()?.takeIf { it.state != GoalState.Dropped }
                 val sessionStored = sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped }
-                var goal = projectStored ?: sessionStored
+                val projectOwned = projectStored.ownedBy(sessionId)
+                val goal = projectOwned ?: sessionStored.ownedBy(sessionId)
+                val goalFiles = files.takeIf { projectStored == null || projectOwned != null }
                 when (command) {
                     is GoalCommand.Set -> {
                         if (command.text.isBlank()) {
@@ -1036,12 +1039,11 @@ class ChatViewModel private constructor(
                             return@launch
                         }
                         val next = GoalDocument.replaceGoal(goal, command.text, sessionId)
-                        if (files != null) files.saveGoal(next)
+                        if (goalFiles != null) goalFiles.saveGoal(next)
                         else sessionGoals.save(sessionId, next)
-                        projectGoal = if (files != null) next else projectGoal
-                        sessionGoal = if (files == null) next else sessionGoal
-                        if (files != null) knownGoalMarkdown = GoalDocument.render(next)
-                        goal = next
+                        projectGoal = if (goalFiles != null) next else projectGoal
+                        sessionGoal = if (goalFiles == null) next else sessionGoal
+                        if (goalFiles != null) knownGoalMarkdown = GoalDocument.render(next)
                         _uiState.update { it.copy(goal = next, goalLine = next.lineForSession(it.currentSessionId),
                             notice = "Goal set: ${next.text.take(160)}", error = null,
                             commandAckCount = it.commandAckCount + 1) }
@@ -1066,13 +1068,13 @@ class ChatViewModel private constructor(
                         }
                         val next = goal.withState(state, sessionId)
                         if (state == GoalState.Dropped) {
-                            if (files != null) files.saveGoal(next) else sessionGoals.save(sessionId, null)
+                            if (goalFiles != null) goalFiles.saveGoal(next) else sessionGoals.save(sessionId, null)
                         } else {
-                            if (files != null) files.saveGoal(next) else sessionGoals.save(sessionId, next)
+                            if (goalFiles != null) goalFiles.saveGoal(next) else sessionGoals.save(sessionId, next)
                         }
-                        projectGoal = if (files != null) next.takeIf { state != GoalState.Dropped } else projectGoal
-                        sessionGoal = if (files == null) next.takeIf { state != GoalState.Dropped } else sessionGoal
-                        if (files != null) knownGoalMarkdown = renderedGoalOrNull(projectGoal)
+                        projectGoal = if (goalFiles != null) next.takeIf { state != GoalState.Dropped } else projectGoal
+                        sessionGoal = if (goalFiles == null) next.takeIf { state != GoalState.Dropped } else sessionGoal
+                        if (goalFiles != null) knownGoalMarkdown = renderedGoalOrNull(projectGoal)
                         val shown = if (state == GoalState.Dropped) null else next
                         _uiState.update { it.copy(goal = shown, goalLine = shown.lineForSession(it.currentSessionId),
                             notice = when (state) {
@@ -1158,7 +1160,10 @@ class ChatViewModel private constructor(
             } else emptyList()) +
             (if (hasWorkspace) SubagentTools.definitions else emptyList()) +
             (if (archiveAvailable) listOf(ArchiveRecall.definition) else emptyList())
-        return coordinatorRequest(config, workspaceId, messages, tools, phoneAccess, archiveAvailable, pinnedArchive)
+        val state = _uiState.value
+        val refreshed = messages + GoalMemoryContext.updates(messages, workspaceId,
+            state.goal.ownedBy(state.currentSessionId), state.memoryMarkdown)
+        return coordinatorRequest(config, workspaceId, refreshed, tools, phoneAccess, archiveAvailable, pinnedArchive)
     }
 
     private fun readContextMeter(config: ProviderConfig, request: AgentRequest): ContextMeterReading =
@@ -1395,9 +1400,9 @@ class ChatViewModel private constructor(
         try {
             val files = ProjectStateFiles(workspace)
             val project = files.loadGoal()?.takeIf { it.state != GoalState.Dropped }
-            val session = sessionGoals.load(_uiState.value.currentSessionId)
-                ?.takeIf { it.state != GoalState.Dropped }
-            val goal = project ?: session
+            val sessionId = _uiState.value.currentSessionId
+            val session = sessionGoals.load(sessionId).ownedBy(sessionId)
+            val goal = project.ownedBy(sessionId) ?: session
             val memory = files.loadMemory()
             val rendered = renderedGoalOrNull(project)
             val externalGoal = knownGoalMarkdown != null && rendered != knownGoalMarkdown
@@ -1408,8 +1413,7 @@ class ChatViewModel private constructor(
             memoryMarkdown = memory
             _uiState.update {
                 if (it.goal == goal && it.memoryMarkdown == memory && !externalGoal) it
-                else it.copy(goal = goal, goalLine = (project?.takeIf { goal -> goal.sessionId == it.currentSessionId } ?: session)
-                    .lineForSession(it.currentSessionId),
+                else it.copy(goal = goal, goalLine = goal.lineForSession(it.currentSessionId),
                     memoryMarkdown = memory, memoryLines = MemoryFormat.facts(memory),
                     goalAttachOffer = project == null && session != null,
                     notice = if (externalGoal) "Goal changed outside Rivet; reloaded." else it.notice)
@@ -1640,13 +1644,18 @@ class ChatViewModel private constructor(
         val files = projectState
         val stored = try { files?.loadGoal()?.takeIf { it.state != GoalState.Dropped } }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
-        val goal = stored ?: sessionGoal ?: projectGoal ?: return
+        val ownedProject = stored.ownedBy(sessionId)
+        val goal = ownedProject ?: sessionGoal.ownedBy(sessionId) ?: return
         if (goal.state != GoalState.Active || note.isBlank()) return
         val next = goal.withProgress(note, sessionId)
-        if (files != null) files.saveGoal(next) else sessionGoals.save(sessionId, next)
-        projectGoal = if (files != null) next else projectGoal
-        sessionGoal = if (files == null) next else sessionGoal
-        if (files != null) knownGoalMarkdown = GoalDocument.render(next)
+        if (ownedProject != null && files != null) {
+            files.saveGoal(next)
+            projectGoal = next
+            knownGoalMarkdown = GoalDocument.render(next)
+        } else {
+            sessionGoals.save(sessionId, next)
+            sessionGoal = next
+        }
         _uiState.update { it.copy(goal = next, goalLine = next.lineForSession(it.currentSessionId)) }
     }
 
@@ -1897,8 +1906,9 @@ class ChatViewModel private constructor(
                 ))
                 if (workspaceId != null && workspace != null) addAll(goalMemoryUpdates(
                     messages, workspaceId, workspace))
-                else if (workspaceId == null && sessionGoal != null) {
-                    addAll(GoalMemoryContext.updates(messages, null, sessionGoal, ""))
+                else if (workspaceId == null) {
+                    addAll(GoalMemoryContext.updates(messages, null,
+                        sessionGoal.ownedBy(_uiState.value.currentSessionId), ""))
                 }
                 if (gesture != null && workspaceId != null) {
                     add(SkillContext.invocation(gesture.skill, workspaceId))
@@ -3248,7 +3258,7 @@ class ChatViewModel private constructor(
     }
 
     fun newSession() {
-        changeSession { store -> store.create(workspaceSelection.currentIdentity(), reuseEmpty = true) }
+        changeSession { store -> store.create(workspaceSelection.currentIdentity(), reuseEmpty = _uiState.value.goal == null) }
     }
 
     fun resumeSession(id: String) {
@@ -3350,7 +3360,7 @@ class ChatViewModel private constructor(
                     undoCheckpointId = if (keepUndo) project.undoCheckpointId else null,
                     lastTurnFiles = if (keepUndo) project.lastTurnFiles else emptyList(),
                     lastTurnFileCount = if (keepUndo) project.lastTurnFileCount else 0,
-                    goal = project.goal, goalLine = project.goal.lineForSession(selected.id),
+                    goal = project.goal.ownedBy(selected.id), goalLine = project.goal.lineForSession(selected.id),
                     goalAttachOffer = project.goalAttachOffer && project.goal?.sessionId == selected.id,
                     memoryMarkdown = project.memoryMarkdown, memoryLines = project.memoryLines,
                     run = project.run, runRecovery = project.runRecovery,
