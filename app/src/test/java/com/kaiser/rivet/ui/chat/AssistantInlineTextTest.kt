@@ -16,7 +16,8 @@ class AssistantInlineTextTest {
     }
 
     @Test fun onlyActualMarkupChangesTheFont() {
-        val text = assistantInlineText(parseInlineMarkdown("genuinely **bold** and `file.kt`."), Color.Gray)
+        val text = assistantInlineText(parseInlineMarkdown("genuinely **bold** and `file.kt`."), Color.Gray,
+            existingFiles = setOf("file.kt"))
         assertEquals("genuinely bold and file.kt.", text.text)
         assertEquals(listOf("bold", "file.kt"), text.spanStyles.map { text.text.substring(it.start, it.end) })
         assertEquals(FontWeight.SemiBold, text.spanStyles[0].item.fontWeight)
@@ -35,6 +36,14 @@ class AssistantInlineTextTest {
         val link = range.item as androidx.compose.ui.text.LinkAnnotation.Clickable
         link.linkInteractionListener!!.onClick(link)
         assertEquals("docs/notes.md", opened)
+    }
+
+    @Test fun ghostFilesHaveNeitherCodeHighlightNorLinkStyle() {
+        val text = assistantInlineText(parseInlineMarkdown("See `ghost-file.md`"), Color.Gray,
+            existingFiles = setOf("real.md"), linkColor = Color.Blue)
+        assertEquals("See ghost-file.md", text.text)
+        assertTrue(text.spanStyles.isEmpty())
+        assertTrue(text.getLinkAnnotations(0, text.length).isEmpty())
     }
 
     @Test fun linksUseProjectRelativeFilesAndLeaveOtherReferencesInert() {

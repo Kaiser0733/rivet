@@ -12,6 +12,9 @@ internal val LocalAssistantFileLinks = staticCompositionLocalOf<AssistantFileLin
 
 internal fun inlineFilePath(run: InlineRun): String? {
     if (!run.code || displaySafeText(run.text) != run.text) return null
+    // A path with whitespace needs an explicit directory or file extension to be a reference.
+    if (run.text.any(Char::isWhitespace) && '/' !in run.text &&
+        !run.text.substringAfterLast('.').matches(Regex("[A-Za-z0-9]+"))) return null
     return runCatching { presentablePath(run.text.removePrefix("./")).value }.getOrNull()
 }
 
