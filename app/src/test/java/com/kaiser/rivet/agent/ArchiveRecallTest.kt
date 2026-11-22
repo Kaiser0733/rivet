@@ -13,6 +13,11 @@ class ArchiveRecallTest {
         assertFalse(ArchiveRecall.required("Remember this number for next time."))
     }
 
+    @Test fun expandedPhrasesUsePortableFts4QuerySyntax() {
+        assertEquals(listOf("\"code\" \"word\"", "\"number\""),
+            ArchiveRecall.matchQueries(listOf("code word", "the number", "code word")))
+    }
+
     @Test fun theAnswerIsAnExactQuoteOrAnExplicitMiss() {
         val candidate = "The code word is monsoon-42 and the number is 5000."
         val hit = ArchiveWindow("You", 1, 0, ArchiveRecall.sentence("Hi. $candidate", listOf("code word")), emptyList())

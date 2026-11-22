@@ -91,7 +91,7 @@ class FixRoundSurfacesTest(unittest.TestCase):
             db.executemany("INSERT INTO archive_fts VALUES (?,?,?,?,?,?)", rows)
             self.assertEqual(db.execute(
                 "SELECT body FROM archive_fts WHERE body MATCH ? AND session_id=? AND CAST(turn AS INTEGER)<=?",
-                ('("code" "word") OR ("number")', "chat", 2),
+                ('"code" "word"', "chat", 2),
             ).fetchall(), [(rows[0][-1],)])
             self.assertEqual(db.execute(
                 "SELECT source FROM archive_fts WHERE body MATCH ? AND session_id=?",

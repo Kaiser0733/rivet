@@ -46,10 +46,9 @@ internal object ArchiveRecall {
     fun terms(phrase: String): List<String> = words.findAll(phrase.take(1024).lowercase())
         .map { it.value }.filter { it.length >= 3 && it !in stop }.distinct().take(8).toList()
 
-    fun matchQuery(queries: List<String>): String? = queries.take(6)
+    fun matchQueries(queries: List<String>): List<String> = queries.take(6)
         .map(::terms).filter(List<String>::isNotEmpty).distinct()
-        .joinToString(" OR ") { parts -> parts.joinToString(" ", "(", ")") { "\"$it\"" } }
-        .ifBlank { null }
+        .map { parts -> parts.joinToString(" ") { "\"$it\"" } }
 
     fun fallbackQueries(prompt: String): List<String> {
         val specific = listOf("code word", "number", "my name", "nickname")

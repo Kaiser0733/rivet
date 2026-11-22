@@ -436,23 +436,32 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
 
     suspend fun searchArchive(id: String, queries: List<String>, excludeLastUser: Boolean = false):
         List<ArchiveWindow> = onDatabase { db ->
-        val expression = ArchiveRecall.matchQuery(queries) ?: return@onDatabase emptyList()
+        val expressions = ArchiveRecall.matchQueries(queries)
+        if (expressions.isEmpty()) return@onDatabase emptyList()
         indexArchive(db, id)
         val lastTurn = if (!excludeLastUser) Int.MAX_VALUE else db.rawQuery(
             "SELECT COALESCE(MAX(CAST(turn AS INTEGER)),0) FROM archive_fts WHERE session_id=? AND source='You'",
             arrayOf(id),
         ).use { it.moveToFirst(); it.getInt(0) - 1 }
-        data class Hit(val source: String, val turn: Int, val at: Long, val text: String)
-        val hits = db.rawQuery(
-            "SELECT source,CAST(turn AS INTEGER),CAST(happened_at AS INTEGER),body FROM archive_fts " +
-                "WHERE body MATCH ? AND session_id=? AND CAST(turn AS INTEGER)<=? " +
-                "ORDER BY CAST(turn AS INTEGER) DESC, CASE source WHEN 'Checkpoint' THEN 1 ELSE 0 END, " +
-                "CAST(happened_at AS INTEGER) DESC, CAST(source_id AS INTEGER) DESC LIMIT 12",
-            arrayOf(expression, id, lastTurn.toString()),
-        ).use { cursor -> buildList {
-            while (cursor.moveToNext()) add(Hit(cursor.getString(0), cursor.getInt(1), cursor.getLong(2), cursor.getString(3)))
-        } }
-        hits.distinctBy { it.source to it.turn }.take(3).map { hit ->
+        data class Hit(val source: String, val sourceId: Long, val turn: Int, val at: Long, val text: String)
+        val byPhrase = expressions.map { expression ->
+            db.rawQuery(
+                "SELECT source,CAST(source_id AS INTEGER),CAST(turn AS INTEGER),CAST(happened_at AS INTEGER),body " +
+                    "FROM archive_fts WHERE body MATCH ? AND session_id=? AND CAST(turn AS INTEGER)<=? " +
+                    "ORDER BY CAST(turn AS INTEGER) DESC, CASE source WHEN 'Checkpoint' THEN 1 ELSE 0 END, " +
+                    "CAST(happened_at AS INTEGER) DESC, CAST(source_id AS INTEGER) DESC LIMIT 3",
+                arrayOf(expression, id, lastTurn.toString()),
+            ).use { cursor -> buildList {
+                while (cursor.moveToNext()) {
+                    add(Hit(cursor.getString(0), cursor.getLong(1), cursor.getInt(2), cursor.getLong(3), cursor.getString(4)))
+                }
+            } }
+        }
+        val hits = (byPhrase.mapNotNull { it.firstOrNull() } + byPhrase.flatten())
+            .distinctBy { it.source to it.sourceId }.take(4)
+            .sortedWith(compareByDescending<Hit> { it.turn }.thenBy { it.source == "Checkpoint" }
+                .thenByDescending { it.at }.thenByDescending { it.sourceId })
+        hits.map { hit ->
             val nearby = db.rawQuery(
                 "SELECT CAST(turn AS INTEGER),source,body FROM archive_fts WHERE session_id=? " +
                     "AND source IN ('You','Rivet') AND CAST(turn AS INTEGER) BETWEEN ? AND ? " +
