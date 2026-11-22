@@ -21,14 +21,13 @@ internal fun assistantInlineText(
     open: (String) -> Unit = {},
 ): AnnotatedString =
     buildAnnotatedString {
-        for (run in runs) {
+        for ((run, candidate) in runs.flatMap(::fileReferenceRuns)) {
             val content = displaySafeText(run.text)
-            val candidate = inlineFilePath(run)
             val path = candidate?.takeIf { it in existingFiles }
             val explicitPath = candidate?.let { '.' in it || '/' in it ||
                 it in setOf("README", "LICENSE", "Makefile", "Dockerfile", "Gemfile") } == true
             val showCode = run.code && (!explicitPath || path != null)
-            if (!showCode && !run.bold && !run.italic) {
+            if (path == null && !showCode && !run.bold && !run.italic) {
                 append(content)
                 continue
             }
