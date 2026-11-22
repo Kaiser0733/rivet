@@ -1388,7 +1388,7 @@ class ChatViewModel private constructor(
             memoryMarkdown = memory
             _uiState.update {
                 if (it.goal == goal && it.memoryMarkdown == memory && !externalGoal) it
-                else it.copy(goal = goal, goalLine = (project.takeIf { project?.sessionId == it.currentSessionId } ?: session)
+                else it.copy(goal = goal, goalLine = (project?.takeIf { goal -> goal.sessionId == it.currentSessionId } ?: session)
                     .lineForSession(it.currentSessionId),
                     memoryMarkdown = memory, memoryLines = MemoryFormat.facts(memory),
                     goalAttachOffer = project == null && session != null,
