@@ -638,7 +638,7 @@ class BrowserTools(private val session: BrowserSession) {
                         put("type", "integer"); put("minimum", 0); put("maximum", 2000)
                     })),
             AgentToolDefinition("browser_wait_for",
-                "Wait for all supplied conditions: visible selector/text (or gone), 500 ms network idle, or a JS predicate.",
+                "Wait for all supplied conditions: visible selector/text (or gone), 500 ms network idle, or a JS predicate. Use this instead of run_command sleep polling.",
                 schema(emptyList(), "selector" to string, "text" to string, "gone" to boolean,
                     "network_idle" to boolean, "js" to string,
                     "timeout_ms" to buildJsonObject {
@@ -651,7 +651,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "Rebuild the renderer. reopen restores the URL; clear_storage deletes browser cookies and storage.",
                 schema(emptyList(), "reopen" to boolean, "clear_storage" to boolean)),
             AgentToolDefinition("browser_status",
-                "Inspect renderer, viewport, resource tier, and handoff. Use browser_reset on a stuck viewport.",
+                "Inspect renderer, viewport, resource tier (normal|strictdiet|readerfirst|norenderer), and handoff. Use browser_reset on a stuck viewport.",
                 schema(emptyList())),
             AgentToolDefinition("browser_read",
                 "Read page text with chunk (starts at 0). Only include hidden text when the user asks.",
@@ -672,7 +672,7 @@ class BrowserTools(private val session: BrowserSession) {
                 "Go back in the current browser window's history.",
                 schema(emptyList())),
             AgentToolDefinition("browser_shot",
-                "Capture the browser viewport. Vision models get the image.",
+                "Capture the browser viewport. Vision-capable models get the image; text-only models get vision_attached=false and a note.",
                 schema(emptyList())),
             AgentToolDefinition("browser_close",
                 "Close the visual browser and free its renderer.",
