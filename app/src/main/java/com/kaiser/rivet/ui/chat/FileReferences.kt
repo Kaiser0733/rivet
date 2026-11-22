@@ -2,10 +2,12 @@ package com.kaiser.rivet.ui.chat
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.kaiser.rivet.agent.presentablePath
+import com.kaiser.rivet.workspace.FilePreviewResult
 
 internal class AssistantFileLinks(
     val resolve: suspend (Set<String>) -> Set<String>,
     val open: suspend (String) -> Boolean,
+    val load: suspend (String) -> FilePreviewResult,
 )
 
 internal val LocalAssistantFileLinks = staticCompositionLocalOf<AssistantFileLinks?> { null }
@@ -25,6 +27,7 @@ internal fun fileReferencePaths(blocks: List<ChatMarkdownBlock>): Set<String> = 
     for (block in blocks) {
         when (block) {
             is ChatMarkdownBlock.Paragraph -> collect(block.text)
+            is ChatMarkdownBlock.Image -> projectImagePath(block.source)?.let(::add)
             is ChatMarkdownBlock.Heading -> collect(block.text)
             is ChatMarkdownBlock.Quote -> collect(block.text)
             is ChatMarkdownBlock.ListItems -> block.items.forEach(::collect)
@@ -32,3 +35,10 @@ internal fun fileReferencePaths(blocks: List<ChatMarkdownBlock>): Set<String> = 
         }
     }
 }
+
+internal fun projectImagePath(source: String): String? {
+    if (displaySafeText(source) != source || ':' in source) return null
+    return runCatching { presentablePath(source.removePrefix("./")).value }.getOrNull()
+}
+
+internal fun ChatMarkdownBlock.Image.fallbackText(): String = alt.ifBlank { source }

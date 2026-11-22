@@ -103,6 +103,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -307,6 +308,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             val session = state.currentSessionId
             AssistantFileLinks(
                 resolve = { paths -> chatViewModel.existingProjectFiles(paths, identity) },
+                load = { path -> chatViewModel.previewProjectFile(path, identity) },
                 open = { path ->
                     val exists = path in chatViewModel.existingProjectFiles(setOf(path), identity)
                     if (exists && chatViewModel.uiState.value.currentSessionId == session) {
@@ -1458,7 +1460,10 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
     // re-splits and re-joins the whole reply; this keeps the blocks before the last one and
     // re-parses only that block, with the same result (see MarkdownBlocks).
     val parser = remember { MarkdownBlocks() }
-    val blocks = parser.forText(text)
+    val parsed = parser.forText(text)
+    val blocks = remember(parsed) { parsed.flatMap { block ->
+        if (block is ChatMarkdownBlock.Paragraph) splitParagraphImages(block.text) else listOf(block)
+    } }
     val links = LocalAssistantFileLinks.current
     val paths = remember(blocks, links != null) {
         if (links == null) emptySet() else fileReferencePaths(blocks)
@@ -1502,8 +1507,17 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                         }
                     }
                 }
-                is ChatMarkdownBlock.Image -> if (showInlineImages) BrowserImage(block)
-                    else if (block.alt.isNotBlank()) InlineMarkdown(block.alt)
+                is ChatMarkdownBlock.Image -> {
+                    val path = projectImagePath(block.source)
+                    when {
+                        !showInlineImages -> if (block.alt.isNotBlank()) Text(displaySafeText(block.alt))
+                        path != null && path in files && links != null && open != null ->
+                            ProjectInlineImage(block, path, links, open)
+                        block.source.startsWith('/') || block.source.startsWith("file://") ->
+                            BrowserImage(block, unavailable = displaySafeText(block.fallbackText()))
+                        else -> Text(displaySafeText(block.fallbackText()))
+                    }
+                }
                 is ChatMarkdownBlock.Table -> MarkdownTable(block)
                 is ChatMarkdownBlock.Code -> Column(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1532,6 +1546,23 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ProjectInlineImage(image: ChatMarkdownBlock.Image, path: String, links: AssistantFileLinks,
+                               onOpen: (String) -> Unit) {
+    val preview by produceState<FilePreviewResult?>(null, links, path) {
+        value = links.load(path)
+    }
+    val bitmap = (preview as? FilePreviewResult.Image)?.bitmap
+    if (bitmap == null) {
+        Text(displaySafeText(image.fallbackText()), style = MaterialTheme.typography.bodyMedium)
+    } else {
+        Image(bitmap.asImageBitmap(), displaySafeText(image.fallbackText()),
+            modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).clip(MaterialTheme.shapes.small)
+                .clickable(role = Role.Button, onClickLabel = "Open image preview") { onOpen(path) },
+            contentScale = ContentScale.Fit)
     }
 }
 

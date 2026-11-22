@@ -165,14 +165,32 @@ internal class MarkdownBlocks {
     }
 }
 
-/** A standalone screenshot line is an attachment, not raw markdown in a paragraph. */
-private fun image(line: String): ChatMarkdownBlock.Image? {
-    if (!line.startsWith("![")) return null
-    val close = line.indexOf("](")
-    if (close <= 1 || !line.endsWith(")")) return null
-    val source = line.substring(close + 2, line.length - 1).trim()
-    if (source.isBlank() || source.any { it.isWhitespace() }) return null
-    return ChatMarkdownBlock.Image(line.substring(2, close), source)
+private val imageSyntax = Regex("""!\[([^\]\r\n]*)]\((<[^<>\r\n]+>|[^\s()]+)\)""")
+
+private fun image(line: String): ChatMarkdownBlock.Image? =
+    imageSyntax.matchEntire(line.trim())?.let(::imageReference)
+
+private fun imageReference(match: MatchResult): ChatMarkdownBlock.Image =
+    ChatMarkdownBlock.Image(match.groupValues[1], match.groupValues[2].removeSurrounding("<", ">"))
+
+internal fun splitParagraphImages(text: String): List<ChatMarkdownBlock> {
+    if ("![" !in text) return listOf(ChatMarkdownBlock.Paragraph(text))
+    val code = pairSpans(text, "`", InlineStyle.Code)
+    var from = 0
+    return buildList {
+        for (match in imageSyntax.findAll(text)) {
+            val start = match.range.first
+            if (text.getOrNull(start - 1) == '\\' ||
+                code.any { start in it.openStart..it.closeStart }) continue
+            val before = text.substring(from, start).trim()
+            if (before.isNotEmpty()) add(ChatMarkdownBlock.Paragraph(before))
+            add(imageReference(match))
+            from = match.range.last + 1
+        }
+        if (from == 0) add(ChatMarkdownBlock.Paragraph(text))
+        else text.substring(from).trim().takeIf(String::isNotEmpty)
+            ?.let { add(ChatMarkdownBlock.Paragraph(it)) }
+    }
 }
 
 private fun heading(line: String): ChatMarkdownBlock.Heading? {
