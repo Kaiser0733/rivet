@@ -156,7 +156,7 @@ import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.PresentedFile
-import com.kaiser.rivet.agent.parseGoalCommand
+import com.kaiser.rivet.agent.SlashCommands
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.ui.provider.labelRes
@@ -405,14 +405,11 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     error = state.error, notice = state.notice, sessionId = state.currentSessionId,
                     skills = skillCatalog?.skills.orEmpty(),
                     onRequestSkills = chatViewModel::refreshSkillCatalog,
-                    onSendFeedback = onSendFeedback,
-                    onCompact = chatViewModel::compactHistory,
-                    onAutonomyChange = onAutonomyChange,
                     folderName = state.projectName,
                     onOpenProjects = onOpenProjects,
                     selector = modelSelector,
                     contextReading = contextReading,
-                    onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
+                    onSend = { chatViewModel.send(it, onSendFeedback, onAutonomyChange) }, onCancel = chatViewModel::cancel,
                     modifier = Modifier.fillMaxWidth())
             }
         }
@@ -1698,7 +1695,7 @@ private val DRAFT_SAVER: Saver<Map<String, String>, Any> = mapSaver(
     restore = { saved -> saved.mapNotNull { (key, value) -> (value as? String)?.let { key to it } }.toMap() },
 )
 
-internal fun isGoalCommand(text: String): Boolean = parseGoalCommand(text) != null
+internal fun isGoalCommand(text: String): Boolean = SlashCommands.builtIn(text) == SlashAction.Goal
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1714,9 +1711,6 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
-                     onSendFeedback: () -> Unit,
-                     onCompact: () -> Unit,
-                     onAutonomyChange: (AutonomyMode) -> Unit,
                      folderName: String?,
                      onOpenProjects: () -> Unit,
                      selector: (@Composable () -> Unit)? = null,
@@ -1808,9 +1802,9 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // exists. Plain text still needs a project and a provider; without a provider the
     // send is allowed so the view model can explain what to choose instead of the
     // button silently refusing the tap.
-    val goalCommand = isGoalCommand(draft)
+    val builtInCommand = SlashCommands.builtIn(draft) != null
     val canSend = ready && !streaming && (draft.isNotBlank() || attachment != null) && pendingText == null &&
-        (goalCommand || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
+        (builtInCommand || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
             !hasProvider)
     // Trailing newlines and spaces are noise; the model never wanted them.
     val submit = {
@@ -1867,13 +1861,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                             else -> ""
                         }
                         drafts = withDraft(drafts, sessionId, nextDraft)
-                        when (row.action) {
-                            SlashAction.Feedback -> onSendFeedback()
-                            SlashAction.Compact -> onCompact()
-                            SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
-                            SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
-                            else -> Unit
-                        }
+                        row.action?.takeUnless { it == SlashAction.Goal }?.let { onSend("/${it.token}") }
                     }
                 }
             }

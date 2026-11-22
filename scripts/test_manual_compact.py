@@ -19,9 +19,9 @@ class ManualCompactTest(unittest.TestCase):
 
     def test_the_tap_fires_the_view_model_compaction(self):
         chat = (SRC / "ui/chat/ChatScreen.kt").read_text()
-        self.assertIn("SlashAction.Compact -> onCompact()", chat)
-        self.assertIn("onCompact = chatViewModel::compactHistory", chat)
-        self.assertIn("onCompact: () -> Unit", chat)
+        self.assertIn('onSend("/${it.token}")', chat)
+        model = (SRC / "chat/ChatViewModel.kt").read_text()
+        self.assertIn("BuiltInSlash.Compact -> compactHistory()", model)
         self.assertIn("compactEnabled = compactRowEnabled(streaming)", chat)
 
     def test_the_trigger_decision_is_a_pure_seam(self):

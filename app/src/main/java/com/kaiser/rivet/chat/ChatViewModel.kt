@@ -58,6 +58,7 @@ import com.kaiser.rivet.agent.PricingTable
 import com.kaiser.rivet.agent.SpendCaps
 import com.kaiser.rivet.agent.SpendGuard
 import com.kaiser.rivet.agent.SlashCommands
+import com.kaiser.rivet.agent.BuiltInSlash
 import com.kaiser.rivet.agent.parseGoalCommand
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.InternalContext
@@ -936,21 +937,32 @@ class ChatViewModel private constructor(
         _uiState.update { it.copy(projectError = "Rivet couldn't open the folder picker. Try again.") }
     }
 
-    fun send(text: String) {
+    fun send(
+        text: String,
+        onFeedback: () -> Unit = {},
+        onAutonomyChange: (AutonomyMode) -> Unit = {},
+    ) {
         val trimmed = text.trim()
         val sessionId = _uiState.value.currentSessionId
         val attachment = _composerAttachments.value[sessionId]
         if ((trimmed.isEmpty() && attachment == null) || _uiState.value.streaming || !_uiState.value.ready ||
             _uiState.value.recoveringProjectChanges) return
-        val command = parseGoalCommand(trimmed)
+        val command = SlashCommands.builtIn(trimmed)
         if (command != null) {
-            handleGoalCommand(command)
+            when (command) {
+                BuiltInSlash.Goal -> handleGoalCommand(requireNotNull(parseGoalCommand(SlashCommands.normalize(trimmed))))
+                BuiltInSlash.Compact -> compactHistory()
+                BuiltInSlash.Feedback -> onFeedback()
+                BuiltInSlash.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
+                BuiltInSlash.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
+            }
+            if (command != BuiltInSlash.Goal) _uiState.update { it.copy(commandAckCount = it.commandAckCount + 1) }
             return
         }
         val unknownCommand = SlashCommands.unknownLeading(trimmed, _userSkills.value)
         if (unknownCommand != null) {
             _uiState.update { it.copy(
-                notice = "Unknown command. Use /goal or pick a skill from the slash list.",
+                notice = "Unknown command. Pick a command or skill from the slash list.",
                 error = null,
                 commandAckCount = it.commandAckCount + 1,
             ) }
