@@ -29,7 +29,6 @@ import android.graphics.BitmapFactory
 import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
-import android.widget.Toast
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -84,7 +83,6 @@ import com.kaiser.rivet.ui.entryProgress
 import com.kaiser.rivet.ui.messageEntry
 import com.kaiser.rivet.ui.motionDisabled
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
@@ -685,83 +683,85 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
         }
     }
-    LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        state.goalLine?.let { line ->
-            item(key = "goal-line") {
-                GoalLine(line, state.goalAttachOffer, onAttachGoal)
+    SelectionContainer {
+        LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
+            contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
+            verticalArrangement = Arrangement.spacedBy(6.dp)) {
+            state.goalLine?.let { line ->
+                item(key = "goal-line") {
+                    GoalLine(line, state.goalAttachOffer, onAttachGoal)
+                }
             }
-        }
-        // Goal first, then the interruption notice, then the transcript: restoring a
-        // saved session must never put the recovery banner above the user's goal.
-        if (showInterruptedTurn) item(key = "interrupted-turn") {
-            InterruptedTurnRow(
-                recovery = state.runRecovery,
-                spendLabel = state.spendLabel,
-                budgetPaused = state.budgetPaused,
-                onRaiseBudget = onRaiseBudget,
-                onRetry = onRetryInterruptedTurn,
-                onDismiss = onDismissInterruptedTurn,
-            )
-        }
-        items(segmentedTurns, key = { it.turnIndex }) { turn ->
-            TurnBlockView(
-                turn = turn,
-                state = state,
-                isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
-                messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
-                fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
-                missingFiles = missingFiles,
-                onOpenPreview = onOpenPreview,
-            )
-        }
-        if (showBrowserCard) item(key = "live-browser") {
-            LiveBrowserCard(browser, browserState, browsing)
-        }
-        if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
-            ReasoningRow(
-                streamingReasoning, streaming = true, id = "streaming",
-                showWaitFallback = statusLabel == "Thinking" && state.activity == "Working on it…",
-            )
-        }
-        if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
-            Box(Modifier.messageEntry(answerProgress)) {
-                AssistantMessage(displaySafeText(streamingText), streaming = true)
+            // Goal first, then the interruption notice, then the transcript: restoring a
+            // saved session must never put the recovery banner above the user's goal.
+            if (showInterruptedTurn) item(key = "interrupted-turn") {
+                InterruptedTurnRow(
+                    recovery = state.runRecovery,
+                    spendLabel = state.spendLabel,
+                    budgetPaused = state.budgetPaused,
+                    onRaiseBudget = onRaiseBudget,
+                    onRetry = onRetryInterruptedTurn,
+                    onDismiss = onDismissInterruptedTurn,
+                )
             }
+            items(segmentedTurns, key = { it.turnIndex }) { turn ->
+                TurnBlockView(
+                    turn = turn,
+                    state = state,
+                    isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
+                    messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
+                    fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
+                    missingFiles = missingFiles,
+                    onOpenPreview = onOpenPreview,
+                )
+            }
+            if (showBrowserCard) item(key = "live-browser") {
+                LiveBrowserCard(browser, browserState, browsing)
+            }
+            if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
+                ReasoningRow(
+                    streamingReasoning, streaming = true, id = "streaming",
+                    showWaitFallback = statusLabel == "Thinking" && state.activity == "Working on it…",
+                )
+            }
+            if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
+                Box(Modifier.messageEntry(answerProgress)) {
+                    AssistantMessage(displaySafeText(streamingText), streaming = true)
+                }
+            }
+            liveStatusStart?.let { start ->
+                item(key = "live-status") { LiveStatusRow(statusLabel, start) }
+            }
+            if (state.compacting) item(key = "manual-compaction") { CompactingRow() }
+            if (showActivity) state.activity?.let { activity ->
+                item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+            }
+            state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+            state.error?.let { error -> item {
+                ErrorRow(error, onDismissError,
+                    when (state.errorAction) {
+                        ChatErrorAction.OpenSettings -> "Open Settings"
+                        ChatErrorAction.RetryProjectChanges -> "Try again"
+                        ChatErrorAction.RetryTurn -> "Retry"
+                        null -> null
+                    },
+                    when (state.errorAction) {
+                        ChatErrorAction.OpenSettings -> onOpenSettings
+                        ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
+                        ChatErrorAction.RetryTurn -> onRetryTurn
+                        null -> null
+                    }, blockedReason = commandBusyReason(state.commandRunning), onDiscard = onDiscardProjectChanges.takeIf {
+                        state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
+                            !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
+                            state.projectIdentity != null &&
+                            state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
+                    })
+            } }
+            state.unsupportedReasoning?.let { notice -> item(key = "reasoning-choice") {
+                ReasoningFallbackRow(notice, onChooseReasoning)
+            } }
         }
-        liveStatusStart?.let { start ->
-            item(key = "live-status") { LiveStatusRow(statusLabel, start) }
-        }
-        if (state.compacting) item(key = "manual-compaction") { CompactingRow() }
-        if (showActivity) state.activity?.let { activity ->
-            item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-        state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-        state.error?.let { error -> item {
-            ErrorRow(error, onDismissError,
-                when (state.errorAction) {
-                    ChatErrorAction.OpenSettings -> "Open Settings"
-                    ChatErrorAction.RetryProjectChanges -> "Try again"
-                    ChatErrorAction.RetryTurn -> "Retry"
-                    null -> null
-                },
-                when (state.errorAction) {
-                    ChatErrorAction.OpenSettings -> onOpenSettings
-                    ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
-                    ChatErrorAction.RetryTurn -> onRetryTurn
-                    null -> null
-                }, blockedReason = commandBusyReason(state.commandRunning), onDiscard = onDiscardProjectChanges.takeIf {
-                    state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
-                        !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
-                        state.projectIdentity != null &&
-                        state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
-                })
-        } }
-        state.unsupportedReasoning?.let { notice -> item(key = "reasoning-choice") {
-            ReasoningFallbackRow(notice, onChooseReasoning)
-        } }
     }
 }
 
@@ -1223,63 +1223,31 @@ private suspend fun scrollToConversationBottom(state: androidx.compose.foundatio
     if (offset != 0) state.scrollToItem(index, offset)
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messageKey: Int = 0) {
-    val context = LocalContext.current
-    val copyText = if (message.role == AgentRole.User) message.text else displaySafeText(message.text)
-    var menuOpen by remember(messageKey) { mutableStateOf(false) }
-    var selectingText by remember(messageKey) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (message.role == AgentRole.Assistant && !reasoning.isNullOrBlank()) {
             ReasoningRow(reasoning, streaming = false, id = "thinking-$messageKey")
         }
-        val bubble: @Composable () -> Unit = {
-            if (message.role == AgentRole.User) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Surface(
-                        modifier = Modifier.widthIn(max = 525.dp).fillMaxWidth(0.82f),
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = RoundedCornerShape(20.dp),
-                    ) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(message.text, style = MaterialTheme.typography.bodyMedium)
-                            message.userImagePath?.let { path ->
-                                BrowserImage(ChatMarkdownBlock.Image("Shared image", path),
-                                    unavailable = "Shared image no longer available.")
-                            }
+        if (message.role == AgentRole.User) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Surface(
+                    modifier = Modifier.widthIn(max = 525.dp).fillMaxWidth(0.82f),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = RoundedCornerShape(20.dp),
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(message.text, style = MaterialTheme.typography.bodyMedium)
+                        message.userImagePath?.let { path ->
+                            BrowserImage(ChatMarkdownBlock.Image("Shared image", path),
+                                unavailable = "Shared image no longer available.")
                         }
                     }
                 }
-            } else {
-                AssistantMessage(displaySafeText(message.text), streaming = false)
             }
-        }
-        Box(Modifier.fillMaxWidth().then(
-            if (selectingText) Modifier else Modifier.combinedClickable(
-                onClick = {},
-                onLongClickLabel = "Copy or select text",
-                onLongClick = { menuOpen = !menuOpen },
-            ),
-        )) {
-            SelectionContainer { bubble() }
-        }
-        if (menuOpen) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = {
-                    menuOpen = false
-                    copyToClipboard(context, copyText)
-                    Toast.makeText(context, "Message copied.", Toast.LENGTH_SHORT).show()
-                }) { Text("Copy message") }
-                TextButton(onClick = {
-                    menuOpen = false
-                    selectingText = true
-                }) { Text("Select text") }
-            }
-        }
-        if (selectingText) {
-            TextButton(onClick = { selectingText = false }) { Text("Done selecting") }
+        } else {
+            AssistantMessage(displaySafeText(message.text), streaming = false)
         }
     }
 }
