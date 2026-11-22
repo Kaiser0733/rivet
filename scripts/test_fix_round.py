@@ -52,3 +52,10 @@ class FixRoundSurfacesTest(unittest.TestCase):
         self.assertNotIn("response.copy(toolCalls = emptyList())", model)
         loop = (UI.parent / "agent/AgentLoop.kt").read_text()
         self.assertIn("dsml.finish(requestModel(", loop)
+
+    def test_jump_action_uses_the_real_conversation_list(self):
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        self.assertIn("if (!nearBottom && totalItems > 0)", chat)
+        self.assertIn('Text("Jump to latest"', chat)
+        jump = chat.split("val jumpScope", 1)[1].split("Jump to latest", 1)[0]
+        self.assertIn("scrollToConversationBottom(listState, totalItems - 1)", jump)
