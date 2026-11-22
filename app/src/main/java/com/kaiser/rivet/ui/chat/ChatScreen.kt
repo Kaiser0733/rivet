@@ -685,84 +685,86 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     }
     val jumpScope = rememberCoroutineScope()
     Box(modifier.fillMaxSize()) {
-        SelectionContainer {
-            LazyColumn(state = listState, modifier = Modifier.fillMaxSize(),
-                contentPadding = androidx.compose.foundation.layout.PaddingValues(
-                    start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
-                verticalArrangement = Arrangement.spacedBy(6.dp)) {
-                state.goalLine?.let { line ->
-                    item(key = "goal-line") {
-                        GoalLine(line, state.goalAttachOffer, onAttachGoal)
+        PlatformSelectionToolbar {
+            SelectionContainer {
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    state.goalLine?.let { line ->
+                        item(key = "goal-line") {
+                            GoalLine(line, state.goalAttachOffer, onAttachGoal)
+                        }
                     }
-                }
-                // Goal first, then the interruption notice, then the transcript: restoring a
-                // saved session must never put the recovery banner above the user's goal.
-                if (showInterruptedTurn) item(key = "interrupted-turn") {
-                    InterruptedTurnRow(
-                        recovery = state.runRecovery,
-                        spendLabel = state.spendLabel,
-                        budgetPaused = state.budgetPaused,
-                        onRaiseBudget = onRaiseBudget,
-                        onRetry = onRetryInterruptedTurn,
-                        onDismiss = onDismissInterruptedTurn,
-                    )
-                }
-                items(segmentedTurns, key = { it.turnIndex }) { turn ->
-                    TurnBlockView(
-                        turn = turn,
-                        state = state,
-                        isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
-                        messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
-                        fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
-                        missingFiles = missingFiles,
-                        onOpenPreview = onOpenPreview,
-                    )
-                }
-                if (showBrowserCard) item(key = "live-browser") {
-                    LiveBrowserCard(browser, browserState, browsing)
-                }
-                if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
-                    ReasoningRow(
-                        streamingReasoning, streaming = true, id = "streaming",
-                        showWaitFallback = statusLabel == "Thinking" && state.activity == "Working on it…",
-                    )
-                }
-                if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
-                    Box(Modifier.messageEntry(answerProgress)) {
-                        AssistantMessage(displaySafeText(streamingText), streaming = true)
+                    // Goal first, then the interruption notice, then the transcript: restoring a
+                    // saved session must never put the recovery banner above the user's goal.
+                    if (showInterruptedTurn) item(key = "interrupted-turn") {
+                        InterruptedTurnRow(
+                            recovery = state.runRecovery,
+                            spendLabel = state.spendLabel,
+                            budgetPaused = state.budgetPaused,
+                            onRaiseBudget = onRaiseBudget,
+                            onRetry = onRetryInterruptedTurn,
+                            onDismiss = onDismissInterruptedTurn,
+                        )
                     }
+                    items(segmentedTurns, key = { it.turnIndex }) { turn ->
+                        TurnBlockView(
+                            turn = turn,
+                            state = state,
+                            isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
+                            messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
+                            fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
+                            missingFiles = missingFiles,
+                            onOpenPreview = onOpenPreview,
+                        )
+                    }
+                    if (showBrowserCard) item(key = "live-browser") {
+                        LiveBrowserCard(browser, browserState, browsing)
+                    }
+                    if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
+                        ReasoningRow(
+                            streamingReasoning, streaming = true, id = "streaming",
+                            showWaitFallback = statusLabel == "Thinking" && state.activity == "Working on it…",
+                        )
+                    }
+                    if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
+                        Box(Modifier.messageEntry(answerProgress)) {
+                            AssistantMessage(displaySafeText(streamingText), streaming = true)
+                        }
+                    }
+                    liveStatusStart?.let { start ->
+                        item(key = "live-status") { LiveStatusRow(statusLabel, start) }
+                    }
+                    if (state.compacting) item(key = "manual-compaction") { CompactingRow() }
+                    if (showActivity) state.activity?.let { activity ->
+                        item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                    state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+                    state.error?.let { error -> item {
+                        ErrorRow(error, onDismissError,
+                            when (state.errorAction) {
+                                ChatErrorAction.OpenSettings -> "Open Settings"
+                                ChatErrorAction.RetryProjectChanges -> "Try again"
+                                ChatErrorAction.RetryTurn -> "Retry"
+                                null -> null
+                            },
+                            when (state.errorAction) {
+                                ChatErrorAction.OpenSettings -> onOpenSettings
+                                ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
+                                ChatErrorAction.RetryTurn -> onRetryTurn
+                                null -> null
+                            }, blockedReason = commandBusyReason(state.commandRunning), onDiscard = onDiscardProjectChanges.takeIf {
+                                state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
+                                    !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
+                                    state.projectIdentity != null &&
+                                    state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
+                            })
+                    } }
+                    state.unsupportedReasoning?.let { notice -> item(key = "reasoning-choice") {
+                        ReasoningFallbackRow(notice, onChooseReasoning)
+                    } }
                 }
-                liveStatusStart?.let { start ->
-                    item(key = "live-status") { LiveStatusRow(statusLabel, start) }
-                }
-                if (state.compacting) item(key = "manual-compaction") { CompactingRow() }
-                if (showActivity) state.activity?.let { activity ->
-                    item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-                }
-                state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-                state.error?.let { error -> item {
-                    ErrorRow(error, onDismissError,
-                        when (state.errorAction) {
-                            ChatErrorAction.OpenSettings -> "Open Settings"
-                            ChatErrorAction.RetryProjectChanges -> "Try again"
-                            ChatErrorAction.RetryTurn -> "Retry"
-                            null -> null
-                        },
-                        when (state.errorAction) {
-                            ChatErrorAction.OpenSettings -> onOpenSettings
-                            ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
-                            ChatErrorAction.RetryTurn -> onRetryTurn
-                            null -> null
-                        }, blockedReason = commandBusyReason(state.commandRunning), onDiscard = onDiscardProjectChanges.takeIf {
-                            state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
-                                !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
-                                state.projectIdentity != null &&
-                                state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
-                        })
-                } }
-                state.unsupportedReasoning?.let { notice -> item(key = "reasoning-choice") {
-                    ReasoningFallbackRow(notice, onChooseReasoning)
-                } }
             }
         }
         if (!nearBottom && totalItems > 0) {
