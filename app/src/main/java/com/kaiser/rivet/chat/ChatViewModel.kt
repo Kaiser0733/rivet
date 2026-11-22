@@ -2006,7 +2006,7 @@ class ChatViewModel private constructor(
                 AgentToolExecutor.definitions.filter {
                     it.name !in AgentToolExecutor.phoneOnlyNames && (workspace != null || it.name in UNBOUND_FILE_TOOLS)
                 }
-            val tools = if (starterOpening) emptyList() else BrowserTools.definitions + workspaceTools +
+            val tools = BrowserTools.definitions + workspaceTools +
                 (if (phone == null) emptyList() else AgentToolExecutor.definitions.filter {
                     it.name in AgentToolExecutor.phoneOnlyNames
                 }) +
@@ -2185,7 +2185,7 @@ class ChatViewModel private constructor(
                             response.toolCalls.sumOf { call -> call.arguments.length.toLong() },
                     )
                     recordSpend(snapshot.config, responseUsage, estimated = response.usage == null)
-                    if (starterOpening) response.copy(toolCalls = emptyList()) else response
+                    response
                 },
                 prepareTool = { call ->
                     if (call.name == "delete_path" && !(phone != null && externalFileMutation(call))) {

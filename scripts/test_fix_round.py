@@ -45,3 +45,10 @@ class FixRoundSurfacesTest(unittest.TestCase):
         manifest = (base.parents[3] / "AndroidManifest.xml").read_text()
         self.assertRegex(manifest, r'android:name="\.runtime\.TermuxResultReceiver"\s+android:exported="false"')
         self.assertNotIn("app.registerReceiver(", bridge)
+
+    def test_starter_opening_advertises_and_keeps_the_same_tool_calls(self):
+        model = (UI.parent / "chat/ChatViewModel.kt").read_text()
+        self.assertNotIn("if (starterOpening) emptyList() else BrowserTools", model)
+        self.assertNotIn("response.copy(toolCalls = emptyList())", model)
+        loop = (UI.parent / "agent/AgentLoop.kt").read_text()
+        self.assertIn("dsml.finish(requestModel(", loop)
