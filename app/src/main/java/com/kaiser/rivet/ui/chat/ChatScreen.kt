@@ -602,7 +602,10 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             hasError = state.error != null,
         )
     }
-    val totalItems = segmentedTurns.size + (if (showBrowserCard) 1 else 0) +
+    val transcriptItems = segmentedTurns.sumOf { turn ->
+        1 + turn.replyTail.size + deliverables[turn.userItem?.messageIndex].orEmpty().size
+    }
+    val totalItems = transcriptItems + (if (showBrowserCard) 1 else 0) +
         (if (state.goalLine != null) 1 else 0) +
         (if (streamingReasoning.isNotBlank()) 1 else 0) +
         (if (streamingText.isNotBlank()) 1 else 0) +
@@ -699,16 +702,21 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                             onDismiss = onDismissInterruptedTurn,
                         )
                     }
-                    items(segmentedTurns, key = { it.turnIndex }) { turn ->
-                        TurnBlockView(
-                            turn = turn,
-                            state = state,
-                            isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
-                            messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
-                            fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
-                            missingFiles = missingFiles,
-                            onOpenPreview = onOpenPreview,
-                        )
+                    segmentedTurns.forEach { turn ->
+                        item(key = turn.turnIndex) {
+                            TurnBlockView(
+                                turn = turn,
+                                state = state,
+                                isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
+                                messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
+                            )
+                        }
+                        turn.replyTail.forEachIndexed { index, part ->
+                            item(key = "reply-${turn.turnIndex}-$index") { TurnTextPart(part, state) }
+                        }
+                        items(deliverables[turn.userItem?.messageIndex].orEmpty()) { file ->
+                            ProjectFileCard(file, missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
+                        }
                     }
                     if (showBrowserCard) item(key = "live-browser") {
                         LiveBrowserCard(browser, browserState)
@@ -918,9 +926,6 @@ private fun TurnBlockView(
     state: ChatUiState,
     isLastTurn: Boolean,
     messageProgress: Float,
-    fileCards: List<PresentedFile>,
-    missingFiles: Set<String>,
-    onOpenPreview: (String) -> Unit,
 ) {
     var turnOpen by rememberSaveable(turn.turnIndex) {
         mutableStateOf(initialFoldOpen(turn.spec.canFold))
@@ -997,7 +1002,7 @@ private fun TurnBlockView(
                 )
             }
             val lastProcess = turn.parts.lastOrNull { it is TurnPart.Process }
-            turn.parts.forEach { part ->
+            turn.processBody.forEach { part ->
                 when (part) {
                     is TurnPart.Process -> {
                         FoldReveal(expanded = isOpen) {
@@ -1015,53 +1020,30 @@ private fun TurnBlockView(
                             }
                         }
                     }
-                    is TurnPart.Answer -> {
-                        val item = part.item.item
-                        if (item is AgentConversationItem.Message) {
-                            val owned = splitMessageReasoning(
-                                item.message,
-                                part.item.messageIndex?.let { state.messageReasoning[it] },
-                            )
-                            MessageRow(
-                                message = item.message,
-                                reasoning = owned.forAnswer,
-                                messageKey = part.item.messageIndex ?: item.message.hashCode(),
-                            )
-                        }
-                    }
-                    is TurnPart.Notice -> {
-                        (part.item.item as? AgentConversationItem.SystemNotice)?.let {
-                            SystemNoticeRow(it.text)
-                        }
-                    }
-                }
-            }
-        } else {
-            turn.parts.forEach { part ->
-                if (part is TurnPart.Answer) {
-                    val item = part.item.item
-                    if (item is AgentConversationItem.Message) {
-                        val owned = splitMessageReasoning(
-                            item.message,
-                            part.item.messageIndex?.let { state.messageReasoning[it] },
-                        )
-                        MessageRow(
-                            message = item.message,
-                            reasoning = owned.forAnswer,
-                            messageKey = part.item.messageIndex ?: item.message.hashCode(),
-                        )
-                    }
-                }
-                if (part is TurnPart.Notice) {
-                    (part.item.item as? AgentConversationItem.SystemNotice)?.let {
-                        SystemNoticeRow(it.text)
-                    }
+                    is TurnPart.Answer, is TurnPart.Notice -> TurnTextPart(part, state)
                 }
             }
         }
-        fileCards.forEach { file ->
-            ProjectFileCard(file, missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
+    }
+}
+
+@Composable
+private fun TurnTextPart(part: TurnPart<TimelineDisplayEntry>, state: ChatUiState) {
+    when (part) {
+        is TurnPart.Answer -> {
+            val entry = part.item
+            val item = entry.item as? AgentConversationItem.Message ?: return
+            val owned = splitMessageReasoning(item.message, entry.messageIndex?.let { state.messageReasoning[it] })
+            MessageRow(
+                message = item.message,
+                reasoning = owned.forAnswer,
+                messageKey = entry.messageIndex ?: item.message.hashCode(),
+            )
         }
+        is TurnPart.Notice -> (part.item.item as? AgentConversationItem.SystemNotice)?.let {
+            SystemNoticeRow(it.text)
+        }
+        is TurnPart.Process -> Unit
     }
 }
 

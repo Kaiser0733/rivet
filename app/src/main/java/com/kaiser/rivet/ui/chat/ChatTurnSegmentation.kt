@@ -74,6 +74,10 @@ data class SegmentedTurn<T>(
         get() = parts.filterIsInstance<TurnPart.Answer<T>>()
             .map { it.item }
     val answerItem: T? get() = answerItems.lastOrNull()
+
+    private val tailStart: Int get() = parts.indexOfLast { it is TurnPart.Process } + 1
+    val processBody: List<TurnPart<T>> get() = parts.take(tailStart)
+    val replyTail: List<TurnPart<T>> get() = parts.drop(tailStart)
 }
 
 fun <T> segmentTurnItems(
