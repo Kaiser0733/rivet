@@ -26,13 +26,17 @@ internal data class TaskCheckpoint(
             openThreads = (openThreads.filterNot { it in resolved } +
                 threads.filterNot { it.startsWith(RESOLVED) }).distinct(),
             exactValues = (exactValues + safeItems(update.exactValues)).distinct(),
-            archiveIndex = (safeItems(update.archiveIndex) + archiveIndex).distinct().take(8),
+            archiveIndex = (safeItems(update.archiveIndex).map { it.take(120) } + archiveIndex).distinct().take(8),
         )
     }
 
     fun fit(maxBytes: Int): TaskCheckpoint? {
         val withoutState = copy(state = emptyList())
-        if (withoutState.encode().toByteArray(Charsets.UTF_8).size > maxBytes) return null
+        if (withoutState.encode().toByteArray(Charsets.UTF_8).size > maxBytes) {
+            return (archiveIndex.lastIndex downTo 0).asSequence()
+                .map { withoutState.copy(archiveIndex = archiveIndex.take(it)) }
+                .firstOrNull { it.encode().toByteArray(Charsets.UTF_8).size <= maxBytes }
+        }
         for (first in state.indices) {
             val candidate = if (first == 0) this else copy(state = state.drop(first))
             if (candidate.encode().toByteArray(Charsets.UTF_8).size <= maxBytes) return candidate

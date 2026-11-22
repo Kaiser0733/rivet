@@ -79,10 +79,20 @@ internal object ArchiveRecall {
         "${window.source}, turn ${window.turn}" +
             if (window.atMillis > 0) " (${java.time.Instant.ofEpochMilli(window.atMillis)})" else ""
 
-    fun directAnswer(windows: List<ArchiveWindow>): String = windows
-        .firstOrNull { it.match.isNotBlank() }
-        ?.let { "From ${it.source.lowercase()}, turn ${it.turn}:\n\n${it.match}" }
-        ?: NOT_FOUND
+    fun directAnswer(windows: List<ArchiveWindow>, queries: List<String> = emptyList()): String {
+        val assertions = windows.filter { it.match.isNotBlank() && !it.match.endsWith('?') }
+        val first = assertions.firstOrNull() ?: return NOT_FOUND
+        val matching = queries.mapNotNull { query ->
+            val sought = terms(query)
+            if (sought.isEmpty()) null else assertions.firstOrNull { window ->
+                val found = words.findAll(window.match.lowercase()).map { it.value }.toSet()
+                sought.all { it in found }
+            }
+        }.distinct()
+        return (matching.ifEmpty { listOf(first) }).joinToString("\n\n") {
+            "From ${it.source.lowercase()}, turn ${it.turn}:\n\n${it.match}"
+        }
+    }
 
     fun splice(messages: List<AgentMessage>, tail: String, user: AgentMessage?): List<AgentMessage> {
         if (tail.isBlank()) return messages
