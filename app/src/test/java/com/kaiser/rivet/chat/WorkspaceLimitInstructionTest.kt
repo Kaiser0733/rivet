@@ -5,15 +5,13 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
-// The workspace briefing states limits the model has to plan around, so the numbers
-// here must match what the runtime actually enforces.
 class WorkspaceLimitInstructionTest {
 
     private val briefing = ChatViewModel.systemInstruction(workspace = true)
 
-    @Test fun namesTheShippedRuntimeLimits() {
-        listOf("16 MiB", "128 KiB", "120 seconds", "2000", "1 MiB", "50,000", "500 MB")
-            .forEach { assertTrue(it, briefing.contains(it)) }
+    @Test fun keepsWorkspaceLimitsOutOfTransportDetails() {
+        listOf("1 MiB", "50,000", "500 MB").forEach { assertTrue(it, briefing.contains(it)) }
+        listOf("16 MiB", "128 KiB", "120 seconds", "2000").forEach { assertFalse(it, briefing.contains(it)) }
     }
 
     @Test fun availabilityIsNotFrozenIntoTheStaticPrompt() {

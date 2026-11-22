@@ -991,7 +991,7 @@ class AgentToolExecutor(
         private val nonNegativeInteger = buildJsonObject { put("type", "integer"); put("minimum", 0) }
         private val boolean = buildJsonObject {
             put("type", "boolean")
-            put("description", "Request user confirmation in Basic YOLO; this cannot bypass Rivet policy.")
+            put("description", "Ask for confirmation in Basic YOLO.")
         }
         private val askUser = "ask_user" to boolean
         private val processId = "process_id" to string
@@ -1005,16 +1005,16 @@ class AgentToolExecutor(
         internal val phoneOnlyNames = PhoneIntents.names + setOf("termux_command", "phone_shot")
 
         val definitions = listOf(
-            AgentToolDefinition("git_status", "Inspect the selected workspace's Git branch, staged, modified, deleted, untracked, and conflicting paths without changing its repository. A non-Git workspace or a grants/<label> path returns repository=false.", schema(emptyList(), path)),
-            AgentToolDefinition("git_diff", "Inspect a bounded Git diff of tracked changes. Supply a workspace-relative path to focus on one file; empty path covers the repository. Staged and unstaged changes are labeled. Untracked files are listed by git_status, not diffed.", schema(emptyList(), path)),
+            AgentToolDefinition("git_status", "Inspect Git status and conflicts. External folders return repository=false.", schema(emptyList(), path)),
+            AgentToolDefinition("git_diff", "Read staged and unstaged Git diffs for tracked files; empty path covers the repo.", schema(emptyList(), path)),
             AgentToolDefinition("list_directory", "List a workspace directory. Empty path means workspace root.", schema(emptyList(), path)),
             AgentToolDefinition(
                 "read_file",
-                "Read a bounded UTF-8 chunk of a workspace file. Offset and next_offset are UTF-8 byte positions. Start at 0; continue with next_offset only when needed, until eof. Every chunk includes the full-file SHA-256. Prefer targeted search for large files; use the returned SHA for write_file or apply_patch.",
+                "Read a UTF-8 page. Continue at next_offset (bytes). The hash covers the whole file.",
                 schema(listOf("path"), path, "offset" to nonNegativeInteger),
             ),
             AgentToolDefinition("present",
-                "$PRESENT_DELIVERABLES_RULE Show 1–4 files using exact project-relative paths and one-line descriptions. Correct any missing path or directory and try again.",
+                "Show 1–4 requested deliverables using project-relative paths and short descriptions.",
                 schema(listOf("files"), "files" to buildJsonObject {
                     put("type", "array")
                     put("minItems", 1)
@@ -1023,23 +1023,23 @@ class AgentToolExecutor(
                 })),
             AgentToolDefinition(
                 "search_files",
-                "Search one file or a directory recursively; empty path means workspace root. Searches are literal and case-sensitive. Broad searches may be limited; inspect limited, files_scanned, entries_visited, bytes_scanned, and skipped for completeness.",
+                "Search literally and case-sensitively. A limited result may omit matches.",
                 schema(listOf("query"), path, "query" to string),
             ),
-            AgentToolDefinition("skill", "Load the full instructions for an installed skill. Call it before acting on a task that names or clearly matches a skill in the skill catalog. Returns the skill's <skill_content> block; bundled resources are read with the normal file tools relative to the base directory it names.",
+            AgentToolDefinition("skill", "Load an installed skill before using it. Read resources relative to its returned base.",
                 schema(listOf("name"), "name" to string)),
-            AgentToolDefinition("remember", "Append one durable project fact to .rivet/memory.md: stack/version, an architecture decision and why, a naming or style convention, a gotcha, or a standing user preference for this project. Never use this for secrets, transcripts, task progress, or other projects. Secrets are refused. Garden memory when it is over its soft cap.", schema(listOf("fact"), "fact" to string)),
-            AgentToolDefinition("write_file", "Replace an existing text file when its hash still matches. In Basic YOLO, set ask_user=true if this edit should still be confirmed.",
+            AgentToolDefinition("remember", "Save a durable project fact. Excludes secrets, transcripts and task progress.", schema(listOf("fact"), "fact" to string)),
+            AgentToolDefinition("write_file", "Replace a text file if its SHA-256 matches.",
                 schema(listOf("path", "content", "expected_sha256"), path, "content" to string, "expected_sha256" to string, askUser)),
-            AgentToolDefinition("apply_patch", "Apply exact unique replacements sequentially in supplied order; each later edit sees earlier edits. All edits validate in memory before the final write, which requires the file hash to still match. In Basic YOLO, set ask_user=true to request confirmation.",
+            AgentToolDefinition("apply_patch", "Apply ordered, exact unique text replacements if the file hash matches.",
                 schema(listOf("path", "expected_sha256", "edits"), path, "expected_sha256" to string,
                     "edits" to buildJsonObject { put("type", "array"); put("items", schema(listOf("old_text", "new_text"), "old_text" to string, "new_text" to string)) }, askUser)),
-            AgentToolDefinition("create_file", "Create a file, optionally with initial content. Use the returned actual path and sha256 for later edits. If provider inspection fails after creation, inspection_error is returned without a hash; inspect that path before editing. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path"), path, "content" to string, askUser)),
-            AgentToolDefinition("create_directory", "Create a new directory. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path"), path, askUser)),
-            AgentToolDefinition("rename_path", "Rename an existing file or directory. Use the returned actual path afterward. In Basic YOLO, set ask_user=true to request confirmation; destructive actions still follow Rivet policy.", schema(listOf("path", "new_name"), path, "new_name" to string, askUser)),
-            AgentToolDefinition("move_path", "Move a path into an existing directory; empty destination means root. Use the returned actual path afterward. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("path", "destination"), path, "destination" to string, askUser)),
-            AgentToolDefinition("delete_path", "Permanently delete a non-root path. Inspect first; never delete an uncertain or pre-existing path just for testing. Set ask_user=true to request confirmation in Basic YOLO.", schema(listOf("path"), path, askUser)),
-            AgentToolDefinition("run_command", "Run one foreground project command, or page cached output with output_id without re-running it. Ask mode requires approval; Basic YOLO only auto-runs Rivet-classified routine inspection commands; YOLO runs allowed commands without prompts. Provide command XOR output_id. offset/tail/grep/max_lines select lines; stderr stays separate. A returned exit_code describes the executed command; sync separately confirms whether changes reached the project. Use a project-relative cwd; empty means root.",
+            AgentToolDefinition("create_file", "Create a file and optional content. Use the returned path and hash for later edits.", schema(listOf("path"), path, "content" to string, askUser)),
+            AgentToolDefinition("create_directory", "Create a directory.", schema(listOf("path"), path, askUser)),
+            AgentToolDefinition("rename_path", "Rename a file or directory. Use the returned path afterward.", schema(listOf("path", "new_name"), path, "new_name" to string, askUser)),
+            AgentToolDefinition("move_path", "Move into an existing directory; empty destination means root.", schema(listOf("path", "destination"), path, "destination" to string, askUser)),
+            AgentToolDefinition("delete_path", "Permanently delete a non-root path. Inspect it first.", schema(listOf("path"), path, askUser)),
+            AgentToolDefinition("run_command", "Run one project command or page cached output with output_id. Pass exactly one. offset/tail/grep/max_lines select lines. Check exit_code and sync separately.",
                 schema(emptyList(), "command" to string, "output_id" to string, "cwd" to string,
                     "timeout_ms" to buildJsonObject { put("type", "integer"); put("minimum", 1000); put("maximum", MAX_COMMAND_TIMEOUT_MS) },
                     "offset" to nonNegativeInteger,
@@ -1047,21 +1047,21 @@ class AgentToolExecutor(
                     "grep" to string,
                     "max_lines" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 500) },
                     askUser)),
-            AgentToolDefinition("spawn_process", "Start one background project command that keeps running after this tool returns. It is visible and stoppable in Tools, has a bounded 5..1800 second lifetime, and shares the four persistent process slots. Waits up to ready_wait_ms for ready_pattern in stdout/stderr. Ask mode and Basic YOLO require approval; YOLO skips the prompt but keeps command, thermal, battery, workspace, and process-limit checks. In Basic YOLO ask_user=true requests confirmation.",
+            AgentToolDefinition("spawn_process", "Start a stoppable background command. Use ready_pattern and ready_wait_ms to wait for readiness.",
                 schema(listOf("command"), "command" to string, "cwd" to string,
                     "ttl_ms" to buildJsonObject { put("type", "integer"); put("minimum", 5000); put("maximum", 1_800_000) },
                     "ready_wait_ms" to buildJsonObject { put("type", "integer"); put("minimum", 0); put("maximum", 10000) },
                     "ready_pattern" to string, askUser)),
-            AgentToolDefinition("process_output", "Read or page the bounded stdout/stderr of a Rivet-owned background process. offset/tail/grep/max_lines are line-based; stderr stays separate. The process must belong to the selected project.",
+            AgentToolDefinition("process_output", "Read background stdout/stderr. offset/tail/grep/max_lines select lines.",
                 schema(listOf("process_id"), processId,
                     "offset" to nonNegativeInteger,
                     "tail" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 500) },
                     "grep" to string,
                     "max_lines" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 500) })),
-            AgentToolDefinition("list_processes", "List currently active Rivet commands, background processes, and local previews. Process IDs are opaque Rivet IDs, not operating-system PIDs.", schema(emptyList())),
-            AgentToolDefinition("stop_process", "Stop one active Rivet-owned command, background process, or preview by its opaque process_id. This does not accept operating-system PIDs. In Basic YOLO, set ask_user=true to request confirmation.", schema(listOf("process_id"), processId, askUser)),
-            AgentToolDefinition("start_preview", "Serve static project files from the selected workspace on this device's 127.0.0.1 loopback address. It stays available after this tool returns; use the returned URL. It is visible and stoppable in Tools. root is the static directory relative to the selected project (empty means project root). entry may be relative to root, such as index.html, or equivalent project-relative site/index.html. Example: {\"root\":\"site\",\"entry\":\"index.html\"}. / serves entry and relative assets resolve under root. GET and HEAD only; no execution, directory listing, LAN access, or uploads. Ask mode requires approval. Basic YOLO may start this read-only loopback preview automatically. In Basic YOLO set ask_user=true to request confirmation.", schema(listOf("entry"), entry, root, askUser)),
-            AgentToolDefinition("download_file", "Download one HTTPS file into the selected project. The streamed temporary copy is limited to 64 MiB and at most five revalidated HTTPS redirects; Rivet uses no provider credentials or cookies and never executes or installs the file. For an existing destination, provide expected_sha256 with its current hash before replacing it. content_sha256 optionally verifies the downloaded bytes. Ask mode and Basic YOLO require approval; YOLO skips the prompt but keeps scheme, path, size, hash, and workspace checks. In Basic YOLO, ask_user=true requests confirmation.", schema(listOf("url", "path"), url, path, expectedSha, contentSha, askUser)),
+            AgentToolDefinition("list_processes", "List active Rivet operations and their process IDs.", schema(emptyList())),
+            AgentToolDefinition("stop_process", "Stop a Rivet operation by process_id.", schema(listOf("process_id"), processId, askUser)),
+            AgentToolDefinition("start_preview", "Serve static files on this device at 127.0.0.1. root is project-relative and entry is relative to root. Use the returned URL.", schema(listOf("entry"), entry, root, askUser)),
+            AgentToolDefinition("download_file", "Save a bounded HTTPS download. Replacing a file requires expected_sha256. content_sha256 verifies the download. Never executes the file.", schema(listOf("url", "path"), url, path, expectedSha, contentSha, askUser)),
         ) + PhoneIntents.definitions + TermuxBridge.definition + PhoneCaptureTool.definition
     }
 }

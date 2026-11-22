@@ -205,7 +205,7 @@ internal class SubagentTools(
         val definitions: List<AgentToolDefinition> = listOf(
             AgentToolDefinition(
                 name = SPAWN_TOOL,
-                description = "Start a focused background worker for parallel research, independent verification, or edits in non-overlapping file paths. Returns immediately with worker_id and state ('running' or 'waiting'). Declare exact write_scope paths ([] for read-only).",
+                description = "Start a focused worker. Read-only by default. Declare exact, non-overlapping write_scope paths for edits. Returns worker_id.",
                 parameters = objectSchema(
                     required = listOf("job", "brief"),
                     "job" to stringSchema,
@@ -218,7 +218,7 @@ internal class SubagentTools(
             ),
             AgentToolDefinition(
                 name = AWAIT_TOOL,
-                description = "Wait for spawned subagents to finish and return their verified result envelopes. Omit ids (or pass []) to wait for all live and queued workers in this run, or pass timeout_s = 0 to check status without waiting.",
+                description = "Wait for worker results. Omit ids to wait for all; timeout_s=0 checks without waiting.",
                 parameters = objectSchema(
                     required = emptyList(),
                     "ids" to stringArraySchema,

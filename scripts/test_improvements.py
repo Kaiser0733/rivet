@@ -200,11 +200,11 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("R.string.support_coffee", support)
         self.assertIn("openSupport(context)", support)
 
-    def test_deliverables_are_a_default_in_tool_copy_and_both_prompts(self):
+    def test_deliverables_are_a_default_in_both_prompts(self):
         rule = source("agent/PresentedFile.kt")
         self.assertIn("Before your final reply, use present for finished files the user asked you to deliver", rule)
         self.assertIn("Leave out scratch files, build artifacts and incidental project edits.", rule)
-        self.assertIn("$PRESENT_DELIVERABLES_RULE Show 1–4 files", source("agent/AgentToolExecutor.kt"))
+        self.assertIn("Show 1–4 requested deliverables", source("agent/AgentToolExecutor.kt"))
         model = source("chat/ChatViewModel.kt")
         self.assertIn("if (presentAvailable)", model)
         self.assertIn("phoneAccess = false, presentAvailable = false", model)

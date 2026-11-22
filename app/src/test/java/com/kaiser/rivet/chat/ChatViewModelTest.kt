@@ -1054,7 +1054,7 @@ class ChatViewModelTest {
         assertTrue(ChatViewModel.systemInstruction(workspace = true).contains(rule))
         assertFalse(ChatViewModel.systemInstruction(workspace = true, presentAvailable = false).contains(rule))
         assertFalse(ChatViewModel.systemInstruction(workspace = false).contains(rule))
-        assertTrue(com.kaiser.rivet.agent.AgentToolExecutor.definitions.single { it.name == "present" }
+        assertFalse(com.kaiser.rivet.agent.AgentToolExecutor.definitions.single { it.name == "present" }
             .description.contains(rule))
     }
 

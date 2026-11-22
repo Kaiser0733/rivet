@@ -27,8 +27,7 @@ internal object ArchiveRecall {
         "mention", "mentioned", "and", "the", "was", "are", "you", "did", "our", "recall", "session", "answer", "find", "original", "asked", "turns")
 
     val definition = AgentToolDefinition(TOOL,
-        "Search this conversation's archived turns and checkpoint summaries. Expand the question into several phrasings, " +
-            "including words likely used in the original. Read the surrounding turns. Prefer the newest direct evidence.",
+        "Find exact passages in archived turns. Try several phrasings using words likely in the original.",
         buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {
