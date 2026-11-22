@@ -12,6 +12,7 @@ internal data class TaskCheckpoint(
     @SerialName("STATE") val state: List<String> = emptyList(),
     @SerialName("OPEN THREADS") val openThreads: List<String> = emptyList(),
     @SerialName("EXACT VALUES") val exactValues: List<String> = emptyList(),
+    @SerialName("USER QUOTES") val userQuotes: List<String> = emptyList(),
     @SerialName("ARCHIVE INDEX") val archiveIndex: List<String> = emptyList(),
 ) {
     fun merge(update: TaskCheckpoint, pinnedGoal: String): TaskCheckpoint {
@@ -26,16 +27,34 @@ internal data class TaskCheckpoint(
             openThreads = (openThreads.filterNot { it in resolved } +
                 threads.filterNot { it.startsWith(RESOLVED) }).distinct(),
             exactValues = (exactValues + safeItems(update.exactValues)).distinct(),
+            userQuotes = userQuotes,
             archiveIndex = (safeItems(update.archiveIndex).map { it.take(120) } + archiveIndex).distinct().take(8),
         )
+    }
+
+    fun withUserAnchors(removed: List<AgentMessage>): TaskCheckpoint {
+        val lines = removed.asReversed().asSequence().filter { it.role == AgentRole.User }
+            .flatMap { message ->
+                if (message.text.toByteArray(Charsets.UTF_8).size <= 320) sequenceOf(message.text)
+                else message.text.lineSequence()
+            }
+            .filter { it.isNotBlank() && it.toByteArray(Charsets.UTF_8).size <= 320 && AgentContext.redact(it) == it }
+        return copy(userQuotes = (lines + userQuotes.asSequence()).distinct().take(8).toList())
     }
 
     fun fit(maxBytes: Int): TaskCheckpoint? {
         val withoutState = copy(state = emptyList())
         if (withoutState.encode().toByteArray(Charsets.UTF_8).size > maxBytes) {
-            return (archiveIndex.lastIndex downTo 0).asSequence()
-                .map { withoutState.copy(archiveIndex = archiveIndex.take(it)) }
-                .firstOrNull { it.encode().toByteArray(Charsets.UTF_8).size <= maxBytes }
+            var candidate = withoutState
+            while (candidate.encode().toByteArray(Charsets.UTF_8).size > maxBytes) {
+                candidate = when {
+                    candidate.archiveIndex.isNotEmpty() -> candidate.copy(archiveIndex = candidate.archiveIndex.dropLast(1))
+                    candidate.exactValues.isNotEmpty() -> candidate.copy(exactValues = candidate.exactValues.drop(1))
+                    candidate.userQuotes.isNotEmpty() -> candidate.copy(userQuotes = candidate.userQuotes.dropLast(1))
+                    else -> return null
+                }
+            }
+            return candidate
         }
         for (first in state.indices) {
             val candidate = if (first == 0) this else copy(state = state.drop(first))
@@ -57,6 +76,7 @@ internal data class TaskCheckpoint(
         section("STATE", state)
         section("OPEN THREADS", openThreads)
         section("EXACT VALUES", exactValues)
+        if (userQuotes.isNotEmpty()) section("USER QUOTES (verbatim)", userQuotes)
         section("ARCHIVE INDEX (search words)", archiveIndex)
     }
 

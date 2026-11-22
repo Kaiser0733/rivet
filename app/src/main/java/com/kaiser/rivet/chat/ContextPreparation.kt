@@ -7,6 +7,8 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.ContextCapacityTooSmall
 import com.kaiser.rivet.agent.ContextBudget
+import com.kaiser.rivet.agent.ContextPlan
+import com.kaiser.rivet.agent.InternalContext
 import com.kaiser.rivet.agent.TaskCheckpoint
 import com.kaiser.rivet.agent.TaskState
 import com.kaiser.rivet.agent.TokenEstimateSource
@@ -100,7 +102,10 @@ internal class ContextPreparation(
             else -> TokenEstimateSource.Unknown
         }
         val budget = ContextBudget.assess(config, attempt.beforeTokens, source)
-        val minimum = (AgentContext.minimumProjection(messages)
+        val baseline = ContextBudget.estimateRequestTokens(requestFor(messages))
+        val idleManual = attempt.reason == "manual" && messages.lastOrNull { it.role != AgentRole.Context }
+            ?.let { it.role == AgentRole.Assistant && it.toolCalls.isEmpty() } == true
+        val minimum = (AgentContext.minimumProjection(messages, keepNewest = !idleManual)
             ?: throw IllegalStateException("context_headroom_unavailable")).filterNot { it.internalContext?.kind == "summary" }
         val minimumTokens = ContextBudget.estimateRequestTokens(request(minimum, ""))
         if (minimumTokens >= budget.allowedInputTokens) {
@@ -110,50 +115,39 @@ internal class ContextPreparation(
         // window's token trigger: a 524,288-byte projection cannot estimate above ~175 k
         // tokens, so a 256 k window's trigger would never fire and the save would throw
         // instead. Compact on whichever comes first.
-        val projectionTriggerTokens = AgentSessionCodec.MAX_SERIALIZED_BYTES / 3L * 7 / 8
-        if (!force && !budget.shouldCompact && attempt.beforeTokens < projectionTriggerTokens) {
+        val projectionTriggerBytes = AgentSessionCodec.MAX_SERIALIZED_BYTES * 7 / 8
+        if (!force && !budget.shouldCompact && AgentContext.serializedBytes(messages) < projectionTriggerBytes) {
             return messages
         }
-        val baseline = attempt.beforeTokens
-        val fixedTokens = (minimumTokens - AgentContext.serializedBytes(minimum) / 3L)
-            .coerceAtLeast(0)
-        val summaryEnvelopeTokens = (ContextBudget.estimateRequestTokens(projectedRequest(messages, minimum, "{}")) - minimumTokens)
-            .coerceAtLeast(0)
-        // A compaction can only free the room above the request's own floor: its fixed
-        // text, the newest message, the summary envelope round it and a little slack.
-        // A margin bigger than half that room plans below what any request can cost, which
-        // is what made a small window fail instead of compacting.
         val ceilingTokens = budget.allowedInputTokens.toLong()
-        val floorTokens = minimumTokens + summaryEnvelopeTokens + 256L
-        val usableTokens = (ceilingTokens - floorTokens).coerceAtLeast(0L)
-        val idealTarget = if (force) minOf(budget.compactToTokens.toLong(), baseline / 2)
-            else budget.compactToTokens.toLong()
-        val marginTokens = minOf((ceilingTokens - idealTarget).coerceAtLeast(0L), usableTokens / 2)
-        // Below the ceiling by a whole margin, and reachable even when fixed costs dominate.
-        val reachableTarget = ceilingTokens - marginTokens
-        val targetTokens = if (force) minOf(reachableTarget,
-            manualCompactionTarget(baseline, floorTokens)) else reachableTarget
+        val summaryEnvelopeTokens = (ContextBudget.estimateRequestTokens(projectedRequest(messages, minimum, "{}")) -
+            minimumTokens).coerceAtLeast(0)
+        val floorTokens = minimumTokens + summaryEnvelopeTokens
+        val available = (ceilingTokens - floorTokens - 64).coerceAtLeast(0)
+        val targetTokens = minOf(
+            ceilingTokens - 1,
+            maxOf(budget.compactToTokens.toLong(), floorTokens + available / 3),
+            manualCompactionTarget(baseline, floorTokens),
+        )
+        val requiredSavings = minOf(256L, ((baseline - floorTokens) / 4).coerceAtLeast(1))
+        val acceptableTokens = if (force && attempt.reason != "manual" || baseline >= ceilingTokens)
+            minOf(ceilingTokens - 1, baseline - 1) else minOf(ceilingTokens - 1, baseline - requiredSavings)
         if (baseline > floorTokens) onCompactionStarted()
-        val roomAfterMinimum = targetTokens - minimumTokens - summaryEnvelopeTokens - 256L
-        val summaryBudgetTokens = minOf(TaskState.MAX_BYTES / 3L, roomAfterMinimum / 2)
-            .coerceAtLeast(0)
-        // The same summary allowance measured against the ceiling instead of the target, so a
-        // projection that only has to fit the ceiling still gets a usable state budget.
+        val summaryBudgetTokens = minOf(TaskState.MAX_BYTES / 3L,
+            (targetTokens - floorTokens).coerceAtLeast(0L) / 2)
         val summaryBudgetCeiling = minOf(TaskState.MAX_BYTES / 3L,
-            (ceilingTokens - minimumTokens - summaryEnvelopeTokens - 256L).coerceAtLeast(0L) / 2)
-            .coerceAtLeast(0L)
-        val targetBytes = ((targetTokens - fixedTokens - summaryEnvelopeTokens - summaryBudgetTokens - 256L) * 3L)
-            .coerceIn(0L, 500_000L).toInt()
+            (acceptableTokens - floorTokens).coerceAtLeast(0L) / 2)
 
         val previous = TaskCheckpoint.previous(summary)
-        val goal = currentRequest ?: messages.lastOrNull { it.role == AgentRole.User }?.text ?: previous.goal
+        val rawGoal = currentRequest ?: messages.lastOrNull { it.role == AgentRole.User }?.text ?: previous.goal
+        val goal = InternalContext.clampUtf8(AgentContext.redact(rawGoal), 512)
         val pinned = previous.copy(goal = goal)
         // A long pasted request still stays intact in the transcript and can benefit from stubbing.
-        val stubCheckpoint by lazy { pinned.fit(TaskState.MAX_BYTES)?.encode() ?: summary }
+        val stubCheckpoint = summary
         // Old successful tool bodies can be removed without asking a model or changing history.
         val pruned = AgentContext.pruneOldResults(messages, protectedTailBytes = 48 * 1024)
         if (pruned != null) {
-            commitStub(durableStore, messages, pruned, stubCheckpoint, attempt, targetTokens, force)?.let { return it }
+            commitStub(durableStore, messages, pruned, stubCheckpoint, attempt, baseline, targetTokens + 1)?.let { return it }
         }
         var aggressivePruned: List<AgentMessage>? = null
         if (AgentContext.canStubAggressively(messages)) {
@@ -166,7 +160,7 @@ internal class ContextPreparation(
                 )
                 if (stubbed != null) {
                     aggressivePruned = stubbed
-                    commitStub(durableStore, messages, stubbed, stubCheckpoint, attempt, targetTokens, force)
+                    commitStub(durableStore, messages, stubbed, stubCheckpoint, attempt, baseline, targetTokens + 1)
                         ?.let { return it }
                 }
             }
@@ -175,57 +169,47 @@ internal class ContextPreparation(
         val basis = aggressivePruned ?: pruned ?: messages
         val inputLimitBytes = minOf(96 * 1024L, budget.allowedInputTokens.toLong() * 2).toInt()
         val summaryLimitBytes = (summaryBudgetTokens * 3).toInt()
-        // A projection that fits the ceiling is a request the provider will take; one smaller than
-        // the baseline is progress. That is everything a sent request needs. Aiming a margin below
-        // the ceiling is comfort, not the contract — and insisting on it is what turned a long chat
-        // into a dead end on device: the transcript could be summarised into a request that fits,
-        // and the turn refused anyway. So the target-sized plan is tried first, and the ceiling-sized
-        // one — "the summary plus the most recent tail that still fits" — is the continuation.
-        val canSummarise = summaryCalls < MAX_SUMMARY_CALLS
-        val targetPlan = if (targetBytes > 0 && summaryBudgetTokens > 0 && canSummarise) {
-            AgentContext.plan(basis, targetBytes, minimumSavingsBytes = 1, sourceForSummary = messages)
-        } else null
-        val ceilingBytes = ((ceilingTokens - fixedTokens - summaryEnvelopeTokens - summaryBudgetCeiling - 256L) * 3L)
-            .coerceIn(0L, 500_000L).toInt()
-        val ceilingPlan = if (ceilingBytes > 0 && summaryBudgetCeiling > 0 && canSummarise) {
-            AgentContext.plan(basis, ceilingBytes, minimumSavingsBytes = 1, sourceForSummary = messages)
-        } else null
-        if (targetPlan == null) {
-            if (summary.isNotBlank() && summaryLimitBytes > 0) {
-                val shortened = pinned.fit(summaryLimitBytes)?.encode()
-                if (shortened != null && shortened != summary) {
-                    val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, basis, shortened))
-                    if (projectionCanBeSent(after, baseline, ceilingTokens)) {
-                        return commit(durableStore, messages, basis, shortened, attempt.copy(afterTokens = after))
-                    }
-                }
-            }
-            val fallbackStubbed = aggressivePruned
-                ?: AgentContext.pruneOldResults(messages, protectedTailBytes = 0, minimumSavingsBytes = 256, protectLatestToolGroup = false)
-                ?: pruned
-            if (fallbackStubbed != null) {
-                commitStub(durableStore, messages, fallbackStubbed, stubCheckpoint, attempt, ceilingTokens, force = false)
-                    ?.let { return it }
+        fun plan(limit: Long, summaryTokens: Long): ContextPlan? {
+            if (summaryTokens <= 0 || summaryCalls >= MAX_SUMMARY_CALLS) return null
+            return AgentContext.planRequest(basis, messages, keepNewest = !idleManual) { retained ->
+                ContextBudget.estimateRequestTokens(projectedRequest(messages, retained, "{}")) + summaryTokens <= limit
             }
         }
-        for ((plan, budget) in listOf(targetPlan to summaryBudgetTokens, ceilingPlan to summaryBudgetCeiling)) {
+        val targetPlan = plan(targetTokens, summaryBudgetTokens)
+        val ceilingPlan = plan(acceptableTokens, summaryBudgetCeiling)
+        if (targetPlan == null) {
+            val shortened = if (summary.isNotBlank() && summaryLimitBytes > 0)
+                pinned.fit(summaryLimitBytes)?.encode() else null
+            if (shortened != null && shortened != summary) {
+                val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, basis, shortened))
+                if (projectionCanBeSent(after, baseline, acceptableTokens + 1)) {
+                    return commit(durableStore, messages, basis, shortened, attempt.copy(afterTokens = after))
+                }
+            }
+        }
+        for ((plan, budget) in listOf(targetPlan to summaryBudgetTokens, ceilingPlan to summaryBudgetCeiling).distinct()) {
             if (plan == null || plan.retained == messages) continue
             val state = mergeCheckpoint(previous, goal, plan.removed, id, inputLimitBytes, (budget * 3).toInt())
                 ?: continue
             val after = ContextBudget.estimateRequestTokens(projectedRequest(messages, plan.retained, state))
-            if (projectionCanBeSent(after, baseline, ceilingTokens)) {
-                return commit(durableStore, messages, plan.retained, state,
-                    attempt.copy(afterTokens = after))
+            if (projectionCanBeSent(after, baseline, acceptableTokens + 1)) {
+                return commit(durableStore, messages, plan.retained, state, attempt.copy(afterTokens = after))
             }
+        }
+
+        val fallbackStubbed = aggressivePruned
+            ?: AgentContext.pruneOldResults(messages, protectedTailBytes = 0, minimumSavingsBytes = 256, protectLatestToolGroup = false)
+            ?: pruned
+        if (fallbackStubbed != null) {
+            commitStub(durableStore, messages, fallbackStubbed, stubCheckpoint, attempt, baseline, acceptableTokens + 1)
+                ?.let { return it }
         }
         return noHeadroom(durableStore, id, attempt, messages, force, ceilingTokens)
     }
 
     private suspend fun commitStub(store: ContextStore, source: List<AgentMessage>, candidate: List<AgentMessage>,
-                                   checkpoint: String, attempt: ContextAttempt, target: Long,
-                                   force: Boolean): List<AgentMessage>? {
+                                   checkpoint: String, attempt: ContextAttempt, baseline: Long, target: Long): List<AgentMessage>? {
         val after = ContextBudget.estimateRequestTokens(projectedRequest(source, candidate, checkpoint))
-        val baseline = if (force) attempt.beforeTokens * 9 / 10 else attempt.beforeTokens
         if (!projectionCanBeSent(after, baseline, target)) return null
         return commit(store, source, candidate, checkpoint, attempt.copy(afterTokens = after))
     }
@@ -310,7 +294,7 @@ internal class ContextPreparation(
         if (response.toolCalls.isNotEmpty()) throw IllegalStateException("context_summary_invalid")
         val update = TaskCheckpoint.parse(response.text) ?: throw IllegalStateException("context_summary_invalid")
         return previous.merge(update.copy(archiveIndex = ArchiveRecall.breadcrumbs(removed) +
-            update.archiveIndex), goal).fit(summaryLimitBytes)?.encode()
+            update.archiveIndex), goal).withUserAnchors(removed).fit(summaryLimitBytes)?.encode()
     }
 
     companion object {

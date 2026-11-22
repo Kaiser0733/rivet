@@ -180,12 +180,42 @@ internal object AgentContext {
         return ContextPlan(retained, summarizeInput(removed, SUMMARY_INPUT_BYTES), originalBytes, retainedBytes, removed)
     }
 
-    fun minimumProjection(messages: List<AgentMessage>): List<AgentMessage>? {
+    fun planRequest(
+        messages: List<AgentMessage>,
+        original: List<AgentMessage>,
+        keepNewest: Boolean,
+        fits: (List<AgentMessage>) -> Boolean,
+    ): ContextPlan? {
+        fun eligible(events: List<AgentMessage>) =
+            completeGroups(events)?.filter { it.singleOrNull()?.role != AgentRole.Context }
+        val groups = eligible(messages) ?: return null
+        val sourceGroups = eligible(original) ?: return null
+        if (groups.isEmpty() || groups.size != sourceGroups.size) return null
+        val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
+        fun retained(first: Int) = groups.indices.filter { it >= first || it == latestUser }
+        var lower = 1
+        var upper = if (keepNewest) groups.lastIndex else groups.size
+        var boundary: Int? = null
+        while (lower <= upper) {
+            val middle = (lower + upper) / 2
+            if (fits(retained(middle).flatMap(groups::get))) {
+                boundary = middle
+                upper = middle - 1
+            } else lower = middle + 1
+        }
+        val kept = retained(boundary ?: return null)
+        val removed = sourceGroups.indices.filterNot { it in kept }.flatMap(sourceGroups::get)
+        if (removed.isEmpty()) return null
+        val tail = kept.flatMap(groups::get)
+        return ContextPlan(tail, "", serializedBytes(messages), serializedBytes(tail), removed)
+    }
+
+    fun minimumProjection(messages: List<AgentMessage>, keepNewest: Boolean = true): List<AgentMessage>? {
         val groups = completeGroups(messages)?.filter { it.singleOrNull()?.role != AgentRole.Context } ?: return null
         if (groups.isEmpty()) return ProjectContext.projection(messages, emptyList())
         val newest = groups.lastIndex
         val latestUser = groups.indexOfLast { it.singleOrNull()?.role == AgentRole.User }
-        val retained = (setOfNotNull(latestUser.takeIf { it >= 0 }, newest).sorted()).flatMap { index ->
+        val retained = (setOfNotNull(latestUser.takeIf { it >= 0 }, newest.takeIf { keepNewest }).sorted()).flatMap { index ->
             val group = groups[index]
             if (group.size == 2) pruneToolGroup(group) else group
         }

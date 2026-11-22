@@ -80,6 +80,7 @@ internal object ArchiveRecall {
 
     fun directAnswer(windows: List<ArchiveWindow>, queries: List<String> = emptyList()): String {
         val assertions = windows.filter { it.match.isNotBlank() && !it.match.endsWith('?') }
+            .sortedBy { when (it.source) { "You" -> 0; "Checkpoint" -> 2; else -> 1 } }
         val first = assertions.firstOrNull() ?: return NOT_FOUND
         val matching = queries.mapNotNull { query ->
             val sought = terms(query)

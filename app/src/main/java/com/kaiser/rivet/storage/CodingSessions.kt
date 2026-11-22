@@ -458,7 +458,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             db.rawQuery(
                 "SELECT source,CAST(source_id AS INTEGER),CAST(turn AS INTEGER),CAST(happened_at AS INTEGER),body " +
                     "FROM archive_fts WHERE body MATCH ? AND session_id=? AND CAST(turn AS INTEGER)<=? " +
-                    "ORDER BY CAST(turn AS INTEGER) DESC, CASE source WHEN 'Checkpoint' THEN 1 ELSE 0 END, " +
+                    "ORDER BY CASE source WHEN 'You' THEN 0 WHEN 'Checkpoint' THEN 2 ELSE 1 END, CAST(turn AS INTEGER) DESC, " +
                     "CAST(happened_at AS INTEGER) DESC, CAST(source_id AS INTEGER) DESC LIMIT 3",
                 arrayOf(expression, id, lastTurn.toString()),
             ).use { cursor -> buildList {
@@ -469,7 +469,8 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         }
         val hits = (byPhrase.mapNotNull { it.firstOrNull() } + byPhrase.flatten())
             .distinctBy { it.source to it.sourceId }.take(4)
-            .sortedWith(compareByDescending<Hit> { it.turn }.thenBy { it.source == "Checkpoint" }
+            .sortedWith(compareBy<Hit> { when (it.source) { "You" -> 0; "Checkpoint" -> 2; else -> 1 } }
+                .thenByDescending { it.turn }
                 .thenByDescending { it.at }.thenByDescending { it.sourceId })
         hits.map { hit ->
             val nearby = db.rawQuery(

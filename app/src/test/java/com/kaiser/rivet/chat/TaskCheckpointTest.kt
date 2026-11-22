@@ -28,6 +28,41 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class TaskCheckpointTest {
+    @Test fun aSingleCompletedTurnCompactsTheActualSmallWindowRequest() = runBlocking {
+        val endpoint = "https://example.invalid"
+        val provider = SummaryProvider("""{"STATE":["Investigated the workspace."]}""")
+        val config = ProviderConfig("test", ProviderType.OpenAiCompatible, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 16_000)).withManualMaxOutputTokens(2_000)
+        val preparation = ContextPreparation(ProjectionStore(), "session", provider, config, "turn", "",
+            useRequestEstimate = true) { messages, _ ->
+            AgentRequest("small", modelMessages(messages), "S".repeat(30_500), ReasoningLevel.Default, emptyList())
+        }
+        val user = AgentMessage.user("Inspect the project")
+        val messages = listOf(user, AgentMessage.assistant("investigation result ".repeat(420)))
+        val before = preparation.footprint(messages)
+        val compacted = preparation.prepare(messages, force = true, reason = "manual")
+        val after = preparation.footprint(compacted)
+        assertTrue("The model request went from $before to $after tokens", before - after > 2_000)
+        assertTrue(user in compacted)
+        assertEquals(compacted, preparation.prepare(compacted))
+        assertEquals(1, provider.requests.size)
+    }
+
+    @Test fun userFactsSurviveModelRewritingAndTakePriorityInRecall() = runBlocking {
+        val fact = "Keep the code word papaya-17 and the number 7777."
+        val provider = SummaryProvider("""{"EXACT VALUES":["code word papaya number 7777 both"]}""")
+        val preparation = preparation(provider)
+        val history = listOf(AgentMessage.user(fact), AgentMessage.assistant("x".repeat(40_000)),
+            AgentMessage.user("Continue the task"))
+        val compacted = preparation.prepare(history)
+        assertTrue(checkpoint(compacted).contains(fact))
+        val wrong = com.kaiser.rivet.agent.ArchiveWindow("Checkpoint", 3, 0, "code word papaya and number 7777", emptyList())
+        val original = com.kaiser.rivet.agent.ArchiveWindow("You", 1, 0, fact, emptyList())
+        val recalled = com.kaiser.rivet.agent.ArchiveRecall.directAnswer(listOf(wrong, original), listOf("code word", "number"))
+        assertTrue(recalled.endsWith(fact))
+        assertFalse(recalled.contains(wrong.match))
+    }
+
     @Test fun compactionProducesTheSameSixSectionsForCloudAndLocal() = runBlocking {
         val headings = listOf("GOAL", "DECISIONS + WHY", "CONSTRAINTS & PREFERENCES",
             "STATE", "OPEN THREADS", "EXACT VALUES")
