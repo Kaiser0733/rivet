@@ -13,20 +13,21 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class TermuxResultReceiverTest {
+    private fun resultBundle() = Bundle().apply {
+        putString("stdout", "hello-rivet\n")
+        putString("stderr", "")
+        putString("stdout_original_length", "12")
+        putString("stderr_original_length", "0")
+        putString("err", "0")
+        putString("exitCode", "0")
+    }
+
     @Test fun deliveredBundleResolvesExactlyOneWaitingCommand() {
         val app = RuntimeEnvironment.getApplication()
         val action = "com.kaiser.rivet.TERMUX_RESULT.unique"
         val results = mutableListOf<TermuxOutcome?>()
-        TermuxResultReceiver.register(action, results::add)
-        val receiver = TermuxResultReceiver()
-        val result = Bundle().apply {
-            putString("stdout", "hello-rivet\n")
-            putString("stderr", "")
-            putString("stdout_original_length", "12")
-            putString("stderr_original_length", "0")
-            putString("err", "0")
-            putString("exitCode", "0")
-        }
+        val receiver = TermuxResultReceiver(action, results::add)
+        val result = resultBundle()
         receiver.onReceive(app, Intent("$action.wrong").putExtra("result", result))
         val intent = Intent(action).putExtra("result", result)
         receiver.onReceive(app, intent)
@@ -35,5 +36,18 @@ class TermuxResultReceiverTest {
         assertEquals("hello-rivet\n", results.single()?.stdout)
         assertEquals(0, results.single()?.exitCode)
         assertNull(results.single()?.error)
+    }
+
+    @Test fun aRegisteredReceiverTakesTheBroadcastAndStopsAfterUnregister() {
+        val app = RuntimeEnvironment.getApplication()
+        val action = "com.kaiser.rivet.TERMUX_RESULT.registered"
+        val results = mutableListOf<TermuxOutcome?>()
+        val receiver = TermuxResultReceiver.register(app, action, results::add)
+        app.sendBroadcast(Intent(action).putExtra("result", resultBundle()))
+        assertEquals(1, results.size)
+        assertEquals("hello-rivet\n", results.single()?.stdout)
+        app.unregisterReceiver(receiver)
+        app.sendBroadcast(Intent(action).putExtra("result", resultBundle()))
+        assertEquals(1, results.size)
     }
 }

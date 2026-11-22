@@ -133,10 +133,13 @@ internal class TermuxBridge(context: Context) {
         val returned = CompletableDeferred<Result>()
         val action = app.packageName + ".TERMUX_RESULT." + UUID.randomUUID()
         val mutable = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
-        val callback = PendingIntent.getBroadcast(app, 0, Intent(app, TermuxResultReceiver::class.java).setAction(action),
+        // Package-scoped, not component-scoped: the receiver exists only while this command
+        // waits, so nothing about it is declared for the system to resolve.
+        val callback = PendingIntent.getBroadcast(app, 0, Intent(action).setPackage(app.packageName),
             PendingIntent.FLAG_ONE_SHOT or mutable)
+        var receiver: TermuxResultReceiver? = null
         try {
-            TermuxResultReceiver.register(action) { outcome ->
+            receiver = TermuxResultReceiver.register(app, action) { outcome ->
                 if (outcome != null) returned.complete(outcome.toResult())
                 else if (fallback == null) returned.complete(Result(error = TERMUX_NO_RESULT))
             }
@@ -174,7 +177,7 @@ internal class TermuxBridge(context: Context) {
             Result(error = "termux_unavailable")
         } finally {
             callback.cancel()
-            TermuxResultReceiver.unregister(action)
+            receiver?.let { runCatching { app.unregisterReceiver(it) } }
         }
     }
 

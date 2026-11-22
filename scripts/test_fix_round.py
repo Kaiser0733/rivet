@@ -38,13 +38,19 @@ class FixRoundSurfacesTest(unittest.TestCase):
         self.assertIn("ContextEstimate(footprint(messages)", prepare)
         self.assertIn("val historyTokens = context.footprint(compacted)", model)
 
-    def test_termux_callback_targets_a_private_receiver(self):
+    def test_termux_callback_targets_a_runtime_private_receiver(self):
         base = UI.parent
         bridge = (base / "runtime/TermuxBridge.kt").read_text()
-        self.assertIn("Intent(app, TermuxResultReceiver::class.java)", bridge)
+        receipt = (base / "runtime/TermuxResultReceiver.kt").read_text()
+        # The command's nonce action is registered while it waits; the process boundary
+        # allows no declared receiver, so the transport must be runtime-only.
+        self.assertIn("TermuxResultReceiver.register(app, action)", bridge)
+        self.assertIn("Intent(action).setPackage(app.packageName)", bridge)
+        self.assertIn("Context.RECEIVER_NOT_EXPORTED", receipt)
+        self.assertIn("app.unregisterReceiver(", bridge)
         manifest = (base.parents[3] / "AndroidManifest.xml").read_text()
-        self.assertRegex(manifest, r'android:name="\.runtime\.TermuxResultReceiver"\s+android:exported="false"')
-        self.assertNotIn("app.registerReceiver(", bridge)
+        self.assertNotIn("<receiver", manifest)
+        self.assertNotIn("TermuxResultReceiver", manifest)
 
     def test_starter_opening_advertises_and_keeps_the_same_tool_calls(self):
         model = (UI.parent / "chat/ChatViewModel.kt").read_text()
