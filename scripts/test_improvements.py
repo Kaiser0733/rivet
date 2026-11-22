@@ -104,6 +104,21 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("ContentScale.Crop", card)
         self.assertIn('Text("Open browser"', card)
 
+    def test_only_assistant_inline_images_use_the_bounded_tappable_renderer(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        markdown = chat.split("internal fun AssistantMarkdown(", 1)[1].split("private fun InlineMarkdown(", 1)[0]
+        self.assertIn("inline = true", markdown)
+        self.assertIn("InlineChatImage(bitmap", markdown)
+        app_image = chat.split("private fun BrowserImage(", 1)[1].split("private fun MarkdownTableCell(", 1)[0]
+        self.assertIn("else if (inline)", app_image)
+        self.assertIn("InlineChatImage(bitmap", app_image)
+        self.assertIn("LocalOpenChatImage.current", app_image)
+        self.assertIn("LocalOpenChatImage provides openChatImage", chat)
+        image = source("ui/chat/InlineChatImage.kt")
+        self.assertIn("inlineMessageImageSize(", image)
+        self.assertIn("ContentScale.Fit", image)
+        self.assertIn('onClickLabel = "Open image preview"', image)
+
     def test_empty_draft_is_reusable_and_absent_from_sidebar_recents(self):
         storage = source("storage/CodingSessions.kt")
         self.assertIn("reuseEmpty: Boolean = false", storage)

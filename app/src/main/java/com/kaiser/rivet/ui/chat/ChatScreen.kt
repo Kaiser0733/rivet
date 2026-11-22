@@ -25,7 +25,6 @@ import com.kaiser.rivet.ui.panelEntry
 import com.kaiser.rivet.ui.rivetMotionSpec
 import androidx.compose.ui.draw.clipToBounds
 import com.kaiser.rivet.ui.starter.HomeStarters
-import android.graphics.BitmapFactory
 import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
@@ -315,8 +314,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             )
         }
     } else null
+    val openChatImage = remember(preview) { preview::open }
     ChatWithPreview(preview, load = { path ->
-        chatViewModel.previewProjectFile(path, state.currentSessionWorkspaceId)
+        if (isAppChatImagePath(path)) loadAppChatImage(context, path)
+        else chatViewModel.previewProjectFile(path, state.currentSessionWorkspaceId)
     }) {
         BoxWithConstraints(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
             val lane = conversationWidth(maxWidth.value).dp
@@ -356,7 +357,10 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     }
                     val visibleState = if (projectBinding == ProjectBindingState.AccessLost &&
                         state.error == PROJECT_ACCESS_LOST_MESSAGE) state.copy(error = null, errorAction = null) else state
-                    CompositionLocalProvider(LocalAssistantFileLinks provides linkDoor) {
+                    CompositionLocalProvider(
+                        LocalAssistantFileLinks provides linkDoor,
+                        LocalOpenChatImage provides openChatImage,
+                    ) {
                         key(state.currentSessionId) {
                             MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
                                 onDiscardProjectChanges = { confirmDiscard = state.projectIdentity },
@@ -1370,32 +1374,32 @@ private fun ReasoningRow(
 }
 
 @Composable
-private fun BrowserImage(image: ChatMarkdownBlock.Image, unavailable: String = "Browser screenshot unavailable.") {
+private fun BrowserImage(
+    image: ChatMarkdownBlock.Image,
+    unavailable: String,
+    inline: Boolean = false,
+) {
     val context = LocalContext.current
-    val bitmap = remember(image.source) {
-        val file = java.io.File(image.source.removePrefix("file://"))
-        runCatching {
-            val allowed = file.canonicalPath.startsWith(context.filesDir.canonicalPath + "/") ||
-                file.canonicalPath.startsWith(context.cacheDir.canonicalPath + "/")
-            if (!allowed || !file.isFile) return@runCatching null
-            val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
-            BitmapFactory.decodeFile(file.absolutePath, options)
-            val edge = maxOf(options.outWidth, options.outHeight)
-            options.inSampleSize = Integer.highestOneBit((edge / 1024).coerceAtLeast(1))
-            options.inJustDecodeBounds = false
-            BitmapFactory.decodeFile(file.absolutePath, options)
-        }.getOrNull()
+    val openImage = LocalOpenChatImage.current
+    val preview by key(image.source) {
+        produceState<FilePreviewResult?>(null, context, image.source) {
+            value = loadAppChatImage(context, image.source, maxEdge = if (inline) 1280 else 1536)
+        }
     }
-    if (bitmap != null) {
+    val bitmap = (preview as? FilePreviewResult.Image)?.bitmap
+    val description = displaySafeText(image.alt).ifBlank { "Browser screenshot" }
+    if (bitmap == null) {
+        if (preview != null) Text(unavailable, style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
+    } else if (inline) {
+        InlineChatImage(bitmap, description, openImage?.let { open -> { open(image.source) } })
+    } else {
         Image(
             bitmap = bitmap.asImageBitmap(),
-            contentDescription = image.alt.ifBlank { "Browser screenshot" },
+            contentDescription = description,
             modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)),
             contentScale = ContentScale.FillWidth,
         )
-    } else {
-        Text(unavailable, style = MaterialTheme.typography.bodySmall,
-            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -1503,8 +1507,8 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                         !showInlineImages -> if (block.alt.isNotBlank()) Text(displaySafeText(block.alt))
                         path != null && path in files && links != null && open != null ->
                             ProjectInlineImage(block, path, links, open)
-                        block.source.startsWith('/') || block.source.startsWith("file://") ->
-                            BrowserImage(block, unavailable = displaySafeText(block.fallbackText()))
+                        isAppChatImagePath(block.source) ->
+                            BrowserImage(block, unavailable = displaySafeText(block.fallbackText()), inline = true)
                         else -> Text(displaySafeText(block.fallbackText()))
                     }
                 }
@@ -1549,10 +1553,7 @@ private fun ProjectInlineImage(image: ChatMarkdownBlock.Image, path: String, lin
     if (bitmap == null) {
         Text(displaySafeText(image.fallbackText()), style = MaterialTheme.typography.bodyMedium)
     } else {
-        Image(bitmap.asImageBitmap(), displaySafeText(image.fallbackText()),
-            modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).clip(MaterialTheme.shapes.small)
-                .clickable(role = Role.Button, onClickLabel = "Open image preview") { onOpen(path) },
-            contentScale = ContentScale.Fit)
+        InlineChatImage(bitmap, displaySafeText(image.fallbackText())) { onOpen(path) }
     }
 }
 
