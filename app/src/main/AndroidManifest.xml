@@ -74,6 +74,9 @@
                 <data android:mimeType="application/x-shellscript" />
             </intent-filter>
         </activity>
+        <receiver
+            android:name=".runtime.TermuxResultReceiver"
+            android:exported="false" />
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.shared-files"

@@ -37,3 +37,11 @@ class FixRoundSurfacesTest(unittest.TestCase):
         self.assertIn("contextReadingForRequest(config, request)", model)
         self.assertIn("ContextEstimate(footprint(messages)", prepare)
         self.assertIn("val historyTokens = context.footprint(compacted)", model)
+
+    def test_termux_callback_targets_a_private_receiver(self):
+        base = UI.parent
+        bridge = (base / "runtime/TermuxBridge.kt").read_text()
+        self.assertIn("Intent(app, TermuxResultReceiver::class.java)", bridge)
+        manifest = (base.parents[3] / "AndroidManifest.xml").read_text()
+        self.assertRegex(manifest, r'android:name="\.runtime\.TermuxResultReceiver"\s+android:exported="false"')
+        self.assertNotIn("app.registerReceiver(", bridge)

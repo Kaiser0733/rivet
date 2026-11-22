@@ -1,10 +1,8 @@
 package com.kaiser.rivet.runtime
 
 import android.app.PendingIntent
-import android.content.BroadcastReceiver
 import android.content.Context
 import android.content.Intent
-import android.content.IntentFilter
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
@@ -134,40 +132,14 @@ internal class TermuxBridge(context: Context) {
         val fallback = location.files
         val returned = CompletableDeferred<Result>()
         val action = app.packageName + ".TERMUX_RESULT." + UUID.randomUUID()
-        val receiver = object : BroadcastReceiver() {
-            override fun onReceive(context: Context, intent: Intent) {
-                if (intent.action != action) return
-                val data = intent.getBundleExtra("result")
-                if (data == null) {
-                    // Termux answered without a result bundle. With a file fallback the
-                    // files are the real result, so keep waiting for them; otherwise say
-                    // so now instead of letting a timeout blur the reason.
-                    if (fallback == null) returned.complete(Result(error = TERMUX_NO_RESULT))
-                    return
-                }
-                returned.complete(parseTermuxResult(TermuxResultBundle(
-                    err = data.get("err"),
-                    errmsg = data.get("errmsg")?.toString(),
-                    stdout = data.get("stdout")?.toString(),
-                    stderr = data.get("stderr")?.toString(),
-                    exitCode = data.get("exitCode"),
-                    stdoutOriginalLength = data.get("stdout_original_length"),
-                    stderrOriginalLength = data.get("stderr_original_length"),
-                )).toResult())
-            }
-        }
         val mutable = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
-        val callback = PendingIntent.getBroadcast(app, 0, Intent(action).setPackage(app.packageName),
+        val callback = PendingIntent.getBroadcast(app, 0, Intent(app, TermuxResultReceiver::class.java).setAction(action),
             PendingIntent.FLAG_ONE_SHOT or mutable)
-        var registered = false
         try {
-            val filter = IntentFilter(action)
-            if (Build.VERSION.SDK_INT >= 33) app.registerReceiver(receiver, filter, Context.RECEIVER_NOT_EXPORTED)
-            else {
-                @Suppress("DEPRECATION")
-                app.registerReceiver(receiver, filter)
+            TermuxResultReceiver.register(action) { outcome ->
+                if (outcome != null) returned.complete(outcome.toResult())
+                else if (fallback == null) returned.complete(Result(error = TERMUX_NO_RESULT))
             }
-            registered = true
             val command = fallback?.let { TermuxCommand.withFileOutput(args.command, it.absolute) } ?: args.command
             val spec = buildRunCommandIntent(args.command, location.cwd)
             val intent = Intent(spec.action).setClassName(TermuxCommand.PACKAGE, spec.service)
@@ -195,14 +167,14 @@ internal class TermuxBridge(context: Context) {
                 }
             }
             result ?: (fallback?.result(null)?.copy(error = "termux_timeout")
-                ?: Result(error = "termux_timeout"))
+                ?: Result(error = TERMUX_NO_RESULT))
         } catch (_: SecurityException) {
             Result(error = "termux_permission_required")
         } catch (_: IllegalStateException) {
             Result(error = "termux_unavailable")
         } finally {
             callback.cancel()
-            if (registered) app.unregisterReceiver(receiver)
+            TermuxResultReceiver.unregister(action)
         }
     }
 
