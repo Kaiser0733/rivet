@@ -1023,7 +1023,7 @@ class AgentToolExecutor(
                 })),
             AgentToolDefinition(
                 "search_files",
-                "Search literally and case-sensitively. A limited result may omit matches.",
+                "Search literally and case-sensitively. A limited result may omit matches; check limited, files_scanned, entries_visited, bytes_scanned, and skipped.",
                 schema(listOf("query"), path, "query" to string),
             ),
             AgentToolDefinition("skill", "Load an installed skill before using it. Read resources relative to its returned base.",
@@ -1031,7 +1031,7 @@ class AgentToolExecutor(
             AgentToolDefinition("remember", "Save a durable project fact. Excludes secrets, transcripts and task progress.", schema(listOf("fact"), "fact" to string)),
             AgentToolDefinition("write_file", "Replace a text file if its SHA-256 matches.",
                 schema(listOf("path", "content", "expected_sha256"), path, "content" to string, "expected_sha256" to string, askUser)),
-            AgentToolDefinition("apply_patch", "Apply ordered, exact unique text replacements if the file hash matches.",
+            AgentToolDefinition("apply_patch", "Apply ordered, exact unique text replacements sequentially; each later edit sees earlier edits, and all edits validate before the final write if the file hash matches.",
                 schema(listOf("path", "expected_sha256", "edits"), path, "expected_sha256" to string,
                     "edits" to buildJsonObject { put("type", "array"); put("items", schema(listOf("old_text", "new_text"), "old_text" to string, "new_text" to string)) }, askUser)),
             AgentToolDefinition("create_file", "Create a file and optional content. Use the returned path and hash for later edits.", schema(listOf("path"), path, "content" to string, askUser)),
