@@ -66,3 +66,9 @@ class FixRoundSurfacesTest(unittest.TestCase):
         self.assertIn("SidebarLink(label, icon, open, Modifier.weight(1f), compact = true)", sidebar)
         self.assertIn('item(key = "recents-heading")', sidebar)
         self.assertEqual(sidebar.count("relativeRecency(session.updatedAt)"), 1)
+
+    def test_chat_only_shows_a_real_price_inside_recovery(self):
+        chat = (UI / "chat/ChatScreen.kt").read_text()
+        footer = chat.split("private fun ChangeSummary", 1)[1].split("private fun InterruptedTurnRow", 1)[0]
+        self.assertNotIn("spendLabel", footer)
+        self.assertIn('spendLabel?.takeUnless { it == "unknown pricing" }', chat)

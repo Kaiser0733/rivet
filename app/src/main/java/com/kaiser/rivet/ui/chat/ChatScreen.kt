@@ -1613,11 +1613,6 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit,
             Text(reason, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        state.spendLabel?.let { spend ->
-            Text(if (spend == "unknown pricing") spend else "Spend $spend",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
         if (details) state.lastTurnFiles.forEach { path ->
             ProjectFileCard(PresentedFile(path, path.substringBeforeLast('/', "")),
                 missing = path in missingFiles, onOpen = { onOpenPreview(path) })
@@ -1647,8 +1642,8 @@ private fun InterruptedTurnRow(recovery: String?, spendLabel: String?, budgetPau
                     Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall)
                 }
-                spendLabel?.let {
-                    Text(if (it == "unknown pricing") it else "Spend $it",
+                spendLabel?.takeUnless { it == "unknown pricing" }?.let {
+                    Text("Spend $it",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall)
                 }
