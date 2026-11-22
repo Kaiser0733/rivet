@@ -1941,9 +1941,19 @@ class ChatViewModel private constructor(
                 { call: AgentToolCall -> bridge.prepare(call, workspace) { id -> liveGrant(id) } }
             }
             val capture = if (phone == null) null else (getApplication<Application>() as? RivetApplication)?.phoneCapture
+            val saveCapture: (suspend (String) -> String)? = workspace?.let { selected ->
+                { capturePath ->
+                    check(workspaceSelection.currentIdentity() == selected.tree.toString())
+                    val file = File(capturePath)
+                    val name = "screenshot-${file.name}"
+                    file.inputStream().use { input ->
+                        SafAgentWorkspace(selected).writeDownloaded(name, input, expectedExistingHash = null).path
+                    }
+                }
+            }
             val prepareCapture = capture?.let { coordinator ->
                 { call: AgentToolCall ->
-                    PhoneCaptureTool.prepare(call, { VisionCapability.assess(snapshot.config) }) {
+                    PhoneCaptureTool.prepare(call, { VisionCapability.assess(snapshot.config) }, saveCapture) {
                         coordinator.capture { status ->
                             if (status == "phone_shot_armed") _uiState.update {
                                 it.copy(activity = "Switch apps, then tap Capture now in Rivet’s notification.")

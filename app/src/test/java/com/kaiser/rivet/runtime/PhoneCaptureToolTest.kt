@@ -23,6 +23,16 @@ class PhoneCaptureToolTest {
         assertTrue(textOnly.content.contains("the model can't view it"))
     }
 
+    @Test fun returnsTheProjectFileAndUsesTheCaptureForVision() = runBlocking {
+        val capture = PhoneCaptureResult(path = "/cache/shot.png", width = 100, height = 200)
+        val result = PhoneCaptureTool.prepare(call, { VisionSupport.Supported }, saveToProject = { path ->
+            assertEquals(capture.path, path)
+            "screenshot-shot.png"
+        }) { capture }.execute()
+        assertTrue(result.content.contains("\"path\":\"screenshot-shot.png\""))
+        assertEquals(capture.path, result.imagePath)
+    }
+
     @Test fun denialAndDismissalReturnTheCorrelatedOutcomeAndPauseTheLoop() = runBlocking {
         for (code in listOf("phone_shot_denied", "phone_shot_cancelled")) {
             val result = PhoneCaptureTool.prepare(call, { VisionSupport.Supported }) {
