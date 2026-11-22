@@ -76,6 +76,20 @@ class ImprovementsTest(unittest.TestCase):
                 self.assertEqual((pixels, pixels), struct.unpack(">II", mark.read_bytes()[16:24]))
         self.assertFalse((resources / "drawable-nodpi/sidebar_rivet_mark.png").exists())
 
+    def test_attachment_sheet_dispatches_only_the_three_icon_rows(self):
+        chat = source("ui/chat/ChatScreen.kt")
+        self.assertNotIn("Include clipboard text", chat)
+        self.assertNotIn("OnPrimaryClipChangedListener", chat)
+        self.assertIn("rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)", chat)
+        self.assertIn("AttachmentSheet(", chat)
+        sheet = source("ui/chat/AttachmentSheet.kt")
+        self.assertIn("Column(", sheet)
+        self.assertIn("ComposerPicker.entries.forEach", sheet)
+        for picker, icon in [("Camera", "camera"), ("Photos", "photo"), ("Files", "attachment")]:
+            self.assertIn(f"ComposerPicker.{picker} -> R.drawable.ic_{icon}", sheet)
+        self.assertIn("CircleShape", sheet)
+        self.assertIn("onPick(picker)", sheet)
+
     def test_empty_draft_is_reusable_and_absent_from_sidebar_recents(self):
         storage = source("storage/CodingSessions.kt")
         self.assertIn("reuseEmpty: Boolean = false", storage)

@@ -85,8 +85,6 @@ import com.kaiser.rivet.ui.motionDisabled
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
-import androidx.compose.material3.ModalBottomSheet
-import androidx.compose.material3.rememberModalBottomSheetState
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
@@ -97,7 +95,6 @@ import androidx.compose.material3.Surface
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
-import androidx.compose.runtime.DisposableEffect
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
@@ -148,7 +145,6 @@ import com.kaiser.rivet.chat.commandBusyReason
 import com.kaiser.rivet.chat.compactRowEnabled
 import com.kaiser.rivet.chat.ComposerAttachment
 import com.kaiser.rivet.chat.SharedDraft
-import com.kaiser.rivet.chat.appendClipboardText
 import com.kaiser.rivet.chat.draftFor
 import com.kaiser.rivet.chat.draftToSend
 import com.kaiser.rivet.chat.liveStatusLabel
@@ -1790,49 +1786,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     var attachmentsOpen by rememberSaveable(sessionId) { mutableStateOf(false) }
     val pickAttachment = rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)
     if (attachmentsOpen) {
-        val context = LocalContext.current
-        val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
-        var hasClipboardText by remember { mutableStateOf(false) }
-        DisposableEffect(clipboard) {
-            fun refresh() {
-                hasClipboardText = clipboard?.hasPrimaryClip() == true &&
-                    clipboard.primaryClipDescription?.hasMimeType("text/*") == true
-            }
-            val listener = ClipboardManager.OnPrimaryClipChangedListener { refresh() }
-            refresh()
-            clipboard?.addPrimaryClipChangedListener(listener)
-            onDispose { clipboard?.removePrimaryClipChangedListener(listener) }
-        }
-        ModalBottomSheet(
-            onDismissRequest = { attachmentsOpen = false },
-            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
-        ) {
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
-                horizontalArrangement = Arrangement.SpaceEvenly) {
-                ComposerPicker.entries.forEach { picker ->
-                    TextButton(onClick = {
-                        attachmentsOpen = false
-                        pickAttachment(picker)
-                    }) { Text(picker.label) }
-                }
-            }
-            TextButton(
-                enabled = hasClipboardText,
-                onClick = {
-                    val clip = clipboard?.primaryClip
-                    val text = if (clip != null && clip.itemCount != 0) clip.getItemAt(0).text?.toString() else null
-                    if (text.isNullOrBlank()) {
-                        hasClipboardText = false
-                    } else {
-                        val current = draftFor(drafts, sessionId)
-                        drafts = withDraft(drafts, sessionId, appendClipboardText(current, text))
-                        attachmentsOpen = false
-                    }
-                },
-                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp)
-                    .dismissOnEscape { attachmentsOpen = false },
-            ) { Text("Include clipboard text") }
-        }
+        AttachmentSheet(onDismiss = { attachmentsOpen = false }, onPick = pickAttachment)
     }
     var appliedShares by rememberSaveable(stateSaver = DRAFT_SAVER) {
         mutableStateOf(emptyMap<String, String>())
