@@ -194,17 +194,22 @@ internal fun UtilityColumns(
     stackedGap: Dp = RivetLayout.sectionGap,
     leading: @Composable ColumnScope.() -> Unit,
     trailing: @Composable ColumnScope.() -> Unit,
+    belowLeadingOnWide: (@Composable ColumnScope.() -> Unit)? = null,
 ) {
     BoxWithConstraints(modifier.fillMaxWidth()) {
         if (maxWidth >= RivetLayout.columnBreakpoint) {
             Row(horizontalArrangement = Arrangement.spacedBy(RivetLayout.sectionGap)) {
-                Column(Modifier.weight(1f), content = leading)
+                Column(Modifier.weight(1f)) {
+                    leading()
+                    belowLeadingOnWide?.invoke(this)
+                }
                 Column(Modifier.weight(1f), content = trailing)
             }
         } else {
             Column(verticalArrangement = Arrangement.spacedBy(stackedGap)) {
                 leading()
                 trailing()
+                belowLeadingOnWide?.invoke(this)
             }
         }
     }

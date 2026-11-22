@@ -2,10 +2,10 @@ package com.kaiser.rivet.ui.local
 
 import androidx.compose.foundation.layout.ExperimentalLayoutApi
 import androidx.compose.foundation.layout.FlowRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.GridItemSpan
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridCells
+import androidx.compose.foundation.lazy.staggeredgrid.StaggeredGridItemSpan
+import androidx.compose.foundation.lazy.staggeredgrid.LazyVerticalStaggeredGrid
+import androidx.compose.foundation.lazy.staggeredgrid.items
 import com.kaiser.rivet.ui.UtilityColumns
 import com.kaiser.rivet.ui.UtilityFold
 import com.kaiser.rivet.R
@@ -111,16 +111,16 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
 
     Column(Modifier.fillMaxSize()) {
         RivetPageHeader(if (firstRun) "Start offline" else "Models", onClose)
-        LazyVerticalGrid(
-            columns = GridCells.Adaptive(320.dp),
+        LazyVerticalStaggeredGrid(
+            columns = StaggeredGridCells.Adaptive(320.dp),
             modifier = Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
             contentPadding = androidx.compose.foundation.layout.PaddingValues(
                 start = 20.dp, end = 20.dp, top = 12.dp, bottom = 32.dp),
-            verticalArrangement = Arrangement.spacedBy(12.dp),
+            verticalItemSpacing = 12.dp,
             horizontalArrangement = Arrangement.spacedBy(20.dp),
         ) {
             if (ui.staleBytes > 0) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
+                item(span = StaggeredGridItemSpan.FullLine) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Text("${formatBytes(ui.staleBytes)} of old partial downloads",
                             Modifier.weight(1f), style = MaterialTheme.typography.bodySmall,
@@ -129,12 +129,12 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
                     }
                 }
             }
-            item(span = { GridItemSpan(maxLineSpan) }) {
+            item(span = StaggeredGridItemSpan.FullLine) {
                 Text("Runs on this phone. No account, no cloud bill.",
                     style = MaterialTheme.typography.bodySmall,
                     color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
-            item(span = { GridItemSpan(maxLineSpan) }) {
+            item(span = StaggeredGridItemSpan.FullLine) {
                 UtilityColumns(
                     leading = { DeviceCard(ui.totalRamMb, ui.availableRamMb, ui.freeStorage) },
                     trailing = {
@@ -148,10 +148,10 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
                 )
             }
             ui.catalogueError?.let { error ->
-                item(span = { GridItemSpan(maxLineSpan) }) { Text(error, color = MaterialTheme.colorScheme.error) }
+                item(span = StaggeredGridItemSpan.FullLine) { Text(error, color = MaterialTheme.colorScheme.error) }
             }
             ui.notice?.let { notice ->
-                item(span = { GridItemSpan(maxLineSpan) }) {
+                item(span = StaggeredGridItemSpan.FullLine) {
                     Surface(color = MaterialTheme.colorScheme.secondaryContainer,
                         shape = RoundedCornerShape(10.dp)) {
                         Row(Modifier.fillMaxWidth().padding(12.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -162,10 +162,10 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
                 }
             }
             if (ui.loading) {
-                item(span = { GridItemSpan(maxLineSpan) }) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
+                item(span = StaggeredGridItemSpan.FullLine) { LinearProgressIndicator(Modifier.fillMaxWidth()) }
             }
             if (!ui.loading && firstRun && ui.entries.isNotEmpty() && ui.recommendation.primary == null) {
-                item(span = { GridItemSpan(maxLineSpan) }) {
+                item(span = StaggeredGridItemSpan.FullLine) {
                     Text(if (ui.totalRamMb in 1 until 4096) "Local models need a phone with at least 4 GB of RAM."
                     else "Rivet has no model recommendation for this phone.")
                 }
@@ -203,7 +203,7 @@ fun ModelsScreen(viewModel: ModelsViewModel, firstRun: Boolean, onClose: () -> U
                     },
                 )
             }
-            item(span = { GridItemSpan(maxLineSpan) }) {
+            item(span = StaggeredGridItemSpan.FullLine) {
                 UtilityFold(R.drawable.ic_add, "Bring your own GGUF") {
                     Text("Paste a Hugging Face repo or file link. Rivet checks for a GGUF before downloading.")
                     RivetOutlinedButton(onClick = { byoOpen = true }) { Text("Add a model link") }

@@ -533,6 +533,11 @@ internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable Co
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
+    val advanced: @Composable ColumnScope.() -> Unit = {
+        UtilityFold(R.drawable.ic_settings, "Advanced", "Phone access add-on") {
+            SectionListItem(R.drawable.ic_phone_access, "Phone access add-on", "Not installed", onOpenAddOn, false)
+        }
+    }
     DetailScroll {
         UtilityColumns(
             leading = {
@@ -546,10 +551,8 @@ private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
                 GrantedFoldersSettings()
                 TermuxSettings()
             },
+            belowLeadingOnWide = advanced,
         )
-        UtilityFold(R.drawable.ic_settings, "Advanced", "Phone access add-on") {
-            SectionListItem(R.drawable.ic_phone_access, "Phone access add-on", "Not installed", onOpenAddOn, false)
-        }
     }
 }
 
