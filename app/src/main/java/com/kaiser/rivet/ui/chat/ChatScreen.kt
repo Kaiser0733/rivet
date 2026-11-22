@@ -145,6 +145,7 @@ import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
 import com.kaiser.rivet.chat.compactRowEnabled
+import com.kaiser.rivet.chat.ComposerAttachment
 import com.kaiser.rivet.chat.SharedDraft
 import com.kaiser.rivet.chat.appendClipboardText
 import com.kaiser.rivet.chat.draftFor
@@ -187,6 +188,7 @@ import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -386,10 +388,15 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         { ProtectedControls { ModelSelector(providersViewModel) { modelSheetVisible = true } } }
                     } else null
                 val sharedContent by chatViewModel.sharedContent.collectAsState()
+                val composerAttachments by chatViewModel.composerAttachments.collectAsState()
                 if (emptyConversation) HomeStarters(chatViewModel, canStartChat, state.starterError,
                     modifier = Modifier.heightIn(max = starterRoom).verticalScroll(rememberScrollState()))
                 InputBar(streaming = state.streaming,
                     sharedDraft = sharedContent[state.currentSessionId],
+                    attachment = composerAttachments[state.currentSessionId],
+                    onStageAttachment = chatViewModel::stageComposerAttachment,
+                    onDropAttachment = { chatViewModel.removeComposerAttachment(state.currentSessionId) },
+                    onPickerUnavailable = chatViewModel::attachmentPickerUnavailable,
                     phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
                     ready = state.ready && !state.projectLoading && !state.undoing &&
                         !state.recoveringProjectChanges,
@@ -1732,6 +1739,10 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
                      sharedDraft: SharedDraft? = null,
+                     attachment: ComposerAttachment? = null,
+                     onStageAttachment: (String?, android.net.Uri, Boolean, File?) -> Unit,
+                     onDropAttachment: () -> Unit,
+                     onPickerUnavailable: () -> Unit,
                      phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
@@ -1754,6 +1765,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     }
     val draft = draftFor(drafts, sessionId)
     var attachmentsOpen by rememberSaveable(sessionId) { mutableStateOf(false) }
+    val pickAttachment = rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)
     if (attachmentsOpen) {
         val context = LocalContext.current
         val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
@@ -1772,6 +1784,15 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             onDismissRequest = { attachmentsOpen = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly) {
+                ComposerPicker.entries.forEach { picker ->
+                    TextButton(onClick = {
+                        attachmentsOpen = false
+                        pickAttachment(picker)
+                    }) { Text(picker.label) }
+                }
+            }
             TextButton(
                 enabled = hasClipboardText,
                 onClick = {
@@ -1820,11 +1841,12 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // send is allowed so the view model can explain what to choose instead of the
     // button silently refusing the tap.
     val goalCommand = isGoalCommand(draft)
-    val canSend = ready && !streaming && draft.isNotBlank() && pendingText == null &&
-        (goalCommand || ((hasProject || sharedDraft != null || phoneAvailable) && hasProvider) || !hasProvider)
+    val canSend = ready && !streaming && (draft.isNotBlank() || attachment != null) && pendingText == null &&
+        (goalCommand || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
+            !hasProvider)
     // Trailing newlines and spaces are noise; the model never wanted them.
     val submit = {
-        val text = draftToSend(draft, canSend)
+        val text = if (canSend && attachment != null && draft.isBlank()) "" else draftToSend(draft, canSend)
         if (text != null) {
             pendingText = draft
             submittedAt = ackCount
@@ -1950,6 +1972,18 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                         ),
                     )
+                    attachment?.let { item ->
+                        Row(Modifier.fillMaxWidth().padding(start = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
+                            Text(item.name, Modifier.weight(1f).padding(horizontal = 8.dp),
+                                style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                            IconButton(onClick = onDropAttachment, enabled = !streaming) {
+                                Icon(painterResource(R.drawable.ic_close), "Remove attachment")
+                            }
+                        }
+                    }
                     if (!contextFitsInRow && contextReading != null) {
                         ConversationContextMeter(contextReading, Modifier.align(Alignment.End).padding(end = 6.dp))
                     }

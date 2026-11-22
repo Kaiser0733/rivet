@@ -57,3 +57,10 @@ internal fun shareFailureNotice(error: Throwable): String = when (error) {
         "That attachment is no longer available. Share it again."
     else -> "Rivet couldn't read this attachment. Try sharing it again."
 }
+
+internal data class ComposerAttachment(val name: String, val image: Boolean) {
+    fun messageText(draft: String): String {
+        if (image) return draft.ifBlank { "Attached image: $name" }
+        return listOf(draft, "Attached file: inbox/$name").filter(String::isNotBlank).joinToString("\n\n")
+    }
+}

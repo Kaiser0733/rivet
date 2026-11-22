@@ -311,6 +311,41 @@ class ChatViewModel private constructor(
     private val _sharedContent = MutableStateFlow<Map<String?, SharedDraft>>(emptyMap())
     internal val sharedContent = _sharedContent.asStateFlow()
 
+    private val _composerAttachments = MutableStateFlow<Map<String?, ComposerAttachment>>(emptyMap())
+    internal val composerAttachments = _composerAttachments.asStateFlow()
+
+    internal fun removeComposerAttachment(sessionId: String?) {
+        _composerAttachments.update { it - sessionId }
+    }
+
+    internal fun attachmentPickerUnavailable() {
+        _uiState.update { it.copy(notice = "Couldn't open the attachment picker.") }
+    }
+
+    internal fun stageComposerAttachment(sessionId: String?, source: Uri, photo: Boolean, temporary: File?) {
+        viewModelScope.launch {
+            val app = getApplication<Application>()
+            var copy: File? = null
+            try {
+                val image = photo || app.contentResolver.getType(source)?.startsWith("image/") == true
+                copy = SharedFileCopy.copy(app, source, if (image) "Photo.jpg" else "Attachment")
+                val saved = withContext(Dispatchers.IO) {
+                    SharedFileCopy.moveToSession(app, requireNotNull(copy), sessionId)
+                }
+                _composerAttachments.update { it + (sessionId to ComposerAttachment(saved.name, image)) }
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: SharedFileCopy.TooLarge) {
+                _uiState.update { it.copy(notice = e.message) }
+            } catch (_: Exception) {
+                _uiState.update { it.copy(notice = "Couldn't read this attachment. Pick it again.") }
+            } finally {
+                copy?.delete()
+                temporary?.delete()
+            }
+        }
+    }
+
     internal fun clearSharedZip() { _sharedZip.value = null }
 
     internal fun receiveSharedContent(content: SharedContent) {
@@ -896,7 +931,9 @@ class ChatViewModel private constructor(
 
     fun send(text: String) {
         val trimmed = text.trim()
-        if (trimmed.isEmpty() || _uiState.value.streaming || !_uiState.value.ready ||
+        val sessionId = _uiState.value.currentSessionId
+        val attachment = _composerAttachments.value[sessionId]
+        if ((trimmed.isEmpty() && attachment == null) || _uiState.value.streaming || !_uiState.value.ready ||
             _uiState.value.recoveringProjectChanges) return
         val command = parseGoalCommand(trimmed)
         if (command != null) {
@@ -915,11 +952,12 @@ class ChatViewModel private constructor(
         // Acceptance is the tap: the bubble appears and the composer clears before the
         // transcript load, SAF stat, provider snapshot or persistence can block. Prep uses
         // this same message object for its durable copy; retries do not pass through here.
-        val imageName = _sharedContent.value[_uiState.value.currentSessionId]?.imageName
-        val accepted = AgentMessage.user(text).copy(userImagePath = imageName?.let {
+        val imageName = attachment?.takeIf { it.image }?.name ?: _sharedContent.value[sessionId]?.imageName
+        val accepted = AgentMessage.user(attachment?.messageText(text) ?: text).copy(userImagePath = imageName?.let {
             File(SharedFileCopy.sessionInbox(getApplication<Application>(), _uiState.value.currentSessionId), it).absolutePath
         })
-        _sharedContent.update { it - _uiState.value.currentSessionId }
+        _sharedContent.update { it - sessionId }
+        removeComposerAttachment(sessionId)
         _uiState.update { state ->
             val appended = state.messages + accepted
             val dropCount = (appended.size - 100).coerceAtLeast(0)
@@ -953,7 +991,7 @@ class ChatViewModel private constructor(
             )
         }
         _subagents.value = emptyList()
-        startTurn(trimmed, retryingInterrupted = false, acceptedUser = accepted)
+        startTurn(accepted.text.trim(), retryingInterrupted = false, acceptedUser = accepted)
     }
 
     private fun handleGoalCommand(command: GoalCommand) {
