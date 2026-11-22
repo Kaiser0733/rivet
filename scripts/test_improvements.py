@@ -42,7 +42,7 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("if (annotated.spanStyles.isEmpty())", chat)
         self.assertIn("Text(annotated.text, modifier", chat)
         runs = source("ui/chat/AssistantInlineText.kt")
-        self.assertIn("if (!run.code && !run.bold && !run.italic)", runs)
+        self.assertIn("if (!showCode && !run.bold && !run.italic)", runs)
         self.assertIn("append(content)", runs)
 
     def test_hardware_input_reaches_the_composer_and_panel_keys(self):
@@ -50,7 +50,7 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("ComposerEnter.Send -> submit()", chat)
         self.assertIn("ComposerEnter.Newline ->", chat)
         self.assertIn("FLAG_SOFT_KEYBOARD", chat)
-        self.assertIn("SelectionContainer { bubble() }", chat)
+        self.assertIn("SelectionContainer {", chat)
         self.assertNotIn("if (selectingText) SelectionContainer", chat)
         self.assertIn("dismissOnEscape(showCommands)", chat)
         self.assertIn("dismissOnEscape(canDismissPage)", source("ui/RivetApp.kt"))
@@ -60,7 +60,7 @@ class ImprovementsTest(unittest.TestCase):
 
     def test_sidebar_starts_with_the_real_mark_then_the_wordmark(self):
         sidebar = source("ui/history/HistoryScreen.kt")
-        self.assertLess(sidebar.index("R.drawable.ic_launcher_foreground"), sidebar.index('Text("RIVET"'))
+        self.assertLess(sidebar.index("R.drawable.sidebar_rivet_mark"), sidebar.index('Text("RIVET"'))
         self.assertLess(sidebar.index('Text("RIVET"'), sidebar.index('"Search chats"'))
 
     def test_empty_draft_is_reusable_and_absent_from_sidebar_recents(self):

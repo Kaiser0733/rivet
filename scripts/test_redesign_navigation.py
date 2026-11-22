@@ -44,9 +44,11 @@ class RedesignNavigationTest(unittest.TestCase):
         app = (UI / "RivetApp.kt").read_text()
         panel = (UI / "chat/SlashMenu.kt").read_text()
         self.assertIn('SlashAction.Goal -> "/goal "', chat)
-        self.assertIn("SlashAction.Feedback -> onSendFeedback()", chat)
-        self.assertIn("SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)", chat)
-        self.assertIn("SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)", chat)
+        self.assertIn('onSend("/${it.token}")', chat)
+        model = (UI.parent / "chat/ChatViewModel.kt").read_text()
+        self.assertIn("BuiltInSlash.Feedback -> onFeedback()", model)
+        self.assertIn("BuiltInSlash.Yolo -> onAutonomyChange(AutonomyMode.Yolo)", model)
+        self.assertIn("BuiltInSlash.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)", model)
         self.assertIn("onAutonomyChange = requestAutonomy", app)
         self.assertIn('group = "Skills"', panel)
         self.assertIn("skill.description", panel)
@@ -148,7 +150,8 @@ class RedesignNavigationTest(unittest.TestCase):
         self.assertNotIn("DropdownMenu(", subagents)
         message = (UI / "chat/ChatScreen.kt").read_text().split("internal fun MessageRow(", 1)[1]
         self.assertNotIn("DropdownMenu(", message)
-        self.assertIn('Text("Copy message")', message)
+        self.assertNotIn('Text("Copy message")', message)
+        self.assertIn("SelectionContainer {", (UI / "chat/ChatScreen.kt").read_text())
 
     def test_search_focuses_the_field_when_the_drawer_is_open(self):
         sidebar = (UI / "history/HistoryScreen.kt").read_text()
