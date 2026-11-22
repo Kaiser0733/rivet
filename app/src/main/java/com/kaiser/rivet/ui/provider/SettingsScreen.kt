@@ -533,10 +533,18 @@ internal fun DetailScroll(modifier: Modifier = Modifier, content: @Composable Co
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
+    val advanced: @Composable ColumnScope.() -> Unit = {
+        UtilityFold(R.drawable.ic_settings, "Advanced", "Phone access add-on") {
+            SectionListItem(R.drawable.ic_phone_access, "Phone access add-on", "Not installed", onOpenAddOn, false)
+        }
+    }
     DetailScroll {
         UtilityColumns(
             leading = {
-                UtilityLead(R.drawable.ic_phone_access, "Share to Rivet", "Available in the Android share sheet")
+                SectionHeading("Share to Rivet", icon = R.drawable.ic_phone_access)
+                Text("Choose Rivet in the Android share sheet to bring in text, photos, or files.",
+                    style = MaterialTheme.typography.bodySmall,
+                    color = MaterialTheme.colorScheme.onSurfaceVariant)
                 Spacer(Modifier.height(16.dp))
                 UtilityFold(R.drawable.ic_expand, "Screen capture", "Asks before each capture") {
                     Text("Rivet asks before each capture. After you allow it, tap Capture now in the notification.")
@@ -546,10 +554,8 @@ private fun PhoneAccessDetail(onOpenAddOn: () -> Unit) {
                 GrantedFoldersSettings()
                 TermuxSettings()
             },
+            belowLeadingOnWide = advanced,
         )
-        UtilityFold(R.drawable.ic_settings, "Advanced", "Phone access add-on") {
-            SectionListItem(R.drawable.ic_phone_access, "Phone access add-on", "Not installed", onOpenAddOn, false)
-        }
     }
 }
 

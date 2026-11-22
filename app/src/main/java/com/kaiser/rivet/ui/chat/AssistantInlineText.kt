@@ -23,22 +23,26 @@ internal fun assistantInlineText(
     buildAnnotatedString {
         for (run in runs) {
             val content = displaySafeText(run.text)
-            if (!run.code && !run.bold && !run.italic) {
+            val candidate = inlineFilePath(run)
+            val path = candidate?.takeIf { it in existingFiles }
+            val explicitPath = candidate?.let { '.' in it || '/' in it ||
+                it in setOf("README", "LICENSE", "Makefile", "Dockerfile", "Gemfile") } == true
+            val showCode = run.code && (!explicitPath || path != null)
+            if (!showCode && !run.bold && !run.italic) {
                 append(content)
-            } else {
-                withStyle(SpanStyle(
-                    fontFamily = if (run.code) FontFamily.Monospace else null,
-                    fontWeight = if (run.bold) FontWeight.SemiBold else null,
-                    fontStyle = if (run.italic) FontStyle.Italic else null,
-                    background = if (run.code) codeBackground else Color.Unspecified,
-                )) {
-                    val path = if (existingFiles.isEmpty()) null else inlineFilePath(run)?.takeIf { it in existingFiles }
-                    if (path == null) append(content)
-                    else withLink(LinkAnnotation.Clickable(path,
-                        styles = TextLinkStyles(style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
-                        linkInteractionListener = { open(path) },
-                    )) { append(content) }
-                }
+                continue
+            }
+            withStyle(SpanStyle(
+                fontFamily = if (showCode) FontFamily.Monospace else null,
+                fontWeight = if (run.bold) FontWeight.SemiBold else null,
+                fontStyle = if (run.italic) FontStyle.Italic else null,
+                background = if (showCode) codeBackground else Color.Unspecified,
+            )) {
+                if (path == null) append(content)
+                else withLink(LinkAnnotation.Clickable(path,
+                    styles = TextLinkStyles(style = SpanStyle(color = linkColor, textDecoration = TextDecoration.Underline)),
+                    linkInteractionListener = { open(path) },
+                )) { append(content) }
             }
         }
     }

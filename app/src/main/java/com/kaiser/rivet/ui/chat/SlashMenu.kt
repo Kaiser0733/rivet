@@ -2,9 +2,7 @@ package com.kaiser.rivet.ui.chat
 
 import com.kaiser.rivet.agent.Skill
 
-internal enum class SlashAction(val token: String) {
-    Goal("goal"), Feedback("feedback"), Compact("compact"), Yolo("yolo"), BasicYolo("basic-yolo"),
-}
+internal typealias SlashAction = com.kaiser.rivet.agent.BuiltInSlash
 
 internal data class SlashRow(
     val group: String?,

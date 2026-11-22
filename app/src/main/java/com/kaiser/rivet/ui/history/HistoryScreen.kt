@@ -4,7 +4,6 @@ import androidx.compose.ui.res.pluralStringResource
 import androidx.compose.ui.res.stringResource
 import androidx.compose.foundation.Image
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
 import androidx.compose.foundation.focusable
@@ -49,6 +48,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.focus.FocusRequester
 import androidx.compose.ui.focus.focusRequester
+import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.platform.LocalFocusManager
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.semantics.Role
@@ -75,6 +75,9 @@ internal fun RivetSidebar(
     onOpenSettings: () -> Unit,
 ) {
     val state by viewModel.uiState.collectAsState()
+    val landscape = LocalConfiguration.current.orientation == android.content.res.Configuration.ORIENTATION_LANDSCAPE
+    val shortcuts = listOf(Triple("Tools", R.drawable.ic_tools, onOpenTools),
+        Triple("Browser", R.drawable.ic_web, onOpenBrowser), Triple("Models", R.drawable.ic_models, onOpenModels))
     val openEnabled = state.ready && !state.projectLoading && !state.undoing && !state.recoveringProjectChanges
     val actionsEnabled = openEnabled && !state.streaming
     var searching by rememberSaveable { mutableStateOf(false) }
@@ -110,11 +113,8 @@ internal fun RivetSidebar(
         .imePadding().padding(horizontal = RivetLayout.pageGutter)) {
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp), verticalAlignment = Alignment.CenterVertically) {
             Box(Modifier.size(32.dp).clip(CircleShape), contentAlignment = Alignment.Center) {
-                Image(painterResource(R.drawable.ic_launcher_foreground), contentDescription = null,
-                    modifier = Modifier.fillMaxSize().graphicsLayer {
-                        scaleX = 1.42f
-                        scaleY = 1.42f
-                    })
+                Image(painterResource(R.drawable.sidebar_rivet_mark), contentDescription = null,
+                    modifier = Modifier.fillMaxSize())
             }
             Spacer(Modifier.size(10.dp))
             Text("RIVET", Modifier.weight(1f),
@@ -158,10 +158,18 @@ internal fun RivetSidebar(
                     }
                 }
                 Spacer(Modifier.size(8.dp))
-                SidebarLink("Tools", R.drawable.ic_tools, onOpenTools)
-                SidebarLink("Browser", R.drawable.ic_web, onOpenBrowser)
-                SidebarLink("Models", R.drawable.ic_models, onOpenModels)
+                if (landscape) {
+                    Row(Modifier.fillMaxWidth()) {
+                        shortcuts.forEach { (label, icon, open) ->
+                            SidebarLink(label, icon, open, Modifier.weight(1f), compact = true)
+                        }
+                    }
+                } else shortcuts.forEach { (label, icon, open) -> SidebarLink(label, icon, open) }
                 HorizontalDivider(Modifier.padding(vertical = 8.dp), color = MaterialTheme.colorScheme.outlineVariant)
+            }
+            if (landscape && rows.isNotEmpty()) item(key = "recents-heading") {
+                Text("Recents", modifier = Modifier.padding(start = 8.dp, bottom = 4.dp),
+                    style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
             }
             if (rows.isEmpty()) item {
                 Text(if (search.isBlank()) "Your chats will appear here." else "No matching chats.",
@@ -247,12 +255,15 @@ internal fun RivetSidebar(
 }
 
 @Composable
-private fun SidebarLink(label: String, icon: Int, onClick: () -> Unit) {
-    Row(Modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick)
-        .heightIn(min = 48.dp).padding(horizontal = 8.dp),
-        verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(14.dp)) {
-        Icon(painterResource(icon), null, Modifier.size(22.dp))
-        Text(label, style = MaterialTheme.typography.titleSmall)
+private fun SidebarLink(label: String, icon: Int, onClick: () -> Unit,
+                        modifier: Modifier = Modifier, compact: Boolean = false) {
+    Row(modifier.fillMaxWidth().clickable(role = Role.Button, onClick = onClick)
+        .heightIn(min = 48.dp).padding(horizontal = if (compact) 4.dp else 8.dp),
+        verticalAlignment = Alignment.CenterVertically,
+        horizontalArrangement = Arrangement.spacedBy(if (compact) 5.dp else 14.dp)) {
+        Icon(painterResource(icon), null, Modifier.size(if (compact) 16.dp else 22.dp))
+        Text(label, style = if (compact) MaterialTheme.typography.labelMedium else MaterialTheme.typography.titleSmall,
+            maxLines = 1, overflow = TextOverflow.Ellipsis)
     }
 }
 

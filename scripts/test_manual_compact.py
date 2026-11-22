@@ -19,9 +19,9 @@ class ManualCompactTest(unittest.TestCase):
 
     def test_the_tap_fires_the_view_model_compaction(self):
         chat = (SRC / "ui/chat/ChatScreen.kt").read_text()
-        self.assertIn("SlashAction.Compact -> onCompact()", chat)
-        self.assertIn("onCompact = chatViewModel::compactHistory", chat)
-        self.assertIn("onCompact: () -> Unit", chat)
+        self.assertIn('onSend("/${it.token}")', chat)
+        model = (SRC / "chat/ChatViewModel.kt").read_text()
+        self.assertIn("BuiltInSlash.Compact -> compactHistory()", model)
         self.assertIn("compactEnabled = compactRowEnabled(streaming)", chat)
 
     def test_the_trigger_decision_is_a_pure_seam(self):
@@ -43,7 +43,7 @@ class ManualCompactTest(unittest.TestCase):
         self.assertIn("sql.save(noticed, interrupted = false, expectedSessionId = sessionId)", body)
         self.assertIn("activeSummary = context.summary", body)
         # The automatic path keeps the same machinery; the manual one adds no second checkpoint.
-        self.assertIn("val compacted = context.prepare(candidate, force)", model)
+        self.assertIn("context.prepare(candidate, force)", model)
         self.assertNotIn("TaskCheckpoint(", body)
 
     def test_edge_cases_get_plain_outcomes_and_the_existing_error_copy(self):

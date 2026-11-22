@@ -29,7 +29,6 @@ import android.graphics.BitmapFactory
 import android.content.ClipData
 import android.content.Context
 import android.content.ClipboardManager
-import android.widget.Toast
 import android.content.Intent
 import android.net.Uri
 import android.provider.Settings
@@ -84,7 +83,6 @@ import com.kaiser.rivet.ui.entryProgress
 import com.kaiser.rivet.ui.messageEntry
 import com.kaiser.rivet.ui.motionDisabled
 import androidx.compose.foundation.ExperimentalFoundationApi
-import androidx.compose.foundation.combinedClickable
 import androidx.compose.material3.AlertDialog
 import androidx.compose.material3.ExperimentalMaterial3Api
 import androidx.compose.material3.ModalBottomSheet
@@ -105,6 +103,7 @@ import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
+import androidx.compose.runtime.produceState
 import androidx.compose.runtime.key
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
@@ -142,9 +141,12 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
+import com.kaiser.rivet.browser.BrowserDrivingPolicy
+import com.kaiser.rivet.workspace.FilePreviewResult
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
 import com.kaiser.rivet.chat.compactRowEnabled
+import com.kaiser.rivet.chat.ComposerAttachment
 import com.kaiser.rivet.chat.SharedDraft
 import com.kaiser.rivet.chat.appendClipboardText
 import com.kaiser.rivet.chat.draftFor
@@ -157,7 +159,7 @@ import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.PresentedFile
-import com.kaiser.rivet.agent.parseGoalCommand
+import com.kaiser.rivet.agent.SlashCommands
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.ui.provider.labelRes
@@ -168,6 +170,7 @@ import com.kaiser.rivet.agent.AgentActivityGroup
 import com.kaiser.rivet.agent.AgentActivityOperation
 import com.kaiser.rivet.agent.ActivityOutcome
 import com.kaiser.rivet.agent.AgentActivityProjection
+import com.kaiser.rivet.agent.AgentToolLifecycle
 import com.kaiser.rivet.agent.AgentToolLifecycleStage
 import com.kaiser.rivet.chat.ChatUiState
 import com.kaiser.rivet.chat.ChatErrorAction
@@ -186,6 +189,7 @@ import com.kaiser.rivet.ui.provider.ProvidersViewModel
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.launch
+import java.io.File
 
 @OptIn(ExperimentalLayoutApi::class)
 @Composable
@@ -306,6 +310,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             val session = state.currentSessionId
             AssistantFileLinks(
                 resolve = { paths -> chatViewModel.existingProjectFiles(paths, identity) },
+                load = { path -> chatViewModel.previewProjectFile(path, identity) },
                 open = { path ->
                     val exists = path in chatViewModel.existingProjectFiles(setOf(path), identity)
                     if (exists && chatViewModel.uiState.value.currentSessionId == session) {
@@ -369,6 +374,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                                 onChooseReasoning = chatViewModel::chooseReasoningLevel,
                                 onOpenPreview = preview::open,
                                 missingFiles = preview.missing,
+                                browser = chatViewModel.browser,
                                 modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
                         }
                     }
@@ -384,10 +390,15 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                         { ProtectedControls { ModelSelector(providersViewModel) { modelSheetVisible = true } } }
                     } else null
                 val sharedContent by chatViewModel.sharedContent.collectAsState()
+                val composerAttachments by chatViewModel.composerAttachments.collectAsState()
                 if (emptyConversation) HomeStarters(chatViewModel, canStartChat, state.starterError,
                     modifier = Modifier.heightIn(max = starterRoom).verticalScroll(rememberScrollState()))
                 InputBar(streaming = state.streaming,
                     sharedDraft = sharedContent[state.currentSessionId],
+                    attachment = composerAttachments[state.currentSessionId],
+                    onStageAttachment = chatViewModel::stageComposerAttachment,
+                    onDropAttachment = { chatViewModel.removeComposerAttachment(state.currentSessionId) },
+                    onPickerUnavailable = chatViewModel::attachmentPickerUnavailable,
                     phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
                     ready = state.ready && !state.projectLoading && !state.undoing &&
                         !state.recoveringProjectChanges,
@@ -398,14 +409,11 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     error = state.error, notice = state.notice, sessionId = state.currentSessionId,
                     skills = skillCatalog?.skills.orEmpty(),
                     onRequestSkills = chatViewModel::refreshSkillCatalog,
-                    onSendFeedback = onSendFeedback,
-                    onCompact = chatViewModel::compactHistory,
-                    onAutonomyChange = onAutonomyChange,
                     folderName = state.projectName,
                     onOpenProjects = onOpenProjects,
                     selector = modelSelector,
                     contextReading = contextReading,
-                    onSend = chatViewModel::send, onCancel = chatViewModel::cancel,
+                    onSend = { chatViewModel.send(it, onSendFeedback, onAutonomyChange) }, onCancel = chatViewModel::cancel,
                     modifier = Modifier.fillMaxWidth())
             }
         }
@@ -486,7 +494,20 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onChooseReasoning: (ReasoningLevel) -> Unit,
                         onOpenPreview: (String) -> Unit,
                         missingFiles: Set<String>,
+                        browser: com.kaiser.rivet.browser.BrowserSession,
                         modifier: Modifier = Modifier) {
+    val browserState by browser.state.collectAsState()
+    val showBrowserCard = BrowserDrivingPolicy.chatPreviewVisible(
+        browserState.watchVisible, browserState.rendererVisible && !browserState.teardownRequested,
+        browserState.visible, browserState.handoff != null, browserState.watchSessionId == state.currentSessionId,
+    )
+    val browserKeys = remember(state.messages) {
+        state.messages.asSequence().flatMap { it.toolCalls.asSequence() }
+            .filter { it.name.startsWith("browser_") }
+            .map { AgentToolLifecycle.keyFor(it.id) }.toSet()
+    }
+    val browsing = browserState.agentRunActive && (!browserState.pageReady ||
+        state.toolLifecycle.any { it.correlationKey in browserKeys && it.stage == AgentToolLifecycleStage.Started })
     val deliverables = remember(state.messages) { presentedFilesForTurns(state.messages) }
     val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning) {
         val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
@@ -549,13 +570,13 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     val startsWriting = remember(state.turnStartedAt, textArrived) { textArrived && !hadText }
     SideEffect { hadText = textArrived }
     val answerProgress = entryProgress(state.turnStartedAt to textArrived, startsWriting, RivetMotion.MESSAGE_MS)
-    val streaming = state.streaming && !state.compacting
+    val streaming = state.streaming && state.turnStartedAt != null
     // While a turn runs the status line is always shown, so a long tool call and a
     // stalled stream never look the same. Outside a turn the plain activity text is
     // still used for recovery messages. The clock's start comes from the turn; without one
     // there is no clock to show, and both the item count and the item itself read this one
     // value so they cannot disagree about whether the row exists.
-    val liveStatusStart = if (streaming) state.turnStartedAt else null
+    val liveStatusStart = if (streaming && !state.compacting) state.turnStartedAt else null
     val toolRunning = liveOperation != null
     val writing = streamingText.isNotBlank()
     val waitingForApproval = state.pendingApproval != null || liveOperation?.stage ==
@@ -593,7 +614,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             hasError = state.error != null,
         )
     }
-    val totalItems = segmentedTurns.size +
+    val totalItems = segmentedTurns.size + (if (showBrowserCard) 1 else 0) +
         (if (state.goalLine != null) 1 else 0) +
         (if (streamingReasoning.isNotBlank()) 1 else 0) +
         (if (streamingText.isNotBlank()) 1 else 0) +
@@ -634,7 +655,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // has to handle rows appearing or disappearing, which move everything at once.
     LaunchedEffect(segmentedTurns.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
-        state.notice) {
+        state.notice, showBrowserCard, state.compacting) {
         if (followBottom && totalItems > 0) {
             programmaticScroll = true
             try {
@@ -665,80 +686,116 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
             }
         }
     }
-    LazyColumn(state = listState, modifier = modifier.fillMaxSize(),
-        contentPadding = androidx.compose.foundation.layout.PaddingValues(
-            start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
-        verticalArrangement = Arrangement.spacedBy(6.dp)) {
-        state.goalLine?.let { line ->
-            item(key = "goal-line") {
-                GoalLine(line, state.goalAttachOffer, onAttachGoal)
+    val jumpScope = rememberCoroutineScope()
+    Box(modifier.fillMaxSize()) {
+        PlatformSelectionToolbar {
+            SelectionContainer {
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(),
+                    contentPadding = androidx.compose.foundation.layout.PaddingValues(
+                        start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
+                    verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                    state.goalLine?.let { line ->
+                        item(key = "goal-line") {
+                            GoalLine(line, state.goalAttachOffer, onAttachGoal)
+                        }
+                    }
+                    // Goal first, then the interruption notice, then the transcript: restoring a
+                    // saved session must never put the recovery banner above the user's goal.
+                    if (showInterruptedTurn) item(key = "interrupted-turn") {
+                        InterruptedTurnRow(
+                            recovery = state.runRecovery,
+                            spendLabel = state.spendLabel,
+                            budgetPaused = state.budgetPaused,
+                            onRaiseBudget = onRaiseBudget,
+                            onRetry = onRetryInterruptedTurn,
+                            onDismiss = onDismissInterruptedTurn,
+                        )
+                    }
+                    items(segmentedTurns, key = { it.turnIndex }) { turn ->
+                        TurnBlockView(
+                            turn = turn,
+                            state = state,
+                            isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
+                            messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
+                            fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
+                            missingFiles = missingFiles,
+                            onOpenPreview = onOpenPreview,
+                        )
+                    }
+                    if (showBrowserCard) item(key = "live-browser") {
+                        LiveBrowserCard(browser, browserState, browsing)
+                    }
+                    if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
+                        ReasoningRow(
+                            streamingReasoning, streaming = true, id = "streaming",
+                            showWaitFallback = statusLabel == "Thinking" && state.activity == "Working on it…",
+                        )
+                    }
+                    if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
+                        Box(Modifier.messageEntry(answerProgress)) {
+                            AssistantMessage(displaySafeText(streamingText), streaming = true)
+                        }
+                    }
+                    liveStatusStart?.let { start ->
+                        item(key = "live-status") { LiveStatusRow(statusLabel, start) }
+                    }
+                    if (state.compacting) item(key = "manual-compaction") { CompactingRow() }
+                    if (showActivity) state.activity?.let { activity ->
+                        item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+                    }
+                    state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
+                    state.error?.let { error -> item {
+                        ErrorRow(error, onDismissError,
+                            when (state.errorAction) {
+                                ChatErrorAction.OpenSettings -> "Open Settings"
+                                ChatErrorAction.RetryProjectChanges -> "Try again"
+                                ChatErrorAction.RetryTurn -> "Retry"
+                                null -> null
+                            },
+                            when (state.errorAction) {
+                                ChatErrorAction.OpenSettings -> onOpenSettings
+                                ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
+                                ChatErrorAction.RetryTurn -> onRetryTurn
+                                null -> null
+                            }, blockedReason = commandBusyReason(state.commandRunning), onDiscard = onDiscardProjectChanges.takeIf {
+                                state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
+                                    !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
+                                    state.projectIdentity != null &&
+                                    state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
+                            })
+                    } }
+                    state.unsupportedReasoning?.let { notice -> item(key = "reasoning-choice") {
+                        ReasoningFallbackRow(notice, onChooseReasoning)
+                    } }
+                }
             }
         }
-        // Goal first, then the interruption notice, then the transcript: restoring a
-        // saved session must never put the recovery banner above the user's goal.
-        if (showInterruptedTurn) item(key = "interrupted-turn") {
-            InterruptedTurnRow(
-                recovery = state.runRecovery,
-                spendLabel = state.spendLabel,
-                budgetPaused = state.budgetPaused,
-                onRaiseBudget = onRaiseBudget,
-                onRetry = onRetryInterruptedTurn,
-                onDismiss = onDismissInterruptedTurn,
-            )
-        }
-        items(segmentedTurns, key = { it.turnIndex }) { turn ->
-            TurnBlockView(
-                turn = turn,
-                state = state,
-                isLastTurn = turn.turnIndex == segmentedTurns.lastIndex,
-                messageProgress = if (turn.turnIndex == segmentedTurns.lastIndex) messageProgress else 1f,
-                fileCards = deliverables[turn.userItem?.messageIndex].orEmpty(),
-                missingFiles = missingFiles,
-                onOpenPreview = onOpenPreview,
-            )
-        }
-        if (streamingReasoning.isNotBlank()) item(key = "streaming-thinking") {
-            ReasoningRow(
-                streamingReasoning, streaming = true, id = "streaming",
-                showWaitFallback = statusLabel == "Thinking" && state.activity == "Working on it…",
-            )
-        }
-        if (streamingText.isNotBlank()) item(key = "streaming-assistant") {
-            Box(Modifier.messageEntry(answerProgress)) {
-                AssistantMessage(displaySafeText(streamingText), streaming = true)
-            }
-        }
-        liveStatusStart?.let { start ->
-            item(key = "live-status") { LiveStatusRow(statusLabel, start) }
-        }
-        if (state.compacting) item(key = "manual-compaction") { CompactingRow() }
-        if (showActivity) state.activity?.let { activity ->
-            item { Text(activity, color = MaterialTheme.colorScheme.onSurfaceVariant) }
-        }
-        state.notice?.let { notice -> item { Text(notice, color = MaterialTheme.colorScheme.onSurfaceVariant) } }
-        state.error?.let { error -> item {
-            ErrorRow(error, onDismissError,
-                when (state.errorAction) {
-                    ChatErrorAction.OpenSettings -> "Open Settings"
-                    ChatErrorAction.RetryProjectChanges -> "Try again"
-                    ChatErrorAction.RetryTurn -> "Retry"
-                    null -> null
+        if (!nearBottom && totalItems > 0) {
+            Surface(
+                onClick = {
+                    jumpScope.launch {
+                        followBottom = true
+                        programmaticScroll = true
+                        try {
+                            scrollToConversationBottom(listState, totalItems - 1)
+                        } finally {
+                            programmaticScroll = false
+                        }
+                    }
                 },
-                when (state.errorAction) {
-                    ChatErrorAction.OpenSettings -> onOpenSettings
-                    ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
-                    ChatErrorAction.RetryTurn -> onRetryTurn
-                    null -> null
-                }, blockedReason = commandBusyReason(state.commandRunning), onDiscard = onDiscardProjectChanges.takeIf {
-                    state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
-                        !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
-                        state.projectIdentity != null &&
-                        state.currentSessionWorkspaceId?.let { it != state.projectIdentity } != true
-                })
-        } }
-        state.unsupportedReasoning?.let { notice -> item(key = "reasoning-choice") {
-            ReasoningFallbackRow(notice, onChooseReasoning)
-        } }
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 8.dp),
+                shape = MaterialTheme.shapes.extraLarge,
+                color = MaterialTheme.colorScheme.surfaceContainerHigh,
+            ) {
+                Row(Modifier.heightIn(min = 48.dp).padding(horizontal = 12.dp),
+                    horizontalArrangement = Arrangement.spacedBy(6.dp),
+                    verticalAlignment = Alignment.CenterVertically) {
+                    Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp),
+                        tint = MaterialTheme.colorScheme.primary)
+                    Text("Jump to latest", style = MaterialTheme.typography.labelMedium)
+                }
+            }
+        }
     }
 }
 
@@ -1200,63 +1257,31 @@ private suspend fun scrollToConversationBottom(state: androidx.compose.foundatio
     if (offset != 0) state.scrollToItem(index, offset)
 }
 
-@OptIn(ExperimentalFoundationApi::class)
 @Composable
 internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messageKey: Int = 0) {
-    val context = LocalContext.current
-    val copyText = if (message.role == AgentRole.User) message.text else displaySafeText(message.text)
-    var menuOpen by remember(messageKey) { mutableStateOf(false) }
-    var selectingText by remember(messageKey) { mutableStateOf(false) }
     Column(Modifier.fillMaxWidth(), verticalArrangement = Arrangement.spacedBy(6.dp)) {
         if (message.role == AgentRole.Assistant && !reasoning.isNullOrBlank()) {
             ReasoningRow(reasoning, streaming = false, id = "thinking-$messageKey")
         }
-        val bubble: @Composable () -> Unit = {
-            if (message.role == AgentRole.User) {
-                Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
-                    Surface(
-                        modifier = Modifier.widthIn(max = 525.dp).fillMaxWidth(0.82f),
-                        color = MaterialTheme.colorScheme.surfaceContainer,
-                        shape = RoundedCornerShape(20.dp),
-                    ) {
-                        Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
-                            verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                            Text(message.text, style = MaterialTheme.typography.bodyMedium)
-                            message.userImagePath?.let { path ->
-                                BrowserImage(ChatMarkdownBlock.Image("Shared image", path),
-                                    unavailable = "Shared image no longer available.")
-                            }
+        if (message.role == AgentRole.User) {
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+                Surface(
+                    modifier = Modifier.widthIn(max = 525.dp).fillMaxWidth(0.82f),
+                    color = MaterialTheme.colorScheme.surfaceContainer,
+                    shape = RoundedCornerShape(20.dp),
+                ) {
+                    Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
+                        verticalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Text(message.text, style = MaterialTheme.typography.bodyMedium)
+                        message.userImagePath?.let { path ->
+                            BrowserImage(ChatMarkdownBlock.Image("Shared image", path),
+                                unavailable = "Shared image no longer available.")
                         }
                     }
                 }
-            } else {
-                AssistantMessage(displaySafeText(message.text), streaming = false)
             }
-        }
-        Box(Modifier.fillMaxWidth().then(
-            if (selectingText) Modifier else Modifier.combinedClickable(
-                onClick = {},
-                onLongClickLabel = "Copy or select text",
-                onLongClick = { menuOpen = !menuOpen },
-            ),
-        )) {
-            SelectionContainer { bubble() }
-        }
-        if (menuOpen) {
-            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(4.dp)) {
-                TextButton(onClick = {
-                    menuOpen = false
-                    copyToClipboard(context, copyText)
-                    Toast.makeText(context, "Message copied.", Toast.LENGTH_SHORT).show()
-                }) { Text("Copy message") }
-                TextButton(onClick = {
-                    menuOpen = false
-                    selectingText = true
-                }) { Text("Select text") }
-            }
-        }
-        if (selectingText) {
-            TextButton(onClick = { selectingText = false }) { Text("Done selecting") }
+        } else {
+            AssistantMessage(displaySafeText(message.text), streaming = false)
         }
     }
 }
@@ -1441,7 +1466,10 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
     // re-splits and re-joins the whole reply; this keeps the blocks before the last one and
     // re-parses only that block, with the same result (see MarkdownBlocks).
     val parser = remember { MarkdownBlocks() }
-    val blocks = parser.forText(text)
+    val parsed = parser.forText(text)
+    val blocks = remember(parsed) { parsed.flatMap { block ->
+        if (block is ChatMarkdownBlock.Paragraph) splitParagraphImages(block.text) else listOf(block)
+    } }
     val links = LocalAssistantFileLinks.current
     val paths = remember(blocks, links != null) {
         if (links == null) emptySet() else fileReferencePaths(blocks)
@@ -1485,8 +1513,17 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                         }
                     }
                 }
-                is ChatMarkdownBlock.Image -> if (showInlineImages) BrowserImage(block)
-                    else if (block.alt.isNotBlank()) InlineMarkdown(block.alt)
+                is ChatMarkdownBlock.Image -> {
+                    val path = projectImagePath(block.source)
+                    when {
+                        !showInlineImages -> if (block.alt.isNotBlank()) Text(displaySafeText(block.alt))
+                        path != null && path in files && links != null && open != null ->
+                            ProjectInlineImage(block, path, links, open)
+                        block.source.startsWith('/') || block.source.startsWith("file://") ->
+                            BrowserImage(block, unavailable = displaySafeText(block.fallbackText()))
+                        else -> Text(displaySafeText(block.fallbackText()))
+                    }
+                }
                 is ChatMarkdownBlock.Table -> MarkdownTable(block)
                 is ChatMarkdownBlock.Code -> Column(Modifier.fillMaxWidth()) {
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
@@ -1515,6 +1552,23 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                 }
             }
         }
+    }
+}
+
+@Composable
+private fun ProjectInlineImage(image: ChatMarkdownBlock.Image, path: String, links: AssistantFileLinks,
+                               onOpen: (String) -> Unit) {
+    val preview by produceState<FilePreviewResult?>(null, links, path) {
+        value = links.load(path)
+    }
+    val bitmap = (preview as? FilePreviewResult.Image)?.bitmap
+    if (bitmap == null) {
+        Text(displaySafeText(image.fallbackText()), style = MaterialTheme.typography.bodyMedium)
+    } else {
+        Image(bitmap.asImageBitmap(), displaySafeText(image.fallbackText()),
+            modifier = Modifier.fillMaxWidth().heightIn(max = 480.dp).clip(MaterialTheme.shapes.small)
+                .clickable(role = Role.Button, onClickLabel = "Open image preview") { onOpen(path) },
+            contentScale = ContentScale.Fit)
     }
 }
 
@@ -1596,11 +1650,6 @@ private fun ChangeSummary(state: ChatUiState, onUndo: () -> Unit,
             Text(reason, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
         }
-        state.spendLabel?.let { spend ->
-            Text(if (spend == "unknown pricing") spend else "Spend $spend",
-                style = MaterialTheme.typography.bodySmall,
-                color = MaterialTheme.colorScheme.onSurfaceVariant)
-        }
         if (details) state.lastTurnFiles.forEach { path ->
             ProjectFileCard(PresentedFile(path, path.substringBeforeLast('/', "")),
                 missing = path in missingFiles, onOpen = { onOpenPreview(path) })
@@ -1630,8 +1679,8 @@ private fun InterruptedTurnRow(recovery: String?, spendLabel: String?, budgetPau
                     Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall)
                 }
-                spendLabel?.let {
-                    Text(if (it == "unknown pricing") it else "Spend $it",
+                spendLabel?.takeUnless { it == "unknown pricing" }?.let {
+                    Text("Spend $it",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall)
                 }
@@ -1707,7 +1756,7 @@ private val DRAFT_SAVER: Saver<Map<String, String>, Any> = mapSaver(
     restore = { saved -> saved.mapNotNull { (key, value) -> (value as? String)?.let { key to it } }.toMap() },
 )
 
-internal fun isGoalCommand(text: String): Boolean = parseGoalCommand(text) != null
+internal fun isGoalCommand(text: String): Boolean = SlashCommands.builtIn(text) == SlashAction.Goal
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -1716,12 +1765,13 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
                      sharedDraft: SharedDraft? = null,
+                     attachment: ComposerAttachment? = null,
+                     onStageAttachment: (String?, android.net.Uri, Boolean, File?) -> Unit,
+                     onDropAttachment: () -> Unit,
+                     onPickerUnavailable: () -> Unit,
                      phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
-                     onSendFeedback: () -> Unit,
-                     onCompact: () -> Unit,
-                     onAutonomyChange: (AutonomyMode) -> Unit,
                      folderName: String?,
                      onOpenProjects: () -> Unit,
                      selector: (@Composable () -> Unit)? = null,
@@ -1738,6 +1788,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     }
     val draft = draftFor(drafts, sessionId)
     var attachmentsOpen by rememberSaveable(sessionId) { mutableStateOf(false) }
+    val pickAttachment = rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)
     if (attachmentsOpen) {
         val context = LocalContext.current
         val clipboard = remember(context) { context.getSystemService(ClipboardManager::class.java) }
@@ -1756,6 +1807,15 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             onDismissRequest = { attachmentsOpen = false },
             sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
         ) {
+            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                horizontalArrangement = Arrangement.SpaceEvenly) {
+                ComposerPicker.entries.forEach { picker ->
+                    TextButton(onClick = {
+                        attachmentsOpen = false
+                        pickAttachment(picker)
+                    }) { Text(picker.label) }
+                }
+            }
             TextButton(
                 enabled = hasClipboardText,
                 onClick = {
@@ -1803,12 +1863,13 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // exists. Plain text still needs a project and a provider; without a provider the
     // send is allowed so the view model can explain what to choose instead of the
     // button silently refusing the tap.
-    val goalCommand = isGoalCommand(draft)
-    val canSend = ready && !streaming && draft.isNotBlank() && pendingText == null &&
-        (goalCommand || ((hasProject || sharedDraft != null || phoneAvailable) && hasProvider) || !hasProvider)
+    val builtInCommand = SlashCommands.builtIn(draft) != null
+    val canSend = ready && !streaming && (draft.isNotBlank() || attachment != null) && pendingText == null &&
+        (builtInCommand || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
+            !hasProvider)
     // Trailing newlines and spaces are noise; the model never wanted them.
     val submit = {
-        val text = draftToSend(draft, canSend)
+        val text = if (canSend && attachment != null && draft.isBlank()) "" else draftToSend(draft, canSend)
         if (text != null) {
             pendingText = draft
             submittedAt = ackCount
@@ -1861,13 +1922,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                             else -> ""
                         }
                         drafts = withDraft(drafts, sessionId, nextDraft)
-                        when (row.action) {
-                            SlashAction.Feedback -> onSendFeedback()
-                            SlashAction.Compact -> onCompact()
-                            SlashAction.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
-                            SlashAction.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
-                            else -> Unit
-                        }
+                        row.action?.takeUnless { it == SlashAction.Goal }?.let { onSend("/${it.token}") }
                     }
                 }
             }
@@ -1934,6 +1989,18 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                         ),
                     )
+                    attachment?.let { item ->
+                        Row(Modifier.fillMaxWidth().padding(start = 12.dp),
+                            verticalAlignment = Alignment.CenterVertically) {
+                            Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
+                            Text(item.name, Modifier.weight(1f).padding(horizontal = 8.dp),
+                                style = MaterialTheme.typography.bodySmall, maxLines = 1,
+                                overflow = TextOverflow.Ellipsis)
+                            IconButton(onClick = onDropAttachment, enabled = !streaming) {
+                                Icon(painterResource(R.drawable.ic_close), "Remove attachment")
+                            }
+                        }
+                    }
                     if (!contextFitsInRow && contextReading != null) {
                         ConversationContextMeter(contextReading, Modifier.align(Alignment.End).padding(end = 6.dp))
                     }

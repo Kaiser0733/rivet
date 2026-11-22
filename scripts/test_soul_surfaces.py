@@ -59,7 +59,7 @@ class SoulSurfaceTest(unittest.TestCase):
         cases = (
             ("provider/SettingsScreen.kt", 'private fun ProviderDetail(', 'active?.name ?: "Connect a provider"'),
             ("local/ModelsScreen.kt", 'private fun DeviceCard(', "formatParams(ceiling.maxParamsB)"),
-            ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', "Available in the Android share sheet"),
+            ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', "Choose Rivet in the Android share sheet"),
             ("provider/SettingsScreen.kt", 'private fun PhoneAccessDetail(', "Rivet asks before each capture. After you allow it, tap Capture now in the notification."),
             ("browser/BrowserScreen.kt", 'Text(', "Enter a web address to get started."),
         )

@@ -5,6 +5,18 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class BrowserDrivingPolicyTest {
+    @Test fun aCompletedPreviewStaysWithTheOpeningChatUntilItCloses() {
+        fun show(watch: Boolean = true, renderer: Boolean = true, full: Boolean = false,
+                 handoff: Boolean = false, owner: Boolean = true) =
+            BrowserDrivingPolicy.chatPreviewVisible(watch, renderer, full, handoff, owner)
+        assertTrue(show())
+        assertFalse(show(watch = false))
+        assertFalse(show(renderer = false))
+        assertFalse(show(full = true))
+        assertFalse(show(handoff = true))
+        assertFalse(show(owner = false))
+    }
+
     @Test fun aManualOpenHasNoDrivingBannerOrChatCard() {
         assertFalse(BrowserDrivingPolicy.bannerVisible(false, false, BrowserDriving.User))
         assertFalse(BrowserDrivingPolicy.cardVisible(false, false, true, false))

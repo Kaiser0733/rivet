@@ -132,9 +132,14 @@ class AgentLoop(
                 messages.addAll(active)
             }
             val streamed = StringBuffer()
-            suspend fun requestOnce(): AgentResponse = requestModel(messages.toList(), tools) { delta ->
-                streamed.append(delta)
-                onText(delta)
+            suspend fun requestOnce(): AgentResponse {
+                val dsml = DsmlToolCalls { text ->
+                    if (text.isNotEmpty()) {
+                        streamed.append(text)
+                        onText(text)
+                    }
+                }
+                return dsml.finish(requestModel(messages.toList(), tools, dsml::delta), tools)
             }
             val response = try {
                 try { requestOnce() }
@@ -157,7 +162,7 @@ class AgentLoop(
                 }
             } catch (incomplete: ProviderError.IncompleteGeneration) {
                 if (!incomplete.isLengthCut || incomplete.truncatedToolCalls.isEmpty()) {
-                    val partial = streamed.toString().ifEmpty { incomplete.partialText }
+                    val partial = streamed.toString().ifEmpty { DsmlToolCalls.hideIncomplete(incomplete.partialText) }
                     if (partial.isNotBlank()) {
                         append(AgentMessage.assistant(partial))
                     }
@@ -179,7 +184,7 @@ class AgentLoop(
                     AgentToolCall(safeId, safeName, safeArgs)
                 }
                 val assistant = AgentMessage.assistant(
-                    text = streamed.toString().ifEmpty { incomplete.partialText },
+                    text = streamed.toString().ifEmpty { DsmlToolCalls.hideIncomplete(incomplete.partialText) },
                     toolCalls = truncatedCalls,
                     transportState = incomplete.transportState,
                 )

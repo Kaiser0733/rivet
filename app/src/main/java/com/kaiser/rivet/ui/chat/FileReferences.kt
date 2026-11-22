@@ -2,16 +2,21 @@ package com.kaiser.rivet.ui.chat
 
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.kaiser.rivet.agent.presentablePath
+import com.kaiser.rivet.workspace.FilePreviewResult
 
 internal class AssistantFileLinks(
     val resolve: suspend (Set<String>) -> Set<String>,
     val open: suspend (String) -> Boolean,
+    val load: suspend (String) -> FilePreviewResult,
 )
 
 internal val LocalAssistantFileLinks = staticCompositionLocalOf<AssistantFileLinks?> { null }
 
 internal fun inlineFilePath(run: InlineRun): String? {
     if (!run.code || displaySafeText(run.text) != run.text) return null
+    // A path with whitespace needs an explicit directory or file extension to be a reference.
+    if (run.text.any(Char::isWhitespace) && '/' !in run.text &&
+        !run.text.substringAfterLast('.').matches(Regex("[A-Za-z0-9]+"))) return null
     return runCatching { presentablePath(run.text.removePrefix("./")).value }.getOrNull()
 }
 
@@ -22,6 +27,7 @@ internal fun fileReferencePaths(blocks: List<ChatMarkdownBlock>): Set<String> = 
     for (block in blocks) {
         when (block) {
             is ChatMarkdownBlock.Paragraph -> collect(block.text)
+            is ChatMarkdownBlock.Image -> projectImagePath(block.source)?.let(::add)
             is ChatMarkdownBlock.Heading -> collect(block.text)
             is ChatMarkdownBlock.Quote -> collect(block.text)
             is ChatMarkdownBlock.ListItems -> block.items.forEach(::collect)
@@ -29,3 +35,10 @@ internal fun fileReferencePaths(blocks: List<ChatMarkdownBlock>): Set<String> = 
         }
     }
 }
+
+internal fun projectImagePath(source: String): String? {
+    if (displaySafeText(source) != source || ':' in source) return null
+    return runCatching { presentablePath(source.removePrefix("./")).value }.getOrNull()
+}
+
+internal fun ChatMarkdownBlock.Image.fallbackText(): String = alt.ifBlank { source }

@@ -76,6 +76,17 @@ class ChatMarkdownTest {
         assertEquals(listOf(ChatMarkdownBlock.Paragraph("#")), parseAssistantMarkdown("#"))
     }
 
+    @Test fun inlineImageSplitsTheParagraphAtItsExactPosition() {
+        val text = "Before ![chart](<docs/our chart.png>) after."
+        assertEquals(listOf(
+            ChatMarkdownBlock.Paragraph("Before"),
+            ChatMarkdownBlock.Image("chart", "docs/our chart.png"),
+            ChatMarkdownBlock.Paragraph("after."),
+        ), splitParagraphImages(text))
+        assertEquals(listOf(ChatMarkdownBlock.Paragraph("`![example](chart.png)`")),
+            splitParagraphImages("`![example](chart.png)`"))
+    }
+
     @Test fun plainTextIsUnchanged() {
         val source = "ordinary response with no formatting"
         assertEquals(listOf(ChatMarkdownBlock.Paragraph(source)), parseAssistantMarkdown(source))

@@ -1,5 +1,7 @@
 package com.kaiser.rivet.chat
 
+import com.kaiser.rivet.agent.ContextBudget
+import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
@@ -30,3 +32,6 @@ internal fun contextReading(config: ProviderConfig, tokens: Long): ContextMeterR
 internal fun contextPercent(usedTokens: Long, contextWindow: Int): Int =
     (usedTokens.coerceAtLeast(0L).toDouble() / contextWindow.coerceAtLeast(1) * 100)
         .coerceIn(0.0, 100.0).roundToInt()
+
+internal fun contextReadingForRequest(config: ProviderConfig, request: AgentRequest): ContextMeterReading =
+    contextReading(config, ContextBudget.estimateRequestTokens(request))

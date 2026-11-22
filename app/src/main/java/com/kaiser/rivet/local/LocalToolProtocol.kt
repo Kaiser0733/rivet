@@ -1,6 +1,7 @@
 package com.kaiser.rivet.local
 
 import com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
+import com.kaiser.rivet.agent.ArchiveRecall
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolDefinition
 import java.util.UUID
@@ -24,7 +25,7 @@ data class ParsedLocalOutput(val text: String, val calls: List<AgentToolCall>)
 object LocalToolProtocol {
     val coreTools = linkedSetOf(
         "read_file", "write_file", "create_file", "apply_patch",
-        "search_files", "list_directory", "run_command", "present",
+        "search_files", "list_directory", "run_command", "present", ArchiveRecall.TOOL,
     )
 
     private data class Tag(val open: String, val close: String?)

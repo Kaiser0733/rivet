@@ -60,6 +60,7 @@
     <string name="provider_hint_version">Rivet %1$s</string>
 
     <string name="chat_send">Send</string>
+    <string name="chat_share_selection">Share</string>
     <string name="chat_stop">Stop</string>
     <string name="chat_error_dismiss">Dismiss</string>
     <string name="model_switch">Change model</string>

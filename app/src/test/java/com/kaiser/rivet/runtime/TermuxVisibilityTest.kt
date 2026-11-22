@@ -3,6 +3,7 @@ package com.kaiser.rivet.runtime
 import java.io.File
 import javax.xml.parsers.DocumentBuilderFactory
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.w3c.dom.Element
@@ -26,5 +27,14 @@ class TermuxVisibilityTest {
         val names = (0 until packages.length)
             .map { (packages.item(it) as Element).getAttribute("android:name") }
         assertEquals(listOf("com.termux"), names)
+    }
+
+    @Test fun theTermuxResultReceiptIsNotDeclaredAsAReceiver() {
+        assertTrue(manifest.isFile)
+        val text = manifest.readText()
+        // The process boundary allows only the AndroidX profile receiver; the receipt is
+        // registered while a command waits, so it must never appear in the manifest.
+        assertFalse("no receiver may be declared in the app manifest", text.contains("<receiver"))
+        assertFalse("the Termux receipt must stay runtime-registered", text.contains("TermuxResultReceiver"))
     }
 }
