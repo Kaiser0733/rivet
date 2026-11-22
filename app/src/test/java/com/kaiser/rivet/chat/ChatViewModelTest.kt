@@ -1093,10 +1093,9 @@ class ChatViewModelTest {
         assertTrue(after.matches(config))
         assertTrue(after.usedTokens < before.usedTokens)
         val compacted = sessions.load()
-        val count = com.kaiser.rivet.agent.ContextBudget.estimateHistoryTokens(
-            com.kaiser.rivet.agent.modelMessages(compacted.messages, compacted.workspaceId, enforceWorkspace = true)
-        )
-        val copy = "Compacted to $count tokens"
+        // §7/§8: the row states the same number the meter shows — the tokens the next
+        // request actually carries (system + tools + live history), one accounting.
+        val copy = "Compacted to ${after.usedTokens} tokens"
         val restored = CodingSessions(app).recent(id)
         assertEquals(done.messages, restored)
         assertEquals(copy, com.kaiser.rivet.agent.AgentActivityProjection.conversation(restored)
