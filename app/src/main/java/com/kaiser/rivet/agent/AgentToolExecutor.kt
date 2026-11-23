@@ -197,7 +197,7 @@ class AgentToolExecutor(
                 }
                 "read_image" -> {
                     val read = readProjectImage ?: return invalid(call, "unknown_tool")
-                    val path = presentablePath(json.decodeFromString<ReadArgs>(call.arguments).path).value
+                    val path = presentablePath(readFileArguments(call.arguments).path).value
                     readOnly(call) {
                         val result = read(path)
                         success(call, buildJsonObject {
