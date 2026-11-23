@@ -25,6 +25,7 @@ import com.kaiser.rivet.agent.AgentRunResult
 import com.kaiser.rivet.agent.AgentStopReason
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolExecutor
+import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentToolEffect
 import com.kaiser.rivet.agent.AgentToolLifecycle
@@ -1425,6 +1426,44 @@ class ChatViewModel private constructor(
         }
     }
 
+    private suspend fun saveRememberedFacts(workspace: SafWorkspace, facts: List<String>): MemoryFormat.Append {
+        val files = ProjectStateFiles(workspace)
+        val result = files.appendMemory(facts)
+        if (result is MemoryFormat.Append.Saved && _uiState.value.projectIdentity == workspace.tree.toString()) {
+            projectState = files
+            memoryMarkdown = result.markdown
+            _uiState.update {
+                it.copy(memoryMarkdown = result.markdown, memoryLines = MemoryFormat.facts(result.markdown),
+                    notice = if (result.garden) "Memory updated. It is over the soft cap; garden it soon."
+                    else "Memory updated.")
+            }
+        }
+        return result
+    }
+
+    private suspend fun writeMemoryProposals(
+        workspace: SafWorkspace,
+        call: AgentToolCall,
+        facts: List<String>,
+    ): AgentToolResult {
+        val result = try {
+            saveRememberedFacts(workspace, facts)
+        } catch (failure: WorkspaceFailure) {
+            MemoryFormat.Append.Refused(failure.reason.name.lowercase())
+        }
+        if (result is MemoryFormat.Append.Saved) {
+            return AgentToolResult(call.id, call.name, """{"lines":${result.lines},"garden":${result.garden}}""",
+                summary = "Memory updated")
+        }
+        val code = (result as MemoryFormat.Append.Refused).code
+        _uiState.update { it.copy(notice = when (code) {
+            "secret" -> "Rivet skipped the memory update because it contains a secret."
+            "garden_first" -> "Remove older memory entries before adding these."
+            else -> "Rivet couldn't save the proposed memory entries."
+        }) }
+        return AgentToolResult(call.id, call.name, AgentToolError.content(code), error = true)
+    }
+
     private suspend fun goalMemoryUpdates(candidate: List<AgentMessage>, workspaceId: String,
                                           workspace: SafWorkspace): List<AgentMessage> {
         val updates = mutableListOf<AgentMessage>()
@@ -2029,23 +2068,7 @@ class ChatViewModel private constructor(
                         projectImageRead(selectedWorkspace, getApplication<Application>().cacheDir,
                             VisionCapability.assess(snapshot.config), path)
                     } else null,
-                    rememberMemory = { fact ->
-                        val files = ProjectStateFiles(selectedWorkspace)
-                        val result = MemoryFormat.append(files.loadMemory(), fact)
-                        if (result is MemoryFormat.Append.Saved) {
-                            files.saveMemory(result.markdown)
-                            projectState = files
-                            memoryMarkdown = result.markdown
-                            _uiState.update {
-                                it.copy(memoryMarkdown = result.markdown,
-                                    memoryLines = MemoryFormat.facts(result.markdown),
-                                    notice = if (result.garden)
-                                        "Memory updated. It is over the soft cap; garden it soon."
-                                    else "Memory updated.")
-                            }
-                        }
-                        result
-                    },
+                    rememberMemory = { fact -> saveRememberedFacts(selectedWorkspace, listOf(fact)) },
                 )
             }
             val executor = createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty(), coordinator = true)
@@ -2341,6 +2364,9 @@ class ChatViewModel private constructor(
                     }
                 },
                 requestApproval = approvals::await,
+                writeMemoryBatch = workspace?.let { selected ->
+                    { call, facts -> writeMemoryProposals(selected, call, facts) }
+                },
                 describeDestructive = { request -> executor?.describeDestructive(request) ?: request },
                 workspaceIsCurrent = {
                     workspaceId == null || workspaceSelection.currentIdentity() == workspaceId

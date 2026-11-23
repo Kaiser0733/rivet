@@ -207,15 +207,17 @@ object MemoryFormat {
         data class Refused(val code: String) : Append
     }
 
-    fun append(markdown: String, fact: String): Append {
-        val clean = fact.replace(Regex("\\s+"), " ").trim()
-        if (clean.isEmpty()) return Append.Refused("empty")
-        if (clean.length > MAX_FACT_CHARS) return Append.Refused("too_long")
-        if (hasSecret(clean)) return Append.Refused("secret")
+    fun append(markdown: String, fact: String): Append = append(markdown, listOf(fact))
+
+    fun append(markdown: String, proposals: List<String>): Append {
+        val clean = proposals.map { it.replace(Regex("\\s+"), " ").trim() }
+        if (clean.isEmpty() || clean.any(String::isEmpty)) return Append.Refused("empty")
+        if (clean.any { it.length > MAX_FACT_CHARS }) return Append.Refused("too_long")
+        if (clean.any(::hasSecret)) return Append.Refused("secret")
         val current = facts(markdown)
-        if (current.size >= HARD_LINES) return Append.Refused("garden_first")
-        val next = render(current + clean)
-        return Append.Saved(next, current.size + 1, current.size + 1 > SOFT_LINES)
+        val next = current + clean
+        if (next.size > HARD_LINES) return Append.Refused("garden_first")
+        return Append.Saved(render(next), next.size, next.size > SOFT_LINES)
     }
 
     fun replaceAll(markdown: String, edited: String): Append {

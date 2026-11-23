@@ -255,7 +255,8 @@ class AgentToolExecutor(
                     val fact = args.fact.trim()
                     require(fact.isNotEmpty() && fact.length <= MemoryFormat.MAX_FACT_CHARS)
                     val writer = rememberMemory ?: throw AgentWorkspaceFailure("unsupported")
-                    mutation(call, "Update project memory", fact.take(160), fact.length * 2 + 512) {
+                    mutation(call, "Update project memory", fact.take(160), fact.length * 2 + 512,
+                        memoryFact = fact) {
                         when (val result = writer(fact)) {
                             is MemoryFormat.Append.Saved -> success(call, buildJsonObject {
                                 put("lines", result.lines)
@@ -633,6 +634,7 @@ class AgentToolExecutor(
         resultPathChars: Int,
         destructivePath: String? = null,
         modelRequestsApproval: Boolean = false,
+        memoryFact: String? = null,
         action: suspend () -> AgentToolResult,
     ): PreparedAgentTool {
         val external = externalTargets(call)
@@ -646,6 +648,7 @@ class AgentToolExecutor(
             basicAutonomyRisk = if (destructivePath == null && !external) BasicAutonomyRisk.Routine
                 else BasicAutonomyRisk.Elevated,
             modelRequestsApproval = modelRequestsApproval,
+            memoryFact = memoryFact,
         ) { execute(call) { requireFileState(call); action() } }
     }
 

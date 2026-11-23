@@ -1622,7 +1622,7 @@ internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> 
     },
         title = { Text(displaySafeText(approvalTitle(request)),
             style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(displaySafeText(request.detail),
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily =
                     if (command) FontFamily.Monospace else FontFamily.Default))

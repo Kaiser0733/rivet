@@ -61,7 +61,10 @@ class AgentLoop(
     private val recordSkillScriptApproval: suspend (String) -> Unit = {},
     private val afterMutation: suspend (AgentToolCall, AgentToolResult?) -> Unit = { _, _ -> },
     private val beforeCompletion: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
+    private val writeMemoryBatch: (suspend (AgentToolCall, List<String>) -> AgentToolResult)? = null,
 ) {
+    private data class MemoryProposal(val tool: PreparedAgentTool, val fact: String, val asksUser: Boolean)
+
     suspend fun run(
         initial: List<AgentMessage>,
         tools: List<AgentToolDefinition>,
@@ -95,6 +98,57 @@ class AgentLoop(
         var toolCalls = 0
         var mutationsAttempted = 0
         var mutationsCompleted = 0
+        val memoryProposals = mutableListOf<MemoryProposal>()
+        suspend fun finishMemoryProposals(): AgentStopReason {
+            val write = writeMemoryBatch ?: return AgentStopReason.Completed
+            val first = memoryProposals.firstOrNull()?.tool ?: return AgentStopReason.Completed
+            val facts = memoryProposals.map { it.fact }.distinct()
+            fun stage(value: AgentToolLifecycleStage) {
+                memoryProposals.forEach { lifecycle(it.tool.call, value) }
+            }
+            try {
+                if (memoryProposals.any { it.asksUser }) {
+                    stage(AgentToolLifecycleStage.AwaitingApproval)
+                    val approval = requireNotNull(first.approval).copy(
+                        detail = facts.joinToString("\n") { "• $it" },
+                    )
+                    if (!requestApproval(approval)) {
+                        stage(AgentToolLifecycleStage.Denied)
+                        return AgentStopReason.Completed
+                    }
+                }
+                currentCoroutineContext().ensureActive()
+                if (!workspaceIsCurrent()) {
+                    stage(AgentToolLifecycleStage.Blocked)
+                    return AgentStopReason.WorkspaceChanged
+                }
+                val blocker = beforeMutation(first.call)
+                if (blocker != null) {
+                    stage(AgentToolLifecycleStage.Blocked)
+                    return AgentStopReason.CheckpointUnavailable
+                }
+                mutationsAttempted++
+                stage(AgentToolLifecycleStage.Started)
+                var result: AgentToolResult? = null
+                try {
+                    result = write(first.call, facts).also {
+                        if (!it.error) mutationsCompleted++
+                    }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    result = failed(first.call)
+                } finally {
+                    withContext(NonCancellable) { afterMutation(first.call, result) }
+                }
+                stage(if (result?.error == false) AgentToolLifecycleStage.Completed else AgentToolLifecycleStage.Failed)
+                return AgentStopReason.Completed
+            } catch (e: CancellationException) {
+                stage(AgentToolLifecycleStage.Cancelled)
+                throw e
+            }
+        }
+
         suspend fun appendContextEvents(events: List<AgentMessage>): AgentRunResult? {
             if (events.isEmpty()) return null
             require(events.all {
@@ -249,9 +303,10 @@ class AgentLoop(
                     appendContextEvents(holdEvents)?.let { return it }
                     continue
                 }
+                val reason = finishMemoryProposals()
                 return AgentRunResult(
                     messages = messages,
-                    stopReason = AgentStopReason.Completed,
+                    stopReason = reason,
                     modelIterations = modelIterations,
                     toolCalls = toolCalls,
                     mutationsAttempted = mutationsAttempted,
@@ -383,6 +438,21 @@ class AgentLoop(
                         break
                     }
                     val asking = decision == ApprovalDecision.AskUser || skillInserted
+                    val memoryFact = prepared.memoryFact
+                    if (writeMemoryBatch != null && memoryFact != null) {
+                        val queued = AgentToolResult(call.id, call.name,
+                            """{"status":"proposed","note":"Rivet processes all memory proposals together at the end of the turn. The fact has not been saved yet."}""",
+                            summary = "Memory proposed")
+                        val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "not_executed") }
+                        if (!fits(results + queued + remaining)) {
+                            results += pending("session_limit")
+                            stopReason = AgentStopReason.SessionLimit
+                            break
+                        }
+                        memoryProposals += MemoryProposal(prepared, memoryFact, asking)
+                        results += queued
+                        continue
+                    }
                     val approval = if (asking) prepared.approval?.let { request ->
                         val target = request.destructivePath
                         val described = when {
