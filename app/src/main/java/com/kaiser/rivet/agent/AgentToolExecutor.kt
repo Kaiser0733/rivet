@@ -176,9 +176,8 @@ class AgentToolExecutor(
                     }
                 }
                 "read_file" -> {
-                    val args = json.decodeFromString<ReadArgs>(call.arguments)
+                    val args = readFileArguments(call.arguments)
                     val path = path(args.path)
-                    require(args.offset >= 0)
                     readOnly(call) {
                         var length = MAX_READ_CHUNK_BYTES
                         var region = workspace.readRegion(path, args.offset, length)
@@ -917,7 +916,6 @@ class AgentToolExecutor(
         } catch (_: Exception) { false }
     }
 
-    @Serializable private data class ReadArgs(val path: String, val offset: Long = 0L)
     @Serializable private data class SearchArgs(val query: String, val path: String = "")
     @Serializable private data class SkillArgs(val name: String)
     @Serializable private data class RememberArgs(val fact: String = "")
