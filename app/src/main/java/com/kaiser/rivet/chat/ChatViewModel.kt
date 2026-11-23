@@ -717,9 +717,7 @@ class ChatViewModel private constructor(
                             val firstUser = restored.messages.firstOrNull {
                                 it.role == AgentRole.User && it.text.isNotBlank()
                             }?.text?.trim()
-                            val answer = restored.messages.lastOrNull {
-                                it.role == AgentRole.Assistant && it.toolCalls.isEmpty() && it.text.isNotBlank()
-                            }?.text
+                            val answer = ConversationTitle.completedAnswer(restored.messages)
                             if (!firstUser.isNullOrEmpty() && answer != null) {
                                 generateTitle(restoredId, UUID.randomUUID().toString(), firstUser, answer)
                             }
@@ -2551,9 +2549,7 @@ class ChatViewModel private constructor(
                         val firstUser = durable.firstOrNull {
                             it.role == AgentRole.User && it.text.isNotBlank()
                         }?.text?.trim()?.takeIf { it.isNotEmpty() } ?: trimmed
-                        val answer = result.messages.lastOrNull()?.takeIf {
-                            it.role == AgentRole.Assistant && it.toolCalls.isEmpty() && it.text.isNotBlank()
-                        }?.text
+                        val answer = ConversationTitle.completedAnswer(result.messages)
                         if (answer != null && sessionId != null) generateTitle(sessionId, turnId, firstUser, answer)
                     }
                     if (sessionId != null && lastSystem.isNotEmpty()) {
