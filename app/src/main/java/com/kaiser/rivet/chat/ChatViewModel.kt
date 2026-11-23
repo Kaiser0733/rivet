@@ -3080,6 +3080,10 @@ class ChatViewModel private constructor(
         approvals.resolve(approvalToken, approved = false)
     }
 
+    fun stopForApproval(approvalToken: Long) {
+        if (approvals.pending.value?.approvalToken == approvalToken) cancel()
+    }
+
     fun cancel() {
         browser.dismissChatPreview()
         userCancelledTicket = generation

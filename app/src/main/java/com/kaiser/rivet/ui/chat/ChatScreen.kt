@@ -1613,7 +1613,7 @@ internal fun approvalTitle(request: AgentApprovalRequest): String = when {
 
 @Composable
 internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> Unit,
-                            onDeny: (Long) -> Unit) {
+                            onDeny: (Long) -> Unit, onStop: (Long) -> Unit = {}) {
     val command = request.call.name == "run_command"
     val delete = request.call.name == "delete_path"
     // A tap outside or Back keeps the card pending; only the buttons answer for the user.
@@ -1633,9 +1633,14 @@ internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> 
         confirmButton = { RivetOutlinedButton(onClick = { onApprove(request.approvalToken) }) {
             Text(if (delete) "Delete" else "Allow")
         } },
-        dismissButton = { TextButton(onClick = { onDeny(request.approvalToken) }) {
-            Text(if (delete) "Cancel" else "Don't allow")
-        } })
+        dismissButton = {
+            Row {
+                TextButton(onClick = { onStop(request.approvalToken) }) { Text("Stop turn") }
+                TextButton(onClick = { onDeny(request.approvalToken) }) {
+                    Text(if (delete) "Cancel" else "Don't allow")
+                }
+            }
+        })
 }
 
 @Composable

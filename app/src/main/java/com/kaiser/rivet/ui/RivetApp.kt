@@ -468,7 +468,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         // window: composed earlier it could sit underneath one and never be seen.
         val approvalState by chatViewModel.uiState.collectAsState()
         approvalState.pendingApproval?.let { approval ->
-            ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny)
+            ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny, chatViewModel::stopForApproval)
         }
     }
 }
