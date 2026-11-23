@@ -1756,9 +1756,6 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     val draft = draftFor(drafts, sessionId)
     var attachmentsOpen by rememberSaveable(sessionId) { mutableStateOf(false) }
     val pickAttachment = rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)
-    if (attachmentsOpen) {
-        AttachmentSheet(onDismiss = { attachmentsOpen = false }, onPick = pickAttachment)
-    }
     var appliedShares by rememberSaveable(stateSaver = DRAFT_SAVER) {
         mutableStateOf(emptyMap<String, String>())
     }
@@ -1865,7 +1862,8 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val contextFitsInRow = maxWidth >= RivetLayout.contextInlineWidth
                 val compactControls = maxWidth < RivetLayout.compactComposerWidth
-                Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
+                val composerInset = 4.dp
+                Column(Modifier.padding(start = composerInset, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
                     sharedDraft?.imageName?.let { name ->
                         Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                             style = MaterialTheme.typography.labelMedium)
@@ -1929,8 +1927,14 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                         ConversationContextMeter(contextReading, Modifier.align(Alignment.End).padding(end = 6.dp))
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
-                            Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+                        Box {
+                            IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
+                                Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+                            }
+                            if (attachmentsOpen) {
+                                AttachmentSheet(composerInset, onDismiss = { attachmentsOpen = false },
+                                    onPick = pickAttachment)
+                            }
                         }
                         Box(Modifier.weight(1f).padding(end = 4.dp)) {
                             selector?.invoke()
