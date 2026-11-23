@@ -153,8 +153,7 @@ internal class TermuxBridge(context: Context) {
             } else {
                 TermuxFileWait(fallback.outputPath, fallback::completedResult).await(returned, args.timeout)
             }
-            result ?: (fallback?.result(null)?.copy(error = "termux_timeout")
-                ?: TermuxRunResult(error = "termux_timeout"))
+            result ?: fallback?.partialResult() ?: TermuxRunResult(error = "termux_timeout")
         } catch (_: SecurityException) {
             TermuxRunResult(error = "termux_permission_required")
         } catch (_: IllegalStateException) {
@@ -181,10 +180,21 @@ internal class TermuxBridge(context: Context) {
                 ?: readFailure?.let { TermuxFileRead.Failed(it) } ?: TermuxFileRead.Missing
         }
 
-        suspend fun result(exitCode: Int?): TermuxRunResult? {
-            val output = read { workspace.readTextRegion(path.child("out.txt"), 0, OUTPUT_BYTES) } ?: return null
-            return TermuxRunResult(stdout = output.text, exitCode = exitCode, outputPath = outputPath,
-                truncated = output.end < output.size)
+        suspend fun partialResult(): TermuxRunResult =
+            result(null)?.copy(error = "termux_timeout") ?: TermuxRunResult(error = "termux_timeout")
+
+        private suspend fun result(exitCode: Int?): TermuxRunResult? {
+            val output = read { workspace.readTextRegion(path.child("out.txt"), 0, OUTPUT_BYTES) }
+            val errors = read { workspace.readTextRegion(path.child("err.txt"), 0, OUTPUT_BYTES) }
+            if (exitCode != null && (output == null || errors == null)) return null
+            if (output == null && errors == null) return null
+            return TermuxRunResult(
+                stdout = output?.text.orEmpty(),
+                stderr = errors?.text.orEmpty(),
+                exitCode = exitCode,
+                outputPath = if (output == null) "$toolPath/err.txt" else outputPath,
+                truncated = output?.let { it.end < it.size } == true || errors?.let { it.end < it.size } == true,
+            )
         }
 
         private suspend fun <T> read(block: suspend () -> T): T? =
