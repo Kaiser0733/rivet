@@ -113,16 +113,18 @@ internal class PhoneCaptureService : Service() {
         fun action(name: String): PendingIntent = PendingIntent.getService(
             this, 0, intent(this, name, id), PendingIntent.FLAG_IMMUTABLE,
         )
+        val capture = action(CAPTURE)
         val cancel = action(CANCEL)
         return Notification.Builder(this, CHANNEL)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentTitle("Rivet is ready to capture")
-            .setStyle(Notification.BigTextStyle().bigText("Switch apps, tap Capture now, then close the notification shade."))
-            .setContentText("Switch apps, then tap Capture now.")
+            .setStyle(Notification.BigTextStyle().bigText("Switch apps, tap this notification, then close the notification shade."))
+            .setContentText("Switch apps, then tap this notification.")
+            .setContentIntent(capture)
             .setOngoing(true)
             .setForegroundServiceBehaviorCompat()
             .setDeleteIntent(cancel)
-            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_camera, "Capture now", action(CAPTURE)).build())
+            .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_camera, "Capture now", capture).build())
             .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_close_clear_cancel, "Cancel", cancel).build())
             .build()
     }

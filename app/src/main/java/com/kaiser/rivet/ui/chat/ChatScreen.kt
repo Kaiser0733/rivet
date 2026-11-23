@@ -741,7 +741,18 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                             item(key = "reply-${turn.turnIndex}-$index") { TurnTextPart(part, state) }
                         }
                         items(deliverables[turn.userItem?.messageIndex].orEmpty()) { file ->
-                            ProjectFileCard(file, missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
+                            if (file.inlineImage) {
+                                val links = LocalAssistantFileLinks.current
+                                val image = ChatMarkdownBlock.Image(file.description, file.path)
+                                if (isAppChatImagePath(file.path)) {
+                                    BrowserImage(image, "Screenshot unavailable.", inline = true)
+                                } else if (links != null) {
+                                    ProjectInlineImage(image, file.path, links, onOpenPreview)
+                                }
+                            } else {
+                                ProjectFileCard(PresentedFile(file.path, file.description),
+                                    missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
+                            }
                         }
                     }
                     if (showBrowserCard) item(key = "live-browser") {
