@@ -59,7 +59,7 @@ internal object ContextBudget {
     fun attachedImageCount(messages: List<AgentMessage>): Int {
         val trailing = messages.lastOrNull() ?: return 0
         return when (trailing.role) {
-            AgentRole.User -> if (trailing.userImagePath == null) 0 else 1
+            AgentRole.User -> trailing.imagePaths.size
             AgentRole.Tool -> trailing.toolResults.count { !it.imagePath.isNullOrBlank() }
             else -> 0
         }

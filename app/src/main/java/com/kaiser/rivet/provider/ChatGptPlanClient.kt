@@ -150,13 +150,15 @@ internal fun responsesInputItems(
     AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> listOf(buildJsonObject {
         put("role", "user")
-        val image = ProviderVisionAttachments.userImage(message, images)
-        if (image == null) put("content", message.text) else put("content", buildJsonArray {
+        val attachments = ProviderVisionAttachments.userImages(message, images)
+        if (attachments.isEmpty()) put("content", message.text) else put("content", buildJsonArray {
             add(buildJsonObject { put("type", "input_text"); put("text", message.text) })
-            add(buildJsonObject {
-                put("type", "input_image")
-                put("image_url", "data:${image.mime};base64,${image.base64}")
-            })
+            attachments.forEach { image ->
+                add(buildJsonObject {
+                    put("type", "input_image")
+                    put("image_url", "data:${image.mime};base64,${image.base64}")
+                })
+            }
         })
     })
     AgentRole.Assistant -> buildList {

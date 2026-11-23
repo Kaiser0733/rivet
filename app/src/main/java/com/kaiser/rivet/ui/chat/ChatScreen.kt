@@ -389,13 +389,15 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     } else null
                 val sharedContent by chatViewModel.sharedContent.collectAsState()
                 val composerAttachments by chatViewModel.composerAttachments.collectAsState()
+                val composerImports by chatViewModel.composerImports.collectAsState()
                 if (emptyConversation) HomeStarters(chatViewModel, canStartChat, state.starterError,
                     modifier = Modifier.heightIn(max = starterRoom).verticalScroll(rememberScrollState()))
                 InputBar(streaming = state.streaming,
                     sharedDraft = sharedContent[state.currentSessionId],
-                    attachment = composerAttachments[state.currentSessionId],
-                    onStageAttachment = chatViewModel::stageComposerAttachment,
-                    onDropAttachment = { chatViewModel.removeComposerAttachment(state.currentSessionId) },
+                    attachments = composerAttachments[state.currentSessionId].orEmpty(),
+                    importingAttachments = state.currentSessionId in composerImports,
+                    onStageAttachments = chatViewModel::stageComposerAttachments,
+                    onDropAttachment = { name -> chatViewModel.removeComposerAttachment(state.currentSessionId, name) },
                     onPickerUnavailable = chatViewModel::attachmentPickerUnavailable,
                     phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
                     ready = state.ready && !state.projectLoading && !state.undoing &&
@@ -1243,7 +1245,7 @@ internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messag
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(message.text, style = MaterialTheme.typography.bodyMedium)
-                        message.userImagePath?.let { path ->
+                        message.imagePaths.forEach { path ->
                             BrowserImage(ChatMarkdownBlock.Image("Shared image", path),
                                 unavailable = "Shared image no longer available.")
                         }
@@ -1732,9 +1734,10 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
                      sharedDraft: SharedDraft? = null,
-                     attachment: ComposerAttachment? = null,
-                     onStageAttachment: (String?, android.net.Uri, Boolean, File?) -> Unit,
-                     onDropAttachment: () -> Unit,
+                     attachments: List<ComposerAttachment>,
+                     importingAttachments: Boolean,
+                     onStageAttachments: (String?, List<android.net.Uri>, Boolean, File?) -> Unit,
+                     onDropAttachment: (String) -> Unit,
                      onPickerUnavailable: () -> Unit,
                      phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
@@ -1755,7 +1758,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     }
     val draft = draftFor(drafts, sessionId)
     var attachmentsOpen by rememberSaveable(sessionId) { mutableStateOf(false) }
-    val pickAttachment = rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)
+    val pickAttachment = rememberComposerPickers(sessionId, onStageAttachments, onPickerUnavailable)
     var appliedShares by rememberSaveable(stateSaver = DRAFT_SAVER) {
         mutableStateOf(emptyMap<String, String>())
     }
@@ -1787,14 +1790,14 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // button silently refusing the tap.
     val builtInCommand = SlashCommands.builtIn(draft) != null
     fun canSubmit(text: String, builtIn: Boolean): Boolean =
-        ready && !streaming && (text.isNotBlank() || attachment != null) && pendingText == null &&
-            (builtIn || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
+        ready && !streaming && !importingAttachments && (text.isNotBlank() || attachments.isNotEmpty()) && pendingText == null &&
+            (builtIn || ((hasProject || sharedDraft != null || attachments.isNotEmpty() || phoneAvailable) && hasProvider) ||
                 !hasProvider)
     val canSend = canSubmit(draft, builtInCommand)
     val submit = {
         val latest = draftFor(drafts, sessionId)
         val allowed = canSubmit(latest, SlashCommands.builtIn(latest) != null)
-        val text = if (allowed && attachment != null && latest.isBlank()) "" else draftToSend(latest, allowed)
+        val text = if (allowed && attachments.isNotEmpty() && latest.isBlank()) "" else draftToSend(latest, allowed)
         if (text != null) {
             pendingText = latest
             submittedAt = ackCount
@@ -1864,6 +1867,9 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                 val compactControls = maxWidth < RivetLayout.compactComposerWidth
                 val composerInset = 4.dp
                 Column(Modifier.padding(start = composerInset, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
+                    if (attachments.isNotEmpty()) {
+                        ComposerAttachmentStrip(attachments, sessionId, !streaming, onDropAttachment)
+                    }
                     sharedDraft?.imageName?.let { name ->
                         Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                             style = MaterialTheme.typography.labelMedium)
@@ -1911,24 +1917,13 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                         ),
                     )
-                    attachment?.let { item ->
-                        Row(Modifier.fillMaxWidth().padding(start = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
-                            Text(item.name, Modifier.weight(1f).padding(horizontal = 8.dp),
-                                style = MaterialTheme.typography.bodySmall, maxLines = 1,
-                                overflow = TextOverflow.Ellipsis)
-                            IconButton(onClick = onDropAttachment, enabled = !streaming) {
-                                Icon(painterResource(R.drawable.ic_close), "Remove attachment")
-                            }
-                        }
-                    }
                     if (!contextFitsInRow && contextReading != null) {
                         ConversationContextMeter(contextReading, Modifier.align(Alignment.End).padding(end = 6.dp))
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
                         Box {
-                            IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
+                            IconButton(onClick = { attachmentsOpen = true },
+                                enabled = ready && !streaming && !importingAttachments) {
                                 Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
                             }
                             if (attachmentsOpen) {

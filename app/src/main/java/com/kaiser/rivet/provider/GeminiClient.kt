@@ -152,7 +152,7 @@ internal fun geminiMessage(
             put("role", "user")
             put("parts", buildJsonArray {
                 add(buildJsonObject { put("text", message.text) })
-                ProviderVisionAttachments.userImage(message, images)?.let { image ->
+                ProviderVisionAttachments.userImages(message, images).forEach { image ->
                     add(buildJsonObject { put("inlineData", buildJsonObject {
                         put("mimeType", image.mime); put("data", image.base64)
                     }) })

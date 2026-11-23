@@ -193,15 +193,17 @@ internal fun anthropicMessage(
     AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> buildJsonObject {
         put("role", "user")
-        val image = ProviderVisionAttachments.userImage(message, images)
-        if (image == null) put("content", message.text) else put("content", buildJsonArray {
+        val attachments = ProviderVisionAttachments.userImages(message, images)
+        if (attachments.isEmpty()) put("content", message.text) else put("content", buildJsonArray {
             add(buildJsonObject { put("type", "text"); put("text", message.text) })
-            add(buildJsonObject {
-                put("type", "image")
-                put("source", buildJsonObject {
-                    put("type", "base64"); put("media_type", image.mime); put("data", image.base64)
+            attachments.forEach { image ->
+                add(buildJsonObject {
+                    put("type", "image")
+                    put("source", buildJsonObject {
+                        put("type", "base64"); put("media_type", image.mime); put("data", image.base64)
+                    })
                 })
-            })
+            }
         })
     }
     AgentRole.Assistant -> buildJsonObject {

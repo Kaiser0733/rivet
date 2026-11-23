@@ -229,7 +229,7 @@ internal object AgentContext {
             val message = messages[index]
             if (message.role == AgentRole.Tool) return null
             if (message.role == AgentRole.Context && (message.toolCalls.isNotEmpty() || message.toolResults.isNotEmpty() ||
-                    message.text.isNotEmpty() || message.transportState != null || message.userImagePath != null)) return null
+                    message.text.isNotEmpty() || message.transportState != null || message.imagePaths.isNotEmpty())) return null
             if (message.role == AgentRole.Assistant && message.toolCalls.isNotEmpty()) {
                 val result = messages.getOrNull(index + 1)?.takeIf { it.role == AgentRole.Tool } ?: return null
                 if (message.toolCalls.any { it.id.isBlank() } ||

@@ -42,7 +42,10 @@ data class AgentMessage(
     val transportState: String? = null,
     val internalContext: InternalContext? = null,
     val userImagePath: String? = null,
+    val userImagePaths: List<String> = emptyList(),
 ) {
+    val imagePaths: List<String> get() = listOfNotNull(userImagePath) + userImagePaths
+
     companion object {
         fun user(text: String) = AgentMessage(AgentRole.User, text = text)
 

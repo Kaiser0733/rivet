@@ -34,36 +34,38 @@ internal object ProviderVisionAttachments {
     ): Pair<List<AgentMessage>, Map<String, EncodedImage>> {
         if (support != VisionSupport.Supported) {
             return messages.map { message ->
-                val path = message.userImagePath
-                if (message.role != AgentRole.User || path == null) message else {
+                if (message.role != AgentRole.User || message.imagePaths.isEmpty()) message else {
                     val note = if (support is VisionSupport.Unsupported) "This model cannot view images."
                         else "Rivet could not confirm that this model accepts images."
-                    withoutUserImage(message, path, note)
+                    withImageNotes(message, message.imagePaths, note, emptyList())
                 }
             } to trailingImages(messages, encode)
         }
-        val last = messages.lastOrNull()
-        val path = last?.takeIf { it.role == AgentRole.User }?.userImagePath
+        val last = messages.lastOrNull()?.takeIf { it.role == AgentRole.User && it.imagePaths.isNotEmpty() }
             ?: return messages to trailingImages(messages, encode)
-        val image = encode(path)
-        return if (image != null) messages to mapOf(userKey(path) to image)
-        else (messages.dropLast(1) + withoutUserImage(last, path, "Shared image no longer available.")) to emptyMap()
+        val encoded = last.imagePaths.distinct().mapNotNull { path -> encode(path)?.let { path to it } }.toMap()
+        val missing = last.imagePaths.filterNot { it in encoded }
+        val prepared = if (missing.isEmpty()) messages else messages.dropLast(1) +
+            withImageNotes(last, missing, "Shared image no longer available.", last.imagePaths.filter { it in encoded })
+        return prepared to encoded.mapKeys { userKey(it.key) }
     }
 
-    private fun withoutUserImage(message: AgentMessage, path: String, note: String) = message.copy(
-        text = "${message.text}\n\nShared image: inbox/${path.substringAfterLast('/')}. $note",
-        userImagePath = null,
+    private fun withImageNotes(message: AgentMessage, paths: List<String>, note: String, available: List<String>) = message.copy(
+        text = (listOf(message.text) + paths.map { "Shared image: inbox/${it.substringAfterLast('/')}. $note" })
+            .filter(String::isNotBlank).joinToString("\n\n"),
+        userImagePath = available.firstOrNull(),
+        userImagePaths = available.drop(1),
     )
 
     private fun userKey(path: String) = "\u0000shared-image:$path"
 
-    fun userImage(message: AgentMessage, images: Map<String, EncodedImage>): EncodedImage? =
-        message.userImagePath?.let { images[userKey(it)] }
+    fun userImages(message: AgentMessage, images: Map<String, EncodedImage>): List<EncodedImage> =
+        message.imagePaths.mapNotNull { images[userKey(it)] }
 
     fun hasTrailingImages(messages: List<AgentMessage>): Boolean =
-        messages.lastOrNull()?.let { it.role == AgentRole.User && it.userImagePath != null } == true ||
+        messages.lastOrNull()?.let { it.role == AgentRole.User && it.imagePaths.isNotEmpty() } == true ||
             trailingImageResults(messages).isNotEmpty()
 
     fun needsPreparation(messages: List<AgentMessage>) =
-        hasTrailingImages(messages) || messages.any { it.userImagePath != null }
+        hasTrailingImages(messages) || messages.any { it.imagePaths.isNotEmpty() }
 }
