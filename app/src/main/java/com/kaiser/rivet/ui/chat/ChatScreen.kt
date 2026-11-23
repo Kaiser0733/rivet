@@ -53,11 +53,15 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.BorderStroke
@@ -483,7 +487,7 @@ private data class TimelineDisplayEntry(
 )
 
 @Composable
-private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
+internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
                         onDiscardProjectChanges: () -> Unit,
                         onRetryInterruptedTurn: () -> Unit,
@@ -495,7 +499,8 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenPreview: (String) -> Unit,
                         missingFiles: Set<String>,
                         browser: com.kaiser.rivet.browser.BrowserSession,
-                        modifier: Modifier = Modifier) {
+                        modifier: Modifier = Modifier,
+                        listState: LazyListState = rememberLazyListState()) {
     val browserState by browser.state.collectAsState()
     val showBrowserCard = browserState.chatPreviewVisible(state.currentSessionId)
     val deliverables = remember(state.messages) { presentedFilesForTurns(state.messages) }
@@ -618,10 +623,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         (if (state.notice != null) 1 else 0) +
         (if (state.error != null) 1 else 0) +
         (if (state.unsupportedReasoning != null) 1 else 0)
-    val listState = rememberLazyListState()
-    // Saved, not just remembered: a rotation must not yank a reader back to the end,
-    // and must not drop a user who was following the reply.
     var followBottom by rememberSaveable { mutableStateOf(true) }
+    var lastAcceptedCount by rememberSaveable { mutableStateOf(state.acceptedMessageCount) }
+    var userScrolling by remember { mutableStateOf(false) }
     var programmaticScroll by remember { mutableStateOf(false) }
     val bottomSlop = with(LocalDensity.current) { 72.dp.toPx() }
     val nearBottom by remember(bottomSlop) { derivedStateOf {
@@ -630,15 +634,37 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         if (last.index < layout.totalItemsCount - 1) false
         else layout.viewportEndOffset - (last.offset + last.size) >= -bottomSlop
     } }
+    val transcriptScrollConnection = remember(listState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                    userScrolling = true
+                    followBottom = false
+                }
+                return Offset.Zero
+            }
+        }
+    }
     LaunchedEffect(listState) {
-        androidx.compose.runtime.snapshotFlow { Triple(listState.isScrollInProgress, nearBottom, programmaticScroll) }
-            .collect { (scrolling, near, programmatic) ->
-                if (scrolling && !programmatic) followBottom = near
+        androidx.compose.runtime.snapshotFlow { Triple(listState.isScrollInProgress, programmaticScroll, userScrolling) }
+            .collect { (scrolling, programmatic, manual) ->
+                if (scrolling && !programmatic && !manual) {
+                    userScrolling = true
+                    followBottom = false
+                } else if (!scrolling && manual) {
+                    followBottom = !listState.canScrollForward
+                    userScrolling = false
+                }
             }
     }
     // Sending a message is an explicit request to see it: after reading back through the
     // conversation, the reply and the user's own message must not land off-screen.
-    LaunchedEffect(state.acceptedMessageCount) { followBottom = true }
+    LaunchedEffect(state.acceptedMessageCount) {
+        if (lastAcceptedCount != state.acceptedMessageCount) {
+            lastAcceptedCount = state.acceptedMessageCount
+            followBottom = true
+        }
+    }
     // Following the bottom while the reader is there. Two things move the list: a row appearing,
     // which this effect lands exactly, and a row growing — and growth is a layout event, not a
     // character count. A wrapped line adds a line height inside the same character bucket, so the
@@ -648,8 +674,8 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // has to handle rows appearing or disappearing, which move everything at once.
     LaunchedEffect(segmentedTurns.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
-        state.notice, showBrowserCard, state.compacting) {
-        if (followBottom && totalItems > 0) {
+        state.notice, showBrowserCard, state.compacting, totalItems, state.acceptedMessageCount) {
+        if (followBottom && totalItems > 0 && !userScrolling && !listState.isScrollInProgress) {
             programmaticScroll = true
             try {
                 scrollToConversationBottom(listState, totalItems - 1)
@@ -661,16 +687,14 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // A row that grows is followed from the layout: whenever the content's end — the list's own
     // bottom padding included — sits below the viewport's end, scroll by that gap. This is what
     // keeps the last row fully visible through a wrap, and it settles exactly on the content's
-    // end, so the live-status row always keeps the padding under it instead of sitting flush
-    // against the list's edge. Not following, not scrolling: a reader who scrolled up owns the
-    // position, and the `followBottom` update above is the only thing that changes that.
+    // end, so the live-status row keeps the padding under it.
     LaunchedEffect(listState) {
         androidx.compose.runtime.snapshotFlow {
             val layout = listState.layoutInfo
             val last = layout.visibleItemsInfo.lastOrNull() ?: return@snapshotFlow 0
             last.offset + last.size + layout.afterContentPadding - layout.viewportEndOffset
         }.collect { gap ->
-            if (!followBottom || gap <= 0 || listState.isScrollInProgress) return@collect
+            if (!followBottom || gap <= 0 || userScrolling || listState.isScrollInProgress) return@collect
             programmaticScroll = true
             try {
                 listState.scrollBy(gap.toFloat())
@@ -683,7 +707,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     Box(modifier.fillMaxSize()) {
         PlatformSelectionToolbar {
             SelectionContainer {
-                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(),
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize().nestedScroll(transcriptScrollConnection),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
                         start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -768,10 +792,11 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 }
             }
         }
-        if (!nearBottom && totalItems > 0) {
+        if (totalItems > 0 && listState.canScrollForward && (!followBottom || !nearBottom)) {
             Surface(
                 onClick = {
                     jumpScope.launch {
+                        userScrolling = false
                         followBottom = true
                         programmaticScroll = true
                         try {
