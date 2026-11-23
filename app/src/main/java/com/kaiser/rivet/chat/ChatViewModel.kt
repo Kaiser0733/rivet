@@ -612,7 +612,7 @@ class ChatViewModel private constructor(
     )
     private var lastPruneSeen = 0
     private var currentCloud = true
-    private var knownGoalMarkdown: String? = null
+    private val projectGoalWatcher = ProjectGoalWatcher()
     private var pendingRollback: String? = null
     private val connectivity = app.getSystemService(ConnectivityManager::class.java)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -782,8 +782,9 @@ class ChatViewModel private constructor(
                                           recoverRun: Boolean = true) {
         projectState = workspace?.let(::ProjectStateFiles)
         runJournal = projectState?.let { RunJournal(ProjectRunStorage(it)) }
-        projectGoal = try { projectState?.loadGoal()?.takeIf { it.state != GoalState.Dropped } }
-            catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+        val goalRead = try { Result.success(projectState?.loadGoal()?.takeIf { it.state != GoalState.Dropped }) }
+            catch (e: CancellationException) { throw e } catch (e: Exception) { Result.failure(e) }
+        projectGoal = goalRead.getOrNull()
         sessionGoal = try { sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped } }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         memoryMarkdown = try { projectState?.loadMemory().orEmpty() }
@@ -799,8 +800,8 @@ class ChatViewModel private constructor(
         val resumable = run?.resumable == true
         runResumeContext = resumable
         val projectMarkdown = projectGoal?.let { GoalDocument.render(it) }
-        val externalGoal = knownGoalMarkdown != null && projectMarkdown != knownGoalMarkdown
-        knownGoalMarkdown = projectMarkdown
+        val externalGoal = goalRead.isSuccess &&
+            projectGoalWatcher.observe(workspace?.tree?.toString(), projectMarkdown)
         _uiState.update {
             it.copy(goal = goal, goalLine = goal.lineForSession(sessionId),
                 goalAttachOffer = workspace != null && projectGoal == null && sessionGoal != null,
@@ -1072,7 +1073,7 @@ class ChatViewModel private constructor(
                         else sessionGoals.save(sessionId, next)
                         projectGoal = if (goalFiles != null) next else projectGoal
                         sessionGoal = if (goalFiles == null) next else sessionGoal
-                        if (goalFiles != null) knownGoalMarkdown = GoalDocument.render(next)
+                        if (goalFiles != null) projectGoalWatcher.remember(workspace?.tree?.toString(), GoalDocument.render(next))
                         _uiState.update {
                             if (it.currentSessionId != sessionId) it
                             else it.copy(goal = next, goalLine = next.lineForSession(sessionId))
@@ -1100,7 +1101,7 @@ class ChatViewModel private constructor(
                         }
                         projectGoal = if (goalFiles != null) next.takeIf { state != GoalState.Dropped } else projectGoal
                         sessionGoal = if (goalFiles == null) next.takeIf { state != GoalState.Dropped } else sessionGoal
-                        if (goalFiles != null) knownGoalMarkdown = renderedGoalOrNull(projectGoal)
+                        if (goalFiles != null) projectGoalWatcher.remember(workspace?.tree?.toString(), renderedGoalOrNull(projectGoal))
                         val shown = if (state == GoalState.Dropped) null else next
                         _uiState.update {
                             if (it.currentSessionId != sessionId) it
@@ -1341,6 +1342,7 @@ class ChatViewModel private constructor(
                 sessionGoals.save(sessionId, null)
                 projectState = files
                 projectGoal = attached
+                projectGoalWatcher.remember(workspace.tree.toString(), GoalDocument.render(attached))
                 sessionGoal = null
                 _uiState.update { it.copy(goal = attached, goalLine = attached.lineForSession(it.currentSessionId),
                     goalAttachOffer = false, notice = "Goal attached to this project.") }
@@ -1434,11 +1436,10 @@ class ChatViewModel private constructor(
             val goal = project.ownedBy(sessionId) ?: session
             val memory = files.loadMemory()
             val rendered = renderedGoalOrNull(project)
-            val externalGoal = knownGoalMarkdown != null && rendered != knownGoalMarkdown
+            val externalGoal = projectGoalWatcher.observe(workspaceId, rendered)
             projectState = files
             projectGoal = project
             sessionGoal = session
-            knownGoalMarkdown = rendered
             memoryMarkdown = memory
             _uiState.update {
                 if (it.goal == goal && it.memoryMarkdown == memory && !externalGoal) it
@@ -1670,6 +1671,7 @@ class ChatViewModel private constructor(
 
     private suspend fun appendGoalProgress(note: String) {
         val sessionId = _uiState.value.currentSessionId
+        val projectId = _uiState.value.projectIdentity
         val files = projectState
         val stored = try { files?.loadGoal()?.takeIf { it.state != GoalState.Dropped } }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
@@ -1680,7 +1682,7 @@ class ChatViewModel private constructor(
         if (ownedProject != null && files != null) {
             files.saveGoal(next)
             projectGoal = next
-            knownGoalMarkdown = GoalDocument.render(next)
+            projectGoalWatcher.remember(projectId, GoalDocument.render(next))
         } else {
             sessionGoals.save(sessionId, next)
             sessionGoal = next
