@@ -30,7 +30,7 @@ class TermuxBridgeTest {
         assertTrue(wrapped.contains("exec"))
         assertTrue(wrapped.contains("exit 17"))
         assertTrue(wrapped.contains("\\''"))
-        assertTrue(wrapped.contains("> \"\$folder/out.txt\" 2>&1"))
+        assertTrue(wrapped.contains("> \"\$folder/out.txt\" 2> \"\$folder/err.txt\""))
         assertTrue(wrapped.contains("code.tmp"))
         assertTrue(wrapped.contains("\"\$folder/code\""))
     }

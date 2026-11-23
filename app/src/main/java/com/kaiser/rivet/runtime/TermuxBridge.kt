@@ -24,10 +24,6 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
-import kotlinx.coroutines.delay
-import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
@@ -71,12 +67,12 @@ internal class TermuxBridge(context: Context) {
                 "\nThis command runs with full Termux-user powers, outside Rivet's sandbox.",
             dangerous = true)) {
             val result = try {
-                if (!installed()) Result(error = "termux_missing")
+                if (!installed()) TermuxRunResult(error = "termux_missing")
                 else execute(args, location(args.cwd, project, resolveGrant))
             } catch (e: CancellationException) { throw e }
-            catch (e: AgentWorkspaceFailure) { Result(error = e.code) }
-            catch (_: WorkspaceFailure) { Result(error = "termux_cwd_unavailable") }
-            catch (_: Exception) { Result(error = "termux_unavailable") }
+            catch (e: AgentWorkspaceFailure) { TermuxRunResult(error = e.code) }
+            catch (_: WorkspaceFailure) { TermuxRunResult(error = "termux_cwd_unavailable") }
+            catch (_: Exception) { TermuxRunResult(error = "termux_unavailable") }
             toolResult(call, result)
         }
     }
@@ -128,9 +124,9 @@ internal class TermuxBridge(context: Context) {
         return File(Environment.getExternalStorageDirectory(), path.value).path
     }
 
-    private suspend fun execute(args: Arguments, location: Location): Result = withContext(Dispatchers.Main.immediate) {
+    private suspend fun execute(args: Arguments, location: Location): TermuxRunResult = withContext(Dispatchers.Main.immediate) {
         val fallback = location.files
-        val returned = CompletableDeferred<Result>()
+        val returned = CompletableDeferred<TermuxRunResult>()
         val action = app.packageName + ".TERMUX_RESULT." + UUID.randomUUID()
         val mutable = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
         val callback = PendingIntent.getBroadcast(app, 0,
@@ -150,30 +146,18 @@ internal class TermuxBridge(context: Context) {
                 .putExtra("com.termux.RUN_COMMAND_BACKGROUND", spec.background)
                 .putExtra("com.termux.RUN_COMMAND_RUNNER", "app-shell")
                 .putExtra("com.termux.RUN_COMMAND_PENDING_INTENT", callback)
-            if (app.startForegroundService(intent) == null) return@withContext Result(error = "termux_missing")
+            if (app.startForegroundService(intent) == null) return@withContext TermuxRunResult(error = "termux_missing")
 
-            val result = withTimeoutOrNull(args.timeout) {
-                if (fallback == null) returned.await()
-                else coroutineScope {
-                    val files = async { fallback.awaitResult() }
-                    try {
-                        select {
-                            returned.onAwait { fromTermux ->
-                                if (fromTermux.error == null && fromTermux.stdout.isEmpty() && fromTermux.stderr.isEmpty()) {
-                                    fallback.completedResult() ?: fromTermux
-                                } else fromTermux
-                            }
-                            files.onAwait { it }
-                        }
-                    } finally { files.cancel() }
-                }
+            val result = if (fallback == null) {
+                withTimeoutOrNull(args.timeout) { returned.await() }
+            } else {
+                TermuxFileWait(fallback.outputPath, fallback::completedResult).await(returned, args.timeout)
             }
-            result ?: (fallback?.result(null)?.copy(error = "termux_timeout")
-                ?: Result(error = "termux_timeout"))
+            result ?: fallback?.partialResult() ?: TermuxRunResult(error = "termux_timeout")
         } catch (_: SecurityException) {
-            Result(error = "termux_permission_required")
+            TermuxRunResult(error = "termux_permission_required")
         } catch (_: IllegalStateException) {
-            Result(error = "termux_unavailable")
+            TermuxRunResult(error = "termux_unavailable")
         } finally {
             callback.cancel()
             TermuxResultReceiver.unregister(action)
@@ -186,48 +170,52 @@ internal class TermuxBridge(context: Context) {
         val toolPath: String,
         val absolute: String,
     ) {
-        suspend fun awaitResult(): Result {
-            while (true) {
-                completedResult()?.let { return it }
-                delay(500)
-            }
+        val outputPath = "$toolPath/out.txt"
+        private var readFailure: WorkspaceFailure.Reason? = null
+
+        suspend fun completedResult(): TermuxFileRead {
+            readFailure = null
+            val code = read { workspace.readTextFile(path.child("code")).text.trim().toIntOrNull() }
+            return code?.let { result(it) }?.let { TermuxFileRead.Done(it) }
+                ?: readFailure?.let { TermuxFileRead.Failed(it) } ?: TermuxFileRead.Missing
         }
 
-        suspend fun completedResult(): Result? {
-            val code = read { workspace.readTextFile(path.child("code")).text.trim().toIntOrNull() } ?: return null
-            return result(code)
-        }
+        suspend fun partialResult(): TermuxRunResult =
+            result(null)?.copy(error = "termux_timeout") ?: TermuxRunResult(error = "termux_timeout")
 
-        suspend fun result(exitCode: Int?): Result? {
-            val output = read { workspace.readTextRegion(path.child("out.txt"), 0, OUTPUT_BYTES) } ?: return null
-            return Result(stdout = output.text, exitCode = exitCode, outputPath = "$toolPath/out.txt",
-                truncated = output.end < output.size)
+        private suspend fun result(exitCode: Int?): TermuxRunResult? {
+            val output = read { workspace.readTextRegion(path.child("out.txt"), 0, OUTPUT_BYTES) }
+            val errors = read { workspace.readTextRegion(path.child("err.txt"), 0, OUTPUT_BYTES) }
+            if (exitCode != null && (output == null || errors == null)) return null
+            if (output == null && errors == null) return null
+            return TermuxRunResult(
+                stdout = output?.text.orEmpty(),
+                stderr = errors?.text.orEmpty(),
+                exitCode = exitCode,
+                outputPath = if (output == null) "$toolPath/err.txt" else outputPath,
+                truncated = output?.let { it.end < it.size } == true || errors?.let { it.end < it.size } == true,
+            )
         }
 
         private suspend fun <T> read(block: suspend () -> T): T? =
-            try { block() } catch (_: WorkspaceFailure) { null }
+            try {
+                block()
+            } catch (failure: WorkspaceFailure) {
+                readFailure = failure.reason
+                null
+            }
     }
 
     private data class Location(val cwd: String, val files: OutputFiles? = null)
     private data class Arguments(val command: String, val cwd: String, val timeout: Long)
-    private data class Result(
-        val stdout: String = "",
-        val stderr: String = "",
-        val exitCode: Int? = null,
-        val error: String? = null,
-        val detail: String? = null,
-        val outputPath: String? = null,
-        val truncated: Boolean = false,
-    )
-
-    private fun TermuxOutcome.toResult() = Result(
+    private fun TermuxOutcome.toResult() = TermuxRunResult(
         stdout = stdout, stderr = stderr, exitCode = exitCode, error = error,
         detail = detail, truncated = truncated,
     )
 
-    private fun failure(call: AgentToolCall, code: String) = toolResult(call, Result(error = code))
+    private fun failure(call: AgentToolCall, code: String) = toolResult(call, TermuxRunResult(error = code))
 
-    private fun toolResult(call: AgentToolCall, result: Result): AgentToolResult {
+    private fun toolResult(call: AgentToolCall, result: TermuxRunResult): AgentToolResult {
         var limit = OUTPUT_BYTES
         var content: String
         do {

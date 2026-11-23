@@ -157,6 +157,7 @@ class PreparedAgentTool(
     /** Set for a command that references an installed skill's bundled files. */
     val skillScript: SkillScriptHit? = null,
     val skillScripts: List<SkillScriptHit> = emptyList(),
+    val memoryFact: String? = null,
     val execute: suspend () -> AgentToolResult,
 )
 

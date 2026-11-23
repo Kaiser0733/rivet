@@ -1,6 +1,7 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.workspace.SafWorkspace
+import com.kaiser.rivet.workspace.TextSnapshot
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
 
@@ -21,6 +22,17 @@ class ProjectStateFiles(private val workspace: SafWorkspace) {
         write(MemoryFormat.PATH, if (markdown.isBlank()) "" else markdown)
     }
 
+    suspend fun appendMemory(facts: List<String>): MemoryFormat.Append {
+        val path = WorkspacePath.parse(MemoryFormat.PATH)
+        val existing = snapshot(path)
+        val result = MemoryFormat.append(existing?.text.orEmpty(), facts)
+        if (result is MemoryFormat.Append.Saved) {
+            ensureParents(path.parent())
+            write(path, result.markdown, existing)
+        }
+        return result
+    }
+
     suspend fun read(relative: String): String? {
         if (relative.isEmpty()) return null
         return try {
@@ -33,12 +45,16 @@ class ProjectStateFiles(private val workspace: SafWorkspace) {
     suspend fun write(relative: String, text: String) {
         val path = WorkspacePath.parse(relative)
         ensureParents(path.parent())
-        val existing = try {
-            workspace.readTextFile(path)
-        } catch (error: WorkspaceFailure) {
-            if (error.reason != WorkspaceFailure.Reason.MISSING) throw error
-            null
-        }
+        write(path, text, snapshot(path))
+    }
+
+    private suspend fun snapshot(path: WorkspacePath): TextSnapshot? = try {
+        workspace.readTextFile(path)
+    } catch (error: WorkspaceFailure) {
+        if (error.reason == WorkspaceFailure.Reason.MISSING) null else throw error
+    }
+
+    private suspend fun write(path: WorkspacePath, text: String, existing: TextSnapshot?) {
         if (existing == null) {
             val created = workspace.createFile(path)
             // A provider may normalize the name; never write through an unexpected path.

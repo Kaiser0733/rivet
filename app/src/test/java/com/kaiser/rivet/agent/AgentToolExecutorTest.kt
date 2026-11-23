@@ -383,6 +383,17 @@ class AgentToolExecutorTest {
     }
 
     @Test
+    fun readAcceptsAnIntegralJsonNumberFromTheProvider() = runTest {
+        val executor = AgentToolExecutor(FakeWorkspace())
+        val result = executor.prepare(AgentToolCall("read", "read_file",
+            """{"path":"index.html","offset":0.0}""")).execute()
+
+        assertFalse(result.error)
+        val content = kotlinx.serialization.json.Json.parseToJsonElement(result.content).jsonObject
+        assertEquals("content", content["text"]!!.jsonPrimitive.content)
+    }
+
+    @Test
     fun unknownMalformedMissingAndTraversalAreControlledErrors() = runTest {
         val executor = AgentToolExecutor(FakeWorkspace())
         val calls = listOf(
@@ -392,12 +403,14 @@ class AgentToolExecutorTest {
             AgentToolCall("p", "read_file", """{"path":"../secret"}"""),
             AgentToolCall("dot", "create_file", """{"path":"trailing."}"""),
             AgentToolCall("x", "read_file", """{"path":"A","extra":true}"""),
+            AgentToolCall("f", "read_file", """{"path":"index.html","offset":0.5}"""),
         )
 
         val results = calls.map { executor.prepare(it).execute() }
 
         assertTrue(results.all { it.error })
-        assertEquals(listOf("unknown_tool", "invalid_arguments", "invalid_arguments", "invalid_path", "invalid_path", "invalid_arguments"),
+        assertEquals(listOf("unknown_tool", "invalid_arguments", "invalid_arguments", "invalid_path", "invalid_path",
+            "invalid_arguments", "invalid_arguments"),
             results.map { kotlinx.serialization.json.Json.parseToJsonElement(it.content).jsonObject["error"]!!.jsonPrimitive.content })
     }
 

@@ -74,6 +74,7 @@ internal object AgentToolError {
         "termux_cwd_unavailable" to "Termux can't use that working directory. Choose a shared-storage folder or pass an absolute Termux directory.",
         "termux_unavailable" to "Rivet couldn't start the Termux service. Open Termux once, then try again while Rivet is open.",
         "termux_timeout" to "Rivet timed out waiting for a Termux reply. The command may still be running.",
+        "termux_output_missing" to "Check workspace access and read the saved Termux output at output_path.",
         "termux_command_failed" to "Termux reported an error. Check the returned details before retrying.",
         "grant_missing" to "Choose a folder in Settings → Phone access, then use its exact grants/ path.",
         "grant_revoked" to "Grant revoked — re-grant in Settings → Phone access.",

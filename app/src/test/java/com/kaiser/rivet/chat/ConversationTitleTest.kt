@@ -1,11 +1,34 @@
 package com.kaiser.rivet.chat
 
 import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.provider.ReasoningLevel
 import org.junit.Assert.*
 import org.junit.Test
 
 class ConversationTitleTest {
+    @Test fun aFailureReportIsNotAnAutoTitle() {
+        assertNull(ConversationTitle.sanitize("Termux echo command failed"))
+        assertNull(ConversationTitle.sanitize("Error: Termux timed out"))
+        assertEquals("Investigate Build Failure", ConversationTitle.sanitize("Investigate Build Failure"))
+    }
+
+    @Test fun anUnsuccessfulTurnDoesNotSupplyAnAnswerForAutoTitle() {
+        val user = AgentMessage.user("Run echo through Termux")
+        assertNull(ConversationTitle.completedAnswer(listOf(user,
+            AgentMessage.assistant("The Termux echo command failed."))))
+        val failure = AgentMessage.tools(listOf(
+            AgentToolResult("echo", "termux_command", """{"exit_code":1,"stderr":"permission denied"}"""),
+        ))
+        assertNull(ConversationTitle.completedAnswer(listOf(user, failure, AgentMessage.assistant("See the output."))))
+        val success = AgentMessage.tools(listOf(
+            AgentToolResult("retry", "termux_command", """{"exit_code":0,"stdout":"hello"}"""),
+        ))
+        assertEquals("Echo printed hello.", ConversationTitle.completedAnswer(listOf(user, failure, success,
+            AgentMessage.assistant("Echo printed hello."))))
+    }
+
     @Test fun requestContainsOnlyBoundedVisibleTextAndDefaultReasoning() {
         val request = ConversationTitle.request("model", "😀".repeat(2000), "é".repeat(2000))
         assertEquals(ReasoningLevel.Default, request.reasoning)

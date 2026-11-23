@@ -1,6 +1,7 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.ui.chat.presentedFilesForTurns
+import com.kaiser.rivet.ui.chat.TurnDeliverable
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
@@ -59,6 +60,20 @@ class PresentedFilesTest {
             AgentMessage.user("Draw the flow"),
             AgentMessage.tools(listOf(restored.copy(error = true, presentedFiles = listOf(second)))),
         )
-        assertEquals(mapOf(0 to listOf(first)), presentedFilesForTurns(messages))
+        assertEquals(mapOf(0 to listOf(TurnDeliverable(first.path, first.description))),
+            presentedFilesForTurns(messages))
+    }
+
+    @Test fun aSavedScreenshotIsAnInlineDeliverableEvenWithoutModelVision() {
+        val path = "captures/screen.png"
+        val screenshot = AgentToolResult("shot", "phone_shot",
+            """{"path":"$path","mime":"image/png","vision_attached":false}""")
+        val present = AgentToolResult("present", "present", "{}",
+            presentedFiles = listOf(PresentedFile(path, "Screenshot")))
+        val messages = listOf(AgentMessage.user("Take a screenshot"),
+            AgentMessage.tools(listOf(screenshot, present)), AgentMessage.assistant("Done."))
+
+        assertEquals(listOf(path), presentedFilesForTurns(messages)[0]?.map { it.path })
+        assertTrue(presentedFilesForTurns(messages).getValue(0).single().inlineImage)
     }
 }

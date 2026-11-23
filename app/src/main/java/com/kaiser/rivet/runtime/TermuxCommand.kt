@@ -35,10 +35,10 @@ internal object TermuxCommand {
 
     fun withFileOutput(command: String, folder: String): String = """
         folder=${quote(folder)}
-        if ! mkdir -p -- "${'$'}folder" || ! { : > "${'$'}folder/out.txt"; }; then
+        if ! mkdir -p -- "${'$'}folder" || ! { : > "${'$'}folder/out.txt" && : > "${'$'}folder/err.txt"; }; then
             exec $BASH -c ${quote(command)}
         fi
-        $BASH -c ${quote(command)} > "${'$'}folder/out.txt" 2>&1
+        $BASH -c ${quote(command)} > "${'$'}folder/out.txt" 2> "${'$'}folder/err.txt"
         code=${'$'}?
         printf '%s\n' "${'$'}code" > "${'$'}folder/code.tmp" && mv -- "${'$'}folder/code.tmp" "${'$'}folder/code"
         exit "${'$'}code"

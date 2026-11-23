@@ -741,7 +741,18 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                             item(key = "reply-${turn.turnIndex}-$index") { TurnTextPart(part, state) }
                         }
                         items(deliverables[turn.userItem?.messageIndex].orEmpty()) { file ->
-                            ProjectFileCard(file, missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
+                            if (file.inlineImage) {
+                                val links = LocalAssistantFileLinks.current
+                                val image = ChatMarkdownBlock.Image(file.description, file.path)
+                                if (isAppChatImagePath(file.path)) {
+                                    BrowserImage(image, "Screenshot unavailable.", inline = true)
+                                } else if (links != null) {
+                                    ProjectInlineImage(image, file.path, links, onOpenPreview)
+                                }
+                            } else {
+                                ProjectFileCard(PresentedFile(file.path, file.description),
+                                    missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
+                            }
                         }
                     }
                     if (showBrowserCard) item(key = "live-browser") {
@@ -1602,7 +1613,7 @@ internal fun approvalTitle(request: AgentApprovalRequest): String = when {
 
 @Composable
 internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> Unit,
-                            onDeny: (Long) -> Unit) {
+                            onDeny: (Long) -> Unit, onStop: (Long) -> Unit = {}) {
     val command = request.call.name == "run_command"
     val delete = request.call.name == "delete_path"
     // A tap outside or Back keeps the card pending; only the buttons answer for the user.
@@ -1611,7 +1622,7 @@ internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> 
     },
         title = { Text(displaySafeText(approvalTitle(request)),
             style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
-        text = { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) {
+        text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
             Text(displaySafeText(request.detail),
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily =
                     if (command) FontFamily.Monospace else FontFamily.Default))
@@ -1622,9 +1633,14 @@ internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> 
         confirmButton = { RivetOutlinedButton(onClick = { onApprove(request.approvalToken) }) {
             Text(if (delete) "Delete" else "Allow")
         } },
-        dismissButton = { TextButton(onClick = { onDeny(request.approvalToken) }) {
-            Text(if (delete) "Cancel" else "Don't allow")
-        } })
+        dismissButton = {
+            Row {
+                TextButton(onClick = { onStop(request.approvalToken) }) { Text("Stop turn") }
+                TextButton(onClick = { onDeny(request.approvalToken) }) {
+                    Text(if (delete) "Cancel" else "Don't allow")
+                }
+            }
+        })
 }
 
 @Composable
