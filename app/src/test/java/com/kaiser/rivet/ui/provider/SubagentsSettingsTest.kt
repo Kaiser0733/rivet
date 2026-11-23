@@ -1,9 +1,11 @@
 package com.kaiser.rivet.ui.provider
 
 import com.kaiser.rivet.provider.ProviderConfig
+import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.subagent.PoolEntry
 import com.kaiser.rivet.subagent.SubagentPoolState
+import com.kaiser.rivet.subagent.SubagentPool
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
@@ -63,5 +65,25 @@ class SubagentsSettingsTest {
         assertEquals("Depth 1 · 2 at once · at most 1 on a local model", SUBAGENT_FACTS)
         assertTrue(SUBAGENT_WARNING.contains("Subagents spend tokens too"))
         assertTrue(SUBAGENT_WARNING.contains("any model you tick"))
+    }
+
+    @Test fun catalogRowsIncludeAndResolveModelsOtherThanTheChatDefault() {
+        val provider = configs.first()
+        val otherId = "deepseek-ai/DeepSeek-V4.1-Flash-1017"
+        val catalog = mapOf(provider.id to WorkerModelCatalog(listOf(
+            ModelInfo(provider.model, "Alpha"),
+            ModelInfo(otherId, "Fast worker", inputLimitTokens = 64_000),
+            ModelInfo("third", "Third worker"),
+        )))
+        val selection = PoolEntry(provider.id, otherId, provider.baseUrl)
+        val state = SubagentPoolState(entries = listOf(selection), fixed = selection)
+        val rows = subagentModelRows(state, listOf(provider), catalog).single().second
+        assertEquals(listOf(provider.model, otherId, "third"), rows.map { it.first.model })
+        assertEquals(listOf(false, true, false), rows.map { it.second })
+        assertEquals(listOf(otherId), filterWorkerModelRows(rows, catalog, " FAST ").map { it.first.model })
+        assertEquals(otherId, SubagentPool.resolve(state, listOf(provider)).entries.single().config.model)
+        assertEquals(otherId, SubagentPool.resolve(state.copy(allowAgentChoice = false),
+            listOf(provider)).fixed?.config?.model)
+        assertTrue(SubagentPool.resolve(state, emptyList()).entries.isEmpty())
     }
 }

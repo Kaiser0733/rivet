@@ -249,14 +249,19 @@ fun SettingsScreen(
                     )
                     SettingsSection.Phone -> PhoneAccessDetail(onOpenAddOn = { section = SettingsSection.PhoneAddOn })
                     SettingsSection.PhoneAddOn -> PhoneAddOnDetail()
-                    SettingsSection.Subagents -> SubagentsSettings(
-                        state = subagentState,
-                        configs = state.configs,
-                        error = subagentError,
-                        onAllowAgentChoice = viewModel::setSubagentAllowAgentChoice,
-                        onToggleModel = viewModel::toggleSubagentModel,
-                        onFixedModel = viewModel::setFixedSubagentModel,
-                    )
+                    SettingsSection.Subagents -> {
+                        val catalogs by viewModel.workerModelCatalogs.collectAsState()
+                        LaunchedEffect(state.configs) { viewModel.loadWorkerModelCatalogs(state.configs) }
+                        SubagentsSettings(
+                            state = subagentState,
+                            configs = state.configs,
+                            error = subagentError,
+                            catalogs = catalogs,
+                            onAllowAgentChoice = viewModel::setSubagentAllowAgentChoice,
+                            onToggleModel = { viewModel.toggleSubagentModel(it, fromCatalog = true) },
+                            onFixedModel = { viewModel.setFixedSubagentModel(it, fromCatalog = true) },
+                        )
+                    }
                     SettingsSection.GitHub -> GitHubDetail(
                         connected = gitHubState.connected,
                         gitAvailable = gitHubState.gitAvailable,

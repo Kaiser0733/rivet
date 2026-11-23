@@ -22,6 +22,7 @@ import com.kaiser.rivet.provider.resolveSignInClientId
 import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
 import com.kaiser.rivet.provider.runSignIn
 import com.kaiser.rivet.provider.selectListedModel
+import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.withManualContextWindow
 import com.kaiser.rivet.provider.withManualMaxOutputTokens
 import com.kaiser.rivet.provider.withModelId
@@ -42,6 +43,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.coroutineScope
 import kotlinx.serialization.json.Json
 import java.util.UUID
 import java.util.concurrent.atomic.AtomicInteger
@@ -98,6 +100,23 @@ class ProvidersViewModel private constructor(
 
     private val _subagentPoolError = MutableStateFlow<String?>(null)
     val subagentPoolError: StateFlow<String?> = _subagentPoolError.asStateFlow()
+
+    private val _workerModelCatalogs = MutableStateFlow<Map<String, WorkerModelCatalog>>(emptyMap())
+    internal val workerModelCatalogs = _workerModelCatalogs.asStateFlow()
+
+    internal suspend fun loadWorkerModelCatalogs(configs: List<ProviderConfig>) = coroutineScope {
+        _workerModelCatalogs.value = emptyMap()
+        for (config in configs.filter { it.type != ProviderType.Local }) launch {
+            val catalog = try {
+                WorkerModelCatalog(loadProviderModels(config, ""))
+            } catch (cancelled: CancellationException) {
+                throw cancelled
+            } catch (error: Exception) {
+                WorkerModelCatalog(emptyList(), editorError(error))
+            }
+            _workerModelCatalogs.update { it + (config.id to catalog) }
+        }
+    }
 
     private val subagentPoolUpdates = Channel<(SubagentPoolState) -> SubagentPoolState>(Channel.UNLIMITED)
     private val pendingSubagentSaves = AtomicInteger(0)
@@ -219,20 +238,24 @@ class ProvidersViewModel private constructor(
         updateSubagentPool { it.copy(allowAgentChoice = allow) }
     }
 
-    fun toggleSubagentModel(config: ProviderConfig) {
-        val entry = PoolEntry(config.id, config.model)
+    fun toggleSubagentModel(config: ProviderConfig, fromCatalog: Boolean = false) {
+        val entry = workerPoolEntry(config, fromCatalog)
         updateSubagentPool { state ->
-            val entries = if (entry in state.entries) state.entries - entry
-            else state.entries + entry
-            state.copy(entries = entries)
+            val remaining = state.entries.filterNot { it.configId == entry.configId && it.model == entry.model }
+            state.copy(entries = if (remaining.size < state.entries.size) remaining else remaining + entry)
         }
     }
 
-    fun setFixedSubagentModel(config: ProviderConfig) {
+    fun setFixedSubagentModel(config: ProviderConfig, fromCatalog: Boolean = false) {
         updateSubagentPool { state ->
-            state.copy(fixed = PoolEntry(config.id, config.model))
+            state.copy(fixed = workerPoolEntry(config, fromCatalog))
         }
     }
+
+    private fun workerPoolEntry(config: ProviderConfig, fromCatalog: Boolean): PoolEntry =
+        if (fromCatalog && config.type != ProviderType.Local) {
+            PoolEntry(config.id, config.model, config.baseUrl, config.modelContextLimit)
+        } else PoolEntry(config.id, config.model)
 
     private fun updateSubagentPool(transform: (SubagentPoolState) -> SubagentPoolState) {
         pendingSubagentSaves.incrementAndGet()
@@ -873,8 +896,7 @@ class ProvidersViewModel private constructor(
         _editorState.update { it.copy(fetching = true, fetchError = null) }
         if (!editorRequests.tryLaunch(state.config.id) { ticket ->
                 try {
-                    val credential = resolveEditorCredential(state.config, state.keyInput)
-                    val models = clientFactory(state.config, credential).listModels()
+                    val models = loadProviderModels(state.config, state.keyInput)
                     if (isCurrent(ticket)) {
                         _editorState.update {
                             val nextConfig = when {
@@ -965,6 +987,9 @@ class ProvidersViewModel private constructor(
 
     // ChatGPT plan providers authenticate with an OAuth access token (refreshed
     // when expired); every other type uses the API-key slot.
+    private suspend fun loadProviderModels(config: ProviderConfig, keyInput: String): List<ModelInfo> =
+        clientFactory(config, resolveEditorCredential(config, keyInput)).listModels()
+
     private suspend fun resolveEditorCredential(config: ProviderConfig, keyInput: String): String {
         if (config.type == ProviderType.ChatGptPlan) {
             return when (val token = com.kaiser.rivet.provider.resolveChatGptToken(secrets, config)) {
