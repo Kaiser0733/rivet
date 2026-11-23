@@ -132,6 +132,7 @@ internal fun UtilityFold(
     value: String = "",
     modifier: Modifier = Modifier,
     titleMaxLines: Int = Int.MAX_VALUE,
+    contentStartPadding: Dp = 52.dp,
     content: @Composable ColumnScope.() -> Unit,
 ) {
     var expanded by rememberSaveable { mutableStateOf(false) }
@@ -141,10 +142,10 @@ internal fun UtilityFold(
             trailingIcon = if (expanded) R.drawable.ic_chevron_down else R.drawable.ic_chevron_right,
             onClick = { expanded = !expanded })
         DisclosureBody(expanded) {
-            Column(Modifier.fillMaxWidth().padding(start = 52.dp, end = 8.dp, bottom = 12.dp),
+            Column(Modifier.fillMaxWidth().padding(start = contentStartPadding, end = 8.dp, bottom = 12.dp),
                 verticalArrangement = Arrangement.spacedBy(8.dp), content = content)
         }
-        HorizontalDivider(Modifier.padding(start = 52.dp), color = MaterialTheme.colorScheme.outlineVariant)
+        HorizontalDivider(Modifier.padding(start = contentStartPadding), color = MaterialTheme.colorScheme.outlineVariant)
     }
 }
 

@@ -7,6 +7,7 @@ import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.chat.ProviderRuntimeResult
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.withModelId
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
@@ -653,7 +654,8 @@ internal class SubagentSupervisor(
                 } ?: SubagentPool.resolvedEntry(
                     alias = "resumed",
                     entry = PoolEntry(config.id, record.model),
-                    config = config,
+                    config = if (config.type == ProviderType.Local || config.model == record.model) config
+                        else config.withModelId(record.model),
                     local = config.type == ProviderType.Local,
                 )
                 val skill = record.skill?.let(::findSkill)

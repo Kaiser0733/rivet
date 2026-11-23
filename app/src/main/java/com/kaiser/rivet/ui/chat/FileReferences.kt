@@ -63,5 +63,3 @@ internal fun projectImagePath(source: String): String? {
     if (displaySafeText(source) != source || ':' in source) return null
     return runCatching { presentablePath(source.removePrefix("./")).value }.getOrNull()
 }
-
-internal fun ChatMarkdownBlock.Image.fallbackText(): String = alt.ifBlank { source }

@@ -31,7 +31,11 @@ data class AgentToolResult(
     val imagePath: String? = null,
     val imageMime: String? = null,
     val presentedFiles: List<PresentedFile> = emptyList(),
+    val projectImages: List<ProjectImageInput> = emptyList(),
 )
+
+@Serializable
+data class ProjectImageInput(val path: String, val cachePath: String)
 
 @Serializable
 data class AgentMessage(
@@ -42,7 +46,10 @@ data class AgentMessage(
     val transportState: String? = null,
     val internalContext: InternalContext? = null,
     val userImagePath: String? = null,
+    val userImagePaths: List<String> = emptyList(),
 ) {
+    val imagePaths: List<String> get() = listOfNotNull(userImagePath) + userImagePaths
+
     companion object {
         fun user(text: String) = AgentMessage(AgentRole.User, text = text)
 

@@ -53,11 +53,15 @@ import androidx.compose.foundation.layout.widthIn
 import androidx.compose.foundation.layout.height
 import androidx.compose.ui.draw.drawBehind
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.input.nestedscroll.NestedScrollConnection
+import androidx.compose.ui.input.nestedscroll.NestedScrollSource
+import androidx.compose.ui.input.nestedscroll.nestedScroll
 import androidx.compose.foundation.horizontalScroll
 import androidx.compose.foundation.text.KeyboardActions
 import androidx.compose.foundation.text.selection.SelectionContainer
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.BorderStroke
@@ -389,13 +393,15 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     } else null
                 val sharedContent by chatViewModel.sharedContent.collectAsState()
                 val composerAttachments by chatViewModel.composerAttachments.collectAsState()
+                val composerImports by chatViewModel.composerImports.collectAsState()
                 if (emptyConversation) HomeStarters(chatViewModel, canStartChat, state.starterError,
                     modifier = Modifier.heightIn(max = starterRoom).verticalScroll(rememberScrollState()))
                 InputBar(streaming = state.streaming,
                     sharedDraft = sharedContent[state.currentSessionId],
-                    attachment = composerAttachments[state.currentSessionId],
-                    onStageAttachment = chatViewModel::stageComposerAttachment,
-                    onDropAttachment = { chatViewModel.removeComposerAttachment(state.currentSessionId) },
+                    attachments = composerAttachments[state.currentSessionId].orEmpty(),
+                    importingAttachments = state.currentSessionId in composerImports,
+                    onStageAttachments = chatViewModel::stageComposerAttachments,
+                    onDropAttachment = { name -> chatViewModel.removeComposerAttachment(state.currentSessionId, name) },
                     onPickerUnavailable = chatViewModel::attachmentPickerUnavailable,
                     phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
                     ready = state.ready && !state.projectLoading && !state.undoing &&
@@ -481,7 +487,7 @@ private data class TimelineDisplayEntry(
 )
 
 @Composable
-private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
+internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenSettings: () -> Unit, onRetryProjectChanges: () -> Unit,
                         onDiscardProjectChanges: () -> Unit,
                         onRetryInterruptedTurn: () -> Unit,
@@ -493,7 +499,8 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         onOpenPreview: (String) -> Unit,
                         missingFiles: Set<String>,
                         browser: com.kaiser.rivet.browser.BrowserSession,
-                        modifier: Modifier = Modifier) {
+                        modifier: Modifier = Modifier,
+                        listState: LazyListState = rememberLazyListState()) {
     val browserState by browser.state.collectAsState()
     val showBrowserCard = browserState.chatPreviewVisible(state.currentSessionId)
     val deliverables = remember(state.messages) { presentedFilesForTurns(state.messages) }
@@ -616,10 +623,9 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         (if (state.notice != null) 1 else 0) +
         (if (state.error != null) 1 else 0) +
         (if (state.unsupportedReasoning != null) 1 else 0)
-    val listState = rememberLazyListState()
-    // Saved, not just remembered: a rotation must not yank a reader back to the end,
-    // and must not drop a user who was following the reply.
     var followBottom by rememberSaveable { mutableStateOf(true) }
+    var lastAcceptedCount by rememberSaveable { mutableStateOf(state.acceptedMessageCount) }
+    var userScrolling by remember { mutableStateOf(false) }
     var programmaticScroll by remember { mutableStateOf(false) }
     val bottomSlop = with(LocalDensity.current) { 72.dp.toPx() }
     val nearBottom by remember(bottomSlop) { derivedStateOf {
@@ -628,15 +634,37 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         if (last.index < layout.totalItemsCount - 1) false
         else layout.viewportEndOffset - (last.offset + last.size) >= -bottomSlop
     } }
+    val transcriptScrollConnection = remember(listState) {
+        object : NestedScrollConnection {
+            override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
+                if (source == NestedScrollSource.UserInput && available.y != 0f) {
+                    userScrolling = true
+                    followBottom = false
+                }
+                return Offset.Zero
+            }
+        }
+    }
     LaunchedEffect(listState) {
-        androidx.compose.runtime.snapshotFlow { Triple(listState.isScrollInProgress, nearBottom, programmaticScroll) }
-            .collect { (scrolling, near, programmatic) ->
-                if (scrolling && !programmatic) followBottom = near
+        androidx.compose.runtime.snapshotFlow { Triple(listState.isScrollInProgress, programmaticScroll, userScrolling) }
+            .collect { (scrolling, programmatic, manual) ->
+                if (scrolling && !programmatic && !manual) {
+                    userScrolling = true
+                    followBottom = false
+                } else if (!scrolling && manual) {
+                    followBottom = !listState.canScrollForward
+                    userScrolling = false
+                }
             }
     }
     // Sending a message is an explicit request to see it: after reading back through the
     // conversation, the reply and the user's own message must not land off-screen.
-    LaunchedEffect(state.acceptedMessageCount) { followBottom = true }
+    LaunchedEffect(state.acceptedMessageCount) {
+        if (lastAcceptedCount != state.acceptedMessageCount) {
+            lastAcceptedCount = state.acceptedMessageCount
+            followBottom = true
+        }
+    }
     // Following the bottom while the reader is there. Two things move the list: a row appearing,
     // which this effect lands exactly, and a row growing — and growth is a layout event, not a
     // character count. A wrapped line adds a line height inside the same character bucket, so the
@@ -646,8 +674,8 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // has to handle rows appearing or disappearing, which move everything at once.
     LaunchedEffect(segmentedTurns.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
-        state.notice, showBrowserCard, state.compacting) {
-        if (followBottom && totalItems > 0) {
+        state.notice, showBrowserCard, state.compacting, totalItems, state.acceptedMessageCount) {
+        if (followBottom && totalItems > 0 && !userScrolling && !listState.isScrollInProgress) {
             programmaticScroll = true
             try {
                 scrollToConversationBottom(listState, totalItems - 1)
@@ -659,16 +687,14 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // A row that grows is followed from the layout: whenever the content's end — the list's own
     // bottom padding included — sits below the viewport's end, scroll by that gap. This is what
     // keeps the last row fully visible through a wrap, and it settles exactly on the content's
-    // end, so the live-status row always keeps the padding under it instead of sitting flush
-    // against the list's edge. Not following, not scrolling: a reader who scrolled up owns the
-    // position, and the `followBottom` update above is the only thing that changes that.
+    // end, so the live-status row keeps the padding under it.
     LaunchedEffect(listState) {
         androidx.compose.runtime.snapshotFlow {
             val layout = listState.layoutInfo
             val last = layout.visibleItemsInfo.lastOrNull() ?: return@snapshotFlow 0
             last.offset + last.size + layout.afterContentPadding - layout.viewportEndOffset
         }.collect { gap ->
-            if (!followBottom || gap <= 0 || listState.isScrollInProgress) return@collect
+            if (!followBottom || gap <= 0 || userScrolling || listState.isScrollInProgress) return@collect
             programmaticScroll = true
             try {
                 listState.scrollBy(gap.toFloat())
@@ -681,7 +707,7 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     Box(modifier.fillMaxSize()) {
         PlatformSelectionToolbar {
             SelectionContainer {
-                LazyColumn(state = listState, modifier = Modifier.fillMaxSize(),
+                LazyColumn(state = listState, modifier = Modifier.fillMaxSize().nestedScroll(transcriptScrollConnection),
                     contentPadding = androidx.compose.foundation.layout.PaddingValues(
                         start = 16.dp, end = 16.dp, top = 8.dp, bottom = 20.dp),
                     verticalArrangement = Arrangement.spacedBy(6.dp)) {
@@ -766,10 +792,11 @@ private fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 }
             }
         }
-        if (!nearBottom && totalItems > 0) {
+        if (totalItems > 0 && listState.canScrollForward && (!followBottom || !nearBottom)) {
             Surface(
                 onClick = {
                     jumpScope.launch {
+                        userScrolling = false
                         followBottom = true
                         programmaticScroll = true
                         try {
@@ -1243,7 +1270,7 @@ internal fun MessageRow(message: AgentMessage, reasoning: String? = null, messag
                     Column(Modifier.padding(horizontal = 16.dp, vertical = 10.dp),
                         verticalArrangement = Arrangement.spacedBy(8.dp)) {
                         Text(message.text, style = MaterialTheme.typography.bodyMedium)
-                        message.userImagePath?.let { path ->
+                        message.imagePaths.forEach { path ->
                             BrowserImage(ChatMarkdownBlock.Image("Shared image", path),
                                 unavailable = "Shared image no longer available.")
                         }
@@ -1425,7 +1452,7 @@ private fun AssistantMessage(text: String, streaming: Boolean) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (streaming) {
-            Text(decoded, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
+            Text(streamingAssistantText(decoded), style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
         } else AssistantMarkdown(decoded)
     }
 }
@@ -1487,11 +1514,11 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                     val path = projectImagePath(block.source)
                     when {
                         !showInlineImages -> if (block.alt.isNotBlank()) Text(displaySafeText(block.alt))
-                        path != null && path in files && links != null && open != null ->
+                        path != null && links != null && open != null ->
                             ProjectInlineImage(block, path, links, open)
                         isAppChatImagePath(block.source) ->
-                            BrowserImage(block, unavailable = displaySafeText(block.fallbackText()), inline = true)
-                        else -> Text(displaySafeText(block.fallbackText()))
+                            BrowserImage(block, unavailable = block.unavailableText(), inline = true)
+                        else -> Text(block.unavailableText())
                     }
                 }
                 is ChatMarkdownBlock.Table -> MarkdownTable(block)
@@ -1533,11 +1560,14 @@ private fun ProjectInlineImage(image: ChatMarkdownBlock.Image, path: String, lin
     }
     val bitmap = (preview as? FilePreviewResult.Image)?.bitmap
     if (bitmap == null) {
-        Text(displaySafeText(image.fallbackText()), style = MaterialTheme.typography.bodyMedium)
+        if (preview != null) Text(image.unavailableText(), style = MaterialTheme.typography.bodyMedium)
     } else {
-        InlineChatImage(bitmap, displaySafeText(image.fallbackText())) { onOpen(path) }
+        InlineChatImage(bitmap, displaySafeText(image.alt).ifBlank { "Project image" }) { onOpen(path) }
     }
 }
+
+private fun ChatMarkdownBlock.Image.unavailableText(): String =
+    displaySafeText(alt).ifBlank { "Image unavailable." }
 
 @Composable
 private fun InlineMarkdown(
@@ -1732,9 +1762,10 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
                      sharedDraft: SharedDraft? = null,
-                     attachment: ComposerAttachment? = null,
-                     onStageAttachment: (String?, android.net.Uri, Boolean, File?) -> Unit,
-                     onDropAttachment: () -> Unit,
+                     attachments: List<ComposerAttachment>,
+                     importingAttachments: Boolean,
+                     onStageAttachments: (String?, List<android.net.Uri>, Boolean, File?) -> Unit,
+                     onDropAttachment: (String) -> Unit,
                      onPickerUnavailable: () -> Unit,
                      phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
@@ -1755,10 +1786,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     }
     val draft = draftFor(drafts, sessionId)
     var attachmentsOpen by rememberSaveable(sessionId) { mutableStateOf(false) }
-    val pickAttachment = rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)
-    if (attachmentsOpen) {
-        AttachmentSheet(onDismiss = { attachmentsOpen = false }, onPick = pickAttachment)
-    }
+    val pickAttachment = rememberComposerPickers(sessionId, onStageAttachments, onPickerUnavailable)
     var appliedShares by rememberSaveable(stateSaver = DRAFT_SAVER) {
         mutableStateOf(emptyMap<String, String>())
     }
@@ -1790,14 +1818,14 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // button silently refusing the tap.
     val builtInCommand = SlashCommands.builtIn(draft) != null
     fun canSubmit(text: String, builtIn: Boolean): Boolean =
-        ready && !streaming && (text.isNotBlank() || attachment != null) && pendingText == null &&
-            (builtIn || ((hasProject || sharedDraft != null || attachment != null || phoneAvailable) && hasProvider) ||
+        ready && !streaming && !importingAttachments && (text.isNotBlank() || attachments.isNotEmpty()) && pendingText == null &&
+            (builtIn || ((hasProject || sharedDraft != null || attachments.isNotEmpty() || phoneAvailable) && hasProvider) ||
                 !hasProvider)
     val canSend = canSubmit(draft, builtInCommand)
     val submit = {
         val latest = draftFor(drafts, sessionId)
         val allowed = canSubmit(latest, SlashCommands.builtIn(latest) != null)
-        val text = if (allowed && attachment != null && latest.isBlank()) "" else draftToSend(latest, allowed)
+        val text = if (allowed && attachments.isNotEmpty() && latest.isBlank()) "" else draftToSend(latest, allowed)
         if (text != null) {
             pendingText = latest
             submittedAt = ackCount
@@ -1865,7 +1893,11 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
             BoxWithConstraints(Modifier.fillMaxWidth()) {
                 val contextFitsInRow = maxWidth >= RivetLayout.contextInlineWidth
                 val compactControls = maxWidth < RivetLayout.compactComposerWidth
-                Column(Modifier.padding(start = 4.dp, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
+                val composerInset = 4.dp
+                Column(Modifier.padding(start = composerInset, end = 6.dp, top = 6.dp, bottom = 4.dp)) {
+                    if (attachments.isNotEmpty()) {
+                        ComposerAttachmentStrip(attachments, sessionId, !streaming, onDropAttachment)
+                    }
                     sharedDraft?.imageName?.let { name ->
                         Text("Attached image · $name", modifier = Modifier.padding(horizontal = 14.dp, vertical = 4.dp),
                             style = MaterialTheme.typography.labelMedium)
@@ -1913,24 +1945,19 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                             unfocusedContainerColor = MaterialTheme.colorScheme.surfaceContainer,
                         ),
                     )
-                    attachment?.let { item ->
-                        Row(Modifier.fillMaxWidth().padding(start = 12.dp),
-                            verticalAlignment = Alignment.CenterVertically) {
-                            Icon(painterResource(R.drawable.ic_files), null, Modifier.size(18.dp))
-                            Text(item.name, Modifier.weight(1f).padding(horizontal = 8.dp),
-                                style = MaterialTheme.typography.bodySmall, maxLines = 1,
-                                overflow = TextOverflow.Ellipsis)
-                            IconButton(onClick = onDropAttachment, enabled = !streaming) {
-                                Icon(painterResource(R.drawable.ic_close), "Remove attachment")
-                            }
-                        }
-                    }
                     if (!contextFitsInRow && contextReading != null) {
                         ConversationContextMeter(contextReading, Modifier.align(Alignment.End).padding(end = 6.dp))
                     }
                     Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
-                        IconButton(onClick = { attachmentsOpen = true }, enabled = ready && !streaming) {
-                            Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+                        Box {
+                            IconButton(onClick = { attachmentsOpen = true },
+                                enabled = ready && !streaming && !importingAttachments) {
+                                Icon(painterResource(R.drawable.ic_add), contentDescription = "Attachments")
+                            }
+                            if (attachmentsOpen) {
+                                AttachmentSheet(composerInset, onDismiss = { attachmentsOpen = false },
+                                    onPick = pickAttachment)
+                            }
                         }
                         Box(Modifier.weight(1f).padding(end = 4.dp)) {
                             selector?.invoke()

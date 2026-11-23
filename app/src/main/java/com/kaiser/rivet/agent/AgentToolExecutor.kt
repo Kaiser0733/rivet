@@ -120,6 +120,7 @@ class AgentToolExecutor(
     private val preparePhoneShot: ((AgentToolCall) -> PreparedAgentTool)? = null,
     private val prepareTermuxCommand: ((AgentToolCall) -> PreparedAgentTool)? = null,
     private val preparePhoneIntent: ((AgentToolCall) -> PreparedAgentTool?)? = null,
+    private val readProjectImage: (suspend (String) -> ProjectImageRead)? = null,
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
@@ -195,6 +196,17 @@ class AgentToolExecutor(
                         success(call, value, "Read  $path")
                     }
                 }
+                "read_image" -> {
+                    val read = readProjectImage ?: return invalid(call, "unknown_tool")
+                    val path = presentablePath(json.decodeFromString<ReadArgs>(call.arguments).path).value
+                    readOnly(call) {
+                        val result = read(path)
+                        success(call, buildJsonObject {
+                            put("path", path)
+                            put("image_input", result.note)
+                        }, "Read image $path").copy(projectImages = listOfNotNull(result.input))
+                    }
+                }
                 "present" -> {
                     if (worker) return invalid(call, "unknown_tool")
                     val args = json.decodeFromString<PresentArguments>(call.arguments)
@@ -206,9 +218,20 @@ class AgentToolExecutor(
                         } catch (_: IllegalArgumentException) {
                             return@readOnly failure(call, "invalid_arguments")
                         }
-                        success(call, buildJsonObject { put("presented", files.size) },
+                        val images = readProjectImage?.let { read ->
+                            files.mapNotNull { file -> read(file.path).takeIf { it.isImage }?.let { file.path to it } }
+                        }.orEmpty()
+                        success(call, buildJsonObject {
+                            put("presented", files.size)
+                            if (images.isNotEmpty()) put("images", buildJsonArray {
+                                images.forEach { (path, result) -> add(buildJsonObject {
+                                    put("path", path)
+                                    put("image_input", result.note)
+                                }) }
+                            })
+                        },
                             "Presented ${files.size} file${if (files.size == 1) "" else "s"}")
-                            .copy(presentedFiles = files)
+                            .copy(presentedFiles = files, projectImages = images.mapNotNull { it.second.input })
                     }
                 }
                 "search_files" -> {
@@ -1021,6 +1044,8 @@ class AgentToolExecutor(
                     put("maxItems", 4)
                     put("items", schema(listOf("path", "description"), path, "description" to string))
                 })),
+            AgentToolDefinition("read_image", "View an existing image at a project-relative path.",
+                schema(listOf("path"), path)),
             AgentToolDefinition(
                 "search_files",
                 "Search literally and case-sensitively. A limited result may omit matches; check limited, files_scanned, entries_visited, bytes_scanned, and skipped.",

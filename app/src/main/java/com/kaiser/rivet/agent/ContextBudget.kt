@@ -3,6 +3,7 @@ package com.kaiser.rivet.agent
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.DEFAULT_CONTEXT_WINDOW_TOKENS
 import com.kaiser.rivet.provider.ProviderConfig
+import com.kaiser.rivet.provider.ProviderVisionAttachments
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.anthropicOutputCeiling
 import com.kaiser.rivet.provider.detectedContextWindowForModel
@@ -55,14 +56,11 @@ internal object ContextBudget {
     private const val GUESSED_INPUT_TOKENS = 220_000
     private const val IMAGE_TOKEN_ESTIMATE = 1_024L
 
-    /** Only the trailing user message or tool result can receive image bytes in a request. */
     fun attachedImageCount(messages: List<AgentMessage>): Int {
         val trailing = messages.lastOrNull() ?: return 0
-        return when (trailing.role) {
-            AgentRole.User -> if (trailing.userImagePath == null) 0 else 1
-            AgentRole.Tool -> trailing.toolResults.count { !it.imagePath.isNullOrBlank() }
-            else -> 0
-        }
+        val trailingCount = if (trailing.role == AgentRole.User) trailing.imagePaths.size
+            else ProviderVisionAttachments.trailingImageResults(messages).size
+        return trailingCount + ProviderVisionAttachments.projectImageInputs(messages).size
     }
 
     private fun historyBytes(messages: List<AgentMessage>): Long =

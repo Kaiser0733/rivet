@@ -1,5 +1,6 @@
 package com.kaiser.rivet.chat
 
+import com.kaiser.rivet.agent.AgentMessage
 import java.net.URI
 import java.util.Locale
 
@@ -58,9 +59,30 @@ internal fun shareFailureNotice(error: Throwable): String = when (error) {
     else -> "Rivet couldn't read this attachment. Try sharing it again."
 }
 
-internal data class ComposerAttachment(val name: String, val image: Boolean, val fileContext: String? = null) {
-    fun messageText(draft: String): String {
-        if (image) return draft.ifBlank { "Attached image: $name" }
-        return listOf(draft, fileContext ?: "Attached file: inbox/$name").filter(String::isNotBlank).joinToString("\n\n")
-    }
+internal data class ComposerAttachment(
+    val name: String,
+    val image: Boolean,
+    val fileContext: String? = null,
+    val bytes: Long = 0,
+) {
+    fun messageText(draft: String): String = if (image) draft.ifBlank { "Attached image: $name" }
+    else listOf(draft, fileContext ?: "Attached file: inbox/$name").filter(String::isNotBlank).joinToString("\n\n")
+}
+
+internal fun composerMessage(
+    text: String,
+    attachments: List<ComposerAttachment>,
+    sharedImageName: String?,
+    resolvePath: (String) -> String,
+): AgentMessage {
+    val imageNames = (listOfNotNull(sharedImageName) + attachments.filter { it.image }.map { it.name }).distinct()
+    val imagePaths = imageNames.map(resolvePath)
+    val opening = if (text.isBlank() && imageNames.isNotEmpty()) {
+        imageNames.joinToString("\n") { "Attached image: $it" }
+    } else text
+    val body = listOf(opening) + attachments.filterNot { it.image }.map { it.messageText("") }
+    return AgentMessage.user(body.filter(String::isNotBlank).joinToString("\n\n")).copy(
+        userImagePath = imagePaths.firstOrNull(),
+        userImagePaths = imagePaths.drop(1),
+    )
 }

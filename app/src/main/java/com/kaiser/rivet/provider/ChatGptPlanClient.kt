@@ -150,13 +150,15 @@ internal fun responsesInputItems(
     AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> listOf(buildJsonObject {
         put("role", "user")
-        val image = ProviderVisionAttachments.userImage(message, images)
-        if (image == null) put("content", message.text) else put("content", buildJsonArray {
+        val attachments = ProviderVisionAttachments.userImages(message, images)
+        if (attachments.isEmpty()) put("content", message.text) else put("content", buildJsonArray {
             add(buildJsonObject { put("type", "input_text"); put("text", message.text) })
-            add(buildJsonObject {
-                put("type", "input_image")
-                put("image_url", "data:${image.mime};base64,${image.base64}")
-            })
+            attachments.forEach { image ->
+                add(buildJsonObject {
+                    put("type", "input_image")
+                    put("image_url", "data:${image.mime};base64,${image.base64}")
+                })
+            }
         })
     })
     AgentRole.Assistant -> buildList {
@@ -177,19 +179,20 @@ internal fun responsesInputItems(
                 put("call_id", result.callId)
                 put("output", result.content)
             })
-            images[result.callId]?.let { image -> add(buildJsonObject {
-                put("role", "user")
-                put("content", buildJsonArray {
-                    add(buildJsonObject {
-                        put("type", "input_text"); put("text", "[Screenshot from ${result.name}]")
-                    })
+        }
+        val attached = message.toolResults.flatMap { ProviderVisionAttachments.toolImages(it, images) }
+        if (attached.isNotEmpty()) add(buildJsonObject {
+            put("role", "user")
+            put("content", buildJsonArray {
+                attached.forEach { (label, image) ->
+                    add(buildJsonObject { put("type", "input_text"); put("text", label) })
                     add(buildJsonObject {
                         put("type", "input_image")
                         put("image_url", "data:${image.mime};base64,${image.base64}")
                     })
-                })
-            }) }
-        }
+                }
+            })
+        })
     }
 }
 

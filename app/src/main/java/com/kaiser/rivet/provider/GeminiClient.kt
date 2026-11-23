@@ -152,7 +152,7 @@ internal fun geminiMessage(
             put("role", "user")
             put("parts", buildJsonArray {
                 add(buildJsonObject { put("text", message.text) })
-                ProviderVisionAttachments.userImage(message, images)?.let { image ->
+                ProviderVisionAttachments.userImages(message, images).forEach { image ->
                     add(buildJsonObject { put("inlineData", buildJsonObject {
                         put("mimeType", image.mime); put("data", image.base64)
                     }) })
@@ -188,8 +188,8 @@ internal fun geminiMessage(
                     if (!result.callId.startsWith(GEMINI_LOCAL_ID_PREFIX)) put("id", result.callId)
                     put("name", result.name); put("response", response)
                 }) })
-                images[result.callId]?.let { image ->
-                    add(buildJsonObject { put("text", "[Screenshot for ${result.name}]") })
+                ProviderVisionAttachments.toolImages(result, images, "Screenshot for").forEach { (label, image) ->
+                    add(buildJsonObject { put("text", label) })
                     add(buildJsonObject { put("inlineData", buildJsonObject {
                         put("mimeType", image.mime); put("data", image.base64)
                     }) })

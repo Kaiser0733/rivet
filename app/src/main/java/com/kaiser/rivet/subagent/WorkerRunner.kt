@@ -134,7 +134,9 @@ internal class WorkerRunner(
         val executor = services.createExecutor(loadedSkills)
         val tools = buildList {
             if (services.browserTools != null) addAll(BrowserTools.definitions)
-            if (executor != null) addAll(AgentToolExecutor.definitions.filterNot { it.name in AgentToolExecutor.phoneOnlyNames || it.name == "present" })
+            if (executor != null) addAll(AgentToolExecutor.definitions.filterNot {
+                it.name in AgentToolExecutor.phoneOnlyNames || it.name == "present" || it.name == "read_image"
+            })
             addAll(services.extraTools)
         }.filterNot {
             it.name == SubagentTools.SPAWN_TOOL || it.name == SubagentTools.AWAIT_TOOL

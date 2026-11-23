@@ -166,6 +166,10 @@ internal class MarkdownBlocks {
 }
 
 private val imageSyntax = Regex("""!\[([^\]\r\n]*)]\((<[^<>\r\n]+>|[^\s()]+)\)""")
+private val unfinishedImageSyntax = Regex("""!\[[^\]\r\n]*(?:](?:\((?:<[^<>\r\n]*>?|[^\s()]*))?)?\z""")
+
+internal fun streamingAssistantText(text: String): String =
+    unfinishedImageSyntax.replace(imageSyntax.replace(text, ""), "").removeSuffix("!")
 
 private fun image(line: String): ChatMarkdownBlock.Image? =
     imageSyntax.matchEntire(line.trim())?.let(::imageReference)

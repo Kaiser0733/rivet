@@ -80,7 +80,12 @@ class ImprovementsTest(unittest.TestCase):
         chat = source("ui/chat/ChatScreen.kt")
         self.assertNotIn("Include clipboard text", chat)
         self.assertNotIn("OnPrimaryClipChangedListener", chat)
-        self.assertIn("rememberComposerPickers(sessionId, onStageAttachment, onPickerUnavailable)", chat)
+        self.assertIn("rememberComposerPickers(sessionId, onStageAttachments, onPickerUnavailable)", chat)
+        # Each row hands over the whole selection, not one URI.
+        pickers = source("ui/chat/ComposerPickers.kt")
+        self.assertIn("onPick: (String?, List<Uri>, Boolean, File?) -> Unit", pickers)
+        self.assertIn("ActivityResultContracts.PickMultipleVisualMedia()", pickers)
+        self.assertIn("ActivityResultContracts.OpenMultipleDocuments()", pickers)
         self.assertIn("AttachmentSheet(", chat)
         sheet = source("ui/chat/AttachmentSheet.kt")
         self.assertIn("Column(", sheet)

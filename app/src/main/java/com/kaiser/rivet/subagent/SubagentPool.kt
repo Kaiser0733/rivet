@@ -3,7 +3,9 @@ package com.kaiser.rivet.subagent
 import com.kaiser.rivet.agent.PricingTable
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
+import com.kaiser.rivet.provider.ModelContextLimit
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
+import com.kaiser.rivet.provider.withModelId
 import java.util.Locale
 import kotlinx.serialization.Serializable
 
@@ -12,6 +14,8 @@ import kotlinx.serialization.Serializable
 data class PoolEntry(
     val configId: String,
     val model: String,
+    val catalogEndpoint: String? = null,
+    val modelContextLimit: ModelContextLimit? = null,
 )
 
 /**
@@ -74,9 +78,8 @@ object SubagentPool {
         val byId = configs.associateBy { it.id }
         val resolved = mutableListOf<ResolvedPoolEntry>()
         for (poolEntry in state.entries) {
-            val config = byId[poolEntry.configId] ?: continue
-            if (config.model != poolEntry.model) continue
-            if (resolved.any { it.entry == poolEntry }) continue
+            val config = resolveConfig(poolEntry, byId[poolEntry.configId]) ?: continue
+            if (resolved.any { it.entry.configId == poolEntry.configId && it.entry.model == poolEntry.model }) continue
             resolved += resolvedEntry(
                 alias = "m${resolved.size + 1}",
                 entry = poolEntry,
@@ -85,9 +88,8 @@ object SubagentPool {
             )
         }
         val fixed = state.fixed?.let { entry ->
-            val config = byId[entry.configId] ?: return@let null
-            if (config.model != entry.model) null
-            else resolvedEntry(
+            val config = resolveConfig(entry, byId[entry.configId]) ?: return@let null
+            resolvedEntry(
                 alias = "fixed",
                 entry = entry,
                 config = config,
@@ -100,6 +102,14 @@ object SubagentPool {
             else -> null
         }
         return ResolvedPool(resolved, fixed, offLine)
+    }
+
+    internal fun resolveConfig(entry: PoolEntry, config: ProviderConfig?): ProviderConfig? {
+        if (config == null) return null
+        if (entry.catalogEndpoint == null) return config.takeIf { it.model == entry.model }
+        if (config.type == ProviderType.Local || config.baseUrl != entry.catalogEndpoint) return null
+        val selected = if (config.model == entry.model) config else config.withModelId(entry.model)
+        return selected.copy(modelContextLimit = entry.modelContextLimit ?: selected.modelContextLimit)
     }
 
     /**

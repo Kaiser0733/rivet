@@ -17,7 +17,9 @@ class FixRoundSurfacesTest(unittest.TestCase):
 
     def test_chat_uses_default_selection_without_a_mode_switch(self):
         chat = (UI / "chat/ChatScreen.kt").read_text()
-        messages = chat.split("private fun MessageList", 1)[1].split("private fun scrollToConversationBottom", 1)[0]
+        # MessageList is internal now so the scroll test can drive it with its own list state.
+        messages = chat.split("internal fun MessageList", 1)[1].split(
+            "private suspend fun scrollToConversationBottom", 1)[0]
         row = chat.split("internal fun MessageRow", 1)[1].split("private fun ReasoningRow", 1)[0]
         self.assertRegex(messages, r"SelectionContainer\s*\{\s*LazyColumn")
         for custom_action in ("combinedClickable", "Done selecting", "Copy or select text"):
@@ -26,7 +28,14 @@ class FixRoundSurfacesTest(unittest.TestCase):
     def test_compaction_publishes_start_and_scrolls_to_the_row(self):
         chat = (UI / "chat/ChatScreen.kt").read_text()
         model = (UI.parent / "chat/ChatViewModel.kt").read_text()
-        self.assertIn("state.notice, showBrowserCard, state.compacting)", chat)
+        self.assertIn(
+            "state.notice, showBrowserCard, state.compacting, totalItems, state.acceptedMessageCount)", chat)
+        follow = chat.split(
+            "state.compacting, totalItems, state.acceptedMessageCount) {", 1)[1].split(
+            "LaunchedEffect(listState)", 1)[0]
+        # A reader who is only watching, not touching the list, still follows the new row.
+        self.assertIn("if (followBottom && totalItems > 0 && !userScrolling && !listState.isScrollInProgress)", follow)
+        self.assertIn("scrollToConversationBottom(listState, totalItems - 1)", follow)
         self.assertIn("onCompactionStarted = {", model)
         self.assertIn("finally {\n                        if (ticket == generation) _uiState.update { it.copy(compacting = false) }", model)
 
@@ -58,9 +67,12 @@ class FixRoundSurfacesTest(unittest.TestCase):
 
     def test_jump_action_uses_the_real_conversation_list(self):
         chat = (UI / "chat/ChatScreen.kt").read_text()
-        self.assertIn("if (!nearBottom && totalItems > 0)", chat)
+        self.assertIn("if (totalItems > 0 && listState.canScrollForward && (!followBottom || !nearBottom))", chat)
         self.assertIn('Text("Jump to latest"', chat)
         jump = chat.split("val jumpScope", 1)[1].split("Jump to latest", 1)[0]
+        # Jumping re-attaches follow before it scrolls, so the rest of the reply stays in view.
+        self.assertIn("userScrolling = false", jump)
+        self.assertIn("followBottom = true", jump)
         self.assertIn("scrollToConversationBottom(listState, totalItems - 1)", jump)
 
     def test_landscape_shortcuts_leave_space_for_the_shared_recents(self):

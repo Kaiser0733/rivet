@@ -50,6 +50,7 @@ import com.kaiser.rivet.agent.ArchiveRecall
 import com.kaiser.rivet.agent.ArchiveWindow
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
+import com.kaiser.rivet.agent.projectImageRead
 import com.kaiser.rivet.browser.BrowserBookmarkPath
 import com.kaiser.rivet.browser.BrowserRuntime
 import com.kaiser.rivet.browser.BrowserSession
@@ -322,40 +323,55 @@ class ChatViewModel private constructor(
     private val _sharedContent = MutableStateFlow<Map<String?, SharedDraft>>(emptyMap())
     internal val sharedContent = _sharedContent.asStateFlow()
 
-    private val _composerAttachments = MutableStateFlow<Map<String?, ComposerAttachment>>(emptyMap())
+    private val _composerAttachments = MutableStateFlow<Map<String?, List<ComposerAttachment>>>(emptyMap())
     internal val composerAttachments = _composerAttachments.asStateFlow()
+    private val _composerImports = MutableStateFlow<Set<String?>>(emptySet())
+    internal val composerImports = _composerImports.asStateFlow()
 
-    internal fun removeComposerAttachment(sessionId: String?) {
-        _composerAttachments.update { it - sessionId }
+    internal fun removeComposerAttachment(sessionId: String?, name: String) {
+        _composerAttachments.update { drafts ->
+            val remaining = drafts[sessionId].orEmpty().filterNot { it.name == name }
+            if (remaining.isEmpty()) drafts - sessionId else drafts + (sessionId to remaining)
+        }
     }
 
     internal fun attachmentPickerUnavailable() {
         _uiState.update { it.copy(notice = "Couldn't open the attachment picker.") }
     }
 
-    internal fun stageComposerAttachment(sessionId: String?, source: Uri, photo: Boolean, temporary: File?) {
+    internal fun stageComposerAttachments(sessionId: String?, sources: List<Uri>, photo: Boolean, temporary: File?) {
+        _composerImports.update { it + sessionId }
         viewModelScope.launch {
             val app = getApplication<Application>()
-            var copy: File? = null
             try {
-                val mime = app.contentResolver.getType(source).orEmpty()
-                val image = photo || mime.startsWith("image/")
-                copy = SharedFileCopy.copy(app, source, if (image) "Photo.jpg" else "Attachment")
-                val staged = withContext(Dispatchers.IO) {
-                    val saved = SharedFileCopy.moveToSession(app, requireNotNull(copy), sessionId)
-                    ComposerAttachment(saved.name, image,
-                        if (image) null else SharedFileCopy.draft(saved, mime))
+                val batch = sources.distinct().mapNotNull { source ->
+                    var copy: File? = null
+                    try {
+                        val mime = withContext(Dispatchers.IO) { app.contentResolver.getType(source).orEmpty() }
+                        val image = photo || mime.startsWith("image/")
+                        val imported = SharedFileCopy.copy(app, source, if (image) "Photo.jpg" else "Attachment")
+                        copy = imported
+                        withContext(Dispatchers.IO) {
+                            val saved = SharedFileCopy.moveToSession(app, imported, sessionId)
+                            ComposerAttachment(saved.name, image,
+                                if (image) null else SharedFileCopy.draft(saved, mime), saved.length())
+                        }
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (e: SharedFileCopy.TooLarge) {
+                        _uiState.update { it.copy(notice = e.message) }
+                        null
+                    } catch (_: Exception) {
+                        _uiState.update { it.copy(notice = "Couldn't read this attachment. Pick it again.") }
+                        null
+                    } finally {
+                        copy?.delete()
+                    }
                 }
-                _composerAttachments.update { it + (sessionId to staged) }
-            } catch (e: CancellationException) {
-                throw e
-            } catch (e: SharedFileCopy.TooLarge) {
-                _uiState.update { it.copy(notice = e.message) }
-            } catch (_: Exception) {
-                _uiState.update { it.copy(notice = "Couldn't read this attachment. Pick it again.") }
+                if (batch.isNotEmpty()) _composerAttachments.update { it + (sessionId to (it[sessionId].orEmpty() + batch)) }
             } finally {
-                copy?.delete()
                 temporary?.delete()
+                _composerImports.update { it - sessionId }
             }
         }
     }
@@ -950,8 +966,9 @@ class ChatViewModel private constructor(
     ) {
         val trimmed = text.trim()
         val sessionId = _uiState.value.currentSessionId
-        val attachment = _composerAttachments.value[sessionId]
-        if ((trimmed.isEmpty() && attachment == null) || _uiState.value.streaming || !_uiState.value.ready ||
+        val attachments = _composerAttachments.value[sessionId].orEmpty()
+        if ((trimmed.isEmpty() && attachments.isEmpty()) || sessionId in _composerImports.value ||
+            _uiState.value.streaming || !_uiState.value.ready ||
             _uiState.value.recoveringProjectChanges) return
         val command = SlashCommands.builtIn(trimmed)
         if (command != null) {
@@ -977,12 +994,12 @@ class ChatViewModel private constructor(
         // Acceptance is the tap: the bubble appears and the composer clears before the
         // transcript load, SAF stat, provider snapshot or persistence can block. Prep uses
         // this same message object for its durable copy; retries do not pass through here.
-        val imageName = attachment?.takeIf { it.image }?.name ?: _sharedContent.value[sessionId]?.imageName
-        val accepted = AgentMessage.user(attachment?.messageText(text) ?: text).copy(userImagePath = imageName?.let {
-            File(SharedFileCopy.sessionInbox(getApplication<Application>(), _uiState.value.currentSessionId), it).absolutePath
-        })
+        val inbox = SharedFileCopy.sessionInbox(getApplication<Application>(), sessionId)
+        val accepted = composerMessage(text, attachments, _sharedContent.value[sessionId]?.imageName) {
+            File(inbox, it).absolutePath
+        }
         _sharedContent.update { it - sessionId }
-        removeComposerAttachment(sessionId)
+        _composerAttachments.update { it - sessionId }
         _uiState.update { state ->
             val appended = state.messages + accepted
             val dropCount = (appended.size - 100).coerceAtLeast(0)
@@ -2006,6 +2023,10 @@ class ChatViewModel private constructor(
                     prepareTermuxCommand = if (coordinator) prepareTermux else null,
                     preparePhoneShot = if (coordinator) prepareCapture else null,
                     preparePhoneIntent = if (coordinator) phone?.let { it::prepare } else null,
+                    readProjectImage = if (coordinator) { path ->
+                        projectImageRead(selectedWorkspace, getApplication<Application>().cacheDir,
+                            VisionCapability.assess(snapshot.config), path)
+                    } else null,
                     rememberMemory = { fact ->
                         val files = ProjectStateFiles(selectedWorkspace)
                         val result = MemoryFormat.append(files.loadMemory(), fact)
@@ -3471,8 +3492,11 @@ class ChatViewModel private constructor(
                 "Use /goal and the remember tool as the only writers of .rivet/goal.md and .rivet/memory.md. " +
                 "Record a lasting decision, constraint, or preference with the remember tool. " +
                 "Fix the cause of a runtime block before retrying." +
-                (if (presentAvailable) "\n$PRESENT_DELIVERABLES_RULE" else "") +
-                "\nUse ![description](relative/path.png) to show an existing project image inline." +
+                (if (presentAvailable) "\n$PRESENT_DELIVERABLES_RULE" +
+                    "\nUse read_image when asked to inspect or describe a project image, including an image shown earlier. " +
+                    "Use present or read_image before showing a project image with ![description](relative/path.png). " +
+                    "Describe only the image input for the requested file. If the model cannot view it, tell the user plainly."
+                else "") +
                 terminalNotice(terminalState)
         } else {
             "You are a coding assistant inside Rivet. Keep answers clear and concise. No workspace is selected, so project files, the project terminal, and project Git are unavailable."

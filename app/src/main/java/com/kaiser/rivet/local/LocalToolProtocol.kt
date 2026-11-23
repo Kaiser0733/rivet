@@ -24,7 +24,7 @@ data class ParsedLocalOutput(val text: String, val calls: List<AgentToolCall>)
  */
 object LocalToolProtocol {
     val coreTools = linkedSetOf(
-        "read_file", "write_file", "create_file", "apply_patch",
+        "read_file", "read_image", "write_file", "create_file", "apply_patch",
         "search_files", "list_directory", "run_command", "present", ArchiveRecall.TOOL,
     )
 
@@ -53,6 +53,9 @@ object LocalToolProtocol {
                 append("Arguments are JSON. Then continue after the result.\n")
                 if (tools.any { it.name == "present" }) {
                     append(PRESENT_DELIVERABLES_RULE).append(" Pass files as a list of path and description objects.\n")
+                }
+                if (tools.any { it.name == "read_image" }) {
+                    append("This model cannot view images. Say so when asked to describe one.\n")
                 }
                 for (tool in tools) {
                     val names = runCatching {

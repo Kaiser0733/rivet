@@ -22,7 +22,7 @@ internal enum class ComposerPicker(val label: String) {
 @Composable
 internal fun rememberComposerPickers(
     sessionId: String?,
-    onPick: (String?, Uri, Boolean, File?) -> Unit,
+    onPick: (String?, List<Uri>, Boolean, File?) -> Unit,
     onUnavailable: () -> Unit,
 ): (ComposerPicker) -> Unit {
     val context = LocalContext.current
@@ -35,15 +35,15 @@ internal fun rememberComposerPickers(
         val file = cameraPath?.let(::File)
         cameraPath = null
         if (file != null) {
-            if (saved && file.length() > 0) onPick(targetSession, cameraUri(file), true, file)
+            if (saved && file.length() > 0) onPick(targetSession, listOf(cameraUri(file)), true, file)
             else file.delete()
         }
     }
-    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickVisualMedia()) { uri ->
-        if (uri != null) onPick(targetSession, uri, true, null)
+    val photos = rememberLauncherForActivityResult(ActivityResultContracts.PickMultipleVisualMedia()) { uris ->
+        if (uris.isNotEmpty()) onPick(targetSession, uris, true, null)
     }
-    val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
-        if (uri != null) onPick(targetSession, uri, false, null)
+    val files = rememberLauncherForActivityResult(ActivityResultContracts.OpenMultipleDocuments()) { uris ->
+        if (uris.isNotEmpty()) onPick(targetSession, uris, false, null)
     }
     return { picker ->
         targetSession = sessionId

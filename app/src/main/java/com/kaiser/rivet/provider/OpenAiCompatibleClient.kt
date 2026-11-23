@@ -133,13 +133,15 @@ internal fun openAiMessages(
     AgentRole.Context -> throw ProviderError.InvalidResponse("unprojected internal context")
     AgentRole.User -> listOf(buildJsonObject {
         put("role", "user")
-        val image = ProviderVisionAttachments.userImage(message, images)
-        if (image == null) put("content", message.text) else put("content", buildJsonArray {
+        val attachments = ProviderVisionAttachments.userImages(message, images)
+        if (attachments.isEmpty()) put("content", message.text) else put("content", buildJsonArray {
             add(buildJsonObject { put("type", "text"); put("text", message.text) })
-            add(buildJsonObject {
-                put("type", "image_url")
-                put("image_url", buildJsonObject { put("url", "data:${image.mime};base64,${image.base64}") })
-            })
+            attachments.forEach { image ->
+                add(buildJsonObject {
+                    put("type", "image_url")
+                    put("image_url", buildJsonObject { put("url", "data:${image.mime};base64,${image.base64}") })
+                })
+            }
         })
     })
     AgentRole.Assistant -> listOf(buildJsonObject {
@@ -155,17 +157,19 @@ internal fun openAiMessages(
         message.toolResults.forEach { result -> add(buildJsonObject {
             put("role", "tool"); put("tool_call_id", result.callId); put("content", result.content)
         }) }
-        val attached = message.toolResults.mapNotNull { result -> images[result.callId] }
+        val attached = message.toolResults.flatMap { ProviderVisionAttachments.toolImages(it, images) }
         if (attached.isNotEmpty()) add(buildJsonObject {
             put("role", "user")
             put("content", buildJsonArray {
-                add(buildJsonObject { put("type", "text"); put("text", "[Screenshot from browser_shot]") })
-                attached.forEach { image -> add(buildJsonObject {
-                    put("type", "image_url")
-                    put("image_url", buildJsonObject {
-                        put("url", "data:${image.mime};base64,${image.base64}")
+                attached.forEach { (label, image) ->
+                    add(buildJsonObject { put("type", "text"); put("text", label) })
+                    add(buildJsonObject {
+                        put("type", "image_url")
+                        put("image_url", buildJsonObject {
+                            put("url", "data:${image.mime};base64,${image.base64}")
+                        })
                     })
-                }) }
+                }
             })
         })
     }
