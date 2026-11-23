@@ -230,20 +230,25 @@ internal fun anthropicMessage(
         put("content", buildJsonArray { message.toolResults.forEach { result ->
             add(buildJsonObject {
                 put("type", "tool_result"); put("tool_use_id", result.callId)
-                val image = images[result.callId]
-                if (image == null) {
+                val attached = ProviderVisionAttachments.toolImages(result, images)
+                if (attached.isEmpty()) {
                     put("content", result.content)
                 } else {
                     put("content", buildJsonArray {
                         add(buildJsonObject { put("type", "text"); put("text", result.content) })
-                        add(buildJsonObject {
-                            put("type", "image")
-                            put("source", buildJsonObject {
-                                put("type", "base64")
-                                put("media_type", image.mime)
-                                put("data", image.base64)
+                        attached.forEach { (label, image) ->
+                            if (result.projectImages.isNotEmpty()) {
+                                add(buildJsonObject { put("type", "text"); put("text", label) })
+                            }
+                            add(buildJsonObject {
+                                put("type", "image")
+                                put("source", buildJsonObject {
+                                    put("type", "base64")
+                                    put("media_type", image.mime)
+                                    put("data", image.base64)
+                                })
                             })
-                        })
+                        }
                     })
                 }
                 if (result.error) put("is_error", true)

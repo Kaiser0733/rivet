@@ -1427,7 +1427,7 @@ private fun AssistantMessage(text: String, streaming: Boolean) {
         verticalArrangement = Arrangement.spacedBy(16.dp),
     ) {
         if (streaming) {
-            Text(decoded, style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
+            Text(streamingAssistantText(decoded), style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
         } else AssistantMarkdown(decoded)
     }
 }
@@ -1489,11 +1489,11 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                     val path = projectImagePath(block.source)
                     when {
                         !showInlineImages -> if (block.alt.isNotBlank()) Text(displaySafeText(block.alt))
-                        path != null && path in files && links != null && open != null ->
+                        path != null && links != null && open != null ->
                             ProjectInlineImage(block, path, links, open)
                         isAppChatImagePath(block.source) ->
-                            BrowserImage(block, unavailable = displaySafeText(block.fallbackText()), inline = true)
-                        else -> Text(displaySafeText(block.fallbackText()))
+                            BrowserImage(block, unavailable = block.unavailableText(), inline = true)
+                        else -> Text(block.unavailableText())
                     }
                 }
                 is ChatMarkdownBlock.Table -> MarkdownTable(block)
@@ -1535,11 +1535,14 @@ private fun ProjectInlineImage(image: ChatMarkdownBlock.Image, path: String, lin
     }
     val bitmap = (preview as? FilePreviewResult.Image)?.bitmap
     if (bitmap == null) {
-        Text(displaySafeText(image.fallbackText()), style = MaterialTheme.typography.bodyMedium)
+        if (preview != null) Text(image.unavailableText(), style = MaterialTheme.typography.bodyMedium)
     } else {
-        InlineChatImage(bitmap, displaySafeText(image.fallbackText())) { onOpen(path) }
+        InlineChatImage(bitmap, displaySafeText(image.alt).ifBlank { "Project image" }) { onOpen(path) }
     }
 }
+
+private fun ChatMarkdownBlock.Image.unavailableText(): String =
+    displaySafeText(alt).ifBlank { "Image unavailable." }
 
 @Composable
 private fun InlineMarkdown(

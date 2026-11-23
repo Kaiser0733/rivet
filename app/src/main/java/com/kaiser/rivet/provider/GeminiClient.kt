@@ -188,8 +188,8 @@ internal fun geminiMessage(
                     if (!result.callId.startsWith(GEMINI_LOCAL_ID_PREFIX)) put("id", result.callId)
                     put("name", result.name); put("response", response)
                 }) })
-                images[result.callId]?.let { image ->
-                    add(buildJsonObject { put("text", "[Screenshot for ${result.name}]") })
+                ProviderVisionAttachments.toolImages(result, images, "Screenshot for").forEach { (label, image) ->
+                    add(buildJsonObject { put("text", label) })
                     add(buildJsonObject { put("inlineData", buildJsonObject {
                         put("mimeType", image.mime); put("data", image.base64)
                     }) })

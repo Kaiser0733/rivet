@@ -31,7 +31,11 @@ data class AgentToolResult(
     val imagePath: String? = null,
     val imageMime: String? = null,
     val presentedFiles: List<PresentedFile> = emptyList(),
+    val projectImages: List<ProjectImageInput> = emptyList(),
 )
+
+@Serializable
+data class ProjectImageInput(val path: String, val cachePath: String)
 
 @Serializable
 data class AgentMessage(

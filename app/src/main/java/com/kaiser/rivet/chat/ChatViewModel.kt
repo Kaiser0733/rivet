@@ -50,6 +50,7 @@ import com.kaiser.rivet.agent.ArchiveRecall
 import com.kaiser.rivet.agent.ArchiveWindow
 import com.kaiser.rivet.agent.AgentResponse
 import com.kaiser.rivet.agent.PRESENT_DELIVERABLES_RULE
+import com.kaiser.rivet.agent.projectImageRead
 import com.kaiser.rivet.browser.BrowserBookmarkPath
 import com.kaiser.rivet.browser.BrowserRuntime
 import com.kaiser.rivet.browser.BrowserSession
@@ -2022,6 +2023,10 @@ class ChatViewModel private constructor(
                     prepareTermuxCommand = if (coordinator) prepareTermux else null,
                     preparePhoneShot = if (coordinator) prepareCapture else null,
                     preparePhoneIntent = if (coordinator) phone?.let { it::prepare } else null,
+                    readProjectImage = if (coordinator) { path ->
+                        projectImageRead(selectedWorkspace, getApplication<Application>().cacheDir,
+                            VisionCapability.assess(snapshot.config), path)
+                    } else null,
                     rememberMemory = { fact ->
                         val files = ProjectStateFiles(selectedWorkspace)
                         val result = MemoryFormat.append(files.loadMemory(), fact)
@@ -3487,8 +3492,11 @@ class ChatViewModel private constructor(
                 "Use /goal and the remember tool as the only writers of .rivet/goal.md and .rivet/memory.md. " +
                 "Record a lasting decision, constraint, or preference with the remember tool. " +
                 "Fix the cause of a runtime block before retrying." +
-                (if (presentAvailable) "\n$PRESENT_DELIVERABLES_RULE" else "") +
-                "\nUse ![description](relative/path.png) to show an existing project image inline." +
+                (if (presentAvailable) "\n$PRESENT_DELIVERABLES_RULE" +
+                    "\nUse read_image when asked to inspect or describe a project image, including an image shown earlier. " +
+                    "Use present or read_image before showing a project image with ![description](relative/path.png). " +
+                    "Describe only the image input for the requested file. If the model cannot view it, tell the user plainly."
+                else "") +
                 terminalNotice(terminalState)
         } else {
             "You are a coding assistant inside Rivet. Keep answers clear and concise. No workspace is selected, so project files, the project terminal, and project Git are unavailable."

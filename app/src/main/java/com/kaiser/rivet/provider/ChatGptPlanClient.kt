@@ -179,19 +179,20 @@ internal fun responsesInputItems(
                 put("call_id", result.callId)
                 put("output", result.content)
             })
-            images[result.callId]?.let { image -> add(buildJsonObject {
-                put("role", "user")
-                put("content", buildJsonArray {
-                    add(buildJsonObject {
-                        put("type", "input_text"); put("text", "[Screenshot from ${result.name}]")
-                    })
+        }
+        val attached = message.toolResults.flatMap { ProviderVisionAttachments.toolImages(it, images) }
+        if (attached.isNotEmpty()) add(buildJsonObject {
+            put("role", "user")
+            put("content", buildJsonArray {
+                attached.forEach { (label, image) ->
+                    add(buildJsonObject { put("type", "input_text"); put("text", label) })
                     add(buildJsonObject {
                         put("type", "input_image")
                         put("image_url", "data:${image.mime};base64,${image.base64}")
                     })
-                })
-            }) }
-        }
+                }
+            })
+        })
     }
 }
 
