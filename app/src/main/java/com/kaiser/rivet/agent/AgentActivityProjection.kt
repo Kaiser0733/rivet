@@ -1,8 +1,11 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.subagent.WorkerRecord
 import kotlinx.serialization.SerializationException
 import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonArray
 import kotlinx.serialization.json.JsonElement
+import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonArray
@@ -17,6 +20,7 @@ data class AgentActivityOperation(
     val outcome: ActivityOutcome,
     val outcomeDetail: String? = null,
     val toolName: String = "",
+    val workerId: String? = null,
 )
 
 data class AgentActivityGroup(
@@ -38,8 +42,11 @@ object AgentActivityProjection {
     fun conversation(
         messages: List<AgentMessage>,
         liveEvents: List<AgentToolLifecycle> = emptyList(),
+        workers: List<WorkerRecord> = emptyList(),
     ): List<AgentConversationItem> {
         val live = liveEvents.associateBy { it.correlationKey }
+        val workersById = workers.associateBy { it.id }
+        val spawnDetails = mutableMapOf<String, String>()
         val nextToolIndex = IntArray(messages.size)
         var nearestToolIndex = -1
         for (index in messages.indices.reversed()) {
@@ -58,8 +65,9 @@ object AgentActivityProjection {
                         val resultIndex = nextToolIndex[index]
                         val correlated = if (resultIndex < 0) emptyMap()
                             else messages[resultIndex].toolResults.associateBy { it.callId }
-                        val operations = message.toolCalls.map { call ->
-                            operation(call, correlated[call.id], live[AgentToolLifecycle.keyFor(call.id)])
+                        val operations = message.toolCalls.flatMap { call ->
+                            operations(call, correlated[call.id], live[AgentToolLifecycle.keyFor(call.id)],
+                                workersById, spawnDetails)
                         }
                         items += AgentConversationItem.Activity(AgentActivityGroup(
                             id = AgentToolLifecycle.groupKeyFor(message.toolCalls.asSequence().map { it.id }),
@@ -80,15 +88,15 @@ object AgentActivityProjection {
         return items
     }
 
-    private fun operation(
+    private fun operations(
         call: AgentToolCall,
         result: AgentToolResult?,
         live: AgentToolLifecycle?,
-    ): AgentActivityOperation {
+        workers: Map<String, WorkerRecord>,
+        spawnDetails: MutableMap<String, String>,
+    ): List<AgentActivityOperation> {
         val args = objectValue(call.arguments)
         val value = result?.let { objectValue(it.content) }.orEmpty()
-        val title = title(call.name)
-        val detail = detail(call.name, args, value)
         val outcome = result?.let { resultOutcome(it, value) } ?: when {
             // Completion telemetry can precede the durable correlated receipt.
             call.name == "download_file" && live?.stage == AgentToolLifecycleStage.Completed -> ActivityOutcome.Running
@@ -105,15 +113,43 @@ object AgentActivityProjection {
             else -> null
         }
         // Correlation keys are hashes — the projection never carries raw call ids.
-        return AgentActivityOperation(
+        val base = AgentActivityOperation(
             id = AgentToolLifecycle.keyFor(call.id),
-            title = title,
-            detail = detail,
+            title = title(call.name),
+            detail = detail(call.name, args, value),
             outcome = outcome,
             outcomeDetail = outcomeDetail,
             toolName = call.name,
         )
+        val workerId = value["worker_id"].primitiveContent()?.takeIf(String::isNotBlank)
+        if (call.name == "spawn_subagent") {
+            val worker = workerId?.let(workers::get)
+            val detail = workerDetail(args["job"].primitiveContent() ?: worker?.job,
+                value["model_label"].primitiveContent() ?: worker?.modelLabel ?: args["model"].primitiveContent())
+            if (workerId != null) spawnDetails[workerId] = detail
+            return listOf(base.copy(detail = detail, workerId = workerId))
+        }
+        if (call.name != "await_subagents") return listOf(base)
+
+        val ids = (listOfNotNull(workerId) +
+            (value["workers"] as? JsonArray).orEmpty().mapNotNull {
+                (it as? JsonObject)?.get("worker_id").primitiveContent()
+            } + workerIds(value["timed_out"]) + workerIds(value["running"]) +
+            workerIds(args["ids"] ?: args["worker_ids"])).filter(String::isNotBlank).distinct()
+        return ids.map { id ->
+            val worker = workers[id]
+            val detail = worker?.let { workerDetail(it.job, it.modelLabel) } ?: spawnDetails[id].orEmpty()
+            base.copy(id = "${base.id}:$id", detail = detail, workerId = id)
+        }.ifEmpty { listOf(base) }
     }
+
+    private fun workerIds(value: JsonElement?) =
+        (value as? JsonArray).orEmpty().mapNotNull { it.primitiveContent() }
+
+    private fun workerDetail(job: String?, model: String?) =
+        listOfNotNull(job, model).filter(String::isNotBlank).joinToString("\n") {
+            it.lineSequence().joinToString(" ")
+        }
 
     private fun resultOutcome(result: AgentToolResult, value: Map<String, kotlinx.serialization.json.JsonElement>): ActivityOutcome {
         val error = value["error"].primitiveContent()
@@ -192,6 +228,8 @@ object AgentActivityProjection {
     }
 
     private fun title(name: String): String = when (name) {
+        "spawn_subagent" -> "Start worker"
+        "await_subagents" -> "Await worker"
         "present" -> "Present files"
         "read_file" -> "Read"
         "list_directory" -> "List"

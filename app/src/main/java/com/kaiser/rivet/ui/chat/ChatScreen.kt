@@ -110,6 +110,7 @@ import androidx.compose.runtime.saveable.Saver
 import androidx.compose.runtime.saveable.mapSaver
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
+import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.semantics.Role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
@@ -139,6 +140,7 @@ import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.workspace.FilePreviewResult
+import com.kaiser.rivet.subagent.WorkerRecord
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
 import com.kaiser.rivet.chat.commandBusyReason
 import com.kaiser.rivet.chat.compactRowEnabled
@@ -190,8 +192,10 @@ import java.io.File
 fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewModel,
                onOpenSettings: () -> Unit, onOpenSidebar: () -> Unit,
                onOpenProjects: () -> Unit,
-               onSendFeedback: () -> Unit = {}, onAutonomyChange: (AutonomyMode) -> Unit = {}) {
+               onSendFeedback: () -> Unit = {}, onAutonomyChange: (AutonomyMode) -> Unit = {},
+               onOpenWorker: ((String) -> Unit)? = null) {
     val state by chatViewModel.uiState.collectAsState()
+    val workers by chatViewModel.subagents.collectAsState()
     val skillCatalog by chatViewModel.skillCatalog.collectAsState()
     val providers by providersViewModel.listState.collectAsState()
     val projectBinding = projectBindingState(state.currentSessionId, state.currentSessionWorkspaceId,
@@ -362,6 +366,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     CompositionLocalProvider(
                         LocalAssistantFileLinks provides linkDoor,
                         LocalOpenChatImage provides openChatImage,
+                        LocalOpenTranscriptWorker provides onOpenWorker,
                     ) {
                         key(state.currentSessionId) {
                             MessageList(visibleState, chatViewModel::clearError, onOpenSettings, chatViewModel::retryProjectChanges,
@@ -375,6 +380,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                                 onOpenPreview = preview::open,
                                 missingFiles = preview.missing,
                                 browser = chatViewModel.browser,
+                                workers = workers,
                                 modifier = Modifier.weight(1f).align(Alignment.CenterHorizontally))
                         }
                     }
@@ -498,12 +504,13 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         missingFiles: Set<String>,
                         browser: com.kaiser.rivet.browser.BrowserSession,
                         modifier: Modifier = Modifier,
-                        listState: LazyListState = rememberLazyListState()) {
+                        listState: LazyListState = rememberLazyListState(),
+                        workers: List<WorkerRecord> = emptyList()) {
     val browserState by browser.state.collectAsState()
     val showBrowserCard = browserState.chatPreviewVisible(state.currentSessionId)
     val deliverables = remember(state.messages) { presentedFilesForTurns(state.messages) }
-    val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning) {
-        val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle)
+    val timeline = remember(state.messages, state.toolLifecycle, state.messageReasoning, workers) {
+        val raw = AgentActivityProjection.conversation(state.messages, state.toolLifecycle, workers)
         var cursor = 0
         raw.map { item ->
             when (item) {
@@ -1218,13 +1225,25 @@ private fun ActivityRow(
     }
 }
 
+internal val LocalOpenTranscriptWorker = staticCompositionLocalOf<((String) -> Unit)?> { null }
+
 @Composable
-private fun ActivityOperationRow(operation: AgentActivityOperation) {
-    Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.Top) {
+internal fun ActivityOperationRow(operation: AgentActivityOperation) {
+    val open = LocalOpenTranscriptWorker.current
+    val workerId = operation.workerId
+    val openWorker = if (open != null && workerId != null) {
+        Modifier.clickable(onClickLabel = "Open worker") { open(workerId) }
+    } else Modifier
+    Row(Modifier.fillMaxWidth().then(openWorker), verticalAlignment = Alignment.Top) {
         Text(operation.title, Modifier.widthIn(min = 64.dp),
             style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onBackground)
         Column(Modifier.weight(1f)) {
-            if (operation.detail.isNotBlank()) Text(displaySafeText(operation.detail),
+            if (operation.toolName == "spawn_subagent" || operation.toolName == "await_subagents") {
+                operation.detail.lineSequence().filter(String::isNotBlank).forEach { line ->
+                    Text(displaySafeText(line), style = MaterialTheme.typography.bodySmall,
+                        maxLines = 2, overflow = TextOverflow.Ellipsis)
+                }
+            } else if (operation.detail.isNotBlank()) Text(displaySafeText(operation.detail),
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
                 maxLines = 3, overflow = TextOverflow.Ellipsis)
             operation.outcomeDetail?.let { Text(displaySafeText(it),

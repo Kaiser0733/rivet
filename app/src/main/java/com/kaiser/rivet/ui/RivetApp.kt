@@ -122,6 +122,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
         // settings sheet are booleans, so a swipe-close or a Back-close cannot disagree
         // with a separate flag.
         var destination by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
+        var workerBackDestination by rememberSaveable { mutableStateOf(RivetDestination.Tools) }
         var modelsReturn by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
         var installReturn by rememberSaveable { mutableStateOf(RivetDestination.Chat) }
         var installZip by rememberSaveable { mutableStateOf<Uri?>(null) }
@@ -246,7 +247,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                 destination == RivetDestination.Terminal -> destination = destination.backDestination()
                 destination == RivetDestination.Workers -> {
                     chatViewModel.closeWorker()
-                    destination = RivetDestination.Tools
+                    destination = workerBackDestination
                 }
                 destination != RivetDestination.Chat -> destination = RivetDestination.Chat
                 else -> closeHistory()
@@ -304,7 +305,12 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                         onOpenSidebar = openHistory,
                                         onSendFeedback = sendFeedback,
                                         onAutonomyChange = requestAutonomy,
-                                        onOpenProjects = openProjects)
+                                        onOpenProjects = openProjects,
+                                        onOpenWorker = { id ->
+                                            workerBackDestination = RivetDestination.Chat
+                                            chatViewModel.openWorker(id)
+                                            destination = RivetDestination.Workers
+                                        })
                                 }
                             }
                             RivetDestination.Tools -> saveableStates.SaveableStateProvider("tools") {
@@ -316,7 +322,13 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                     terminal = chatViewModel.terminalSession,
                                     onBack = { destination = RivetDestination.Chat },
                                     onOpenTerminal = { destination = RivetDestination.Terminal },
-                                    onOpenWorkers = selected?.let { { chatViewModel.openWorker(it.id); destination = RivetDestination.Workers } },
+                                    onOpenWorkers = selected?.let { worker ->
+                                        {
+                                            workerBackDestination = RivetDestination.Tools
+                                            chatViewModel.openWorker(worker.id)
+                                            destination = RivetDestination.Workers
+                                        }
+                                    },
                                     checkpoints = conversation.runCheckpoints,
                                     onRestoreCheckpoint = chatViewModel::restoreRunCheckpoint,
                                     checkpointNotice = conversation.runCheckpointNotice,
@@ -332,7 +344,10 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                 val sheet by chatViewModel.workerSheet.collectAsState()
                                 val worker = workers.firstOrNull { it.id == sheet.worker?.id } ?: sheet.worker
                                 if (worker == null) Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
-                                    RivetPageHeader("Subagents") { destination = RivetDestination.Tools }
+                                    RivetPageHeader("Subagents") {
+                                        chatViewModel.closeWorker()
+                                        destination = workerBackDestination
+                                    }
                                 } else WorkerScreen(
                                     worker = worker,
                                     workers = workerSheetRows(workers),
@@ -340,7 +355,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                                     messages = sheet.messages,
                                     loading = sheet.loading,
                                     error = sheet.error,
-                                    onDismiss = { chatViewModel.closeWorker(); destination = RivetDestination.Tools },
+                                    onDismiss = { chatViewModel.closeWorker(); destination = workerBackDestination },
                                     onStop = { chatViewModel.stopSubagent(worker.id) },
                                     onContinue = {
                                         chatViewModel.closeWorker()
