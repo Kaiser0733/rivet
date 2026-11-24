@@ -23,14 +23,6 @@ internal class PhoneCaptureCoordinator(context: Context) {
     var consentLauncher: ((Intent) -> Boolean)? = null
     var rivetVisible = false
     var rivetResumed = false
-    // Overridable so a test can prove the raise happens once without starting an activity.
-    var bringToFront: () -> Unit = {
-        runCatching {
-            app.startActivity(Intent(app, com.kaiser.rivet.MainActivity::class.java).addFlags(
-                Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_REORDER_TO_FRONT))
-        }
-        Unit
-    }
 
     private var active: Capture? = null
     private var awaitingActivityResult = false
@@ -45,6 +37,9 @@ internal class PhoneCaptureCoordinator(context: Context) {
         }
         val projection = app.getSystemService(MediaProjectionManager::class.java)
             ?: return@withContext error("phone_shot_unavailable")
+        if (phoneShotNeedsForeground(rivetVisible)) {
+            return@withContext error(PHONE_SHOT_NEEDS_FOREGROUND)
+        }
         val request = Capture(UUID.randomUUID().toString(), onStatus)
         request.advance(PhoneCaptureEvent.Request)
         active = request
@@ -79,7 +74,8 @@ internal class PhoneCaptureCoordinator(context: Context) {
     /**
      * A chained tool can call phone_shot while a Custom Tab owns the screen, so the
      * activity is paused and the consent launcher refuses. Wait for the resume instead
-     * of failing instantly; only a bounded expiry reports needs_foreground.
+     * of failing instantly; only a bounded expiry reports needs_foreground. Rivet is
+     * never brought to the front by the tool.
      */
     private suspend fun awaitForegroundLaunch(
         intent: Intent,
@@ -88,14 +84,9 @@ internal class PhoneCaptureCoordinator(context: Context) {
     ): String? {
         var accepted = false
         var refusedWhileResumed = false
-        var raised = false
         request.onStatus(PHONE_SHOT_WAITING_FOREGROUND)
         val completed = withTimeoutOrNull(PHONE_SHOT_FOREGROUND_WAIT_MS) {
             while (true) {
-                if (shouldRaiseRivet(rivetResumed, raised)) {
-                    raised = true
-                    bringToFront()
-                }
                 if (rivetResumed) {
                     if (launcher(intent)) {
                         accepted = true

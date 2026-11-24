@@ -41,6 +41,9 @@ sealed interface Admission {
 object SubagentScheduler {
     const val MAX_RUNNING = 2
     const val MAX_LOCAL = 1
+    // A worker can spend up to a full model/tool loop. Twenty is enough for a
+    // broad fan-out and small enough that a spawn loop cannot quietly become a bill.
+    const val MAX_SPAWNS_PER_RUN = 20
 
     fun admit(
         request: SubagentRequest,

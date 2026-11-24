@@ -87,8 +87,15 @@ data class ContextAttempt(
 )
 
 /** Provider-neutral event rows. The old DataStore value is retained after migration. */
-internal class CodingSessions(private val context: Context) : AgentSessionPersistence, ContextStore {
+internal class CodingSessions(
+    private val context: Context,
+    onNotice: (String) -> Unit = {},
+) : AgentSessionPersistence, ContextStore {
+    internal var onNotice: (String) -> Unit = onNotice
     private val database = SessionDatabase(context)
+    private val databaseFile = context.getDatabasePath("coding-sessions.db")
+    internal var maxEventsPerSession = 2_000
+    internal var maxDatabaseBytes = 512L * 1024 * 1024
     private val lock = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
     private var initialized = false
@@ -97,6 +104,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     override suspend fun load(): AgentSession = onDatabase { db ->
         val id = activeId(db)
         val header = header(db, id)
+        trimCompactedHistory(db, id)
         validateProjection(db, id)
         val summary = summary(db, id)
         summaryBytes = summary.toByteArray(Charsets.UTF_8).size
@@ -160,6 +168,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                     put("session_id", id); put("payload", payload)
                 })
             }
+            trimCompactedHistory(db, id)
             db.execSQL("UPDATE sessions SET interrupted=?, updated_at=? WHERE id=?",
                 arrayOf(if (interrupted || hasPendingToolCall(messages.lastOrNull())) 1 else 0,
                     System.currentTimeMillis(), id))
@@ -174,6 +183,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             put("payload", json.encodeToString(AgentMessage.serializer(), message))
             put("created_at", System.currentTimeMillis())
         })
+        trimCompactedHistory(db, id)
     }
 
     override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean =
@@ -212,6 +222,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
             db.delete("context_attempts", "session_id=?", arrayOf(id))
             db.delete("usage", "session_id=?", arrayOf(id))
             db.delete("metadata", "key=?", arrayOf(turnMetricsKey(id)))
+            db.delete("metadata", "key=?", arrayOf(trimmedPrefixKey(id)))
             db.execSQL("UPDATE sessions SET interrupted=0, summary='', active_generation=active_generation+1, updated_at=? WHERE id=?",
                 arrayOf(System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
@@ -422,6 +433,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         try {
             db.delete("metadata", "key=?", arrayOf("auto_title-$id"))
             db.delete("metadata", "key=?", arrayOf(turnMetricsKey(id)))
+            db.delete("metadata", "key=?", arrayOf(trimmedPrefixKey(id)))
             if (db.delete("sessions", "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
             val next = db.rawQuery("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1", null).use {
                 if (it.moveToFirst()) it.getString(0) else null
@@ -613,6 +625,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 })
             }
             db.execSQL("UPDATE sessions SET summary=?, active_generation=active_generation+1 WHERE id=?", arrayOf(summary, id))
+            if (!trimCompactedHistory(db, id)) db.delete("metadata", "key=?", arrayOf(trimmedPrefixKey(id)))
             if (attempt != null) insertContextAttempt(db, id, through, compactionId, attempt,
                 AgentContext.serializedBytes(expected), AgentContext.serializedBytes(projected),
                 summary.toByteArray(Charsets.UTF_8).size)
@@ -802,7 +815,9 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
                 migrate(db)
                 initialized = true
             }
-            block(db)
+            val result = block(db)
+            pruneForSize(db)
+            result
         }
     }
 
@@ -936,6 +951,58 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         val summaryHash: String?,
     )
 
+    /**
+     * Completed compactions already carry the old history in `compactions.summary`.
+     * Once a session outgrows the event budget, the raw rows before the latest
+     * compaction boundary are redundant; keep the summary and the post-boundary
+     * events that back the active projection.
+     */
+    private fun trimCompactedHistory(db: SQLiteDatabase, id: String): Boolean {
+        if (maxEventsPerSession <= 0) return false
+        val total = db.rawQuery("SELECT COUNT(*) FROM events WHERE session_id=?", arrayOf(id)).use {
+            it.moveToFirst(); it.getInt(0)
+        }
+        if (total <= maxEventsPerSession) return false
+        val through = db.rawQuery(
+            "SELECT through_event_id FROM compactions WHERE session_id=? ORDER BY id DESC LIMIT 1",
+            arrayOf(id),
+        ).use { if (it.moveToFirst()) it.getLong(0) else null } ?: return false
+        val deleted = db.delete("events", "session_id=? AND id<=?", arrayOf(id, through.toString()))
+        if (deleted > 0) {
+            db.execSQL(
+                "UPDATE compactions SET prefix_hash=NULL WHERE session_id=? " +
+                    "AND id=(SELECT MAX(id) FROM compactions WHERE session_id=?)",
+                arrayOf(id, id),
+            )
+            putMeta(db, trimmedPrefixKey(id), "1")
+        }
+        return deleted > 0
+    }
+
+    /**
+     * Last-resort storage guard. Pinned and active conversations are never deleted;
+     * otherwise the oldest conversations go first and their rows are vacuumed away.
+     */
+    private fun pruneForSize(db: SQLiteDatabase) {
+        if (maxDatabaseBytes <= 0L || databaseFile.length() <= maxDatabaseBytes) return
+        val active = activeId(db)
+        val candidates = db.rawQuery(
+            "SELECT id FROM sessions WHERE id<>? AND pinned=0 ORDER BY updated_at ASC, created_at ASC",
+            arrayOf(active),
+        ).use { cursor -> buildList { while (cursor.moveToNext()) add(cursor.getString(0)) } }
+        var removed = 0
+        for (id in candidates) {
+            if (databaseFile.length() <= maxDatabaseBytes) break
+            if (db.delete("sessions", "id=?", arrayOf(id)) > 0) {
+                removed++
+                runCatching { db.execSQL("VACUUM") }
+            }
+        }
+        if (removed > 0) {
+            onNotice("Storage is full — removed $removed oldest conversation(s) to free space.")
+        }
+    }
+
     private fun validateProjection(db: SQLiteDatabase, id: String) {
         val boundary = db.rawQuery("SELECT id,through_event_id,after_count,summary,prefix_hash," +
             "active_hash,summary_hash FROM compactions WHERE session_id=? ORDER BY id DESC LIMIT 1",
@@ -948,18 +1015,28 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
         } ?: return
         val active = activeMessages(db, id)
         val currentSummary = summary(db, id)
+        val oldestEvent = db.rawQuery("SELECT MIN(id) FROM events WHERE session_id=?", arrayOf(id)).use {
+            it.moveToFirst(); if (it.isNull(0)) null else it.getLong(0)
+        }
+        val trimmedPrefix = meta(db, trimmedPrefixKey(id)) != null ||
+            (oldestEvent != null && oldestEvent > boundary.through)
         val shapeValid = boundary.afterCount in 0..active.size &&
             canonicalSuffixMatches(db, id, boundary.through, active.drop(boundary.afterCount)) &&
             currentSummary == boundary.summary
-        val prefix = if (shapeValid) canonicalPrefixHash(db, id, boundary.through) else ""
-        val valid = shapeValid && if (boundary.prefixHash != null && boundary.activeHash != null &&
-            boundary.summaryHash != null) {
-            prefix == boundary.prefixHash &&
-                hashMessages(active.take(boundary.afterCount)) == boundary.activeHash &&
-                hash(currentSummary) == boundary.summaryHash
-        } else canonicalSubsequence(db, id, boundary.through, active.take(boundary.afterCount))
+        val prefix = if (shapeValid && !trimmedPrefix) canonicalPrefixHash(db, id, boundary.through) else ""
+        val valid = shapeValid && when {
+            trimmedPrefix ->
+                (boundary.activeHash == null || hashMessages(active.take(boundary.afterCount)) == boundary.activeHash) &&
+                    (boundary.summaryHash == null || hash(currentSummary) == boundary.summaryHash)
+            boundary.prefixHash != null && boundary.activeHash != null && boundary.summaryHash != null ->
+                prefix == boundary.prefixHash &&
+                    hashMessages(active.take(boundary.afterCount)) == boundary.activeHash &&
+                    hash(currentSummary) == boundary.summaryHash
+            else -> canonicalSubsequence(db, id, boundary.through, active.take(boundary.afterCount))
+        }
         if (valid) {
-            if (boundary.prefixHash == null) db.execSQL("UPDATE compactions SET prefix_hash=?,active_hash=?,summary_hash=? WHERE id=?",
+            if (boundary.prefixHash == null && !trimmedPrefix) db.execSQL(
+                "UPDATE compactions SET prefix_hash=?,active_hash=?,summary_hash=? WHERE id=?",
                 arrayOf(prefix, hashMessages(active.take(boundary.afterCount)), hash(currentSummary), boundary.rowId))
             return
         }
@@ -1103,6 +1180,7 @@ internal class CodingSessions(private val context: Context) : AgentSessionPersis
     }
 
     private fun turnMetricsKey(sessionId: String) = "turn-metrics-$sessionId"
+    private fun trimmedPrefixKey(sessionId: String) = "trimmed-prefix-$sessionId"
 
     private fun decodeTurnMetrics(raw: String?): Map<Int, StoredTurnMetric> = try {
         raw?.let { json.decodeFromString(TurnMetrics.serializer(), it).entries }

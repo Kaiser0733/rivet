@@ -639,7 +639,8 @@ class AgentToolExecutor(
     ): PreparedAgentTool {
         val external = externalTargets(call)
         return PreparedAgentTool(
-            call, AgentApprovalRequest(call, title, detail + if (external) NO_EXTERNAL_UNDO else "", destructivePath),
+            call, AgentApprovalRequest(call, title, detail + if (external) NO_EXTERNAL_UNDO else "",
+                destructivePath, undoable = !external),
             // Paths contain no controls: three UTF-8 bytes per UTF-16 unit covers
             // their JSON representation. Fixed fields, hashes and numbers fit in 512.
             resultContentLimitBytes = minOf(AgentLoop.MAX_TOOL_RESULT_BYTES, 512 + resultPathChars * 3),
@@ -675,9 +676,11 @@ class AgentToolExecutor(
             else -> "Move"
         }
         val size = entry?.takeIf { !it.directory }?.size?.let { "\n%,d bytes".format(java.util.Locale.US, it) } ?: ""
-        val warning = if (request.call.name == "delete_path")
-            "This may be one of your existing files. Deletion is permanent."
-        else "This may be one of your existing files."
+        val warning = if (request.call.name == "delete_path") {
+            if (request.undoable)
+                "This may be one of your existing files. Undo is available only for the most recent 3 turns."
+            else "This may be one of your existing files. Deletion is permanent."
+        } else "This may be one of your existing files."
         return request.copy(title = "$verb ${if (entry == null) "unverified" else "existing"} $kind?",
             detail = "${request.detail}$size\n$warning", dangerous = true)
     }

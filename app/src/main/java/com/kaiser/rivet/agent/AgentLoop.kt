@@ -17,6 +17,12 @@ import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 import java.security.MessageDigest
 
+/** Visible in the transcript and in later model turns, so a cut reply cannot pass for a finished one. */
+internal const val INCOMPLETE_REPLY_SUFFIX = "\n\n[Reply incomplete — the stream ended before it finished.]"
+
+private fun markedIncomplete(text: String): String =
+    if (text.endsWith(INCOMPLETE_REPLY_SUFFIX)) text else text + INCOMPLETE_REPLY_SUFFIX
+
 enum class AgentStopReason {
     Completed,
     EmptyResponse,
@@ -225,7 +231,7 @@ class AgentLoop(
                 if (!incomplete.isLengthCut || incomplete.truncatedToolCalls.isEmpty()) {
                     val partial = streamed.toString().ifEmpty { DsmlToolCalls.hideIncomplete(incomplete.partialText) }
                     if (partial.isNotBlank()) {
-                        append(AgentMessage.assistant(partial))
+                        append(AgentMessage.assistant(markedIncomplete(partial)))
                     }
                     throw incomplete
                 }
@@ -274,7 +280,11 @@ class AgentLoop(
             } catch (e: Throwable) {
                 val partial = streamed.toString()
                 if (partial.isNotBlank()) {
-                    val assistant = AgentMessage.assistant(partial)
+                    // Cancellation is a user/run decision, not a broken stream; leave the
+                    // completed text untouched so the existing stop UI can explain it.
+                    val assistant = AgentMessage.assistant(
+                        if (e is CancellationException) partial else markedIncomplete(partial),
+                    )
                     append(assistant)
                 }
                 throw e

@@ -86,16 +86,40 @@ class RunSpendLedgerTest {
         assertTrue(localOnly.local)
         assertNull(localOnly.label)
         assertFalse(localOnly.shouldPause)
-        assertEquals(0, addedCalls)
+        assertEquals(1, addedCalls)
 
         val cloud = ledger.record(cloudConfig("worker"), AgentUsage(inputTokens = 1_000_000, outputTokens = 0), estimated = true)
         assertFalse(cloud.local)
         assertTrue(cloud.shouldPause)
-        assertEquals(1, addedCalls)
+        assertEquals(2, addedCalls)
 
         val localAfterCloud = ledger.record(localConfig(), AgentUsage(inputTokens = 5_000, outputTokens = 1_000), estimated = false)
         assertTrue(localAfterCloud.local)
         assertEquals("$2.50", localAfterCloud.label)
         assertFalse(localAfterCloud.shouldPause)
+    }
+
+    @Test
+    fun localEndpointTokensAreRecordedAndFireTokenCaps() {
+        var storedTokens = 0L
+        var storedCost = 0.0
+        val pauses = AtomicInteger(0)
+        val ledger = RunSpendLedger(
+            addMonthlySpend = { cost, tokens -> storedCost += cost; storedTokens += tokens },
+            readCaps = { SpendCaps(perRunTokens = 10_000) },
+            readUserPricePerMillionUsd = { null },
+            isLocalEndpoint = LocalEndpointPolicy::isLocal,
+            onBudgetPause = { pauses.incrementAndGet() },
+        )
+
+        val update = ledger.record(localConfig(), AgentUsage(inputTokens = 5_000, outputTokens = 6_000), estimated = false)
+
+        assertTrue(update.local)
+        assertEquals(11_000L, storedTokens)
+        assertEquals(0.0, storedCost, 0.0)
+        assertTrue(update.shouldPause)
+        assertEquals(1, pauses.get())
+        assertTrue(ledger.budgetPaused)
+        assertEquals(11_000L, update.decision.runTokens)
     }
 }

@@ -99,6 +99,8 @@ data class AgentApprovalRequest(
     val dangerous: Boolean = false,
     val approvalToken: Long = 0L,
     val requester: String? = null,
+    /** True when this mutation is inside the project tree and a recent turn checkpoint can restore it. */
+    val undoable: Boolean = false,
 )
 
 /** Execution effects drive integrity work independently from human confirmation. */
@@ -159,7 +161,22 @@ class PreparedAgentTool(
     val skillScripts: List<SkillScriptHit> = emptyList(),
     val memoryFact: String? = null,
     val execute: suspend () -> AgentToolResult,
-)
+) {
+    /** Preserve every contract field while changing only how the action is executed. */
+    fun withExecute(block: suspend () -> AgentToolResult) = PreparedAgentTool(
+        call = call,
+        approval = approval,
+        resultContentLimitBytes = resultContentLimitBytes,
+        effect = effect,
+        basicAutonomyRisk = basicAutonomyRisk,
+        modelRequestsApproval = modelRequestsApproval,
+        blockedReason = blockedReason,
+        skillScript = skillScript,
+        skillScripts = skillScripts,
+        memoryFact = memoryFact,
+        execute = block,
+    )
+}
 
 private fun defaultEffect(name: String): AgentToolEffect = when (name) {
     "write_file", "apply_patch", "create_file", "create_directory" -> AgentToolEffect.WorkspaceMutation

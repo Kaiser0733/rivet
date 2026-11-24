@@ -74,9 +74,10 @@ object SpendGuard {
         caps: SpendCaps,
         localModel: Boolean = false,
     ): SpendDecision {
-        if (localModel) return SpendDecision(null, 0.0, 0.0, 0, 0, "local model — no spend")
-        val runStop = caps.perRunUsd?.let { cap -> runCost?.let { it >= cap } == true } == true
-        val monthStop = caps.monthlyUsd?.let { cap -> monthCost?.let { it >= cap } == true } == true
+        // A local endpoint still consumes tokens (and may proxy a paid API). USD
+        // caps need a price, so only token caps can apply here.
+        val runStop = !localModel && caps.perRunUsd?.let { cap -> runCost?.let { it >= cap } == true } == true
+        val monthStop = !localModel && caps.monthlyUsd?.let { cap -> monthCost?.let { it >= cap } == true } == true
         val runTokenStop = caps.perRunTokens?.let { runTokens >= it } == true
         val monthTokenStop = caps.monthlyTokens?.let { monthTokens >= it } == true
         val stop = when {

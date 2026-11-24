@@ -2368,7 +2368,9 @@ class ChatViewModelTest {
         t2.start()
         t2.join()
 
-        val finished = await(viewModel) { !it.streaming && attempts.get() >= 2 }
+        val finished = await(viewModel) {
+            !it.streaming && attempts.get() >= 2 && it.notice.orEmpty().contains("Network returned")
+        }
         assertEquals(2, attempts.get())
         assertTrue(finished.messages.any { it.text == "Recovered" })
     }

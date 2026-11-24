@@ -10,6 +10,7 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
@@ -810,9 +811,22 @@ class AgentLoopTest {
         assertTrue(existing.dangerous)
         assertTrue(existing.title.contains("existing file"))
         assertTrue(existing.detail.contains("80,106 bytes"))
-        assertTrue(existing.detail.contains("Deletion is permanent"))
+        assertTrue(existing.detail.contains("most recent 3"))
         assertEquals(1, workspace.deletes)
         assertTrue(result.messages.flatMap { it.toolResults }.last().error)
+    }
+
+    @Test
+    fun deleteApprovalStatesRecentUndoInsteadOfPermanentForProjectFiles() = runBlocking {
+        val workspace = AgentToolExecutorTest.FakeWorkspace()
+        val executor = AgentToolExecutor(workspace)
+        val call = AgentToolCall("delete-existing", "delete_path", """{"path":"Max.txt"}""")
+        val prepared = executor.prepare(call)
+        val approval = requireNotNull(prepared?.approval)
+        val described = executor.describeDestructive(approval)
+
+        assertTrue(described.detail, described.detail.contains("most recent 3"))
+        assertFalse(described.detail, described.detail.contains("Deletion is permanent"))
     }
 
     @Test
@@ -1082,7 +1096,37 @@ class AgentLoopTest {
             // expected
         }
 
-        assertEquals(listOf(AgentMessage.assistant("Half-written answer")), completed)
+        assertEquals(1, completed.size)
+        assertTrue(completed.single().text.startsWith("Half-written answer"))
+        assertTrue(completed.single().text, completed.single().text.contains("incomplete", ignoreCase = true))
+    }
+
+    @Test
+    fun incompleteGenerationMarksThePartialAssistantReplyAsIncomplete() = runTest {
+        val completed = mutableListOf<AgentMessage>()
+        val loop = AgentLoop(
+            requestModel = { _, _, onText ->
+                onText("Half-written ")
+                onText("answer")
+                throw ProviderError.IncompleteGeneration(reason = "network")
+            },
+            prepareTool = { error("No complete tool call exists") },
+            requestApproval = { error("No approval should be requested") },
+        )
+
+        try {
+            loop.run(
+                listOf(AgentMessage.user("Explain")),
+                emptyList(),
+                onMessage = { completed += it },
+            )
+            error("Expected incomplete generation to propagate")
+        } catch (_: ProviderError.IncompleteGeneration) {
+            // expected
+        }
+
+        assertEquals(1, completed.size)
+        assertTrue(completed.single().text, completed.single().text.contains("incomplete", ignoreCase = true))
     }
 
     @Test

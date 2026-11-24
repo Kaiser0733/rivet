@@ -159,6 +159,20 @@ internal class SubagentSupervisor(
             writeScope = brief.writeScope,
         )
         return queueLock.withLock {
+            val storedWorkers = services.workerStore.workersForRun(services.runId)
+            val spawnedThisRun = maxOf(storedWorkers.size, workers.values.count { it.runId == services.runId })
+            if (spawnedThisRun >= SubagentScheduler.MAX_SPAWNS_PER_RUN) {
+                return@withLock SpawnExecutionResult(
+                    json = buildJsonObject {
+                        put("error", "spawn_limit")
+                        put("retryable", false)
+                        put("required_action",
+                            "This run has reached its ${SubagentScheduler.MAX_SPAWNS_PER_RUN}-subagent limit. " +
+                                "Finish or stop the run before spawning more.")
+                    }.toString(),
+                    error = true,
+                )
+            }
             val allConfigs = services.providerSource.configs()
             val live = workers.values.map {
                 SubagentLive(

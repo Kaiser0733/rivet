@@ -7,11 +7,9 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class PhoneCaptureForegroundTest {
-    @Test fun rivetRaisesItselfOnceWhenAnotherAppOwnsTheScreen() {
-        assertTrue(shouldRaiseRivet(resumed = false, alreadyRaised = false))
-        assertFalse(shouldRaiseRivet(resumed = true, alreadyRaised = false))
-        // A second raise would restart MainActivity under the consent dialog.
-        assertFalse(shouldRaiseRivet(resumed = false, alreadyRaised = true))
+    @Test fun aHiddenRivetNeedsTheForegroundInsteadOfBeingRaised() {
+        assertTrue(phoneShotNeedsForeground(rivetVisible = false))
+        assertFalse(phoneShotNeedsForeground(rivetVisible = true))
     }
 
     @Test fun anAcceptedLaunchProceedsToConsent() {
