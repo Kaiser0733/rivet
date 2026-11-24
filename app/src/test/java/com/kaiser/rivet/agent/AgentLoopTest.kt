@@ -1096,7 +1096,37 @@ class AgentLoopTest {
             // expected
         }
 
-        assertEquals(listOf(AgentMessage.assistant("Half-written answer")), completed)
+        assertEquals(1, completed.size)
+        assertTrue(completed.single().text.startsWith("Half-written answer"))
+        assertTrue(completed.single().text, completed.single().text.contains("incomplete", ignoreCase = true))
+    }
+
+    @Test
+    fun incompleteGenerationMarksThePartialAssistantReplyAsIncomplete() = runTest {
+        val completed = mutableListOf<AgentMessage>()
+        val loop = AgentLoop(
+            requestModel = { _, _, onText ->
+                onText("Half-written ")
+                onText("answer")
+                throw ProviderError.IncompleteGeneration(reason = "network")
+            },
+            prepareTool = { error("No complete tool call exists") },
+            requestApproval = { error("No approval should be requested") },
+        )
+
+        try {
+            loop.run(
+                listOf(AgentMessage.user("Explain")),
+                emptyList(),
+                onMessage = { completed += it },
+            )
+            error("Expected incomplete generation to propagate")
+        } catch (_: ProviderError.IncompleteGeneration) {
+            // expected
+        }
+
+        assertEquals(1, completed.size)
+        assertTrue(completed.single().text, completed.single().text.contains("incomplete", ignoreCase = true))
     }
 
     @Test
