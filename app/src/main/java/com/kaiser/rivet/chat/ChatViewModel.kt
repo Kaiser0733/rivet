@@ -629,7 +629,11 @@ class ChatViewModel private constructor(
             val activeSend = sendJob
             if (activeSend?.isActive == true) activeSend.join()
             if (currentSessionRun()?.pause == RunPauseReason.NetworkLost) {
-                retryInterruptedTurn()
+                if (retryInterruptedTurn()) {
+                    _uiState.update {
+                        it.copy(notice = "Network returned — resuming the paused run.")
+                    }
+                }
             }
         }
     }
@@ -1771,18 +1775,19 @@ class ChatViewModel private constructor(
         }
     }
 
-    fun retryInterruptedTurn() {
+    fun retryInterruptedTurn(): Boolean {
         if (_uiState.value.streaming || !_uiState.value.ready ||
             _uiState.value.recoveringProjectChanges || _uiState.value.undoing ||
-            !_uiState.value.interruptedTurn) return
+            !_uiState.value.interruptedTurn) return false
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
         // A compacted transcript can end without a user message; retrying then would send
         // an empty prompt. Match the sibling retry: without a prompt there is nothing to run.
         if (lastUser.isEmpty()) {
             openPendingStarter()
-            return
+            return false
         }
         startTurn(lastUser, retryingInterrupted = true)
+        return true
     }
 
     // Re-runs the last prompt after a failed turn. The failed request already left its
