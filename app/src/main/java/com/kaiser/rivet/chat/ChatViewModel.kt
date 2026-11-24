@@ -319,6 +319,13 @@ class ChatViewModel private constructor(
     }
 
     private val _uiState = MutableStateFlow(ChatUiState())
+    init {
+        // Storage retention runs on the database thread; a visible notice is the only
+        // signal that an old conversation was removed to keep Rivet's database bounded.
+        (sessionStore as? CodingSessions)?.onNotice = { notice ->
+            _uiState.update { it.copy(notice = notice) }
+        }
+    }
     private val shareLanding = Mutex()
     private val grantedFolders = AndroidGrantedFolders(app)
     private val _sharedZip = MutableStateFlow<Uri?>(null)

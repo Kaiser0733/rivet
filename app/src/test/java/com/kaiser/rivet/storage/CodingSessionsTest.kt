@@ -323,6 +323,38 @@ class CodingSessionsTest {
         assertEquals(restored.messages, CodingSessions(app).load().messages)
     }
 
+    @Test fun compactionDropsRawEventsBeyondThePerSessionBudget() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = listOf(
+            AgentMessage.user("old question"),
+            AgentMessage.assistant("old answer"),
+            AgentMessage.user("new question"),
+            AgentMessage.assistant("new answer"),
+        )
+        sessions.save(history, false)
+        sessions.maxEventsPerSession = 3
+
+        val projected = sessions.compact(history, history.takeLast(1), "Kept summary", null, id)
+
+        assertTrue(sessions.fullEventCount(id) <= 3)
+        assertEquals(projected, CodingSessions(app).load().messages)
+    }
+
+    @Test fun storageGuardRemovesOldestUnpinnedSessionsAndNotifies() = runBlocking {
+        var notice: String? = null
+        val sessions = CodingSessions(app) { notice = it }
+        sessions.load()
+        sessions.create(null)
+        sessions.create(null)
+        sessions.maxDatabaseBytes = 1
+
+        sessions.list()
+
+        assertEquals(1, sessions.list().size)
+        assertTrue(notice.orEmpty(), notice.orEmpty().contains("Storage is full"))
+    }
+
     @Test fun reportedZeroAndUnavailableUsageStayDistinguishable() = runBlocking {
         val sessions = CodingSessions(app)
         val id = sessions.load().id!!
