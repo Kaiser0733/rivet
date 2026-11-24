@@ -185,6 +185,38 @@ class SubagentSupervisorTest {
     }
 
     @Test
+    fun spawnsAreCappedAtTwentyPerRun() = runBlocking {
+        val config = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        repeat(SubagentScheduler.MAX_SPAWNS_PER_RUN) { index ->
+            store.saveWorker(WorkerRecord(
+                id = "previous-$index",
+                runId = "test-run",
+                parentSessionId = "test-session",
+                workspaceId = "test-workspace",
+                job = "previous $index",
+                brief = "done",
+                configId = config.id,
+                model = config.model,
+                state = RunPhase.Done,
+                createdAt = index.toLong(),
+            ))
+        }
+        val services = testServices(store, listOf(config))
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
+        val valid = supervisor.validateSpawn(
+            """{"job":"one too many","brief":"do it","model":"m1"}""",
+        ) as SpawnValidation.Valid
+
+        val result = supervisor.executeSpawn(valid.brief, valid.entry, valid.skill)
+
+        assertTrue(result.error)
+        assertEquals("spawn_limit", json.parseToJsonElement(result.json).jsonObject["error"]?.jsonPrimitive?.content)
+        assertTrue(json.parseToJsonElement(result.json).jsonObject["required_action"]
+            ?.jsonPrimitive?.content.orEmpty().contains("20"))
+    }
+
+    @Test
     fun executeSpawnAdmitsFirstTwoAndQueuesThirdUntilSlotFrees() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()
