@@ -79,8 +79,11 @@ object AgentActivityProjection {
                 AgentRole.Tool -> Unit
                 AgentRole.Context -> {
                     val context = message.validatedContext()
-                    if (context != null && CompactionNotice.isNotice(context.kind)) {
-                        items += AgentConversationItem.SystemNotice(CompactionNotice.display(context.content))
+                    when {
+                        context?.kind == MemoryProposalDeclined.KIND ->
+                            items += AgentConversationItem.SystemNotice(MemoryProposalDeclined.MESSAGE)
+                        context != null && CompactionNotice.isNotice(context.kind) ->
+                            items += AgentConversationItem.SystemNotice(CompactionNotice.display(context.content))
                     }
                 }
             }

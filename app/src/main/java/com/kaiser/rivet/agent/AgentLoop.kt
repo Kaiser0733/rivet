@@ -114,6 +114,7 @@ class AgentLoop(
                     )
                     if (!requestApproval(approval)) {
                         stage(AgentToolLifecycleStage.Denied)
+                        append(MemoryProposalDeclined.event())
                         return AgentStopReason.Completed
                     }
                 }
@@ -441,7 +442,7 @@ class AgentLoop(
                     val memoryFact = prepared.memoryFact
                     if (writeMemoryBatch != null && memoryFact != null) {
                         val queued = AgentToolResult(call.id, call.name,
-                            """{"status":"proposed","note":"Rivet processes all memory proposals together at the end of the turn. The fact has not been saved yet."}""",
+                            """{"status":"proposed","note":"This memory write is proposed. The user decides whether to save it. Nothing is saved if the user declines."}""",
                             summary = "Memory proposed")
                         val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "not_executed") }
                         if (!fits(results + queued + remaining)) {
