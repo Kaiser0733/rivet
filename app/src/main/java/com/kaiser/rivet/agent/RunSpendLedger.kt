@@ -81,20 +81,31 @@ class RunSpendLedger(
 
     fun record(config: ProviderConfig, usage: AgentUsage, estimated: Boolean): RunSpendUpdate {
         if (isLocalEndpoint(config.baseUrl)) {
-            return synchronized(lock) {
-                val hasCloudSpend = runSpendTokens > 0L || runSpendUsd > 0.0
+            val tokens = SpendGuard.tokens(usage)
+            var firePause = false
+            val update = synchronized(lock) {
+                runSpendTokens += tokens
+                monthSpendTokens += tokens
+                addMonthlySpend(0.0, tokens)
+                val decision = SpendGuard.evaluate(
+                    runSpendUsd, monthSpendUsd, runSpendTokens, monthSpendTokens,
+                    effectiveCapsLocked(), localModel = true,
+                )
+                if (decision.paused && !budgetPaused) {
+                    budgetPaused = true
+                    firePause = true
+                }
                 RunSpendUpdate(
-                    decision = SpendGuard.evaluate(
-                        runSpendUsd, monthSpendUsd, runSpendTokens, monthSpendTokens,
-                        effectiveCapsLocked(), localModel = true,
-                    ),
-                    label = if (hasCloudSpend) SpendGuard.liveLabel(runSpendUsd) else null,
+                    decision = decision,
+                    label = if (runSpendUsd > 0.0) SpendGuard.liveLabel(runSpendUsd) else null,
                     spendFromEstimate = false,
                     runSpendUsd = runSpendUsd,
-                    shouldPause = false,
+                    shouldPause = firePause,
                     local = true,
                 )
             }
+            if (firePause) onBudgetPause()
+            return update
         }
         val tokens = SpendGuard.tokens(usage)
         val cost = SpendGuard.cost(usage, PricingTable.price(config.model), readUserPricePerMillionUsd())

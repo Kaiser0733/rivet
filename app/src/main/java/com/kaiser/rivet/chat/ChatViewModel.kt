@@ -1576,8 +1576,15 @@ class ChatViewModel private constructor(
     private fun recordSpend(config: ProviderConfig, usage: AgentUsage, estimated: Boolean) {
         val result = spendLedger.record(config, usage, estimated)
         if (result.local) {
-            if (result.label == null) {
-                _uiState.update { it.copy(spendLabel = null, spendFromEstimate = false) }
+            _uiState.update { it.copy(spendLabel = result.label, spendFromEstimate = false) }
+            if (result.shouldPause) {
+                _uiState.update {
+                    it.copy(
+                        budgetPaused = true,
+                        notice = "Budget reached — raise the cap or stop this run.",
+                    )
+                }
+                pauseCurrentRun(RunPauseReason.Budget)
             }
             return
         }

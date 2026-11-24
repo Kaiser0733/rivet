@@ -35,6 +35,9 @@ class SpendGuardTest {
     @Test fun localRunsNeverSpendAndTokenCapsWorkWithoutPrices() {
         val local = SpendGuard.evaluate(99.0, 99.0, 1_000_000, 1_000_000, SpendCaps(1.0, 1.0), localModel = true)
         assertFalse(local.paused)
+        val localTokens = SpendGuard.evaluate(99.0, 99.0, 1_000_000, 1_000_000,
+            SpendCaps(perRunTokens = 500_000), localModel = true)
+        assertEquals(SpendStop.PerRun, localTokens.stop)
         val tokens = SpendGuard.evaluate(null, null, 10_000, 10_000,
             SpendCaps(perRunTokens = 9_000))
         assertEquals(SpendStop.PerRun, tokens.stop)
