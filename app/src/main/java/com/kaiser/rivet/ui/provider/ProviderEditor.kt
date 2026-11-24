@@ -30,11 +30,15 @@ import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.Icon
 import androidx.compose.material3.IconButton
 import androidx.compose.material3.MaterialTheme
-import androidx.compose.material3.OutlinedTextField
+import androidx.compose.material3.LocalContentColor
+import androidx.compose.material3.ProvideTextStyle
+import androidx.compose.material3.TextField
+import androidx.compose.material3.TextFieldDefaults
 import androidx.compose.material3.RadioButton
 import androidx.compose.material3.Text
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
@@ -46,6 +50,9 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.semantics.contentDescription
+import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
@@ -61,6 +68,7 @@ import com.kaiser.rivet.provider.selectListedModel
 import com.kaiser.rivet.provider.withModelId
 import com.kaiser.rivet.ui.FoldReveal
 import com.kaiser.rivet.ui.RivetOutlinedButton
+import com.kaiser.rivet.ui.RivetLayout
 import com.kaiser.rivet.ui.chat.displaySafeText
 import java.util.Locale
 
@@ -112,23 +120,24 @@ fun ProviderEditor(
             Text(if (state.isNew) "Add provider" else "Change model",
                 style = MaterialTheme.typography.titleLarge)
         }
-        HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+        HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
         Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().weight(1f)
             .align(Alignment.CenterHorizontally).padding(bottom = 12.dp)
             .verticalScroll(rememberScrollState())
-            .padding(start = 16.dp, end = 16.dp, top = 12.dp, bottom = 32.dp)) {
-            OutlinedTextField(
+            .padding(horizontal = RivetLayout.pageGutter)
+            .padding(top = 16.dp, bottom = 32.dp)) {
+            ProviderEditorField(
                 value = config.name,
                 onValueChange = { v -> viewModel.updateConfig { it.copy(name = v) } },
-                label = { Text(stringResource(R.string.provider_name_label)) },
+                label = stringResource(R.string.provider_name_label),
                 modifier = Modifier.fillMaxWidth(),
                 singleLine = true,
             )
             FoldReveal(expanded = config.type == ProviderType.OpenAiCompatible || advanced) {
-                OutlinedTextField(
+                ProviderEditorField(
                     value = config.baseUrl,
                     onValueChange = { v -> viewModel.updateConfig { it.copy(baseUrl = v) } },
-                    label = { Text(stringResource(R.string.provider_base_url_label)) },
+                    label = stringResource(R.string.provider_base_url_label),
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     singleLine = true,
                     supportingText = if (config.type == ProviderType.OpenAiCompatible) {
@@ -201,10 +210,10 @@ fun ProviderEditor(
                     )
                 }
             } else {
-                OutlinedTextField(
+                ProviderEditorField(
                     value = state.keyInput,
                     onValueChange = viewModel::setKeyInput,
-                    label = { Text(stringResource(R.string.provider_api_key_label)) },
+                    label = stringResource(R.string.provider_api_key_label),
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     singleLine = true,
                     visualTransformation = if (showKey) VisualTransformation.None else PasswordVisualTransformation(),
@@ -227,7 +236,7 @@ fun ProviderEditor(
                 )
             }
 
-            Row(Modifier.fillMaxWidth().padding(top = 8.dp),
+            Row(Modifier.fillMaxWidth().padding(top = RivetLayout.sectionGap),
                 horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 RivetOutlinedButton(onClick = viewModel::testConnection,
                     enabled = !state.busy && !state.fetching) {
@@ -256,12 +265,16 @@ fun ProviderEditor(
                     style = MaterialTheme.typography.bodyMedium, modifier = Modifier.padding(top = 4.dp))
             }
 
-            OutlinedTextField(
+            HorizontalDivider(
+                Modifier.padding(top = RivetLayout.sectionGap, bottom = 4.dp),
+                color = MaterialTheme.colorScheme.outlineVariant,
+            )
+            ProviderEditorField(
                 value = config.model,
                 onValueChange = { v -> viewModel.updateConfig {
                     it.withModelId(v, state.models)
                 } },
-                label = { Text(stringResource(R.string.provider_model_label)) },
+                label = stringResource(R.string.provider_model_label),
                 placeholder = { Text(stringResource(R.string.provider_model_hint)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -269,10 +282,10 @@ fun ProviderEditor(
 
             val detectedContextWindow = config.detectedContextWindowForModel()
             val manualContextWindow = config.manualContextWindowForModel()
-            OutlinedTextField(
+            ProviderEditorField(
                 value = state.contextWindowInput,
                 onValueChange = viewModel::setContextWindowInput,
-                label = { Text(stringResource(R.string.provider_context_window_label)) },
+                label = stringResource(R.string.provider_context_window_label),
                 placeholder = {
                     Text(
                         if (detectedContextWindow != null) {
@@ -297,10 +310,10 @@ fun ProviderEditor(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )
 
-            OutlinedTextField(
+            ProviderEditorField(
                 value = state.maxOutputTokensInput,
                 onValueChange = viewModel::setMaxOutputTokensInput,
-                label = { Text(stringResource(R.string.provider_max_output_tokens_label)) },
+                label = stringResource(R.string.provider_max_output_tokens_label),
                 placeholder = { Text(stringResource(R.string.provider_max_output_tokens_hint)) },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
@@ -318,10 +331,10 @@ fun ProviderEditor(
                         maxLines = 2, overflow = TextOverflow.Ellipsis,
                         modifier = Modifier.padding(top = 2.dp))
                 }
-                OutlinedTextField(
+                ProviderEditorField(
                     value = modelSearch,
                     onValueChange = { modelSearch = it },
-                    label = { Text(stringResource(R.string.provider_search_models)) },
+                    label = stringResource(R.string.provider_search_models),
                     modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
                     singleLine = true,
                 )
@@ -384,7 +397,7 @@ fun ProviderEditor(
                     }
                 }
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             TextButton(onClick = { advanced = !advanced }, modifier = Modifier.fillMaxWidth()) {
                 Icon(painterResource(R.drawable.ic_settings), null, Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.onBackground)
@@ -394,10 +407,10 @@ fun ProviderEditor(
                 Icon(painterResource(R.drawable.ic_chevron_down), null, Modifier.size(18.dp),
                     tint = MaterialTheme.colorScheme.onBackground)
             }
-            HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.24f))
+            HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
             FoldReveal(expanded = advanced) {
-                OutlinedTextField(value = state.headersText, onValueChange = viewModel::updateHeadersText,
-                    label = { Text(stringResource(R.string.provider_headers_label)) },
+                ProviderEditorField(value = state.headersText, onValueChange = viewModel::updateHeadersText,
+                    label = stringResource(R.string.provider_headers_label),
                     placeholder = { Text(stringResource(R.string.provider_headers_hint)) },
                     modifier = Modifier.fillMaxWidth().padding(top = 16.dp))
             }
@@ -411,7 +424,7 @@ fun ProviderEditor(
         Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
             .background(MaterialTheme.colorScheme.surfaceContainerLow)) {
             HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
-            Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 8.dp),
+            Row(Modifier.fillMaxWidth().padding(horizontal = RivetLayout.pageGutter, vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 RivetOutlinedButton(onClick = { viewModel.save(onSaved = onDone) },
@@ -426,6 +439,55 @@ fun ProviderEditor(
         }
     }
 
+}
+
+@Composable
+internal fun ProviderEditorField(
+    value: String,
+    onValueChange: (String) -> Unit,
+    label: String,
+    modifier: Modifier = Modifier,
+    singleLine: Boolean = false,
+    placeholder: (@Composable () -> Unit)? = null,
+    supportingText: (@Composable () -> Unit)? = null,
+    trailingIcon: (@Composable () -> Unit)? = null,
+    visualTransformation: VisualTransformation = VisualTransformation.None,
+) {
+    val colors = MaterialTheme.colorScheme
+    Column(modifier, verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(
+            label,
+            modifier = Modifier.padding(horizontal = 4.dp),
+            style = MaterialTheme.typography.titleSmall,
+            color = colors.onSurface,
+        )
+        TextField(
+            value = value,
+            onValueChange = onValueChange,
+            modifier = Modifier.fillMaxWidth().semantics { contentDescription = label },
+            singleLine = singleLine,
+            placeholder = placeholder,
+            trailingIcon = trailingIcon,
+            visualTransformation = visualTransformation,
+            textStyle = MaterialTheme.typography.bodyMedium,
+            shape = MaterialTheme.shapes.medium,
+            colors = TextFieldDefaults.colors(
+                focusedContainerColor = colors.surfaceContainerHigh,
+                unfocusedContainerColor = colors.surfaceContainerLow,
+                focusedIndicatorColor = Color.Transparent,
+                unfocusedIndicatorColor = Color.Transparent,
+            ),
+        )
+        if (supportingText != null) {
+            Column(Modifier.padding(horizontal = 4.dp)) {
+                CompositionLocalProvider(
+                    LocalContentColor provides colors.onSurfaceVariant,
+                ) {
+                    ProvideTextStyle(MaterialTheme.typography.bodySmall, supportingText)
+                }
+            }
+        }
+    }
 }
 
 private fun displaySafeModelId(value: String): String {
