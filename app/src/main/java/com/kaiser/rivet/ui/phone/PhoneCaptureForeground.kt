@@ -24,9 +24,8 @@ internal fun phoneShotFailureCode(
 }
 
 /**
- * A chained tool can leave Chrome in front, and phone_shot then waits for a Rivet
- * that nobody is going to bring back. Raise Rivet once; if it is still not resumed
- * after that, the existing bounded wait and its honest error still apply.
+ * A background tool request must not steal the screen. If Rivet is not visible,
+ * fail with the existing "needs foreground" action instead of starting an activity
+ * and waiting minutes behind a consent dialog the user never asked to see.
  */
-internal fun shouldRaiseRivet(resumed: Boolean, alreadyRaised: Boolean): Boolean =
-    !resumed && !alreadyRaised
+internal fun phoneShotNeedsForeground(rivetVisible: Boolean): Boolean = !rivetVisible

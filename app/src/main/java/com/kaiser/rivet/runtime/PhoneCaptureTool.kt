@@ -47,7 +47,7 @@ internal object PhoneCaptureTool {
 
     val definition = AgentToolDefinition(
         "phone_shot",
-        "Request one phone screenshot. Android asks for consent every time. When armed, wait for the user to tap Capture now in Rivet's notification or cancel. Only a model with vision sees the image.",
+        "Request one phone screenshot. Rivet must be open; a background request fails instead of bringing Rivet forward. Android asks for consent every time. When armed, wait for the user to tap Capture now in Rivet's notification or cancel. Only a model with vision sees the image.",
         buildJsonObject {
             put("type", "object")
             put("properties", buildJsonObject {})
