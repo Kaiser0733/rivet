@@ -13,6 +13,7 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.layout.Layout
+import androidx.compose.ui.unit.constrainHeight
 import kotlin.math.roundToInt
 import kotlinx.coroutines.currentCoroutineContext
 
@@ -41,10 +42,16 @@ internal fun FoldReveal(
         modifier = modifier.clipToBounds(),
     ) { measurables, constraints ->
         val placeables = measurables.map { it.measure(constraints.copy(minHeight = 0)) }
-        val fullHeight = placeables.maxOfOrNull { it.height } ?: 0
+        val fullHeight = constraints.constrainHeight(placeables.sumOf { it.height })
         val fullWidth = placeables.maxOfOrNull { it.width } ?: 0
         val height = (fullHeight * (if (instant) target else progress)).roundToInt().coerceIn(0, fullHeight)
-        layout(fullWidth, height) { placeables.forEach { it.place(0, 0) } }
+        layout(fullWidth, height) {
+            var top = 0
+            placeables.forEach {
+                it.place(0, top)
+                top += it.height
+            }
+        }
     }
 }
 
