@@ -2,6 +2,7 @@ package com.kaiser.rivet.workspace
 
 import android.graphics.Bitmap
 import android.graphics.BitmapFactory
+import android.util.Size
 import com.kaiser.rivet.agent.AgentWorkspaceFailure
 import com.kaiser.rivet.agent.SafAgentWorkspace
 import com.kaiser.rivet.agent.presentablePath
@@ -33,7 +34,11 @@ internal object WorkspaceFilePreview {
     private suspend fun statFile(workspace: SafWorkspace, path: WorkspacePath): WorkspaceEntry? =
         workspace.stat(path).takeUnless { it.directory }
 
-    suspend fun read(workspace: SafWorkspace, relative: String): FilePreviewResult {
+    suspend fun read(
+        workspace: SafWorkspace,
+        relative: String,
+        onImageBounds: suspend (Size) -> Unit = {},
+    ): FilePreviewResult {
         val path = presentablePath(relative)
         val files = SafAgentWorkspace(workspace)
         return try {
@@ -52,6 +57,7 @@ internal object WorkspaceFilePreview {
                         val options = BitmapFactory.Options().apply { inJustDecodeBounds = true }
                         BitmapFactory.decodeByteArray(bytes, 0, bytes.size, options)
                         if (options.outWidth <= 0 || options.outHeight <= 0) return@withContext null
+                        onImageBounds(Size(options.outWidth, options.outHeight))
                         var sample = 1
                         while (maxOf(options.outWidth, options.outHeight) / sample > IMAGE_SIDE) sample *= 2
                         options.inSampleSize = sample

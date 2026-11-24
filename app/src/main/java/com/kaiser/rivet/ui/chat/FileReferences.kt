@@ -1,13 +1,15 @@
 package com.kaiser.rivet.ui.chat
 
+import android.util.Size
 import androidx.compose.runtime.staticCompositionLocalOf
 import com.kaiser.rivet.agent.presentablePath
 import com.kaiser.rivet.workspace.FilePreviewResult
 
 internal class AssistantFileLinks(
+    val identity: String?,
     val resolve: suspend (Set<String>) -> Set<String>,
     val open: suspend (String) -> Boolean,
-    val load: suspend (String) -> FilePreviewResult,
+    val load: suspend (String, suspend (Size) -> Unit) -> FilePreviewResult,
 )
 
 internal val LocalAssistantFileLinks = staticCompositionLocalOf<AssistantFileLinks?> { null }

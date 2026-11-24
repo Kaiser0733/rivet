@@ -1,11 +1,46 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.subagent.WorkerRecord
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentActivityProjectionTest {
+    @Test fun spawnedWorkerShowsTheTaskAndTheResolvedModel() {
+        val call = AgentToolCall("spawn", "spawn_subagent", """{"job":"Inspect docs","model":"auto"}""")
+        val result = AgentToolResult("spawn", call.name,
+            """{"worker_id":"w-1","state":"waiting","model_label":"DeepSeek V4.1 Flash"}""")
+        val messages = listOf(AgentMessage.assistant("", listOf(call)), AgentMessage.tools(listOf(result)))
+        val operation = AgentActivityProjection.conversation(messages)
+            .filterIsInstance<AgentConversationItem.Activity>().single().group.operations.single()
+
+        assertEquals("Start worker", operation.title)
+        assertEquals("Inspect docs\nDeepSeek V4.1 Flash", operation.detail)
+    }
+
+    @Test fun anAwaitBatchUsesTheMatchingWorkerAndEarlierSpawnForEachRow() {
+        val spawn = AgentToolCall("spawn", "spawn_subagent", """{"job":"Inspect docs"}""")
+        val await = AgentToolCall("await", "await_subagents", """{"ids":["w-1","w-2"]}""")
+        val messages = listOf(
+            AgentMessage.assistant("", listOf(spawn)),
+            AgentMessage.tools(listOf(AgentToolResult("spawn", spawn.name,
+                """{"worker_id":"w-1","model_label":"DeepSeek V4.1 Flash"}"""))),
+            AgentMessage.assistant("", listOf(await)),
+            AgentMessage.tools(listOf(AgentToolResult("await", await.name,
+                """{"workers":[{"worker_id":"w-1"}],"timed_out":["w-2"]}"""))),
+        )
+        val w2 = WorkerRecord("w-2", "run", "chat", "project", "Check examples", "",
+            configId = "cloud", model = "m", modelLabel = "Example model")
+        val groups = AgentActivityProjection.conversation(messages, workers = listOf(w2))
+            .filterIsInstance<AgentConversationItem.Activity>().map { it.group }
+
+        assertEquals("w-1", groups.first().operations.single().workerId)
+        assertEquals(listOf("w-1", "w-2"), groups.last().operations.map { it.workerId })
+        assertEquals(listOf("Inspect docs\nDeepSeek V4.1 Flash", "Check examples\nExample model"),
+            groups.last().operations.map { it.detail })
+    }
+
     @Test fun liveLifecycleCorrelationStaysFixedSizeForLargeProviderIds() {
         val providerId = "opaque-" + "x".repeat(100_000)
         val key = AgentToolLifecycle.keyFor(providerId)

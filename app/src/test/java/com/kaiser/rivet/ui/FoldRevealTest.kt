@@ -10,6 +10,7 @@ import androidx.compose.ui.MotionDurationScale
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.platform.testTag
 import androidx.compose.ui.test.ExperimentalTestApi
+import androidx.compose.ui.test.assertHeightIsEqualTo
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithTag
 import androidx.compose.ui.unit.dp
@@ -31,6 +32,21 @@ class FoldRevealTest {
 
     @get:Rule
     val compose = createComposeRule(effectContext = ZeroMotionScale)
+
+    @Test
+    fun childrenStackWithoutOverlap() {
+        compose.setContent {
+            FoldReveal(expanded = true, modifier = Modifier.testTag("fold")) {
+                Box(Modifier.fillMaxWidth().height(40.dp).testTag("field"))
+                Box(Modifier.fillMaxWidth().height(20.dp).testTag("hint"))
+            }
+        }
+
+        compose.onNodeWithTag("fold").assertHeightIsEqualTo(60.dp)
+        val field = compose.onNodeWithTag("field").fetchSemanticsNode().boundsInRoot
+        val hint = compose.onNodeWithTag("hint").fetchSemanticsNode().boundsInRoot
+        assertEquals(field.bottom, hint.top, 0.01f)
+    }
 
     @Test
     fun zeroSystemMotionScaleJumpsToTheFullHeight() {

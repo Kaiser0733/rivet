@@ -60,12 +60,13 @@ class ProjectStateFilesTest {
     @Test fun runJournalPersistsUnderRivetAndRecoversInterrupted() = runBlocking {
         val files = ProjectStateFiles(workspace)
         val journal = RunJournal(ProjectRunStorage(files))
-        var run = RunMachine.begin("run-1", workspace.tree.toString(), "Build the feature", now = 1)
+        var run = RunMachine.begin("run-1", workspace.tree.toString(), "Build the feature",
+            now = 1, sessionId = "chat")
         run = RunMachine.start(run, now = 2)
         run = RunMachine.step(run, "read the fixture", now = 3)
         journal.save(run)
 
-        val recovered = RunJournal(ProjectRunStorage(ProjectStateFiles(workspace))).recoverLatest()
+        val recovered = RunJournal(ProjectRunStorage(ProjectStateFiles(workspace))).recoverLatest("chat")
         assertNotNull(recovered)
         assertEquals(RunPauseReason.Interrupted, recovered!!.pause)
         assertEquals(1, recovered.lastCompletedStep)

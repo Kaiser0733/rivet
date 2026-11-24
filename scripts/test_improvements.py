@@ -113,10 +113,11 @@ class ImprovementsTest(unittest.TestCase):
         chat = source("ui/chat/ChatScreen.kt")
         markdown = chat.split("internal fun AssistantMarkdown(", 1)[1].split("private fun InlineMarkdown(", 1)[0]
         self.assertIn("inline = true", markdown)
-        self.assertIn("InlineChatImage(bitmap", markdown)
+        self.assertIn("ProjectInlineImage(block, path, links, open)", markdown)
+        self.assertIn("BrowserImage(block, unavailable = block.unavailableText(), inline = true)", markdown)
         app_image = chat.split("private fun BrowserImage(", 1)[1].split("private fun MarkdownTableCell(", 1)[0]
-        self.assertIn("else if (inline)", app_image)
-        self.assertIn("InlineChatImage(bitmap", app_image)
+        self.assertIn("ReservedChatImage(preview, description, open = if (inline) {", app_image)
+        self.assertIn("else null, inline = inline)", app_image)
         self.assertIn("LocalOpenChatImage.current", app_image)
         self.assertIn("LocalOpenChatImage provides openChatImage", chat)
         image = source("ui/chat/InlineChatImage.kt")

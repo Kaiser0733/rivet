@@ -17,7 +17,7 @@ data class ReaderBlock(
 object ReaderBlocks {
     private val heading = Regex("^(#{1,6})\\s+(.+)$")
     private val bullet = Regex("^[-*]\\s+(.+)$")
-    private val link = Regex("\\[([^\\]]+)]\\(([^)]+)\\)")
+    private val link = Regex("""\[((?:[^\[\]\r\n]|\[[^\[\]\r\n]*])+)]\(([^)]+)\)""")
 
     fun parse(markdown: String): List<ReaderBlock> {
         val blocks = mutableListOf<ReaderBlock>()
@@ -45,14 +45,14 @@ object ReaderBlocks {
                 return@forEach
             }
             if (inCode) { code.appendLine(line); return@forEach }
+            val headingMatch = heading.matchEntire(line.trimStart())
             when {
                 line.isBlank() -> flushParagraph()
-                heading.matches(line) -> {
+                headingMatch != null -> {
                     flushParagraph()
-                    val match = heading.matchEntire(line)!!
-                    val level = match.groupValues[1].length.coerceIn(1, 6)
+                    val level = headingMatch.groupValues[1].length.coerceIn(1, 6)
                     blocks += ReaderBlock(ReaderBlockKind.Heading, level,
-                        inline(match.groupValues[2].trim()))
+                        inline(headingMatch.groupValues[2].trim()))
                 }
                 bullet.matches(line) -> {
                     flushParagraph()
