@@ -99,6 +99,8 @@ data class AgentApprovalRequest(
     val dangerous: Boolean = false,
     val approvalToken: Long = 0L,
     val requester: String? = null,
+    /** True when this mutation is inside the project tree and a recent turn checkpoint can restore it. */
+    val undoable: Boolean = false,
 )
 
 /** Execution effects drive integrity work independently from human confirmation. */
