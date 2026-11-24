@@ -25,9 +25,17 @@ class CoordinatorBudgetTest {
         assertTrue(tools.size >= 45)
     }
 
-    @Test fun emptyCloudProjectBaselineComesFromSystemAndToolDefinitions() {
+    @Test fun emptyCloudProjectPinsTheDeviceBaseline() {
+        assertEmptyCloudProjectBaseline("deepseek-ai/DeepSeek-V4.1-Flash", 7_190)
+    }
+
+    @Test fun emptyCloudProjectPinsTheSyntheticBaseline() {
+        assertEmptyCloudProjectBaseline("test-model", 7_183)
+    }
+
+    private fun assertEmptyCloudProjectBaseline(model: String, expectedTokens: Long) {
         val config = ProviderConfig(id = "baseline", name = "Baseline", type = ProviderType.OpenAiCompatible,
-            baseUrl = "https://example.invalid/v1", model = "test-model", manualContextWindowTokens = 16_000)
+            baseUrl = "https://example.invalid/v1", model = model, manualContextWindowTokens = 16_000)
         val system = ChatViewModel.systemInstruction(workspace = true, phoneAccess = true,
             presentAvailable = true, archiveAvailable = true)
         val tools = BrowserTools.definitions + AgentToolExecutor.definitions +
@@ -47,7 +55,9 @@ class CoordinatorBudgetTest {
         assertEquals(0, ContextBudget.attachedImageCount(request.messages))
         assertEquals(baseline, ContextBudget.estimateRequestTokens(request))
         assertEquals(baseline, reading.usedTokens)
+        assertEquals(expectedTokens, reading.usedTokens)
         assertEquals(16_000, reading.contextWindow)
+        assertEquals(45, reading.percent)
         println("Empty cloud project: ${tools.size} tools, system=$systemBytes B, tools=$toolBytes B, " +
             "estimated framing=$framingBytes B, model=$modelBytes B, history=$historyBytes B, estimate=$baseline")
     }
