@@ -7,6 +7,7 @@ import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Environment
 import android.provider.DocumentsContract
+import android.util.Log
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.AgentLoop
 import com.kaiser.rivet.agent.AgentToolCall
@@ -151,7 +152,9 @@ internal class TermuxBridge(context: Context) {
             val result = if (fallback == null) {
                 withTimeoutOrNull(args.timeout) { returned.await() }
             } else {
-                TermuxFileWait(fallback.outputPath, fallback::completedResult).await(returned, args.timeout)
+                TermuxFileWait(fallback.outputPath, fallback::completedResult, onReadOutcome = { outcome ->
+                    Log.d("RivetTermux", "Saved command output: $outcome")
+                }).await(returned, args.timeout)
             }
             result ?: fallback?.partialResult() ?: TermuxRunResult(error = "termux_timeout")
         } catch (_: SecurityException) {
@@ -201,7 +204,7 @@ internal class TermuxBridge(context: Context) {
             try {
                 block()
             } catch (failure: WorkspaceFailure) {
-                readFailure = failure.reason
+                if (readFailure?.retryableTermuxRead() != false) readFailure = failure.reason
                 null
             }
     }

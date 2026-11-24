@@ -2,10 +2,7 @@ package com.kaiser.rivet.runtime
 
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import kotlinx.coroutines.Deferred
-import kotlinx.coroutines.async
-import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.delay
-import kotlinx.coroutines.selects.select
 import kotlinx.coroutines.withTimeoutOrNull
 
 internal data class TermuxRunResult(
@@ -29,57 +26,48 @@ internal class TermuxFileWait(
     private val outputPath: String,
     private val read: suspend () -> TermuxFileRead,
     private val pollMillis: Long = 500,
+    private val onReadOutcome: (String) -> Unit = {},
 ) {
     suspend fun await(returned: Deferred<TermuxRunResult>, timeoutMillis: Long): TermuxRunResult? {
-        var emptyBroadcast = false
-        var lastFailure: WorkspaceFailure.Reason? = null
+        var lastRead: TermuxFileRead = TermuxFileRead.Missing
         val result = withTimeoutOrNull(timeoutMillis) {
-            if (returned.isCompleted) {
-                val broadcast = returned.await()
-                if (broadcast.hasReply()) return@withTimeoutOrNull broadcast
-            }
-            coroutineScope {
-                val files = async { awaitFiles { lastFailure = it } }
-                try {
-                    select<TermuxRunResult?> {
-                        returned.onAwait { broadcast ->
-                            if (broadcast.hasReply()) {
-                                broadcast
-                            } else {
-                                emptyBroadcast = true
-                                withTimeoutOrNull(FILE_SETTLE_MILLIS) { files.await() }
-                            }
-                        }
-                        files.onAwait { it }
-                    }
-                } finally {
-                    files.cancel()
-                }
-            }
+            awaitFiles { lastRead = it }
         }
-        return result ?: if (emptyBroadcast) {
-            TermuxRunResult(
-                error = "termux_output_missing",
-                detail = "${lastFailure?.name ?: "MISSING"}: $outputPath",
-                outputPath = outputPath,
-            )
+        val outcome = when (val read = lastRead) {
+            TermuxFileRead.Missing -> "MISSING"
+            is TermuxFileRead.Failed -> read.reason.name
+            is TermuxFileRead.Done -> "DONE exit=${read.result.exitCode} " +
+                "stdout=${read.result.stdout.length} stderr=${read.result.stderr.length}"
+        }
+        onReadOutcome(outcome)
+        return result ?: if (returned.isCompleted || lastRead != TermuxFileRead.Missing) {
+            missingOutput(outcome)
         } else null
     }
 
-    private fun TermuxRunResult.hasReply() = error != null || stdout.isNotEmpty() || stderr.isNotEmpty()
-
-    private suspend fun awaitFiles(onFailure: (WorkspaceFailure.Reason) -> Unit): TermuxRunResult {
+    private suspend fun awaitFiles(onRead: (TermuxFileRead) -> Unit): TermuxRunResult {
         while (true) {
-            when (val attempt = read()) {
+            val attempt = read()
+            onRead(attempt)
+            when (attempt) {
                 TermuxFileRead.Missing -> Unit
-                is TermuxFileRead.Failed -> onFailure(attempt.reason)
-                is TermuxFileRead.Done -> return attempt.result
+                is TermuxFileRead.Failed -> if (!attempt.reason.retryableTermuxRead()) {
+                    return missingOutput(attempt.reason.name)
+                }
+                is TermuxFileRead.Done -> if (attempt.result.stdout.isNotEmpty() || attempt.result.stderr.isNotEmpty()) {
+                    return attempt.result
+                }
             }
             delay(pollMillis)
         }
     }
 
-    private companion object {
-        const val FILE_SETTLE_MILLIS = 5_000L
-    }
+    private fun missingOutput(outcome: String) = TermuxRunResult(
+        error = "termux_output_missing",
+        detail = "$outcome: $outputPath",
+        outputPath = outputPath,
+    )
 }
+
+internal fun WorkspaceFailure.Reason.retryableTermuxRead() =
+    this == WorkspaceFailure.Reason.MISSING || this == WorkspaceFailure.Reason.PROVIDER
