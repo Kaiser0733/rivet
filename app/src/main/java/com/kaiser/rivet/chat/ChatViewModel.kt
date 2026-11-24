@@ -1,5 +1,6 @@
 package com.kaiser.rivet.chat
 
+import android.util.Size
 import android.app.Application
 import android.net.ConnectivityManager
 import android.net.Network
@@ -929,11 +930,17 @@ class ChatViewModel private constructor(
         return workspaceSelection.restore()?.first?.takeIf { it.tree.toString() == identity }
     }
 
-    internal suspend fun previewProjectFile(path: String, identity: String?): FilePreviewResult {
+    internal suspend fun previewProjectFile(
+        path: String,
+        identity: String?,
+        onImageBounds: suspend (Size) -> Unit = {},
+    ): FilePreviewResult {
         if (identity == null) return FilePreviewResult.WrongProject
         return try {
             val workspace = previewWorkspace(identity) ?: return FilePreviewResult.WrongProject
-            val content = WorkspaceFilePreview.read(workspace, path)
+            val content = WorkspaceFilePreview.read(workspace, path) { bounds ->
+                if (previewIdentityMatches(identity)) onImageBounds(bounds)
+            }
             if (previewIdentityMatches(identity)) content else FilePreviewResult.WrongProject
         } catch (cancelled: CancellationException) {
             throw cancelled

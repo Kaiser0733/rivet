@@ -65,7 +65,6 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.BorderStroke
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.rememberScrollState
@@ -117,8 +116,6 @@ import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
-import androidx.compose.ui.graphics.asImageBitmap
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalDensity
@@ -306,8 +303,9 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
             val identity = state.currentSessionWorkspaceId
             val session = state.currentSessionId
             AssistantFileLinks(
+                identity = identity,
                 resolve = { paths -> chatViewModel.existingProjectFiles(paths, identity) },
-                load = { path -> chatViewModel.previewProjectFile(path, identity) },
+                load = { path, bounds -> chatViewModel.previewProjectFile(path, identity, bounds) },
                 open = { path ->
                     val exists = path in chatViewModel.existingProjectFiles(setOf(path), identity)
                     if (exists && chatViewModel.uiState.value.currentSessionId == session) {
@@ -1401,25 +1399,20 @@ private fun BrowserImage(
 ) {
     val context = LocalContext.current
     val openImage = LocalOpenChatImage.current
-    val preview by key(image.source) {
-        produceState<FilePreviewResult?>(null, context, image.source) {
-            value = loadAppChatImage(context, image.source, maxEdge = if (inline) 1280 else 1536)
+    val preview by key(context, image.source, inline) {
+        produceState<ChatImageState>(ChatImageState.Pending) {
+            loadChatImage { bounds ->
+                loadAppChatImage(context, image.source, maxEdge = if (inline) 1280 else 1536,
+                    onImageBounds = bounds)
+            }
         }
     }
-    val bitmap = (preview as? FilePreviewResult.Image)?.bitmap
     val description = displaySafeText(image.alt).ifBlank { "Browser screenshot" }
-    if (bitmap == null) {
-        if (preview != null) Text(unavailable, style = MaterialTheme.typography.bodySmall,
+    ReservedChatImage(preview, description, open = if (inline) {
+        openImage?.let { open -> { open(image.source) } }
+    } else null, inline = inline) {
+        Text(unavailable, style = MaterialTheme.typography.bodySmall,
             color = MaterialTheme.colorScheme.onSurfaceVariant)
-    } else if (inline) {
-        InlineChatImage(bitmap, description, openImage?.let { open -> { open(image.source) } })
-    } else {
-        Image(
-            bitmap = bitmap.asImageBitmap(),
-            contentDescription = description,
-            modifier = Modifier.fillMaxWidth().clip(RoundedCornerShape(6.dp)),
-            contentScale = ContentScale.FillWidth,
-        )
     }
 }
 
@@ -1566,14 +1559,14 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
 @Composable
 private fun ProjectInlineImage(image: ChatMarkdownBlock.Image, path: String, links: AssistantFileLinks,
                                onOpen: (String) -> Unit) {
-    val preview by produceState<FilePreviewResult?>(null, links, path) {
-        value = links.load(path)
+    val preview by key(links.identity, path) {
+        produceState<ChatImageState>(ChatImageState.Pending, links) {
+            loadChatImage { bounds -> links.load(path, bounds) }
+        }
     }
-    val bitmap = (preview as? FilePreviewResult.Image)?.bitmap
-    if (bitmap == null) {
-        if (preview != null) Text(image.unavailableText(), style = MaterialTheme.typography.bodyMedium)
-    } else {
-        InlineChatImage(bitmap, displaySafeText(image.alt).ifBlank { "Project image" }) { onOpen(path) }
+    ReservedChatImage(preview, displaySafeText(image.alt).ifBlank { "Project image" },
+        open = { onOpen(path) }) {
+        Text(image.unavailableText(), style = MaterialTheme.typography.bodyMedium)
     }
 }
 
