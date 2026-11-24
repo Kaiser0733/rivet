@@ -32,18 +32,20 @@ class BrowserTools(private val session: BrowserSession) {
         visionSupport: () -> VisionSupport = { VisionSupport.Unknown },
     ): PreparedAgentTool? {
         if (call.name !in NAMES) return null
-        if (lease != null && !lease.tryAcquire(owner, call)) {
-            return PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
-                AgentToolResult(
-                    call.id,
-                    call.name,
-                    AgentToolError.content("browser_busy"),
-                    error = true,
-                    summary = "Failed  ${call.name}",
-                )
-            }
-        }
-        return prepare(call, visionSupport) { lease?.tryAcquireRenderer(owner) != false }
+        if (lease?.blockedFor(owner, call) == true) return busy(call)
+        val prepared = prepare(call, visionSupport) { lease?.tryAcquireRenderer(owner) != false }
+            ?: return null
+        return lease?.wrap(owner, prepared) ?: prepared
+    }
+
+    private fun busy(call: AgentToolCall) = PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
+        AgentToolResult(
+            call.id,
+            call.name,
+            AgentToolError.content("browser_busy"),
+            error = true,
+            summary = "Failed  ${call.name}",
+        )
     }
 
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool? =
@@ -719,6 +721,35 @@ class BrowserDrivingLease {
         if (holder != null && holder != owner) return@synchronized false
         holder = owner
         true
+    }
+
+    internal fun blockedFor(owner: String, call: AgentToolCall): Boolean =
+        isDrivingCall(call) && synchronized(lock) { holder != null && holder != owner }
+
+    /**
+     * A driving action holds the renderer only for its own execution. The urgent
+     * text/reader actions stay unleased; browser_open may claim a renderer for a
+     * visual fallback, so it is released here too.
+     */
+    internal fun wrap(owner: String, prepared: PreparedAgentTool): PreparedAgentTool {
+        val driving = isDrivingCall(prepared.call)
+        return prepared.withExecute {
+            if (driving && !tryAcquireRenderer(owner)) {
+                AgentToolResult(
+                    prepared.call.id,
+                    prepared.call.name,
+                    AgentToolError.content("browser_busy"),
+                    error = true,
+                    summary = "Failed  ${prepared.call.name}",
+                )
+            } else {
+                try {
+                    prepared.execute()
+                } finally {
+                    release(owner)
+                }
+            }
+        }
     }
 
     fun release(owner: String) {
