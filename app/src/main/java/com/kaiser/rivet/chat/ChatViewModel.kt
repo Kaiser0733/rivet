@@ -2832,12 +2832,8 @@ class ChatViewModel private constructor(
         result: AgentRunResult, durable: List<AgentMessage>, config: ProviderConfig,
     ) {
         val error = when (result.stopReason) {
-            AgentStopReason.Completed -> {
-                val last = result.messages.lastOrNull()
-                if (last?.role == AgentRole.Assistant && last.text.isBlank() && last.toolCalls.isEmpty()) {
-                    ProviderError.EmptyResponse.text()
-                } else null
-            }
+            AgentStopReason.Completed -> null
+            AgentStopReason.EmptyResponse -> ProviderError.EmptyResponse.text()
             AgentStopReason.RunawayGuard -> "Rivet stopped after reaching its safety limit. Try a smaller request."
             AgentStopReason.WorkspaceChanged -> "The project changed while Rivet was working, so it stopped. Completed changes remain."
             AgentStopReason.SessionLimit -> CONTEXT_LIMIT_ERROR
@@ -2878,10 +2874,10 @@ class ChatViewModel private constructor(
             AgentStopReason.CheckpointUnavailable, AgentStopReason.ContextUnavailable,
             AgentStopReason.ContextTooSmall, AgentStopReason.NoProgress,
             AgentStopReason.RuntimeBlocked, AgentStopReason.CapabilityBlocked,
-            AgentStopReason.RunawayGuard ->
+            AgentStopReason.RunawayGuard, AgentStopReason.EmptyResponse ->
                 finishRun(RunPhase.Failed, result.failureCode ?: error)
         }
-        val persisted = if (error == ProviderError.EmptyResponse.text()) durable.dropLast(1) else durable
+        val persisted = durable
         persistTurn(persisted, interrupted = capturePause != null)
         activeMessages = persisted
         val progressNote = result.messages.lastOrNull {
@@ -2911,13 +2907,10 @@ class ChatViewModel private constructor(
         var completedDuration: Long? = null
         var completedTurnIndex: Int? = null
         _uiState.update { state ->
-            val rawReasoning = if (error == ProviderError.EmptyResponse.text() && state.messages.isNotEmpty()) {
-                state.messageReasoning - (state.messages.size - 1)
-            } else state.messageReasoning
             val remapped = com.kaiser.rivet.ui.chat.remapTurnMetadataAfterVisibilityChange(
                 oldMessages = state.messages,
                 newMessages = visible,
-                oldReasoning = rawReasoning,
+                oldReasoning = state.messageReasoning,
                 oldDurations = state.turnDurationsMs,
                 isInternal = { it.role == AgentRole.Context || it.internalContext != null },
                 isUser = { it.role == AgentRole.User },

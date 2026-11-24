@@ -19,6 +19,7 @@ import java.security.MessageDigest
 
 enum class AgentStopReason {
     Completed,
+    EmptyResponse,
     RunawayGuard,
     WorkspaceChanged,
     SessionLimit,
@@ -167,6 +168,8 @@ class AgentLoop(
             for (event in events) append(event)
             return null
         }
+        var blankAnswerRetries = 0
+        var requestFinalAnswer = false
         while (modelIterations < RUNAWAY_MODEL_ITERATIONS) {
             currentCoroutineContext().ensureActive()
             if (!workspaceIsCurrent()) return AgentRunResult(messages, AgentStopReason.WorkspaceChanged,
@@ -194,7 +197,10 @@ class AgentLoop(
                         onText(text)
                     }
                 }
-                return dsml.finish(requestModel(messages.toList(), tools, dsml::delta), tools)
+                val history = if (requestFinalAnswer) {
+                    messages + AgentMessage.user("Give the final answer to the original request using the tool results above.")
+                } else messages.toList()
+                return dsml.finish(requestModel(history, tools, dsml::delta), tools)
             }
             val response = try {
                 try { requestOnce() }
@@ -274,6 +280,17 @@ class AgentLoop(
                 throw e
             }
             modelIterations++
+            requestFinalAnswer = false
+            if (response.toolCalls.isEmpty() && response.text.isBlank()) {
+                val afterTool = messages.lastOrNull { it.role != AgentRole.Context }?.role == AgentRole.Tool
+                if (afterTool && blankAnswerRetries < MAX_BLANK_ANSWER_RETRIES) {
+                    blankAnswerRetries++
+                    requestFinalAnswer = true
+                    continue
+                }
+                return AgentRunResult(messages, AgentStopReason.EmptyResponse, modelIterations, toolCalls,
+                    mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
+            }
             val callIds = response.toolCalls.map { it.id }
             if (callIds.any(String::isBlank) || callIds.toSet().size != callIds.size) {
                 throw ProviderError.InvalidResponse("ambiguous tool call ids")
@@ -625,6 +642,7 @@ class AgentLoop(
 
     companion object {
         // Emergency ceilings for broken model loops, not normal workflow quotas.
+        private const val MAX_BLANK_ANSWER_RETRIES = 2
         const val RUNAWAY_MODEL_ITERATIONS = 200
         const val RUNAWAY_TOOL_CALLS = 1000
         // UTF-8 bytes of structured result content after tool JSON encoding.
