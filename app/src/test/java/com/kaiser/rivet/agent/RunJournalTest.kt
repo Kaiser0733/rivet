@@ -5,6 +5,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Rule
 import org.junit.Test
@@ -31,14 +32,14 @@ class RunJournalTest {
     @Test fun processDeathRecoversTheLastCompletedStepAndResumeContext() = runBlocking {
         val storage = DirectoryRunStorage(temp.root)
         val journal = RunJournal(storage)
-        var run = RunMachine.begin("r2", "ws", "Long job", now = 1)
+        var run = RunMachine.begin("r2", "ws", "Long job", now = 1, sessionId = "chat")
         run = RunMachine.start(run, now = 2)
         run = RunMachine.step(run, "step one", now = 3)
         run = RunMachine.step(run, "step two", now = 4)
         journal.save(run)
 
         // A new process: recoverLatest never pretends this completed.
-        val recovered = RunJournal(DirectoryRunStorage(temp.root)).recoverLatest()!!
+        val recovered = RunJournal(DirectoryRunStorage(temp.root)).recoverLatest("chat")!!
         assertEquals(RunPhase.Paused, recovered.phase)
         assertEquals(RunPauseReason.Interrupted, recovered.pause)
         assertEquals(2, recovered.lastCompletedStep)
@@ -50,7 +51,42 @@ class RunJournalTest {
         assertEquals(3, next.lastCompletedStep)
         assertEquals(2, journal.load("r2")!!.lastCompletedStep) // old snapshot until saved
         journal.save(next)
-        assertNotNull(journal.latest())
+        assertNotNull(journal.latest("chat"))
+    }
+
+    @Test fun anotherChatCannotRecoverOrInjectTheNewestProjectRun() = runBlocking {
+        val journal = RunJournal(DirectoryRunStorage(temp.root))
+        var original = RunMachine.start(RunMachine.begin("run-a", "ws", "Original",
+            now = 1, sessionId = "chat-a"), now = 2)
+        repeat(12) { original = RunMachine.step(original, "step ${it + 1}", now = 3L + it) }
+        journal.save(original)
+        val second = RunMachine.begin("run-b", "ws", "Second", now = 30, sessionId = "chat-b")
+        journal.save(second)
+
+        val newChat = journal.recoverLatest("chat-c")
+        assertNull(newChat)
+        assertNull(newChat?.recoveryMessage())
+        assertFalse(newChat?.resumable == true)
+        assertTrue(RunContext.updates(emptyList(), "ws", original.ownedBy("chat-c")).isEmpty())
+        assertEquals(RunPhase.Running, journal.load(original.id)?.phase)
+        assertEquals(second.id, journal.recoverLatest("chat-b")?.id)
+
+        val resumed = requireNotNull(journal.recoverLatest("chat-a"))
+        assertEquals(original.id, resumed.id)
+        assertEquals(RunPauseReason.Interrupted, resumed.pause)
+        assertTrue(resumed.recoveryMessage().orEmpty().contains("12 completed step"))
+        assertTrue(RunContext.updates(emptyList(), "ws", resumed.ownedBy("chat-a")).isNotEmpty())
+    }
+
+    @Test fun legacyRunWithoutSessionIdStaysHidden() = runBlocking {
+        val storage = DirectoryRunStorage(temp.root)
+        storage.write("${RunJournal.ROOT}/legacy/run.json",
+            """{"id":"legacy","workspaceId":"ws","title":"Original","phase":"Running"}""")
+        val journal = RunJournal(storage)
+
+        assertNotNull(journal.load("legacy"))
+        assertNull(journal.recoverLatest("new-chat"))
+        assertNull(journal.recoverLatest(null))
     }
 
     @Test fun systemTimeoutAndNetworkLossPauseWithoutLosingTheRun() {

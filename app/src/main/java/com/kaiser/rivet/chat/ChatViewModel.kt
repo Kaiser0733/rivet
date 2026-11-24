@@ -64,6 +64,7 @@ import com.kaiser.rivet.agent.SlashCommands
 import com.kaiser.rivet.agent.BuiltInSlash
 import com.kaiser.rivet.agent.lineForSession
 import com.kaiser.rivet.agent.ownedBy
+import com.kaiser.rivet.agent.recoveryMessage
 import com.kaiser.rivet.agent.parseGoalCommand
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.InternalContext
@@ -603,6 +604,7 @@ class ChatViewModel private constructor(
     private var memoryMarkdown: String = ""
     private var currentRun: RunRecord? = null
     private var runResumeContext = false
+    private fun currentSessionRun() = currentRun.ownedBy(_uiState.value.currentSessionId)
     private val spendLedger = RunSpendLedger(
         spendStore = spendStore,
         readCaps = { _uiState.value.spendCaps },
@@ -626,7 +628,7 @@ class ChatViewModel private constructor(
         viewModelScope.launch {
             val activeSend = sendJob
             if (activeSend?.isActive == true) activeSend.join()
-            if (currentRun?.pause == RunPauseReason.NetworkLost) {
+            if (currentSessionRun()?.pause == RunPauseReason.NetworkLost) {
                 retryInterruptedTurn()
             }
         }
@@ -635,7 +637,7 @@ class ChatViewModel private constructor(
     internal fun onConnectivityLost() {
         viewModelScope.launch {
             val hasCloud = currentCloud || activeSupervisor?.hasLiveCloudWorker() == true
-            if (hasCloud && _uiState.value.streaming && currentRun?.phase == RunPhase.Running) {
+            if (hasCloud && _uiState.value.streaming && currentSessionRun()?.phase == RunPhase.Running) {
                 pauseCurrentRun(RunPauseReason.NetworkLost)
             }
         }
@@ -778,27 +780,33 @@ class ChatViewModel private constructor(
      * Read goal, memory and the newest run journal from the selected project. Every call
      * goes to SAF, so edits to the .rivet goal and memory files outside Rivet are visible immediately.
      */
-    private suspend fun refreshGoalMemory(workspace: SafWorkspace?, sessionId: String?,
-                                          recoverRun: Boolean = true) {
-        projectState = workspace?.let(::ProjectStateFiles)
-        runJournal = projectState?.let { RunJournal(ProjectRunStorage(it)) }
-        val goalRead = try { Result.success(projectState?.loadGoal()?.takeIf { it.state != GoalState.Dropped }) }
+    private suspend fun refreshGoalMemory(workspace: SafWorkspace?, sessionId: String?) {
+        val files = workspace?.let(::ProjectStateFiles)
+        val journal = files?.let { RunJournal(ProjectRunStorage(it)) }
+        projectState = files
+        runJournal = journal
+        val goalRead = try { Result.success(files?.loadGoal()?.takeIf { it.state != GoalState.Dropped }) }
             catch (e: CancellationException) { throw e } catch (e: Exception) { Result.failure(e) }
-        projectGoal = goalRead.getOrNull()
-        sessionGoal = try { sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped } }
+        val storedSessionGoal = try { sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped } }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
-        memoryMarkdown = try { projectState?.loadMemory().orEmpty() }
+        val memory = try { files?.loadMemory().orEmpty() }
             catch (e: CancellationException) { throw e } catch (_: Exception) { "" }
-        if (workspace == null) {
-            currentRun = null
-        } else if (recoverRun) {
-            currentRun = try { runJournal?.recoverLatest() }
-                catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+        if (_uiState.value.currentSessionId != sessionId || runJournal !== journal) return
+        val run = if (_uiState.value.streaming) currentSessionRun() else {
+            try { journal?.recoverLatest(sessionId) }
+            catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         }
+        if (_uiState.value.currentSessionId != sessionId || runJournal !== journal) return
+        projectGoal = goalRead.getOrNull()
+        sessionGoal = storedSessionGoal
+        memoryMarkdown = memory
         val goal = projectGoal.ownedBy(sessionId) ?: sessionGoal.ownedBy(sessionId)
-        val run = currentRun
-        val resumable = run?.resumable == true
-        runResumeContext = resumable
+        if (!_uiState.value.streaming) {
+            currentRun = run
+            runResumeContext = run?.resumable == true
+        }
+        val visibleRun = currentSessionRun()
+        val recovery = visibleRun?.recoveryMessage()
         val projectMarkdown = projectGoal?.let { GoalDocument.render(it) }
         val externalGoal = goalRead.isSuccess &&
             projectGoalWatcher.observe(workspace?.tree?.toString(), projectMarkdown)
@@ -807,12 +815,10 @@ class ChatViewModel private constructor(
                 goalAttachOffer = workspace != null && projectGoal == null && sessionGoal != null,
                 memoryMarkdown = memoryMarkdown,
                 memoryLines = MemoryFormat.facts(memoryMarkdown),
-                run = run,
+                run = visibleRun,
                 notice = if (externalGoal) "Goal changed outside Rivet; reloaded." else it.notice,
-                runRecovery = if (resumable)
-                    "Run ${run?.plainState() ?: "paused"} after ${run?.lastCompletedStep ?: 0} completed step(s). Resume to continue."
-                else null,
-                interruptedTurn = it.interruptedTurn || resumable)
+                runRecovery = recovery,
+                interruptedTurn = it.interruptedTurn || recovery != null)
         }
         if (workspace != null) refreshRunCheckpoints()
     }
@@ -890,7 +896,7 @@ class ChatViewModel private constructor(
                             currentSessionWorkspaceId = identity, usage = null, contextEstimate = null, contextMeter = null,
                             turnDurationsMs = emptyMap(),
                             lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
-                            interruptedTurn = false) }
+                            interruptedTurn = false, run = null, runRecovery = null) }
                     }
                 }
                 refreshGoalMemory(workspace, _uiState.value.currentSessionId)
@@ -1493,7 +1499,7 @@ class ChatViewModel private constructor(
                     notice = if (externalGoal) "Goal changed outside Rivet; reloaded." else it.notice)
             }
             updates += GoalMemoryContext.updates(candidate, workspaceId, goal, memory)
-            if (runResumeContext) currentRun?.let {
+            if (runResumeContext) currentSessionRun()?.takeIf { it.workspaceId == workspaceId }?.let {
                 updates += RunContext.updates(candidate, workspaceId, it)
             }
             pendingRollback?.let { text ->
@@ -1512,12 +1518,13 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun startRun(workspaceId: String, title: String,
-                                 resuming: Boolean): RunRecord? {
+                                 sessionId: String?, resuming: Boolean): RunRecord? {
+        if (sessionId == null || _uiState.value.currentSessionId != sessionId) return null
         val journal = runJournal ?: projectState?.let { RunJournal(ProjectRunStorage(it)) } ?: return null
         runJournal = journal
-        val resumed = if (resuming) currentRun?.takeIf { it.resumable } else null
+        val resumed = if (resuming) currentSessionRun()?.takeIf { it.resumable && it.workspaceId == workspaceId } else null
         val next = if (resumed != null) RunMachine.resume(resumed)
-        else RunMachine.start(RunMachine.begin(UUID.randomUUID().toString(), workspaceId, title))
+        else RunMachine.start(RunMachine.begin(UUID.randomUUID().toString(), workspaceId, title, sessionId = sessionId))
         currentRun = next
         runResumeContext = resumed != null
         if (resumed != null) PersistentProcessService.cancelBudgetPause(getApplication<Application>())
@@ -1541,7 +1548,7 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun persistRunStep(summary: String) {
-        val run = currentRun ?: return
+        val run = currentSessionRun() ?: return
         if (run.phase != RunPhase.Running) return
         val next = try { RunMachine.step(run, summary) }
             catch (_: IllegalStateException) { return }
@@ -1552,7 +1559,7 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun finishRun(phase: RunPhase, failure: String? = null) {
-        val run = currentRun ?: return
+        val run = currentSessionRun() ?: return
         if (run.phase in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped)) return
         val next = try { RunMachine.finish(run, phase, failure) }
             catch (_: IllegalStateException) { return }
@@ -1788,16 +1795,22 @@ class ChatViewModel private constructor(
     fun dismissInterruptedTurn() {
         val dismissed = _uiState.value
         if (dismissed.streaming) return
+        val dismissedRun = currentSessionRun()?.takeIf { it.resumable }
         _uiState.update { state ->
             state.copy(interruptedTurn = false, runRecovery = null)
         }
         viewModelScope.launch {
             try {
-                currentRun?.id?.let { runId ->
-                    ChatSupervisorServices.dismissInterruptedWorkers(workerStore, runId)
+                if (dismissedRun != null) {
+                    ChatSupervisorServices.dismissInterruptedWorkers(workerStore, dismissedRun.id)
+                    if (currentSessionRun()?.id == dismissedRun.id && !_uiState.value.streaming) {
+                        finishRun(RunPhase.Stopped)
+                    }
                 }
-                if (currentRun?.resumable == true) finishRun(RunPhase.Stopped)
-                sessionStore.markInterrupted(false)
+                if (_uiState.value.currentSessionId != dismissed.currentSessionId || _uiState.value.streaming) return@launch
+                val store = sessions
+                if (store != null) store.markInterrupted(false, dismissed.currentSessionId)
+                else sessionStore.markInterrupted(false)
                 val history = sessions?.list()
                 if (history != null) _uiState.update { it.copy(sessions = history) }
             } catch (e: CancellationException) { throw e
@@ -1962,7 +1975,7 @@ class ChatViewModel private constructor(
             val prompt = gesture?.task ?: trimmed
             updateSpendEstimate(snapshot.config)
             if (workspaceId != null) {
-                startRun(workspaceId, prompt, retryingInterrupted)
+                startRun(workspaceId, prompt, current.currentSessionId, retryingInterrupted)
             }
             suspend fun initialContext(messages: List<AgentMessage>): List<AgentMessage> = buildList {
                 if (activeSummary.isNotBlank() && messages.none { it.role == AgentRole.Context &&
@@ -2083,7 +2096,7 @@ class ChatViewModel private constructor(
             if (workspaceId != null && workspace != null) {
                 val boundWorkspaceId = workspaceId ?: workspace.tree.toString()
                 val supervisorServices = ChatSupervisorServices.createServices(
-                    workspaceId = boundWorkspaceId, runId = currentRun?.id ?: UUID.randomUUID().toString(),
+                    workspaceId = boundWorkspaceId, runId = currentSessionRun()?.id ?: UUID.randomUUID().toString(),
                     parentSessionId = _uiState.value.currentSessionId, workerStore = workerStore,
                     providerSource = providerSource, clientFactory = clientFactory, approvals = approvals,
                     checkpointGate = checkpointGate, coordinatorConfig = { snapshot.config },
@@ -2104,7 +2117,7 @@ class ChatViewModel private constructor(
                     services = supervisorServices,
                     parentScope = CoroutineScope(coroutineContext + scopeJob),
                     retryingInterrupted = retryingInterrupted,
-                    currentRunId = currentRun?.id,
+                    currentRunId = currentSessionRun()?.id,
                     onStateUpdate = { _subagents.value = it },
                     sessionId = { _uiState.value.currentSessionId },
                 )
@@ -2245,7 +2258,7 @@ class ChatViewModel private constructor(
             // a few tens of milliseconds is invisible while text keeps arriving. Reasoning
             // cannot be held back that way, see its handler below.
             val textWindow = PreviewWindow()
-            checkpointGate.beginTurn(workspaceId, currentRun?.takeIf { workspaceId != null }?.id, turnSessionId)
+            checkpointGate.beginTurn(workspaceId, currentSessionRun()?.takeIf { workspaceId != null }?.id, turnSessionId)
 
             val loop = AgentLoop(
                 requestModel = request@{ messages, _, onText ->
@@ -2717,7 +2730,7 @@ class ChatViewModel private constructor(
                     withContext(NonCancellable) { persistAcceptedTail(accepted) }
                 }
                 withContext(NonCancellable) {
-                    val live = currentRun
+                    val live = currentSessionRun()
                     if (live != null && live.phase !in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped, RunPhase.Paused)) {
                         try {
                             if (pauseRequestedTicket == ticket && live.phase == RunPhase.Running) {
@@ -2850,7 +2863,7 @@ class ChatViewModel private constructor(
             else -> null
         }
         if (capturePause != null) {
-            currentRun?.takeIf { it.phase == RunPhase.Running }?.let { run ->
+            currentSessionRun()?.takeIf { it.phase == RunPhase.Running }?.let { run ->
                 val paused = RunMachine.pause(run, capturePause)
                 currentRun = paused
                 runResumeContext = true
@@ -3441,7 +3454,6 @@ class ChatViewModel private constructor(
                     goal = project.goal.ownedBy(selected.id), goalLine = project.goal.lineForSession(selected.id),
                     goalAttachOffer = project.goalAttachOffer && project.goal?.sessionId == selected.id,
                     memoryMarkdown = project.memoryMarkdown, memoryLines = project.memoryLines,
-                    run = project.run, runRecovery = project.runRecovery,
                     spendCaps = spendStore.caps(), userPricePerMillionUsd = spendStore.userPricePerMillionUsd(),
                     spendLabel = project.spendLabel, runSpendUsd = project.runSpendUsd)
                 selected.workspaceId?.let { browser.bindProject(it) }

@@ -47,6 +47,7 @@ data class RunRecord(
     val steps: List<RunStep> = emptyList(),
     val lastCompletedStep: Int = 0,
     val failure: String? = null,
+    val sessionId: String? = null,
 ) {
     val interrupted: Boolean
         get() = phase == RunPhase.Running || (phase == RunPhase.Paused && pause == RunPauseReason.Interrupted)
@@ -65,11 +66,20 @@ data class RunRecord(
     }
 }
 
+internal fun RunRecord?.ownedBy(sessionId: String?): RunRecord? =
+    this?.takeIf { sessionId != null && it.sessionId == sessionId }
+
+internal fun RunRecord.recoveryMessage(): String? = if (resumable) {
+    "Run ${plainState()} after $lastCompletedStep completed step(s). Resume to continue."
+} else null
+
 /** Pure transitions so the persisted machine is testable without Android. */
 object RunMachine {
-    fun begin(id: String, workspaceId: String?, title: String, now: Long = System.currentTimeMillis()):
-        RunRecord = RunRecord(id = id, workspaceId = workspaceId, title = title.take(160),
-        phase = RunPhase.Queued, startedAt = now, updatedAt = now)
+    fun begin(
+        id: String, workspaceId: String?, title: String, now: Long = System.currentTimeMillis(),
+        sessionId: String? = null,
+    ): RunRecord = RunRecord(id = id, workspaceId = workspaceId, title = title.take(160),
+        phase = RunPhase.Queued, startedAt = now, updatedAt = now, sessionId = sessionId)
 
     fun start(run: RunRecord, now: Long = System.currentTimeMillis()): RunRecord = when (run.phase) {
         RunPhase.Queued, RunPhase.Paused -> run.copy(phase = RunPhase.Running, pause = null,
@@ -208,14 +218,16 @@ class RunJournal(private val storage: RunStorage) {
         try { json.decodeFromString(RunRecord.serializer(), it) } catch (_: Exception) { null }
     }
 
-    /** Newest run in this project; callers decide whether it is interrupted or history. */
-    suspend fun latest(): RunRecord? = storage.directories(ROOT).mapNotNull { id ->
-        load(id)
-    }.maxByOrNull { it.updatedAt }
+    suspend fun latest(sessionId: String?): RunRecord? {
+        if (sessionId == null) return null
+        return storage.directories(ROOT).mapNotNull { id ->
+            load(id).ownedBy(sessionId)
+        }.maxByOrNull { it.updatedAt }
+    }
 
     /** Recover a live run from a previous process without pretending it finished. */
-    suspend fun recoverLatest(): RunRecord? {
-        val latest = latest() ?: return null
+    suspend fun recoverLatest(sessionId: String?): RunRecord? {
+        val latest = latest(sessionId) ?: return null
         if (latest.phase in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped)) return latest
         val recovered = RunMachine.recover(latest)
         save(recovered)
