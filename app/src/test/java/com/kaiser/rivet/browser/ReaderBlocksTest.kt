@@ -6,6 +6,22 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderBlocksTest {
+    @Test fun whitespaceBeforeAnMdnHeadingDoesNotTurnItIntoProse() {
+        val block = ReaderBlocks.parse("    ## [Try it](https://example.org/#try_it)").single()
+
+        assertEquals(ReaderBlockKind.Heading, block.kind)
+        assertEquals(2, block.level)
+        assertEquals("Try it", block.spans.single().text)
+        assertEquals("https://example.org/#try_it", block.spans.single().url)
+    }
+
+    @Test fun bracketedCitationLabelsStayTappable() {
+        val span = ReaderBlocks.parse("[[1]](https://example.org/#cite_note-1)").single().spans.single()
+
+        assertEquals("[1]", span.text)
+        assertEquals("https://example.org/#cite_note-1", span.url)
+    }
+
     @Test fun headingsAndLinksBecomeStyledSpansWithoutSourceSyntax() {
         val blocks = ReaderBlocks.parse("## Authentication\n\nUse [the endpoint](https://example.com/v1) now.")
         assertEquals(ReaderBlockKind.Heading, blocks[0].kind)

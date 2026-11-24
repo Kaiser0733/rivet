@@ -6,6 +6,32 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class ReaderExtractorTest {
+    @Test fun keepsTheArticleHeadingFromRemovedChrome() {
+        val html = """<title>Tea - Wikipedia</title><main><header><h1 id="firstHeading">Tea</h1>
+            <nav>Page actions</nav></header><p>Tea is a beverage.</p></main>"""
+        val text = ReaderExtractor.extract(html, "https://en.wikipedia.org/wiki/Tea").text
+        val heading = ReaderBlocks.parse(text).first()
+
+        assertEquals(ReaderBlockKind.Heading, heading.kind)
+        assertEquals(1, heading.level)
+        assertEquals("Tea", heading.spans.single().text)
+        assertFalse(text.contains("Page actions"))
+    }
+
+    @Test fun infoboxCaptionsAndCellsStaySeparate() {
+        val html = """<main><p>Tea is a beverage.</p><table><caption>Tea types</caption>
+            <tr><td colspan="2"><figure><figcaption>Longjing being infused</figcaption></figure></td></tr>
+            <tr><th>Type</th><td>Hot or cold beverage</td></tr>
+            <tr><th>Origin</th><td>China<a href="#cite_note-1">[1]</a></td></tr></table></main>"""
+        val url = "https://en.wikipedia.org/wiki/Tea"
+        val blocks = ReaderBlocks.parse(ReaderExtractor.extract(html, url).text)
+        val lines = blocks.map { block -> block.spans.joinToString("") { it.text } }
+
+        assertEquals(listOf("Tea is a beverage.", "Tea types", "Longjing being infused",
+            "Type", "Hot or cold beverage", "Origin", "China[1]"), lines)
+        assertEquals("$url#cite_note-1", blocks.last().spans.last().url)
+    }
+
     private fun fixture(name: String): String =
         javaClass.classLoader!!.getResource("browser/$name")!!.readText()
 

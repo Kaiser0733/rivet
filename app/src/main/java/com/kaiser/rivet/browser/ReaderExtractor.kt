@@ -27,22 +27,27 @@ object ReaderExtractor {
     const val CHUNK_CHARS = 12_000
     private const val MIN_TEXT = 240
     private val OPACITY_ZERO_REGEX = Regex("""(?:^|;)opacity:0(?:\.0+)?(?:;|$)""")
-    private val BLOCK_TAGS = setOf("p", "div", "section", "article", "main", "ul", "ol", "table",
+    private val BLOCK_TAGS = setOf("p", "div", "section", "article", "main", "ul", "ol",
         "blockquote", "pre", "h1", "h2", "h3", "h4", "h5", "h6", "br", "li")
+    private val TABLE_BLOCKS = setOf("table", "tr", "td", "th", "caption", "figcaption")
 
     fun extract(html: String, url: String, visibleOnly: Boolean = true): ReaderDocument {
         val doc = Jsoup.parse(html, url)
-        doc.select("script,style,noscript,template,svg,nav,header,footer,aside,form,iframe").remove()
         doc.select("[aria-hidden=true]").remove()
         if (visibleOnly) removeHidden(doc)
+        val firstHeading = doc.selectFirst("h1")
+        doc.select("script,style,noscript,template,svg,nav,header,footer,aside,form,iframe").remove()
         val title = doc.title().trim().ifEmpty {
-            doc.selectFirst("h1")?.text()?.trim().orEmpty()
+            firstHeading?.text()?.trim().orEmpty()
         }
         val candidates = doc.select("article,main,[role=main],#content,.content,.post,.article,body")
         val winner = candidates.maxByOrNull(::score)
-        val text = winner?.let(::renderMarkdown)?.trim().orEmpty().ifBlank {
+        val body = winner?.let(::renderMarkdown)?.trim().orEmpty().ifBlank {
             doc.body()?.text()?.trim().orEmpty()
         }
+        val text = if (firstHeading != null && winner?.select("h1")?.contains(firstHeading) != true) {
+            listOf(renderMarkdown(firstHeading), body).filter { it.isNotBlank() }.joinToString("\n\n")
+        } else body
         val needsRenderer = needsRenderer(html, text, doc)
         val chunks = chunk(text, title)
         return ReaderDocument(url, title.ifBlank { url }, text, chunks, needsRenderer)
@@ -119,7 +124,10 @@ object ReaderExtractor {
                     val href = node.absUrl("href").ifBlank { node.attr("href") }
                     if (label.isNotEmpty() && isSafeReaderHref(href)) "[$label]($href)" else label
                 }
-                else -> node.childNodes().joinToString("") { inline(it) }
+                else -> {
+                    val text = node.childNodes().joinToString("") { inline(it) }
+                    if (node.normalName() in TABLE_BLOCKS) " $text " else text
+                }
             }
             else -> ""
         }
@@ -141,7 +149,11 @@ object ReaderExtractor {
                         "br" -> out.append('\n')
                         "a" -> out.append(inline(node))
                         else -> {
-                            if (node.tagName().lowercase() in BLOCK_TAGS) {
+                            if (node.normalName() in TABLE_BLOCKS) {
+                                out.append("\n\n")
+                                for (child in node.childNodes()) visit(child)
+                                out.append("\n\n")
+                            } else if (node.normalName() in BLOCK_TAGS) {
                                 for (child in node.childNodes()) visit(child)
                                 out.append('\n')
                             } else for (child in node.childNodes()) visit(child)
