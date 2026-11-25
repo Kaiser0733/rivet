@@ -15,6 +15,7 @@ import com.kaiser.rivet.runtime.PreviewPaths
 import com.kaiser.rivet.runtime.PreviewLaunch
 import com.kaiser.rivet.runtime.ProjectDownloader
 import com.kaiser.rivet.runtime.DownloadFailure
+import com.kaiser.rivet.runtime.isVcsPath
 import com.kaiser.rivet.workspace.GrantPath
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
@@ -677,9 +678,18 @@ class AgentToolExecutor(
         }
         val size = entry?.takeIf { !it.directory }?.size?.let { "\n%,d bytes".format(java.util.Locale.US, it) } ?: ""
         val warning = if (request.call.name == "delete_path") {
-            if (request.undoable)
-                "This may be one of your existing files. Undo is available only for the most recent 3 turns."
-            else "This may be one of your existing files. Deletion is permanent."
+            when {
+                !request.undoable -> "This may be one of your existing files. Deletion is permanent."
+                // Rivet never mirrors repository metadata into the project folder, so the
+                // checkpoint holds no copy of it. Say that instead of promising an Undo
+                // that cannot bring it back.
+                isVcsPath(target) ->
+                    "This may be one of your existing files. Rivet keeps no copy of repository metadata such as .git, so this cannot be undone."
+                // Ignored build folders are left out of the snapshot to stay inside the
+                // checkpoint limits, and a symlink is not regular content, so an Undo
+                // cannot bring either back.
+                else -> "This may be one of your existing files. Undo is available only for the most recent 3 turns, and does not cover ignored build folders or symlinks."
+            }
         } else "This may be one of your existing files."
         return request.copy(title = "$verb ${if (entry == null) "unverified" else "existing"} $kind?",
             detail = "${request.detail}$size\n$warning", dangerous = true)
