@@ -108,6 +108,7 @@ internal class RunServices(
         { _, _, _, _ -> },
     val recordSpend: suspend (config: ProviderConfig, usage: AgentUsage?, estimated: Boolean) -> Unit =
         { _, _, _ -> },
+    val beforeModelRequest: (ProviderConfig) -> Unit = {},
 )
 
 /**
@@ -252,6 +253,7 @@ internal class WorkerRunner(
             }
             val loop = AgentLoop(
                 requestModel = { messages, _, onText ->
+                    services.beforeModelRequest(config)
                     val request = context.requestFor(messages)
                     val response = client.streamAgent(
                         request = request,

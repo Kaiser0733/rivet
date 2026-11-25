@@ -219,12 +219,14 @@ class ProjectRunStorage(private val files: ProjectStateFiles) : RunStorage {
 class RunJournal(private val storage: RunStorage, private val projectCopy: RunStorage? = null) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    suspend fun save(run: RunRecord) {
+    suspend fun save(run: RunRecord, mirrorToProject: Boolean = true) {
         val path = path(run.id)
         val encoded = json.encodeToString(RunRecord.serializer(), run)
         storage.write(path, encoded)
-        try { projectCopy?.write(path, encoded) }
-        catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        if (mirrorToProject) {
+            try { projectCopy?.write(path, encoded) }
+            catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
     }
 
     suspend fun load(id: String): RunRecord? = (storage.read(path(id)) ?: readProject { it.read(path(id)) })?.let {

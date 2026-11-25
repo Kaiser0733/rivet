@@ -13,12 +13,15 @@ class SpendStore(context: Context) {
         .getSharedPreferences("spend_guard", Context.MODE_PRIVATE)
 
     @Synchronized
-    fun caps(): SpendCaps = SpendCaps(
-        perRunUsd = decimal(PER_RUN_USD),
-        monthlyUsd = decimal(MONTHLY_USD),
-        perRunTokens = long(PER_RUN_TOKENS),
-        monthlyTokens = long(MONTHLY_TOKENS),
-    )
+    fun caps(): SpendCaps {
+        if (CAP_KEYS.none(preferences::contains)) return SpendCaps.DEFAULT
+        return SpendCaps(
+            perRunUsd = decimal(PER_RUN_USD),
+            monthlyUsd = decimal(MONTHLY_USD),
+            perRunTokens = long(PER_RUN_TOKENS),
+            monthlyTokens = long(MONTHLY_TOKENS),
+        )
+    }
 
     @Synchronized
     fun userPricePerMillionUsd(): Double? = decimal(USER_PRICE)
@@ -26,10 +29,10 @@ class SpendStore(context: Context) {
     @Synchronized
     fun save(caps: SpendCaps, userPricePerMillionUsd: Double?) {
         preferences.edit()
-            .putString(PER_RUN_USD, caps.perRunUsd?.takeIf { it.isFinite() }?.toString())
-            .putString(MONTHLY_USD, caps.monthlyUsd?.takeIf { it.isFinite() }?.toString())
-            .putString(PER_RUN_TOKENS, caps.perRunTokens?.toString())
-            .putString(MONTHLY_TOKENS, caps.monthlyTokens?.toString())
+            .putString(PER_RUN_USD, caps.perRunUsd?.takeIf { it.isFinite() }?.toString() ?: OFF)
+            .putString(MONTHLY_USD, caps.monthlyUsd?.takeIf { it.isFinite() }?.toString() ?: OFF)
+            .putString(PER_RUN_TOKENS, caps.perRunTokens?.toString() ?: OFF)
+            .putString(MONTHLY_TOKENS, caps.monthlyTokens?.toString() ?: OFF)
             .putString(USER_PRICE, userPricePerMillionUsd?.takeIf { it.isFinite() }?.toString())
             .apply()
     }
@@ -60,6 +63,24 @@ class SpendStore(context: Context) {
             .apply()
     }
 
+    @Synchronized
+    fun runTotals(runId: String): Pair<Double, Long> =
+        (decimal("run_usd_$runId") ?: 0.0) to (nonNegativeLong("run_tokens_$runId") ?: 0L)
+
+    @Synchronized
+    fun saveRunTotals(runId: String, costUsd: Double, tokens: Long) {
+        val current = runTotals(runId)
+        preferences.edit()
+            .putString("run_usd_$runId", maxOf(current.first, costUsd).toString())
+            .putString("run_tokens_$runId", maxOf(current.second, tokens).toString())
+            .commit()
+    }
+
+    @Synchronized
+    fun clearRunTotals(runId: String) {
+        preferences.edit().remove("run_usd_$runId").remove("run_tokens_$runId").apply()
+    }
+
     private fun decimal(key: String): Double? =
         preferences.getString(key, null)?.toDoubleOrNull()?.takeIf { it >= 0 && it.isFinite() }
 
@@ -78,6 +99,8 @@ class SpendStore(context: Context) {
         private const val MONTH_KEY = "month_key"
         private const val MONTH_USD = "month_usd"
         private const val MONTH_TOKENS = "month_tokens"
+        private const val OFF = "off"
+        private val CAP_KEYS = listOf(PER_RUN_USD, MONTHLY_USD, PER_RUN_TOKENS, MONTHLY_TOKENS)
 
         fun isLocal(baseUrl: String): Boolean = LocalEndpointPolicy.isLocal(baseUrl)
     }

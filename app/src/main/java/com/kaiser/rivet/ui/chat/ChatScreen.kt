@@ -400,6 +400,11 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 val composerImports by chatViewModel.composerImports.collectAsState()
                 if (emptyConversation) HomeStarters(chatViewModel, canStartChat, state.starterError,
                     modifier = Modifier.heightIn(max = starterRoom).verticalScroll(rememberScrollState()))
+                state.spendWarning?.let {
+                    Text(it, Modifier.padding(horizontal = 20.dp, vertical = 4.dp),
+                        style = MaterialTheme.typography.bodySmall,
+                        color = MaterialTheme.colorScheme.onSurfaceVariant)
+                }
                 InputBar(streaming = state.streaming,
                     sharedDraft = sharedContent[state.currentSessionId],
                     attachments = composerAttachments[state.currentSessionId].orEmpty(),
@@ -1706,7 +1711,7 @@ private fun InterruptedTurnRow(recovery: String?, spendLabel: String?, budgetPau
                     Text(it, color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall)
                 }
-                spendLabel?.takeUnless { it == "unknown pricing" }?.let {
+                spendLabel?.takeUnless { it.startsWith("Unpriced model") }?.let {
                     Text("Spend $it",
                         color = MaterialTheme.colorScheme.onSurfaceVariant,
                         style = MaterialTheme.typography.bodySmall)

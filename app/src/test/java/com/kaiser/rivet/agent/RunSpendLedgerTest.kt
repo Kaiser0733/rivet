@@ -15,6 +15,24 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class RunSpendLedgerTest {
+    @Test fun unpricedModelWarnsAndAnEnabledUsdCapFallsBackToTokens() {
+        val ledger = RunSpendLedger(
+            addMonthlySpend = { _, _ -> },
+            readCaps = { SpendCaps(perRunUsd = 1.0) },
+            readUserPricePerMillionUsd = { null },
+        )
+        val config = cloudConfig("custom", model = "unpriced/custom-model")
+
+        val first = ledger.record(config, AgentUsage(totalTokens = 499_999), estimated = true)
+        val last = ledger.record(config, AgentUsage(totalTokens = 1), estimated = true)
+
+        assertEquals("Unpriced model · token limits apply", first.label)
+        assertFalse(first.decision.paused)
+        assertEquals(SpendStop.PerRun, last.decision.stop)
+        assertTrue(last.shouldPause)
+        assertEquals(0.0, last.runSpendUsd, 0.0)
+    }
+
     private fun cloudConfig(id: String, model: String = "gpt-4o") = ProviderConfig(
         id = id,
         type = ProviderType.OpenAi,

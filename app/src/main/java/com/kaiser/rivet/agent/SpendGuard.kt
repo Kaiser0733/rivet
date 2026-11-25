@@ -38,7 +38,17 @@ data class SpendCaps(
     // When a model has no published price, a cap can still be token-based.
     val perRunTokens: Long? = null,
     val monthlyTokens: Long? = null,
-)
+) {
+    companion object {
+        val DEFAULT = SpendCaps(perRunUsd = 1.0, monthlyUsd = 15.0,
+            perRunTokens = 500_000, monthlyTokens = 5_000_000)
+    }
+
+    internal fun withUnpricedFallback(): SpendCaps = copy(
+        perRunTokens = perRunTokens ?: DEFAULT.perRunTokens.takeIf { perRunUsd != null },
+        monthlyTokens = monthlyTokens ?: DEFAULT.monthlyTokens.takeIf { monthlyUsd != null },
+    )
+}
 
 enum class SpendStop { PerRun, Monthly }
 
@@ -54,6 +64,9 @@ data class SpendDecision(
 }
 
 object SpendGuard {
+    const val UNPRICED_TOKENS = "Unpriced model · token limits apply"
+    const val UNPRICED = "Unpriced model · USD spend unavailable"
+
     fun tokens(usage: AgentUsage): Long =
         usage.totalTokens ?: ((usage.inputTokens ?: 0) + (usage.outputTokens ?: 0))
 
