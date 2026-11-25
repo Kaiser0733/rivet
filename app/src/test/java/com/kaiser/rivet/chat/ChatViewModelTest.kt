@@ -1866,9 +1866,7 @@ class ChatViewModelTest {
         assertEquals(fixture.tree.toString(), back.currentSessionWorkspaceId)
     }
 
-    // A queued switch belongs to the other session and must not inherit the first
-    // session's bar, even though both chats are in the same project.
-    @Test fun aQueuedConversationSwitchDoesNotCarryTheUndoBarAcrossSessions() = runBlocking {
+    @Test fun switchingDuringAToolCallKeepsTheResultAndUndoWithTheOriginalConversation() = runBlocking {
         val fixture = undoFixture("com.kaiser.rivet.undo-switch", listOf(
             AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
             AgentResponse(text = "Done"),
@@ -1878,16 +1876,22 @@ class ChatViewModelTest {
         fixture.sessions.select(first)
 
         fixture.viewModel.send("Create A")
-        await(fixture.viewModel) { it.streaming }
-        fixture.viewModel.resumeSession(other)
-        val queued = await(fixture.viewModel) { it.queuedSessionId == other }
-        assertEquals("Rivet will open that conversation when this reply finishes.", queued.notice)
         val approval = await(fixture.viewModel) { it.pendingApproval?.call?.id == "create-a" }
-        fixture.viewModel.approve(approval.pendingApproval!!.approvalToken)
-
-        val switched = await(fixture.viewModel) { !it.streaming && it.currentSessionId == other }
-        assertNull("the other session must not inherit the Undo bar", switched.undoCheckpointId)
+        fixture.viewModel.resumeSession(other)
+        val switched = await(fixture.viewModel) { it.currentSessionId == other }
+        assertFalse(switched.streaming)
+        assertNull(switched.pendingApproval)
+        assertNull(switched.undoCheckpointId)
         assertTrue(switched.lastTurnFiles.isEmpty())
+
+        fixture.viewModel.approve(approval.pendingApproval!!.approvalToken)
+        withTimeout(5_000) {
+            while (fixture.sessions.recent(first).none { it.text == "Done" }) delay(10)
+        }
+        val tool = fixture.sessions.recent(first).flatMap { it.toolResults }.single()
+        assertEquals("create-a", tool.callId)
+        assertTrue(fixture.sessions.recent(other).isEmpty())
+        assertTrue(fixture.viewModel.uiState.value.messages.isEmpty())
 
         fixture.viewModel.resumeSession(first)
         val back = await(fixture.viewModel) { it.currentSessionId == first && it.undoCheckpointId != null }
@@ -1993,7 +1997,7 @@ class ChatViewModelTest {
 
     // A conversation picked while a reply is streaming must not fight the running turn
     // for the storage pointer: the choice waits, then opens when the turn is done.
-    @Test fun conversationPickedDuringATurnOpensWhenTheTurnFinishes() = runBlocking {
+    @Test fun conversationSwitchKeepsTheOriginalTurnLiveAndDurable() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val sessions = CodingSessions(app)
@@ -2010,6 +2014,7 @@ class ChatViewModelTest {
                 onReasoning: (String) -> Unit,
                 onDelta: (String) -> Unit,
             ): AgentResponse {
+                onDelta("Working")
                 release.await()
                 onDelta("Done")
                 return AgentResponse(text = "Done")
@@ -2020,20 +2025,36 @@ class ChatViewModelTest {
         await(viewModel) { it.ready && it.currentSessionId == first }
 
         viewModel.send("Keep working")
-        await(viewModel) { it.streaming }
-
+        val live = await(viewModel) { it.streamingText == "Working" }
         viewModel.resumeSession(other)
 
-        val queued = await(viewModel) { it.queuedSessionId != null }
-        assertEquals(first, queued.currentSessionId)
-        assertTrue("the running turn must keep going", queued.streaming)
-        assertEquals(other, queued.queuedSessionId)
-        assertNotNull("the user must see that the switch is waiting", queued.notice)
-        assertEquals(first, sessions.load().id)
+        val switched = await(viewModel) { it.currentSessionId == other }
+        assertFalse(switched.streaming)
+        assertTrue(switched.messages.isEmpty())
+        assertEquals(other, sessions.load().id)
+        viewModel.send("Do not queue this")
+        val blocked = await(viewModel) { it.notice?.contains("one turn at a time") == true }
+        assertTrue(blocked.messages.isEmpty())
+
+        viewModel.resumeSession(first)
+        val back = await(viewModel) { it.currentSessionId == first }
+        assertTrue(back.streaming)
+        assertEquals(live.streamingText, back.streamingText)
+        assertEquals(live.turnStartedAt, back.turnStartedAt)
+        assertEquals(live.messages, back.messages)
+        viewModel.resumeSession(other)
+        await(viewModel) { it.currentSessionId == other }
 
         release.complete(Unit)
-        val switched = await(viewModel) { !it.streaming && it.currentSessionId == other }
-        assertNull(switched.queuedSessionId)
+        withTimeout(5_000) {
+            while (sessions.recent(first).lastOrNull()?.text != "Done") delay(10)
+        }
+        assertTrue(sessions.recent(other).isEmpty())
+        assertEquals(other, viewModel.uiState.value.currentSessionId)
+        assertTrue(viewModel.uiState.value.messages.isEmpty())
+        viewModel.resumeSession(first)
+        val finished = await(viewModel) { !it.streaming && it.currentSessionId == first }
+        assertEquals("Done", finished.messages.lastOrNull()?.text)
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =

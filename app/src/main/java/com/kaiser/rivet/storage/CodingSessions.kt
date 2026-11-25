@@ -107,7 +107,7 @@ internal class CodingSessions(
 
     suspend fun load(sessionId: String): AgentSession = onDatabase { db -> load(db, sessionId) }
 
-    private fun load(db: SQLiteDatabase, id: String): AgentSession {
+    private fun load(db: SQLiteDatabase, id: String, recover: Boolean = true): AgentSession {
         val header = header(db, id)
         trimCompactedHistory(db, id)
         validateProjection(db, id)
@@ -117,7 +117,7 @@ internal class CodingSessions(
         val active = activeMessages(db, id)
         val interrupted = hasPendingToolCall(active.lastOrNull()) ||
             (header.interrupted && hasUnfinishedTurn(active))
-        val messages = recoverInterrupted(db, id, interrupted, active, bytes)
+        val messages = if (recover) recoverInterrupted(db, id, interrupted, active, bytes) else active
         return AgentSession(messages, interrupted, id, header.title, header.workspaceId, summary)
     }
 
@@ -210,8 +210,11 @@ internal class CodingSessions(
             arrayOf(if (interrupted) 1 else 0, id))
     }
 
-    override suspend fun clear() = onDatabase { db ->
-        val id = activeId(db)
+    override suspend fun clear() = clear(null)
+
+    suspend fun clear(sessionId: String?) = onDatabase { db ->
+        val id = sessionId ?: activeId(db)
+        header(db, id)
         db.beginTransaction()
         try {
             db.delete("events", "session_id=?", arrayOf(id))
@@ -360,8 +363,10 @@ internal class CodingSessions(
         id
     }
 
-    suspend fun select(id: String): AgentSession = onDatabase { db ->
-        val selected = load(db, id)
+    suspend fun select(id: String): AgentSession = select(id, recover = true)
+
+    suspend fun select(id: String, recover: Boolean): AgentSession = onDatabase { db ->
+        val selected = load(db, id, recover)
         setActive(db, id)
         selected
     }
@@ -418,7 +423,9 @@ internal class CodingSessions(
                 "id=?", arrayOf(id)) != 1) throw IllegalArgumentException("Unknown session")
     }
 
-    suspend fun delete(id: String): AgentSession = onDatabase { db ->
+    suspend fun delete(id: String): AgentSession = delete(id, liveSessionId = null)
+
+    suspend fun delete(id: String, liveSessionId: String?): AgentSession = onDatabase { db ->
         val workspaceId = WorkspaceSelection(context).currentIdentity()
         db.beginTransaction()
         try {
@@ -436,7 +443,8 @@ internal class CodingSessions(
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
         summaryBytes.remove(id)
-        load(db, activeId(db))
+        val active = activeId(db)
+        load(db, active, recover = active != liveSessionId)
     }
 
     suspend fun searchArchive(id: String, queries: List<String>, excludeLastUser: Boolean = false):

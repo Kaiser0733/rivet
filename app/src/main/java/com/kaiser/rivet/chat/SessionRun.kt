@@ -5,11 +5,19 @@ import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentToolLifecycle
 import com.kaiser.rivet.agent.GoalDocument
 import com.kaiser.rivet.agent.RunRecord
+import com.kaiser.rivet.agent.RunSpendLedger
 import com.kaiser.rivet.agent.SpendCaps
+import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.runtime.RunCheckpointInfo
 import com.kaiser.rivet.storage.CodingSessionHeader
 import com.kaiser.rivet.storage.ContextEstimate
 import com.kaiser.rivet.storage.SessionUsage
+import com.kaiser.rivet.agent.ProjectStateFiles
+import com.kaiser.rivet.agent.RunJournal
+import com.kaiser.rivet.subagent.SubagentSupervisor
+import com.kaiser.rivet.agent.RunPauseReason
+import com.kaiser.rivet.subagent.WorkerRecord
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.map
 import kotlinx.coroutines.flow.update
@@ -25,7 +33,6 @@ internal data class SessionRunUi(
     val error: String? = null,
     val errorAction: ChatErrorAction? = null,
     val unsupportedReasoning: UnsupportedReasoningNotice? = null,
-    val queuedSessionId: String? = null,
     val currentSessionId: String? = null,
     val currentSessionTitle: String? = null,
     val currentSessionWorkspaceId: String? = null,
@@ -78,21 +85,53 @@ internal data class ChatScreenUi(
 
 internal class SessionRun(initial: ChatUiState = ChatUiState()) {
     private val snapshot = MutableStateFlow(SessionRunSnapshot.from(initial))
-    val projection = snapshot.map { it.project() }
+    val projection = snapshot.map { it.projectVisible() }
+    val visibleValue: ChatUiState get() = snapshot.value.projectVisible()
 
     var activeMessages: List<AgentMessage> = emptyList()
     var activeSummary: String = ""
+    var projectState: ProjectStateFiles? = null
+    var runJournal: RunJournal? = null
+    var projectGoal: GoalDocument? = null
+    var sessionGoal: GoalDocument? = null
+    var memoryMarkdown: String = ""
+    var currentRun: RunRecord? = null
+    var runResumeContext: Boolean = false
+    var activeSupervisor: SubagentSupervisor? = null
+    var lastPruneSeen: Int = 0
+    var currentCloud: Boolean = true
+    var pendingRollback: String? = null
+    var job: Job? = null
+    var userCancelled = false
+    var pauseRequested = false
+    var pauseReason = RunPauseReason.User
+    var ledger: RunSpendLedger? = null
+    var checkpoints: RunCheckpointGate? = null
+    val workers = MutableStateFlow<List<WorkerRecord>>(emptyList())
+
 
     var value: ChatUiState
         get() = snapshot.value.project()
-        set(value) { snapshot.value = SessionRunSnapshot.from(value) }
+        set(value) { snapshot.update { SessionRunSnapshot.from(value, it.reserved) } }
 
     fun update(transform: (ChatUiState) -> ChatUiState) {
-        snapshot.update { SessionRunSnapshot.from(transform(it.project())) }
+        snapshot.update { SessionRunSnapshot.from(transform(it.project()), it.reserved) }
+    }
+
+    fun reserveTurn(reserved: Boolean) {
+        snapshot.update { it.copy(reserved = reserved) }
     }
 }
 
-private data class SessionRunSnapshot(val run: SessionRunUi, val screen: ChatScreenUi) {
+private data class SessionRunSnapshot(
+    val run: SessionRunUi,
+    val screen: ChatScreenUi,
+    val reserved: Boolean,
+) {
+    fun projectVisible(): ChatUiState = project().let {
+        if (reserved && !it.streaming) it.copy(streaming = true) else it
+    }
+
     fun project() = ChatUiState(
         messages = run.messages,
         ready = screen.ready,
@@ -105,7 +144,6 @@ private data class SessionRunSnapshot(val run: SessionRunUi, val screen: ChatScr
         error = run.error,
         errorAction = run.errorAction,
         unsupportedReasoning = run.unsupportedReasoning,
-        queuedSessionId = run.queuedSessionId,
         sessions = screen.sessions,
         currentSessionId = run.currentSessionId,
         currentSessionTitle = run.currentSessionTitle,
@@ -153,7 +191,8 @@ private data class SessionRunSnapshot(val run: SessionRunUi, val screen: ChatScr
     )
 
     companion object {
-        fun from(state: ChatUiState) = SessionRunSnapshot(
+        fun from(state: ChatUiState, reserved: Boolean = false) = SessionRunSnapshot(
+            reserved = reserved,
             run = SessionRunUi(
                 messages = state.messages,
                 streaming = state.streaming,
@@ -165,7 +204,6 @@ private data class SessionRunSnapshot(val run: SessionRunUi, val screen: ChatScr
                 error = state.error,
                 errorAction = state.errorAction,
                 unsupportedReasoning = state.unsupportedReasoning,
-                queuedSessionId = state.queuedSessionId,
                 currentSessionId = state.currentSessionId,
                 currentSessionTitle = state.currentSessionTitle,
                 currentSessionWorkspaceId = state.currentSessionWorkspaceId,
