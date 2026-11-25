@@ -111,7 +111,7 @@ internal class GeminiClient(
                     }) }
                 }) })
             })
-            config.resolvedManualMaxOutputTokens(request.model)?.let { maxOutput ->
+            config.requestOutputLimit(request.model)?.let { maxOutput ->
                 put("generationConfig", buildJsonObject {
                     put("maxOutputTokens", maxOutput)
                 })
