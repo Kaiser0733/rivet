@@ -7,6 +7,7 @@ import android.content.Context
 import android.database.Cursor
 import android.database.sqlite.SQLiteDatabase
 import android.database.sqlite.SQLiteOpenHelper
+import java.util.concurrent.ConcurrentHashMap
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.ArchiveRecall
 import com.kaiser.rivet.agent.ArchiveWindow
@@ -99,36 +100,36 @@ internal class CodingSessions(
     private val lock = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
     private var initialized = false
-    @Volatile private var summaryBytes = 0
+    private val summaryBytes = ConcurrentHashMap<String, Int>()
+    @Volatile private var selectedId: String? = null
 
-    override suspend fun load(): AgentSession = onDatabase { db ->
-        val id = activeId(db)
+    override suspend fun load(): AgentSession = onDatabase { db -> load(db, activeId(db)) }
+
+    suspend fun load(sessionId: String): AgentSession = onDatabase { db -> load(db, sessionId) }
+
+    private fun load(db: SQLiteDatabase, id: String): AgentSession {
         val header = header(db, id)
         trimCompactedHistory(db, id)
         validateProjection(db, id)
         val summary = summary(db, id)
-        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
+        val bytes = summary.toByteArray(Charsets.UTF_8).size
+        summaryBytes[id] = bytes
         val active = activeMessages(db, id)
         val interrupted = hasPendingToolCall(active.lastOrNull()) ||
             (header.interrupted && hasUnfinishedTurn(active))
-        val messages = recoverInterrupted(db, id, interrupted, active, summaryBytes)
-        AgentSession(messages, interrupted, header.id, header.title, header.workspaceId, summary)
+        val messages = recoverInterrupted(db, id, interrupted, active, bytes)
+        return AgentSession(messages, interrupted, id, header.title, header.workspaceId, summary)
     }
 
     override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) =
         save(messages, interrupted, expectedSessionId = null)
 
-    // A turn must write into the conversation it started in. `compact` already refuses a
-    // stale pointer; the transcript writes did not, so a switch landing in the middle of a
-    // turn filed its messages into whichever conversation the pointer had moved to.
     suspend fun save(messages: List<AgentMessage>, interrupted: Boolean, expectedSessionId: String?) =
         onDatabase { db ->
+        val id = expectedSessionId ?: activeId(db)
+        header(db, id)
         db.beginTransaction()
         try {
-            val id = activeId(db)
-            if (expectedSessionId != null && id != expectedSessionId) {
-                throw IllegalStateException("Session changed")
-            }
             val count = db.rawQuery("SELECT COUNT(*) FROM active_events WHERE session_id=?", arrayOf(id)).use {
                 it.moveToFirst(); it.getInt(0)
             }
@@ -187,19 +188,17 @@ internal class CodingSessions(
     }
 
     override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean =
-        AgentSessionCodec.fits(messages, reservedEncodedBytes + summaryBytes)
+        canSaveWithReserve(messages, reservedEncodedBytes, selectedId)
+
+    fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int, sessionId: String?): Boolean =
+        AgentSessionCodec.fits(messages, reservedEncodedBytes + (sessionId?.let(summaryBytes::get) ?: 0))
 
     override suspend fun markInterrupted(interrupted: Boolean) =
         markInterrupted(interrupted, expectedSessionId = null)
 
-    // Same rule as `save`: the flag belongs to the conversation the call was made for, and a
-    // switch that moved the pointer must not let a turn clear another conversation's flag.
-    // The check and the write share one database block so they cannot be split.
     suspend fun markInterrupted(interrupted: Boolean, expectedSessionId: String?) = onDatabase { db ->
-        val id = activeId(db)
-        if (expectedSessionId != null && id != expectedSessionId) {
-            throw IllegalStateException("Session changed")
-        }
+        val id = expectedSessionId ?: activeId(db)
+        header(db, id)
         if (!interrupted) {
             val last = db.rawQuery("SELECT payload FROM active_events WHERE session_id=? ORDER BY id DESC LIMIT 1",
                 arrayOf(id)).use { cursor ->
@@ -227,7 +226,7 @@ internal class CodingSessions(
                 arrayOf(System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        summaryBytes = 0
+        summaryBytes[id] = 0
     }
 
     /**
@@ -295,7 +294,7 @@ internal class CodingSessions(
             ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
             if (empty != null) {
                 setActive(db, empty)
-                summaryBytes = 0
+                summaryBytes[empty] = 0
                 return@onDatabase AgentSession(emptyList(), id = empty, title = title, workspaceId = workspaceId)
             }
         }
@@ -316,7 +315,7 @@ internal class CodingSessions(
             setActive(db, id)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        summaryBytes = 0
+        summaryBytes[id] = 0
         AgentSession(messages = listOfNotNull(starterBrief), id = id, title = title, workspaceId = workspaceId)
     }
 
@@ -362,17 +361,9 @@ internal class CodingSessions(
     }
 
     suspend fun select(id: String): AgentSession = onDatabase { db ->
-        val selected = header(db, id)
-        validateProjection(db, id)
-        val summary = summary(db, id)
-        val active = activeMessages(db, id)
-        val interrupted = hasPendingToolCall(active.lastOrNull()) ||
-            (selected.interrupted && hasUnfinishedTurn(active))
-        val messages = recoverInterrupted(db, id, interrupted, active,
-            summary.toByteArray(Charsets.UTF_8).size)
+        val selected = load(db, id)
         setActive(db, id)
-        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
-        AgentSession(messages, interrupted, id, selected.title, selected.workspaceId, summary)
+        selected
     }
 
     suspend fun rename(id: String, title: String) = onDatabase { db ->
@@ -444,16 +435,8 @@ internal class CodingSessions(
             if (activeId(db) == id) setActive(db, next)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        val active = activeId(db)
-        val selected = header(db, active)
-        validateProjection(db, active)
-        val summary = summary(db, active)
-        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
-        val currentMessages = activeMessages(db, active)
-        val interrupted = hasPendingToolCall(currentMessages.lastOrNull()) ||
-            (selected.interrupted && hasUnfinishedTurn(currentMessages))
-        val messages = recoverInterrupted(db, active, interrupted, currentMessages, summaryBytes)
-        AgentSession(messages, interrupted, active, selected.title, selected.workspaceId, summary)
+        summaryBytes.remove(id)
+        load(db, activeId(db))
     }
 
     suspend fun searchArchive(id: String, queries: List<String>, excludeLastUser: Boolean = false):
@@ -591,20 +574,21 @@ internal class CodingSessions(
     override suspend fun compact(expected: List<AgentMessage>, retained: List<AgentMessage>, summary: String,
                         attempt: ContextAttempt?,
                         expectedSessionId: String?): List<AgentMessage> = onDatabase { db ->
-        require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
-        require(retained != expected || summary != this.summary(db, activeId(db)))
+        val id = expectedSessionId ?: activeId(db)
+        val target = header(db, id)
+        val bytes = summary.toByteArray(Charsets.UTF_8).size
+        require(bytes <= MAX_SUMMARY_BYTES)
+        require(retained != expected || summary != this.summary(db, id))
         require(validProjection(expected, retained))
-        val projected = ProjectContext.projection(expected, retained, summary, header(db, activeId(db)).workspaceId)
+        val projected = ProjectContext.projection(expected, retained, summary, target.workspaceId)
         require(AgentContext.validGroups(projected))
-        if (!AgentSessionCodec.fits(projected, summary.toByteArray(Charsets.UTF_8).size)) {
+        if (!AgentSessionCodec.fits(projected, bytes)) {
             throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
         }
         val activeHash = hashMessages(projected)
         val summaryHash = hash(summary)
         db.beginTransaction()
         try {
-            val id = activeId(db)
-            if (expectedSessionId != null && id != expectedSessionId) throw IllegalStateException("Session changed")
             if (activeMessages(db, id) != expected) throw IllegalStateException("Active context changed")
             val through = db.rawQuery("SELECT MAX(id) FROM events WHERE session_id=?", arrayOf(id)).use {
                 it.moveToFirst(); if (it.isNull(0)) 0L else it.getLong(0)
@@ -631,7 +615,7 @@ internal class CodingSessions(
                 summary.toByteArray(Charsets.UTF_8).size)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
+        summaryBytes[id] = bytes
         projected
     }
 
@@ -847,8 +831,10 @@ internal class CodingSessions(
         } finally { db.endTransaction() }
     }
 
-    private fun activeId(db: SQLiteDatabase): String = meta(db, "active_session")
-        ?: throw IllegalStateException("No active session")
+    private fun activeId(db: SQLiteDatabase): String =
+        (meta(db, "active_session") ?: throw IllegalStateException("No active session")).also {
+            selectedId = it
+        }
 
     private fun activeMessages(db: SQLiteDatabase, id: String): List<AgentMessage> =
         db.rawQuery("SELECT payload FROM active_events WHERE session_id=? ORDER BY id", arrayOf(id)).use { cursor ->
@@ -1125,7 +1111,7 @@ internal class CodingSessions(
             })
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        summaryBytes = 0
+        summaryBytes[id] = 0
     }
 
     private fun canonicalProjectState(db: SQLiteDatabase, id: String): List<AgentMessage> {
@@ -1202,7 +1188,10 @@ internal class CodingSessions(
 
     companion object { const val MAX_SUMMARY_BYTES = 16 * 1024 }
 
-    private fun setActive(db: SQLiteDatabase, id: String) = putMeta(db, "active_session", id)
+    private fun setActive(db: SQLiteDatabase, id: String) {
+        putMeta(db, "active_session", id)
+        selectedId = id
+    }
 
     private fun meta(db: SQLiteDatabase, key: String): String? =
         db.rawQuery("SELECT value FROM metadata WHERE key=?", arrayOf(key)).use {

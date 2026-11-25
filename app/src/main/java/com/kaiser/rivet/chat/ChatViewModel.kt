@@ -162,6 +162,7 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.collectLatest
 import kotlinx.coroutines.flow.combine
 import kotlinx.coroutines.flow.distinctUntilChanged
 import kotlinx.coroutines.flow.flow
@@ -329,12 +330,14 @@ class ChatViewModel private constructor(
         }
     }
 
+    private val selectedRun = MutableStateFlow(SessionRun())
+    private val selectedState get() = selectedRun.value
     private val _uiState = MutableStateFlow(ChatUiState())
     init {
         // Storage retention runs on the database thread; a visible notice is the only
         // signal that an old conversation was removed to keep Rivet's database bounded.
         (sessionStore as? CodingSessions)?.onNotice = { notice ->
-            _uiState.update { it.copy(notice = notice) }
+            selectedState.update { it.copy(notice = notice) }
         }
     }
     private val shareLanding = Mutex()
@@ -363,7 +366,7 @@ class ChatViewModel private constructor(
     }
 
     internal fun attachmentPickerUnavailable() {
-        _uiState.update { it.copy(notice = "Couldn't open the attachment picker.") }
+        selectedState.update { it.copy(notice = "Couldn't open the attachment picker.") }
     }
 
     internal fun stageComposerAttachments(sessionId: String?, sources: List<Uri>, photo: Boolean, temporary: File?) {
@@ -386,10 +389,10 @@ class ChatViewModel private constructor(
                     } catch (e: CancellationException) {
                         throw e
                     } catch (e: SharedFileCopy.TooLarge) {
-                        _uiState.update { it.copy(notice = e.message) }
+                        selectedState.update { it.copy(notice = e.message) }
                         null
                     } catch (_: Exception) {
-                        _uiState.update { it.copy(notice = "Couldn't read this attachment. Pick it again.") }
+                        selectedState.update { it.copy(notice = "Couldn't read this attachment. Pick it again.") }
                         null
                     } finally {
                         copy?.delete()
@@ -420,7 +423,7 @@ class ChatViewModel private constructor(
                     else -> null
                 }
                 fun land() {
-                    val id = _uiState.value.currentSessionId
+                    val id = selectedState.value.currentSessionId
                     val saved = file?.let { SharedFileCopy.moveToSession(app, it, id) }
                     val draftId = UUID.randomUUID().toString()
                     val draft = when (content) {
@@ -434,7 +437,7 @@ class ChatViewModel private constructor(
                 }
                 shareLanding.withLock {
                     uiState.first { it.ready && !it.streaming && !it.undoing && !it.recoveringProjectChanges }
-                    if (_uiState.value.messages.isEmpty() && _uiState.value.currentSessionId !in _sharedContent.value ||
+                    if (selectedState.value.messages.isEmpty() && selectedState.value.currentSessionId !in _sharedContent.value ||
                         sessions == null) {
                         land()
                     } else {
@@ -446,9 +449,9 @@ class ChatViewModel private constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (e: SharedFileCopy.TooLarge) {
-                _uiState.update { it.copy(notice = e.message) }
+                selectedState.update { it.copy(notice = e.message) }
             } catch (e: Exception) {
-                _uiState.update { it.copy(notice = shareFailureNotice(e)) }
+                selectedState.update { it.copy(notice = shareFailureNotice(e)) }
             }
         }
     }
@@ -459,7 +462,7 @@ class ChatViewModel private constructor(
         if (route.readOnly) {
             return withContext(Dispatchers.IO) {
                 val app = getApplication<Application>()
-                val directory = SharedFileCopy.sessionInbox(app, _uiState.value.currentSessionId).canonicalFile
+                val directory = SharedFileCopy.sessionInbox(app, selectedState.value.currentSessionId).canonicalFile
                 val file = File(directory, path.value).canonicalFile
                 if (file.parentFile != directory || !file.isFile) return@withContext null
                 val uri = FileProvider.getUriForFile(app, "${app.packageName}.shared-files", file)
@@ -474,15 +477,19 @@ class ChatViewModel private constructor(
     }
 
     private fun putSharedDraft(draft: SharedDraft) {
-        _sharedContent.update { it + (_uiState.value.currentSessionId to draft) }
+        _sharedContent.update { it + (selectedState.value.currentSessionId to draft) }
     }
-    val uiState: StateFlow<ChatUiState> = _uiState.asStateFlow()
+    // A synchronous read can happen before the projection collector resumes.
+    val uiState: StateFlow<ChatUiState> = object : StateFlow<ChatUiState> by _uiState.asStateFlow() {
+        override val value: ChatUiState get() = selectedState.value
+        override val replayCache: List<ChatUiState> get() = listOf(value)
+    }
 
     // The right slide's workspace line. Derived in the view model so the panel reads no
     // .value at composition and only recomposes when the workspace name actually changes,
     // not on every streamed token.
-    val projectName: StateFlow<String?> = _uiState.map { it.projectName }.distinctUntilChanged()
-        .stateIn(viewModelScope, SharingStarted.Eagerly, _uiState.value.projectName)
+    val projectName: StateFlow<String?> = uiState.map { it.projectName }.distinctUntilChanged()
+        .stateIn(viewModelScope, SharingStarted.Eagerly, selectedState.value.projectName)
 
     // The composer's "/" list: user-invocable skills of the current project. Filled from
     // the discovery cache when the sheet opens and at every turn start; never scanned here.
@@ -578,7 +585,7 @@ class ChatViewModel private constructor(
     @Volatile private var pauseRequestedTicket = 0L
     @Volatile private var pauseReason: RunPauseReason = RunPauseReason.User
     private val runtimeController = RuntimeController(app, workspaceSelection, managedProcesses) {
-        _uiState.value.projectName
+        selectedState.value.projectName
     }
 
     // ONE interactive terminal. It lives in the view model, so closing the slide or
@@ -615,9 +622,13 @@ class ChatViewModel private constructor(
         AutonomyMode.Ask
     }
 
-    private var activeMessages: List<AgentMessage> = emptyList()
+    private var activeMessages: List<AgentMessage>
+        get() = selectedState.activeMessages
+        set(value) { selectedState.activeMessages = value }
     private val dismissedUndoBars = mutableSetOf<String>()
-    private var activeSummary: String = ""
+    private var activeSummary: String
+        get() = selectedState.activeSummary
+        set(value) { selectedState.activeSummary = value }
     private val sessionGoals = SessionGoalStore(app)
     private val spendStore = SpendStore(app)
     private var spendRunId: String? = null
@@ -635,11 +646,11 @@ class ChatViewModel private constructor(
     private var memoryMarkdown: String = ""
     private var currentRun: RunRecord? = null
     private var runResumeContext = false
-    private fun currentSessionRun() = currentRun.ownedBy(_uiState.value.currentSessionId)
+    private fun currentSessionRun() = currentRun.ownedBy(selectedState.value.currentSessionId)
     private val spendLedger = RunSpendLedger(
         spendStore = spendStore,
-        readCaps = { _uiState.value.spendCaps },
-        readUserPricePerMillionUsd = { _uiState.value.userPricePerMillionUsd },
+        readCaps = { selectedState.value.spendCaps },
+        readUserPricePerMillionUsd = { selectedState.value.userPricePerMillionUsd },
     )
     private val checkpointGate = RunCheckpointGate(
         runtime = runtimeController,
@@ -668,17 +679,22 @@ class ChatViewModel private constructor(
     internal fun onConnectivityLost() {
         viewModelScope.launch {
             val hasCloud = currentCloud || activeSupervisor?.hasLiveCloudWorker() == true
-            if (hasCloud && _uiState.value.streaming && currentSessionRun()?.phase == RunPhase.Running) {
+            if (hasCloud && selectedState.value.streaming && currentSessionRun()?.phase == RunPhase.Running) {
                 pauseCurrentRun(RunPauseReason.NetworkLost)
             }
         }
     }
 
     init {
+        viewModelScope.launch {
+            selectedRun.collectLatest { run ->
+                run.projection.collect { _uiState.value = it }
+            }
+        }
         val caps = spendStore.caps()
         val price = spendStore.userPricePerMillionUsd()
         spendLedger.syncMonth(spendStore.month())
-        _uiState.update { it.copy(spendCaps = caps, userPricePerMillionUsd = price) }
+        selectedState.update { it.copy(spendCaps = caps, userPricePerMillionUsd = price) }
         try { connectivity?.registerDefaultNetworkCallback(networkCallback) } catch (_: Exception) { }
         viewModelScope.launch { loadProject() }
         viewModelScope.launch {
@@ -705,12 +721,12 @@ class ChatViewModel private constructor(
                 sessionStore.load() to sessions?.list().orEmpty()
             } catch (_: AgentSessionLimitException) {
                 if (ticket == generation) {
-                    _uiState.update { it.copy(ready = true, error = CONTEXT_LIMIT_ERROR) }
+                    selectedState.update { it.copy(ready = true, error = CONTEXT_LIMIT_ERROR) }
                 }
                 return@launch
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
-                if (ticket == generation) _uiState.update {
+                if (ticket == generation) selectedState.update {
                     it.copy(ready = true, error = "Could not load conversation history. Restart Rivet or check available storage.")
                 }
                 return@launch
@@ -724,7 +740,7 @@ class ChatViewModel private constructor(
                     val visible = restored.id?.let { sessions?.recent(it) } ?: restored.messages
                     val interruptedTurn = restored.interrupted &&
                         (visible.isNotEmpty() || restored.messages.isNotEmpty())
-                    _uiState.update { state ->
+                    selectedState.update { state ->
                         state.copy(
                             messages = visible,
                             ready = true,
@@ -759,14 +775,14 @@ class ChatViewModel private constructor(
                     }
                 } catch (e: CancellationException) { throw e
                 } catch (_: Exception) {
-                    _uiState.update { it.copy(ready = true, error = "Could not load conversation history. Restart Rivet or check available storage.") }
+                    selectedState.update { it.copy(ready = true, error = "Could not load conversation history. Restart Rivet or check available storage.") }
                 }
             }
         }
         viewModelScope.launch {
             approvals.pending.collect { pending ->
                 managedProcesses.updateApproval(pending)
-                _uiState.update { it.copy(pendingApproval = pending) }
+                selectedState.update { it.copy(pendingApproval = pending) }
             }
         }
         viewModelScope.launch {
@@ -785,18 +801,18 @@ class ChatViewModel private constructor(
                 val name = try { workspace.displayName() }
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { "Selected project" }
-                _uiState.update { it.copy(projectName = name, projectIdentity = workspace.tree.toString(),
+                selectedState.update { it.copy(projectName = name, projectIdentity = workspace.tree.toString(),
                     projectLoading = false, projectError = null) }
                 browser.bindProject(workspace.tree.toString())
-                refreshGoalMemory(workspace, _uiState.value.currentSessionId)
+                refreshGoalMemory(workspace, selectedState.value.currentSessionId)
             } else {
-                _uiState.update { it.copy(projectName = null, projectIdentity = null,
+                selectedState.update { it.copy(projectName = null, projectIdentity = null,
                     projectLoading = false) }
-                browser.bindProject(_uiState.value.currentSessionWorkspaceId ?: "unbound")
+                browser.bindProject(selectedState.value.currentSessionWorkspaceId ?: "unbound")
             }
         } catch (e: CancellationException) { throw e
         } catch (_: Exception) {
-            _uiState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
+            selectedState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
                 projectError = "Rivet couldn't open this project. Choose the folder again.") }
         }
     }
@@ -816,21 +832,21 @@ class ChatViewModel private constructor(
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         val memory = try { files?.loadMemory().orEmpty() }
             catch (e: CancellationException) { throw e } catch (_: Exception) { "" }
-        if (_uiState.value.currentSessionId != sessionId || runJournal !== journal) return
-        val run = if (_uiState.value.streaming) currentSessionRun() else {
+        if (selectedState.value.currentSessionId != sessionId || runJournal !== journal) return
+        val run = if (selectedState.value.streaming) currentSessionRun() else {
             try { journal?.recoverLatest(sessionId) }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         }
-        val recoveredWorkers = if (!_uiState.value.streaming && run?.resumable == true) {
+        val recoveredWorkers = if (!selectedState.value.streaming && run?.resumable == true) {
             try { workerStore.recoverWorkersForRun(run.id) }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         } else null
-        if (_uiState.value.currentSessionId != sessionId || runJournal !== journal) return
+        if (selectedState.value.currentSessionId != sessionId || runJournal !== journal) return
         projectGoal = goalRead.getOrNull()
         sessionGoal = storedSessionGoal
         memoryMarkdown = memory
         val goal = projectGoal.ownedBy(sessionId) ?: sessionGoal.ownedBy(sessionId)
-        if (!_uiState.value.streaming) {
+        if (!selectedState.value.streaming) {
             currentRun = run
             runResumeContext = run?.resumable == true
             if (recoveredWorkers != null) _subagents.value = recoveredWorkers
@@ -840,7 +856,7 @@ class ChatViewModel private constructor(
         val projectMarkdown = projectGoal?.let { GoalDocument.render(it) }
         val externalGoal = goalRead.isSuccess &&
             projectGoalWatcher.observe(workspace?.tree?.toString(), projectMarkdown)
-        _uiState.update {
+        selectedState.update {
             it.copy(goal = goal, goalLine = goal.lineForSession(sessionId),
                 goalAttachOffer = workspace != null && projectGoal == null && sessionGoal != null,
                 memoryMarkdown = memoryMarkdown,
@@ -859,10 +875,10 @@ class ChatViewModel private constructor(
 
     internal fun takePendingStarter(): StarterOption? = pendingStarter.also { pendingStarter = null }
 
-    internal fun dismissStarterError() { _uiState.update { it.copy(starterError = null) } }
+    internal fun dismissStarterError() { selectedState.update { it.copy(starterError = null) } }
 
     internal fun starterPickerInterrupted() {
-        _uiState.update { it.copy(starterError = "Choose the starter again to install it.") }
+        selectedState.update { it.copy(starterError = "Choose the starter again to install it.") }
     }
 
     fun selectProject(uri: Uri, flags: Int) = openProject(uri, flags, starter = null)
@@ -871,13 +887,13 @@ class ChatViewModel private constructor(
         openProject(uri, flags, starter)
 
     private fun openProject(uri: Uri, flags: Int, starter: StarterOption?) {
-        if (!_uiState.value.ready || _uiState.value.streaming || _uiState.value.projectLoading ||
-            _uiState.value.recoveringProjectChanges) return
-        _uiState.update { it.copy(projectLoading = true, projectError = null, starterError = null, error = null,
+        if (!selectedState.value.ready || selectedState.value.streaming || selectedState.value.projectLoading ||
+            selectedState.value.recoveringProjectChanges) return
+        selectedState.update { it.copy(projectLoading = true, projectError = null, starterError = null, error = null,
             errorAction = null, activity = null) }
         viewModelScope.launch {
             try {
-                val previousIdentity = _uiState.value.projectIdentity
+                val previousIdentity = selectedState.value.projectIdentity
                 val files = starter?.let { option ->
                     checkNotNull(sessions)
                     withContext(Dispatchers.IO) {
@@ -908,9 +924,9 @@ class ChatViewModel private constructor(
                     runtimeController.clearCommandOutput(previousIdentity)
                 }
                 browser.bindProject(identity)
-                _uiState.update { it.copy(projectName = name, projectIdentity = identity,
+                selectedState.update { it.copy(projectName = name, projectIdentity = identity,
                     projectError = null) }
-                val current = _uiState.value
+                val current = selectedState.value
                 if (starter != null || current.currentSessionWorkspaceId != identity) {
                     sessions?.let { store ->
                         val selected = if (starter == null) store.create(identity) else store.create(
@@ -920,8 +936,9 @@ class ChatViewModel private constructor(
                         activeSummary = selected.summary
                         _subagents.value = emptyList()
                         closeWorker()
-                        _uiState.update { it.copy(messages = emptyList(), messageReasoning = emptyMap(),
-                            sessions = store.list(),
+                        val history = store.list()
+                        selectedState.update { it.copy(messages = emptyList(), messageReasoning = emptyMap(),
+                            sessions = history,
                             currentSessionId = selected.id, currentSessionTitle = selected.title,
                             currentSessionWorkspaceId = identity, usage = null, contextEstimate = null, contextMeter = null,
                             turnDurationsMs = emptyMap(),
@@ -929,29 +946,29 @@ class ChatViewModel private constructor(
                             externalUndo = null, interruptedTurn = false, run = null, runRecovery = null) }
                     }
                 }
-                refreshGoalMemory(workspace, _uiState.value.currentSessionId)
-                _uiState.update { it.copy(projectLoading = false, error = null) }
+                refreshGoalMemory(workspace, selectedState.value.currentSessionId)
+                selectedState.update { it.copy(projectLoading = false, error = null) }
                 // Switching to a project also has to offer what that project can still undo;
                 // inside the same project the row was cleared a few lines up only because the
                 // conversation changed, not the workspace.
                 rehydrateUndo(identity)
             } catch (e: CancellationException) { throw e
             } catch (e: StarterInstallFailure) {
-                _uiState.update { it.copy(projectLoading = false, starterError = e.message) }
+                selectedState.update { it.copy(projectLoading = false, starterError = e.message) }
             } catch (e: WorkspaceFailure) {
                 if (starter != null) {
-                    _uiState.update { it.copy(projectLoading = false, starterError =
+                    selectedState.update { it.copy(projectLoading = false, starterError =
                         if (e.reason == WorkspaceFailure.Reason.PERMISSION)
                             "Rivet couldn't open that folder. Choose it again and allow access."
                         else "Rivet couldn't finish installing. Check the folder before trying again.") }
                     return@launch
                 }
-                _uiState.update { it.copy(projectLoading = false, projectError = when (e.reason) {
+                selectedState.update { it.copy(projectLoading = false, projectError = when (e.reason) {
                     WorkspaceFailure.Reason.PERMISSION -> "Rivet couldn't open that folder. Choose it again and allow access."
                     else -> "Rivet couldn't use that folder. Choose another project folder."
                 }) }
             } catch (_: Exception) {
-                _uiState.update { it.copy(projectLoading = false,
+                selectedState.update { it.copy(projectLoading = false,
                     projectError = if (starter == null) "Rivet couldn't open that project. Try choosing it again." else null,
                     starterError = if (starter != null) "Rivet couldn't finish installing. Check the folder before trying again." else null) }
             }
@@ -959,7 +976,7 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun previewIdentityMatches(identity: String): Boolean =
-        workspaceSelection.currentIdentity() == identity && _uiState.value.currentSessionWorkspaceId == identity
+        workspaceSelection.currentIdentity() == identity && selectedState.value.currentSessionWorkspaceId == identity
 
     private suspend fun previewWorkspace(identity: String): SafWorkspace? {
         if (!previewIdentityMatches(identity)) return null
@@ -999,7 +1016,7 @@ class ChatViewModel private constructor(
     }
 
     fun projectPickerUnavailable() {
-        _uiState.update { it.copy(projectError = "Rivet couldn't open the folder picker. Try again.") }
+        selectedState.update { it.copy(projectError = "Rivet couldn't open the folder picker. Try again.") }
     }
 
     fun send(
@@ -1008,11 +1025,11 @@ class ChatViewModel private constructor(
         onAutonomyChange: (AutonomyMode) -> Unit = {},
     ) {
         val trimmed = text.trim()
-        val sessionId = _uiState.value.currentSessionId
+        val sessionId = selectedState.value.currentSessionId
         val attachments = _composerAttachments.value[sessionId].orEmpty()
         if ((trimmed.isEmpty() && attachments.isEmpty()) || sessionId in _composerImports.value ||
-            _uiState.value.streaming || !_uiState.value.ready ||
-            _uiState.value.recoveringProjectChanges) return
+            selectedState.value.streaming || !selectedState.value.ready ||
+            selectedState.value.recoveringProjectChanges) return
         val command = SlashCommands.builtIn(trimmed)
         if (command != null) {
             when (command) {
@@ -1022,12 +1039,12 @@ class ChatViewModel private constructor(
                 BuiltInSlash.Yolo -> onAutonomyChange(AutonomyMode.Yolo)
                 BuiltInSlash.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
             }
-            if (command != BuiltInSlash.Goal) _uiState.update { it.copy(commandAckCount = it.commandAckCount + 1) }
+            if (command != BuiltInSlash.Goal) selectedState.update { it.copy(commandAckCount = it.commandAckCount + 1) }
             return
         }
         val unknownCommand = SlashCommands.unknownLeading(trimmed, _userSkills.value)
         if (unknownCommand != null) {
-            _uiState.update { it.copy(
+            selectedState.update { it.copy(
                 notice = "Unknown command. Pick a command or skill from the slash list.",
                 error = null,
                 commandAckCount = it.commandAckCount + 1,
@@ -1043,7 +1060,7 @@ class ChatViewModel private constructor(
         }
         _sharedContent.update { it - sessionId }
         _composerAttachments.update { it - sessionId }
-        _uiState.update { state ->
+        selectedState.update { state ->
             val appended = state.messages + accepted
             val dropCount = (appended.size - 100).coerceAtLeast(0)
             val nextMessages = appended.takeLast(100)
@@ -1081,10 +1098,10 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun appendCommandReply(sessionId: String?, command: String, reply: String) {
-        val state = _uiState.value
+        val state = selectedState.value
         val row = InternalContext.commandReply(command, reply, state.currentSessionWorkspaceId)
         if (sessionId != null) sessions?.appendCommandReply(sessionId, row)
-        _uiState.update {
+        selectedState.update {
             if (it.currentSessionId != sessionId) it
             else it.copy(messages = (it.messages + row).takeLast(100), notice = null, error = null,
                 commandAckCount = it.commandAckCount + 1)
@@ -1092,14 +1109,14 @@ class ChatViewModel private constructor(
     }
 
     private fun handleGoalCommand(input: String, command: GoalCommand) {
-        val sessionId = _uiState.value.currentSessionId ?: return
+        val sessionId = selectedState.value.currentSessionId ?: return
         viewModelScope.launch {
             try {
                 val workspace = workspaceSelection.restore()?.first
                 val files = workspace?.let(::ProjectStateFiles)
                 projectState = files
                 runJournal = workspace?.let { workspaceRunJournal(it.tree.toString(), requireNotNull(files)) }
-                if (_uiState.value.currentSessionId != sessionId) return@launch
+                if (selectedState.value.currentSessionId != sessionId) return@launch
                 val projectStored = files?.loadGoal()?.takeIf { it.state != GoalState.Dropped }
                 val sessionStored = sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped }
                 val projectOwned = projectStored.ownedBy(sessionId)
@@ -1108,7 +1125,7 @@ class ChatViewModel private constructor(
                 when (command) {
                     is GoalCommand.Set -> {
                         if (command.text.isBlank()) {
-                            _uiState.update { it.copy(commandAckCount = it.commandAckCount + 1) }
+                            selectedState.update { it.copy(commandAckCount = it.commandAckCount + 1) }
                             return@launch
                         }
                         val next = GoalDocument.replaceGoal(goal, command.text, sessionId)
@@ -1117,7 +1134,7 @@ class ChatViewModel private constructor(
                         projectGoal = if (goalFiles != null) next else projectGoal
                         sessionGoal = if (goalFiles == null) next else sessionGoal
                         if (goalFiles != null) projectGoalWatcher.remember(workspace?.tree?.toString(), GoalDocument.render(next))
-                        _uiState.update {
+                        selectedState.update {
                             if (it.currentSessionId != sessionId) it
                             else it.copy(goal = next, goalLine = next.lineForSession(sessionId))
                         }
@@ -1146,7 +1163,7 @@ class ChatViewModel private constructor(
                         sessionGoal = if (goalFiles == null) next.takeIf { state != GoalState.Dropped } else sessionGoal
                         if (goalFiles != null) projectGoalWatcher.remember(workspace?.tree?.toString(), renderedGoalOrNull(projectGoal))
                         val shown = if (state == GoalState.Dropped) null else next
-                        _uiState.update {
+                        selectedState.update {
                             if (it.currentSessionId != sessionId) it
                             else it.copy(goal = shown, goalLine = shown.lineForSession(sessionId))
                         }
@@ -1160,7 +1177,7 @@ class ChatViewModel private constructor(
                 }
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
-                _uiState.update { it.copy(error = "Rivet couldn't update the goal. Try again.",
+                selectedState.update { it.copy(error = "Rivet couldn't update the goal. Try again.",
                     errorAction = null, commandAckCount = it.commandAckCount + 1) }
             }
         }
@@ -1234,7 +1251,7 @@ class ChatViewModel private constructor(
             } else emptyList()) +
             (if (hasWorkspace) SubagentTools.definitions else emptyList()) +
             (if (archiveAvailable) listOf(ArchiveRecall.definition) else emptyList())
-        val state = _uiState.value
+        val state = selectedState.value
         val refreshed = messages + GoalMemoryContext.updates(messages, workspaceId,
             state.goal.ownedBy(state.currentSessionId), state.memoryMarkdown)
         return coordinatorRequest(config, workspaceId, refreshed, tools, phoneAccess, archiveAvailable, pinnedArchive)
@@ -1244,13 +1261,13 @@ class ChatViewModel private constructor(
         contextReadingForRequest(config, request)
 
     internal suspend fun refreshContextMeter(config: ProviderConfig) {
-        val state = _uiState.value
+        val state = selectedState.value
         if (!state.ready || state.projectLoading || state.streaming) return
         val ticket = generation
         val pinned = state.currentSessionId?.let { sessions?.archiveTail(it) }.orEmpty()
         val meter = readContextMeter(config,
             idleContextRequest(config, state.currentSessionWorkspaceId, activeMessages, pinned))
-        if (ticket == generation && !_uiState.value.streaming) _uiState.update { it.copy(contextMeter = meter) }
+        if (ticket == generation && !selectedState.value.streaming) selectedState.update { it.copy(contextMeter = meter) }
     }
 
     /**
@@ -1259,15 +1276,15 @@ class ChatViewModel private constructor(
      * notice row. While a reply runs, its turn already owns compaction.
      */
     fun compactHistory() {
-        val state = _uiState.value
+        val state = selectedState.value
         when (compactTrigger(state.streaming, state.messages.any { it.role != AgentRole.Context })) {
             CompactTrigger.RunActive -> {
-                _uiState.update { it.copy(notice = "Cannot compact while a reply is running.",
+                selectedState.update { it.copy(notice = "Cannot compact while a reply is running.",
                     error = null, commandAckCount = it.commandAckCount + 1) }
                 return
             }
             CompactTrigger.NothingToCompact -> {
-                _uiState.update { it.copy(notice = "Nothing to compact yet.",
+                selectedState.update { it.copy(notice = "Nothing to compact yet.",
                     error = null, commandAckCount = it.commandAckCount + 1) }
                 return
             }
@@ -1275,23 +1292,23 @@ class ChatViewModel private constructor(
         }
         if (!state.ready || state.projectLoading || state.undoing || state.recoveringProjectChanges) return
         val ticket = ++generation
-        _uiState.update { it.copy(streaming = true, compacting = true, turnStartedAt = null,
+        selectedState.update { it.copy(streaming = true, compacting = true, turnStartedAt = null,
             activity = null, error = null, errorAction = null, notice = null) }
         val previous = sendJob
         sendJob = viewModelScope.launch {
             var store: CodingSessions? = null
             try {
                 previous?.join()
-                val snapshot = providerSnapshot(_uiState.value.interruptedTurn) ?: return@launch
-                val sessionId = _uiState.value.currentSessionId
+                val snapshot = providerSnapshot(selectedState.value.interruptedTurn) ?: return@launch
+                val sessionId = selectedState.value.currentSessionId
                 val sql = sessions
                 if (sessionId == null || sql == null) {
-                    _uiState.update { it.copy(streaming = false, activity = null,
+                    selectedState.update { it.copy(streaming = false, activity = null,
                         notice = "Nothing to compact yet.") }
                     return@launch
                 }
                 store = sql
-                val workspaceId = _uiState.value.currentSessionWorkspaceId
+                val workspaceId = selectedState.value.currentSessionWorkspaceId
                 val pinnedArchive = sql.archiveTail(sessionId)
                 val context = ContextPreparation(sql, sessionId,
                     clientFactory(snapshot.config, snapshot.apiKey), snapshot.config,
@@ -1302,7 +1319,7 @@ class ChatViewModel private constructor(
                 val compacted = context.prepare(activeMessages, force = true, reason = "manual")
                 if (ticket != generation) return@launch
                 if (compacted == activeMessages) {
-                    _uiState.update { it.copy(streaming = false, activity = null,
+                    selectedState.update { it.copy(streaming = false, activity = null,
                         notice = "Nothing to compact yet.", error = null) }
                     return@launch
                 }
@@ -1317,7 +1334,7 @@ class ChatViewModel private constructor(
                     val restored = sql.load()
                     activeMessages = restored.messages
                     activeSummary = restored.summary
-                    if (ticket == generation) _uiState.update { it.copy(streaming = false, activity = null,
+                    if (ticket == generation) selectedState.update { it.copy(streaming = false, activity = null,
                         error = if (e is AgentSessionLimitException) CONTEXT_LIMIT_ERROR
                         else "Could not save the conversation. Check available storage and try again.") }
                     return@launch
@@ -1329,7 +1346,7 @@ class ChatViewModel private constructor(
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { ContextEstimate(context.footprint(noticed), "estimated") }
                     val meter = readContextMeter(snapshot.config, context.requestFor(noticed))
-                    _uiState.update { state ->
+                    selectedState.update { state ->
                         val visible = (state.messages + notice).takeLast(100)
                         val remapped = com.kaiser.rivet.ui.chat.remapTurnMetadataAfterVisibilityChange(
                             oldMessages = state.messages,
@@ -1351,16 +1368,16 @@ class ChatViewModel private constructor(
                     try {
                         store?.load()?.let { activeMessages = it.messages; activeSummary = it.summary }
                     } catch (_: Exception) { }
-                    if (ticket == generation) _uiState.update { it.copy(streaming = false, activity = null) }
+                    if (ticket == generation) selectedState.update { it.copy(streaming = false, activity = null) }
                 }
                 throw e
             } catch (e: Exception) {
                 Log.w("RivetChat", "manual compaction failed: ${e.javaClass.simpleName}")
-                if (ticket == generation) _uiState.update { it.copy(streaming = false, activity = null,
+                if (ticket == generation) selectedState.update { it.copy(streaming = false, activity = null,
                     error = "Rivet could not shorten this session's context. The conversation was kept.",
                     errorAction = null) }
             } finally {
-                if (ticket == generation) _uiState.update { state ->
+                if (ticket == generation) selectedState.update { state ->
                     if (state.compacting) state.copy(compacting = false) else state
                 }
             }
@@ -1369,14 +1386,14 @@ class ChatViewModel private constructor(
 
     /** Move a no-project goal into the folder the user just opened. */
     fun attachGoalToProject() {
-        val sessionId = _uiState.value.currentSessionId ?: return
+        val sessionId = selectedState.value.currentSessionId ?: return
         viewModelScope.launch {
             try {
                 val workspace = workspaceSelection.restore()?.first ?: return@launch
                 val files = ProjectStateFiles(workspace)
                 val existing = files.loadGoal()?.takeIf { it.state != GoalState.Dropped }
                 if (existing != null) {
-                    _uiState.update { it.copy(goalAttachOffer = false,
+                    selectedState.update { it.copy(goalAttachOffer = false,
                         notice = "This project already has a goal.") }
                     return@launch
                 }
@@ -1388,11 +1405,11 @@ class ChatViewModel private constructor(
                 projectGoal = attached
                 projectGoalWatcher.remember(workspace.tree.toString(), GoalDocument.render(attached))
                 sessionGoal = null
-                _uiState.update { it.copy(goal = attached, goalLine = attached.lineForSession(it.currentSessionId),
+                selectedState.update { it.copy(goal = attached, goalLine = attached.lineForSession(it.currentSessionId),
                     goalAttachOffer = false, notice = "Goal attached to this project.") }
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
-                _uiState.update { it.copy(error = "Rivet couldn't attach the goal to this project.") }
+                selectedState.update { it.copy(error = "Rivet couldn't attach the goal to this project.") }
             }
         }
     }
@@ -1400,7 +1417,7 @@ class ChatViewModel private constructor(
     fun updateMemory(content: String) {
         viewModelScope.launch {
             val message = tryEditMemory(content)
-            _uiState.update {
+            selectedState.update {
                 if (message == null) it.copy(notice = "Memory updated.", error = null)
                 else it.copy(notice = null, error = message)
             }
@@ -1414,25 +1431,25 @@ class ChatViewModel private constructor(
                 val next = MemoryFormat.forget(memoryMarkdown, index)
                 val checkpoint = beginMemoryCheckpoint()
                 if (checkpoint == null) {
-                    _uiState.update { it.copy(error = "Rivet couldn't prepare a memory checkpoint. Try again.") }
+                    selectedState.update { it.copy(error = "Rivet couldn't prepare a memory checkpoint. Try again.") }
                     return@launch
                 }
                 files.saveMemory(next)
                 memoryMarkdown = next
                 // Repaint the Settings list as soon as the file write succeeds; the
                 // checkpoint bookkeeping below can take a moment on a large project.
-                _uiState.update { it.copy(memoryMarkdown = next,
+                selectedState.update { it.copy(memoryMarkdown = next,
                     memoryLines = MemoryFormat.facts(next), notice = "Memory line forgotten.") }
                 finishMemoryCheckpoint(checkpoint)
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
-                _uiState.update { it.copy(error = "Rivet couldn't update project memory.") }
+                selectedState.update { it.copy(error = "Rivet couldn't update project memory.") }
             }
         }
     }
 
     private suspend fun beginMemoryCheckpoint(): String? {
-        val workspaceId = _uiState.value.currentSessionWorkspaceId ?: return null
+        val workspaceId = selectedState.value.currentSessionWorkspaceId ?: return null
         return try {
             runtimeController.beginRunCheckpoint(workspaceId, "memory-${UUID.randomUUID()}", 0,
                 "Before memory edit")
@@ -1441,7 +1458,7 @@ class ChatViewModel private constructor(
 
     private suspend fun finishMemoryCheckpoint(id: String?) {
         if (id == null) return
-        val workspaceId = _uiState.value.currentSessionWorkspaceId ?: return
+        val workspaceId = selectedState.value.currentSessionWorkspaceId ?: return
         try { runtimeController.finishRunCheckpoint(workspaceId, id) }
         catch (e: CancellationException) { throw e } catch (_: Exception) { }
         refreshRunCheckpoints()
@@ -1461,7 +1478,7 @@ class ChatViewModel private constructor(
                     ?: return "Rivet couldn't prepare a memory checkpoint. Try again."
                 files.saveMemory(result.markdown)
                 memoryMarkdown = result.markdown
-                _uiState.update { it.copy(memoryMarkdown = result.markdown,
+                selectedState.update { it.copy(memoryMarkdown = result.markdown,
                     memoryLines = MemoryFormat.facts(result.markdown)) }
                 finishMemoryCheckpoint(checkpoint)
                 null
@@ -1472,10 +1489,10 @@ class ChatViewModel private constructor(
     private suspend fun saveRememberedFacts(workspace: SafWorkspace, facts: List<String>): MemoryFormat.Append {
         val files = ProjectStateFiles(workspace)
         val result = files.appendMemory(facts)
-        if (result is MemoryFormat.Append.Saved && _uiState.value.projectIdentity == workspace.tree.toString()) {
+        if (result is MemoryFormat.Append.Saved && selectedState.value.projectIdentity == workspace.tree.toString()) {
             projectState = files
             memoryMarkdown = result.markdown
-            _uiState.update {
+            selectedState.update {
                 it.copy(memoryMarkdown = result.markdown, memoryLines = MemoryFormat.facts(result.markdown),
                     notice = if (result.garden) "Memory updated. It is over the soft cap; garden it soon."
                     else "Memory updated.")
@@ -1499,7 +1516,7 @@ class ChatViewModel private constructor(
                 summary = "Memory updated")
         }
         val code = (result as MemoryFormat.Append.Refused).code
-        _uiState.update { it.copy(notice = when (code) {
+        selectedState.update { it.copy(notice = when (code) {
             "secret" -> "Rivet skipped the memory update because it contains a secret."
             "garden_first" -> "Remove older memory entries before adding these."
             else -> "Rivet couldn't save the proposed memory entries."
@@ -1513,7 +1530,7 @@ class ChatViewModel private constructor(
         try {
             val files = ProjectStateFiles(workspace)
             val project = files.loadGoal()?.takeIf { it.state != GoalState.Dropped }
-            val sessionId = _uiState.value.currentSessionId
+            val sessionId = selectedState.value.currentSessionId
             val session = sessionGoals.load(sessionId).ownedBy(sessionId)
             val goal = project.ownedBy(sessionId) ?: session
             val memory = files.loadMemory()
@@ -1523,7 +1540,7 @@ class ChatViewModel private constructor(
             projectGoal = project
             sessionGoal = session
             memoryMarkdown = memory
-            _uiState.update {
+            selectedState.update {
                 if (it.goal == goal && it.memoryMarkdown == memory && !externalGoal) it
                 else it.copy(goal = goal, goalLine = goal.lineForSession(it.currentSessionId),
                     memoryMarkdown = memory, memoryLines = MemoryFormat.facts(memory),
@@ -1551,7 +1568,7 @@ class ChatViewModel private constructor(
 
     private suspend fun startRun(workspaceId: String, title: String,
                                  sessionId: String?, resuming: Boolean): RunRecord? {
-        if (sessionId == null || _uiState.value.currentSessionId != sessionId) return null
+        if (sessionId == null || selectedState.value.currentSessionId != sessionId) return null
         val journal = runJournal ?: projectState?.let { workspaceRunJournal(workspaceId, it) } ?: return null
         runJournal = journal
         val previous = if (resuming) currentSessionRun()?.takeIf { it.workspaceId == workspaceId } else null
@@ -1565,10 +1582,10 @@ class ChatViewModel private constructor(
         if (resumed == null) {
             if (batteryAskStore.shouldAsk()) {
                 batteryAskStore.markAsked()
-                _uiState.update { it.copy(batteryAsk = true) }
+                selectedState.update { it.copy(batteryAsk = true) }
             }
             spendLedger.resetRun(spendStore.month(), previous?.let { spendStore.runTotals(it.id) } ?: (0.0 to 0L))
-            _uiState.update { it.copy(spendLabel = null, spendEstimate = null, spendWarning = null,
+            selectedState.update { it.copy(spendLabel = null, spendEstimate = null, spendWarning = null,
                 runSpendUsd = 0.0, budgetPaused = false) }
         } else if (spendRunId == next.id) {
             spendLedger.syncMonth(spendStore.month())
@@ -1583,7 +1600,7 @@ class ChatViewModel private constructor(
         journal.save(next, mirrorToProject = false)
         checkpointGate.startRun(workspaceId, next.id, title, resuming = resumed != null)
         managedProcesses.updateRunStatus(next.title, "Getting ready…", next.startedAt)
-        _uiState.update { it.copy(run = next, runRecovery = null) }
+        selectedState.update { it.copy(run = next, runRecovery = null) }
         return next
     }
 
@@ -1606,7 +1623,7 @@ class ChatViewModel private constructor(
         currentRun = next
         try { runJournal?.save(next) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
         managedProcesses.updateRunStatus(next.title, summary.take(180), next.startedAt)
-        _uiState.update { it.copy(run = next) }
+        selectedState.update { it.copy(run = next) }
     }
 
     private suspend fun finishRun(phase: RunPhase, failure: String? = null) {
@@ -1622,16 +1639,16 @@ class ChatViewModel private constructor(
             if (phase == RunPhase.Done || phase == RunPhase.Stopped) spendStore.clearRunTotals(next.id)
         } catch (e: CancellationException) { throw e } catch (_: Exception) { }
         managedProcesses.updateRunStatus(null, null, 0)
-        _uiState.update { it.copy(run = next) }
+        selectedState.update { it.copy(run = next) }
     }
 
     private fun recordSpend(config: ProviderConfig, usage: AgentUsage, estimated: Boolean) {
         val result = spendLedger.record(config, usage, estimated)
         spendRunId?.let { spendStore.saveRunTotals(it, result.runSpendUsd, result.decision.runTokens) }
         if (result.local) {
-            _uiState.update { it.copy(spendLabel = result.label, spendFromEstimate = false) }
+            selectedState.update { it.copy(spendLabel = result.label, spendFromEstimate = false) }
             if (result.shouldPause) {
-                _uiState.update {
+                selectedState.update {
                     it.copy(
                         budgetPaused = true,
                         notice = "Budget reached — raise the cap or stop this run.",
@@ -1641,7 +1658,7 @@ class ChatViewModel private constructor(
             }
             return
         }
-        _uiState.update {
+        selectedState.update {
             it.copy(
                 spendLabel = result.label,
                 spendFromEstimate = result.spendFromEstimate,
@@ -1650,7 +1667,7 @@ class ChatViewModel private constructor(
             )
         }
         if (result.shouldPause) {
-            _uiState.update {
+            selectedState.update {
                 it.copy(
                     budgetPaused = true,
                     notice = "Budget reached — raise the cap or stop this run.",
@@ -1671,23 +1688,23 @@ class ChatViewModel private constructor(
 
     private fun updateSpendEstimate(config: ProviderConfig) {
         if (SpendStore.isLocal(config.baseUrl)) {
-            _uiState.update { it.copy(spendEstimate = null) }
+            selectedState.update { it.copy(spendEstimate = null) }
             return
         }
-        val tokens = _uiState.value.contextEstimate?.tokens ?: 0L
+        val tokens = selectedState.value.contextEstimate?.tokens ?: 0L
         if (tokens < BIG_JOB_TOKENS) {
-            _uiState.update { it.copy(spendEstimate = null) }
+            selectedState.update { it.copy(spendEstimate = null) }
             return
         }
         val label = SpendGuard.estimateRange(PricingTable.price(config.model),
             (tokens / 2)..(tokens + 8_000L), 500L..8_000L,
-            _uiState.value.userPricePerMillionUsd)
-        _uiState.update { it.copy(spendEstimate = label) }
+            selectedState.value.userPricePerMillionUsd)
+        selectedState.update { it.copy(spendEstimate = label) }
     }
 
     fun saveSpendCaps(caps: SpendCaps, userPricePerMillionUsd: Double?) {
         spendStore.save(caps, userPricePerMillionUsd)
-        _uiState.update { it.copy(spendCaps = caps, userPricePerMillionUsd = userPricePerMillionUsd,
+        selectedState.update { it.copy(spendCaps = caps, userPricePerMillionUsd = userPricePerMillionUsd,
             notice = "Spend limits saved.") }
     }
 
@@ -1695,7 +1712,7 @@ class ChatViewModel private constructor(
     fun raiseBudgetCapForThisRun() {
         if (!spendLedger.raiseCapForCurrentRun()) return
         PersistentProcessService.cancelBudgetPause(getApplication<Application>())
-        _uiState.update { it.copy(budgetPaused = false, notice = "Cap raised for this run.") }
+        selectedState.update { it.copy(budgetPaused = false, notice = "Cap raised for this run.") }
         retryInterruptedTurn()
     }
 
@@ -1708,7 +1725,7 @@ class ChatViewModel private constructor(
             lastPruneSeen = pruned
             "Old checkpoints pruned to keep the 500 MB project cap."
         } else null
-        _uiState.update {
+        selectedState.update {
             it.copy(runCheckpoints = list,
                 runCheckpointNotice = pruneNotice ?: it.runCheckpointNotice)
         }
@@ -1719,24 +1736,24 @@ class ChatViewModel private constructor(
      * transcript row keeps it visible when the pane is closed.
      */
     private suspend fun recordTerminalRestoreNotice() {
-        val notice = InternalContext.restoreNotice(_uiState.value.currentSessionWorkspaceId)
+        val notice = InternalContext.restoreNotice(selectedState.value.currentSessionWorkspaceId)
         activeMessages = activeMessages + notice
-        _uiState.update { it.copy(messages = (it.messages + notice).takeLast(100)) }
-        val sessionId = _uiState.value.currentSessionId
+        selectedState.update { it.copy(messages = (it.messages + notice).takeLast(100)) }
+        val sessionId = selectedState.value.currentSessionId
         val sql = sessions
         if (sessionId != null && sql != null) sql.save(activeMessages, false, sessionId)
         else sessionStore.save(activeMessages, false)
     }
 
     fun restoreRunCheckpoint(id: String, undoRun: Boolean = false) {
-        if (_uiState.value.streaming || activeSupervisor?.hasLiveWorkers() == true) {
-            _uiState.update { it.copy(runCheckpointNotice = "Not restored. Cannot restore while a run or subagent is active.",
+        if (selectedState.value.streaming || activeSupervisor?.hasLiveWorkers() == true) {
+            selectedState.update { it.copy(runCheckpointNotice = "Not restored. Cannot restore while a run or subagent is active.",
                 error = "Cannot restore while a run or subagent is active.") }
             return
         }
-        val record = _uiState.value.runCheckpoints.firstOrNull { it.id == id }
+        val record = selectedState.value.runCheckpoints.firstOrNull { it.id == id }
         if (record == null) {
-            _uiState.update {
+            selectedState.update {
                 it.copy(runCheckpointNotice = "Not restored. That checkpoint is no longer available.",
                     error = "That checkpoint is no longer available.")
             }
@@ -1752,7 +1769,7 @@ class ChatViewModel private constructor(
                 }
                 val conflictList = result.conflicts.take(20).joinToString(", ") +
                     if (result.conflicts.size > 20) " and ${result.conflicts.size - 20} more" else ""
-                _uiState.update {
+                selectedState.update {
                     if (result.conflicts.isEmpty()) it.copy(
                         runCheckpointNotice = if (result.restored.isEmpty())
                             "Restored from ${record.summary}. Nothing needed changing."
@@ -1774,12 +1791,12 @@ class ChatViewModel private constructor(
                     "sync_failed" -> "Not restored. The workspace could not finish syncing."
                     else -> "Not restored. The checkpoint could not be read safely."
                 }
-                _uiState.update {
+                selectedState.update {
                     it.copy(runCheckpointNotice = notice,
                         error = "Restore stopped. No files were overwritten.")
                 }
             } catch (_: Exception) {
-                _uiState.update {
+                selectedState.update {
                     it.copy(runCheckpointNotice = "Not restored. The checkpoint could not be read safely.",
                         error = "Rivet couldn't restore that checkpoint.")
                 }
@@ -1791,8 +1808,8 @@ class ChatViewModel private constructor(
         goal?.takeIf { it.state != GoalState.Dropped }?.let { GoalDocument.render(it) }
 
     private suspend fun appendGoalProgress(note: String) {
-        val sessionId = _uiState.value.currentSessionId
-        val projectId = _uiState.value.projectIdentity
+        val sessionId = selectedState.value.currentSessionId
+        val projectId = selectedState.value.projectIdentity
         val files = projectState
         val stored = try { files?.loadGoal()?.takeIf { it.state != GoalState.Dropped } }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
@@ -1808,24 +1825,24 @@ class ChatViewModel private constructor(
             sessionGoals.save(sessionId, next)
             sessionGoal = next
         }
-        _uiState.update { it.copy(goal = next, goalLine = next.lineForSession(it.currentSessionId)) }
+        selectedState.update { it.copy(goal = next, goalLine = next.lineForSession(it.currentSessionId)) }
     }
 
     // The model refused an effort. Saving the chosen level and running the same prompt
     // again is the whole recovery: the user never retypes the message.
     fun chooseReasoningLevel(level: ReasoningLevel) {
-        val notice = _uiState.value.unsupportedReasoning ?: return
-        if (_uiState.value.streaming) return
+        val notice = selectedState.value.unsupportedReasoning ?: return
+        if (selectedState.value.streaming) return
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
         if (lastUser.isEmpty()) return
-        _uiState.update { it.copy(unsupportedReasoning = null, error = null, errorAction = null) }
+        selectedState.update { it.copy(unsupportedReasoning = null, error = null, errorAction = null) }
         viewModelScope.launch {
             try {
                 providerSource.updateReasoning(notice.providerId, level)
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                _uiState.update {
+                selectedState.update {
                     it.copy(error = "Rivet couldn't save that reasoning level. Try again.")
                 }
                 return@launch
@@ -1835,9 +1852,9 @@ class ChatViewModel private constructor(
     }
 
     fun retryInterruptedTurn(notice: String? = null): Boolean {
-        if (_uiState.value.streaming || !_uiState.value.ready ||
-            _uiState.value.recoveringProjectChanges || _uiState.value.undoing ||
-            !_uiState.value.interruptedTurn) return false
+        if (selectedState.value.streaming || !selectedState.value.ready ||
+            selectedState.value.recoveringProjectChanges || selectedState.value.undoing ||
+            !selectedState.value.interruptedTurn) return false
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
         // A compacted transcript can end without a user message; retrying then would send
         // an empty prompt. Match the sibling retry: without a prompt there is nothing to run.
@@ -1853,7 +1870,7 @@ class ChatViewModel private constructor(
     // user message in the transcript, so the turn reuses that tail instead of adding a
     // second copy.
     fun retryFailedTurn() {
-        val state = _uiState.value
+        val state = selectedState.value
         if (state.streaming || !state.ready || state.recoveringProjectChanges || state.undoing) return
         val lastUser = activeMessages.lastOrNull { it.role == AgentRole.User }?.text?.trim().orEmpty()
         if (lastUser.isEmpty()) {
@@ -1864,33 +1881,33 @@ class ChatViewModel private constructor(
     }
 
     fun dismissInterruptedTurn() {
-        val dismissed = _uiState.value
+        val dismissed = selectedState.value
         if (dismissed.streaming) return
         val dismissedRun = currentSessionRun()?.takeIf { it.resumable }
-        _uiState.update { state ->
+        selectedState.update { state ->
             state.copy(interruptedTurn = false, runRecovery = null)
         }
         viewModelScope.launch {
             try {
                 if (dismissedRun != null) {
                     ChatSupervisorServices.dismissInterruptedWorkers(workerStore, dismissedRun.id)
-                    if (currentSessionRun()?.id == dismissedRun.id && !_uiState.value.streaming) {
+                    if (currentSessionRun()?.id == dismissedRun.id && !selectedState.value.streaming) {
                         finishRun(RunPhase.Stopped)
                     }
                 }
-                if (_uiState.value.currentSessionId != dismissed.currentSessionId || _uiState.value.streaming) return@launch
+                if (selectedState.value.currentSessionId != dismissed.currentSessionId || selectedState.value.streaming) return@launch
                 val store = sessions
                 if (store != null) store.markInterrupted(false, dismissed.currentSessionId)
                 else sessionStore.markInterrupted(false)
                 val history = sessions?.list()
-                if (history != null) _uiState.update { it.copy(sessions = history) }
+                if (history != null) selectedState.update { it.copy(sessions = history) }
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) { }
         }
     }
 
     internal fun openPendingStarter() {
-        val state = _uiState.value
+        val state = selectedState.value
         val workspace = state.currentSessionWorkspaceId ?: return
         if (!state.ready || state.streaming || state.projectLoading || state.projectIdentity != workspace ||
             state.messages.any { it.role != AgentRole.Context }) return
@@ -1901,9 +1918,9 @@ class ChatViewModel private constructor(
     private fun startTurn(trimmed: String, retryingInterrupted: Boolean,
                          acceptedUser: AgentMessage? = null, starterOpening: Boolean = false,
                          notice: String? = null) {
-        val wasInterrupted = _uiState.value.interruptedTurn
+        val wasInterrupted = selectedState.value.interruptedTurn
         val ticket = ++generation
-        _uiState.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
+        selectedState.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
             turnStartedWallClock = System.currentTimeMillis(),
             streamingText = "", streamingReasoning = "",
             activity = "Getting ready…",
@@ -1940,7 +1957,7 @@ class ChatViewModel private constructor(
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) {
                         releaseTurn()
-                        _uiState.update { it.copy(streaming = false, activity = null,
+                        selectedState.update { it.copy(streaming = false, activity = null,
                             interruptedTurn = wasInterrupted,
                             error = "Could not recover the previous task. Check available storage and try again.") }
                         return@launch
@@ -1949,7 +1966,7 @@ class ChatViewModel private constructor(
                         it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty()
                     } == true) {
                     releaseTurn()
-                    _uiState.update { it.copy(streaming = false, activity = null,
+                    selectedState.update { it.copy(streaming = false, activity = null,
                         interruptedTurn = wasInterrupted,
                         error = "Could not recover the previous task. Restart Rivet before continuing.") }
                     return@launch
@@ -1982,7 +1999,7 @@ class ChatViewModel private constructor(
                     workspaceAccessFailed = true
                 }
             }
-            browser.bindProject(workspaceId ?: _uiState.value.currentSessionWorkspaceId ?: "unbound")
+            browser.bindProject(workspaceId ?: selectedState.value.currentSessionWorkspaceId ?: "unbound")
             if (!starterOpening && workspaceId != null && snapshot.config.type == ProviderType.Local) {
                 val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
                 val block = local?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)
@@ -1994,14 +2011,14 @@ class ChatViewModel private constructor(
                     return@launch
                 }
             }
-            val current = _uiState.value
+            val current = selectedState.value
             val binding = projectBindingState(current.currentSessionId,
                 current.currentSessionWorkspaceId, workspaceId, projectLoading = false)
             if (workspaceAccessFailed || binding == ProjectBindingState.AccessLost) {
                 persistAcceptedOnExit = false
                 rollbackAcceptedUser(acceptedUser)
                 releaseTurn()
-                _uiState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
+                selectedState.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
                     projectError = if (current.currentSessionWorkspaceId != null) null
                     else "Rivet couldn't open this project. Choose the folder again.",
                     streaming = false, activity = null,
@@ -2013,7 +2030,7 @@ class ChatViewModel private constructor(
                 persistAcceptedOnExit = false
                 rollbackAcceptedUser(acceptedUser)
                 releaseTurn()
-                _uiState.update { it.copy(streaming = false, activity = null,
+                selectedState.update { it.copy(streaming = false, activity = null,
                     interruptedTurn = wasInterrupted,
                     error = PROJECT_BINDING_MISMATCH_MESSAGE) }
                 return@launch
@@ -2072,7 +2089,7 @@ class ChatViewModel private constructor(
                     messages, workspaceId, workspace))
                 else if (workspaceId == null) {
                     addAll(GoalMemoryContext.updates(messages, null,
-                        sessionGoal.ownedBy(_uiState.value.currentSessionId), ""))
+                        sessionGoal.ownedBy(selectedState.value.currentSessionId), ""))
                 }
                 if (gesture != null && workspaceId != null) {
                     add(SkillContext.invocation(gesture.skill, workspaceId))
@@ -2107,10 +2124,10 @@ class ChatViewModel private constructor(
                 { call: AgentToolCall ->
                     PhoneCaptureTool.prepare(call, { VisionCapability.assess(snapshot.config) }, saveCapture) {
                         coordinator.capture { status ->
-                            if (status == "phone_shot_armed") _uiState.update {
+                            if (status == "phone_shot_armed") selectedState.update {
                                 it.copy(activity = "Switch apps, then tap Capture now in Rivet’s notification.")
                             }
-                            if (status == com.kaiser.rivet.ui.phone.PHONE_SHOT_WAITING_FOREGROUND) _uiState.update {
+                            if (status == com.kaiser.rivet.ui.phone.PHONE_SHOT_WAITING_FOREGROUND) selectedState.update {
                                 it.copy(activity = "Waiting for Rivet to return to the screen to ask for capture permission.")
                             }
                         }
@@ -2128,7 +2145,7 @@ class ChatViewModel private constructor(
                         if (phone == null) throw com.kaiser.rivet.agent.AgentWorkspaceFailure("grant_missing")
                         SafAgentWorkspace(liveGrant(id, write))
                     },
-                    inbox = SharedFileCopy.sessionInbox(getApplication<Application>(), _uiState.value.currentSessionId),
+                    inbox = SharedFileCopy.sessionInbox(getApplication<Application>(), selectedState.value.currentSessionId),
                 ) else projectFiles ?: return null
                 if (selectedWorkspace == null) return AgentToolExecutor(
                     files, downloader = projectDownloader, preparePhoneIntent = phone?.let { it::prepare },
@@ -2147,7 +2164,7 @@ class ChatViewModel private constructor(
                     managedProcesses = managedProcesses,
                     startPreview = { root, entry ->
                         runtime.startPreview(selectedWorkspace, boundWorkspaceId,
-                            _uiState.value.projectName, root, entry)
+                            selectedState.value.projectName, root, entry)
                     },
                     downloader = projectDownloader,
                     currentWorkspaceIdentity = workspaceSelection::currentIdentity,
@@ -2180,7 +2197,7 @@ class ChatViewModel private constructor(
                 val boundWorkspaceId = workspaceId ?: workspace.tree.toString()
                 val supervisorServices = ChatSupervisorServices.createServices(
                     workspaceId = boundWorkspaceId, runId = currentSessionRun()?.id ?: UUID.randomUUID().toString(),
-                    parentSessionId = _uiState.value.currentSessionId, workerStore = workerStore,
+                    parentSessionId = selectedState.value.currentSessionId, workerStore = workerStore,
                     providerSource = providerSource, clientFactory = clientFactory, approvals = approvals,
                     checkpointGate = checkpointGate, coordinatorConfig = { snapshot.config },
                     browserTools = browserTools, browserLease = browserLease, createExecutor = { createExecutor(it) },
@@ -2205,7 +2222,7 @@ class ChatViewModel private constructor(
                     retryingInterrupted = retryingInterrupted,
                     currentRunId = currentSessionRun()?.id,
                     onStateUpdate = { _subagents.value = it },
-                    sessionId = { _uiState.value.currentSessionId },
+                    sessionId = { selectedState.value.currentSessionId },
                 )
                 supervisorScopeJob = scopeJob
                 supervisorCollector = collectorJob
@@ -2219,7 +2236,7 @@ class ChatViewModel private constructor(
                 val selected = workspace
                     ?: throw com.kaiser.rivet.agent.AgentWorkspaceFailure("workspace_unavailable")
                 val identity = workspaceId ?: selected.tree.toString()
-                runtime.startPreview(selected, identity, _uiState.value.projectName, root, entry).url
+                runtime.startPreview(selected, identity, selectedState.value.projectName, root, entry).url
             }
             val workspaceTools = if (executor == null) emptyList() else
                 AgentToolExecutor.definitions.filter {
@@ -2232,7 +2249,7 @@ class ChatViewModel private constructor(
                 (subagentTools?.let { SubagentTools.definitions }.orEmpty()) +
                 (if (sessions != null) listOf(ArchiveRecall.definition) else emptyList())
             val client = clientFactory(snapshot.config, snapshot.apiKey)
-            val sessionId = _uiState.value.currentSessionId
+            val sessionId = selectedState.value.currentSessionId
             turnSessionId = sessionId
             val turnId = UUID.randomUUID().toString()
             val titleEligible = try {
@@ -2256,7 +2273,7 @@ class ChatViewModel private constructor(
                 turnId, activeSummary, workspaceId, currentRequest = acceptedUser?.text, useRequestEstimate = true,
                 redactions = secrets.sensitiveValues().toList(),
                 onCompactionStarted = {
-                    if (ticket == generation) _uiState.update { it.copy(compacting = true) }
+                    if (ticket == generation) selectedState.update { it.copy(compacting = true) }
                 }) { messages, _ ->
                 coordinatorRequest(snapshot.config, workspaceId, messages, tools, phone != null,
                     archive != null, pinnedArchive)
@@ -2267,24 +2284,24 @@ class ChatViewModel private constructor(
             val reuseExistingTail = retryingInterrupted
             val pendingUser = if (reuseExistingTail || starterOpening) emptyList()
                 else listOf(acceptedUser ?: AgentMessage.user(prompt))
-            if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
+            if (!canSaveTurn(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
                 try {
                     val reduced = try {
                         context.prepare(activeMessages, force = true, reason = "storage_pressure")
                     } finally {
-                        if (ticket == generation) _uiState.update { it.copy(compacting = false) }
+                        if (ticket == generation) selectedState.update { it.copy(compacting = false) }
                     }
                     if (reduced != activeMessages) {
                         activeMessages = reduced
                         activeSummary = context.summary
                         val meter = readContextMeter(snapshot.config, context.requestFor(reduced))
-                        if (ticket == generation) _uiState.update { it.copy(contextMeter = meter) }
+                        if (ticket == generation) selectedState.update { it.copy(contextMeter = meter) }
                     }
                 }
                 catch (e: CancellationException) { throw e
                 } catch (_: Exception) {
                     releaseTurn()
-                    _uiState.update { it.copy(streaming = false, activity = null,
+                    selectedState.update { it.copy(streaming = false, activity = null,
                         interruptedTurn = wasInterrupted,
                         error = "Rivet could not shorten this session's context. The conversation was kept.") }
                     return@launch
@@ -2299,7 +2316,7 @@ class ChatViewModel private constructor(
                 rollbackAcceptedUser(acceptedUser)
                 releaseTurn()
                 if (ticket == generation) {
-                    _uiState.update {
+                    selectedState.update {
                         it.copy(streaming = false, pendingApproval = null, activity = null,
                             interruptedTurn = wasInterrupted,
                             error = CONTEXT_LIMIT_ERROR)
@@ -2309,13 +2326,13 @@ class ChatViewModel private constructor(
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
                 releaseTurn()
-                _uiState.update { it.copy(streaming = false, pendingApproval = null, activity = null,
+                selectedState.update { it.copy(streaming = false, pendingApproval = null, activity = null,
                     interruptedTurn = wasInterrupted,
                     error = "Could not save the conversation. Check available storage and try again.") }
                 return@launch
             }
             val updatedHistory = if (pendingUser.isNotEmpty() &&
-                _uiState.value.sessions.none { it.id == turnSessionId && it.hasMessages }) {
+                selectedState.value.sessions.none { it.id == turnSessionId && it.hasMessages }) {
                 try {
                     sessions?.list()
                 } catch (e: CancellationException) {
@@ -2324,7 +2341,7 @@ class ChatViewModel private constructor(
                     null
                 }
             } else null
-            _uiState.update {
+            selectedState.update {
                 it.copy(
                     // send() already appended the accepted bubble; retries reuse the tail.
                     messages = it.messages,
@@ -2373,7 +2390,7 @@ class ChatViewModel private constructor(
                                 // cost of showing it small.
                                 if (ticket == generation) {
                                     val preview = reasoningPreview.toString()
-                                    _uiState.update { it.copy(streamingReasoning = preview) }
+                                    selectedState.update { it.copy(streamingReasoning = preview) }
                                 }
                             }
                         },
@@ -2383,8 +2400,8 @@ class ChatViewModel private constructor(
                     // stream stops, not when the next delta or the turn happens to arrive.
                     if (ticket == generation) {
                         val text = streamPreview.toString()
-                        if (text.isNotEmpty() && _uiState.value.streamingText != text) {
-                            _uiState.update { it.copy(streamingText = text) }
+                        if (text.isNotEmpty() && selectedState.value.streamingText != text) {
+                            selectedState.update { it.copy(streamingText = text) }
                         }
                     }
                     if (sessionId != null) {
@@ -2396,7 +2413,7 @@ class ChatViewModel private constructor(
                     }
                     if (ticket == generation) {
                         val meter = readContextMeter(snapshot.config, request)
-                        _uiState.update { it.copy(contextMeter = meter) }
+                        selectedState.update { it.copy(contextMeter = meter) }
                     }
                     // Some OpenAI-compatible providers omit usage entirely. Estimate
                     // from the exact text sent and received so the cap still bites and
@@ -2496,7 +2513,7 @@ class ChatViewModel private constructor(
                     workspaceId == null || workspaceSelection.currentIdentity() == workspaceId
                 },
                 canPersistToolOutput = { candidate, reserve ->
-                    sessionStore.canSaveWithReserve(candidate, reserve)
+                    canSaveTurn(candidate, reserve)
                 },
                 mutationBlocker = { call ->
                     when (call.name) {
@@ -2539,7 +2556,7 @@ class ChatViewModel private constructor(
                     val compacted = try {
                         context.prepare(candidate, force)
                     } finally {
-                        if (ticket == generation) _uiState.update { it.copy(compacting = false) }
+                        if (ticket == generation) selectedState.update { it.copy(compacting = false) }
                     }
                     if (compacted != candidate) {
                         // A completed compaction leaves one visible, persisted marker row;
@@ -2551,7 +2568,7 @@ class ChatViewModel private constructor(
                         activeMessages = noticed
                         activeSummary = context.summary
                         val meter = readContextMeter(snapshot.config, context.requestFor(noticed))
-                        if (ticket == generation) _uiState.update { it.copy(contextMeter = meter) }
+                        if (ticket == generation) selectedState.update { it.copy(contextMeter = meter) }
                         noticed
                     } else compacted
                 },
@@ -2590,11 +2607,11 @@ class ChatViewModel private constructor(
                             if (ticket == generation && delta.isNotEmpty() &&
                                 textWindow.shouldPublish(System.nanoTime())) {
                                 val preview = streamPreview.toString()
-                                _uiState.update { it.copy(streamingText = preview) }
+                                selectedState.update { it.copy(streamingText = preview) }
                             }
                         },
                         onToolLifecycle = { event ->
-                            if (ticket == generation) _uiState.update { state ->
+                            if (ticket == generation) selectedState.update { state ->
                                 val current = state.toolLifecycle.filterNot {
                                     it.correlationKey == event.correlationKey
                                 }
@@ -2614,7 +2631,7 @@ class ChatViewModel private constructor(
                                 val completedToolKeys = message.toolResults.mapTo(mutableSetOf()) {
                                     AgentToolLifecycle.keyFor(it.callId)
                                 }
-                                _uiState.update { state ->
+                                selectedState.update { state ->
                                     val appended = state.messages + message
                                     val dropCount = (appended.size - 100).coerceAtLeast(0)
                                     val nextMessages = appended.takeLast(100)
@@ -2683,7 +2700,7 @@ class ChatViewModel private constructor(
                     releaseTurn()
                     finish(result, durable, snapshot.config)
                     if (!starterOpening && titleEligible && result.stopReason == AgentStopReason.Completed &&
-                        _uiState.value.error == null) {
+                        selectedState.value.error == null) {
                         val firstUser = durable.firstOrNull {
                             it.role == AgentRole.User && it.text.isNotBlank()
                         }?.text?.trim()?.takeIf { it.isNotEmpty() } ?: trimmed
@@ -2694,7 +2711,7 @@ class ChatViewModel private constructor(
                         try {
                             val estimate = context.estimate(durable)
                             val meter = readContextMeter(snapshot.config, context.requestFor(durable))
-                            _uiState.update { it.copy(contextEstimate = estimate, contextMeter = meter) }
+                            selectedState.update { it.copy(contextEstimate = estimate, contextMeter = meter) }
                         } catch (e: CancellationException) { throw e
                         } catch (_: Exception) { /* Usage estimates never change the completed turn. */ }
                     }
@@ -2702,9 +2719,9 @@ class ChatViewModel private constructor(
             } catch (_: AgentSessionLimitException) {
                 withContext(NonCancellable) {
                     if (ticket == generation) {
-                        sessionStore.markInterrupted(false)
+                        markTurnInterrupted(false)
                         releaseTurn()
-                        _uiState.update {
+                        selectedState.update {
                             it.copy(
                                 messages = durable.toList(),
                                 streaming = false,
@@ -2727,7 +2744,7 @@ class ChatViewModel private constructor(
                         }
                         persistTurn(durable, interrupted = !userCancelled)
                         releaseTurn()
-                        _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
+                        selectedState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                             pendingApproval = null, activity = null,
                             toolLifecycle = emptyList(), commandRunning = false,
                             interruptedTurn = !userCancelled && durable.isNotEmpty(),
@@ -2791,7 +2808,7 @@ class ChatViewModel private constructor(
                                     val record = runtime.latestCheckpoint()
                                     if (record?.id == outcome.id && undoBarOwned(record)) {
                                         val row = undoRowFor(record)
-                                        _uiState.update { state ->
+                                        selectedState.update { state ->
                                             if (state.currentSessionId != record.sessionId) state
                                             else state.copy(lastTurnFiles = row.files,
                                                 lastTurnFileCount = row.fileCount,
@@ -2801,7 +2818,7 @@ class ChatViewModel private constructor(
                                 }
                             }
                             TurnCheckpointOutcome.Broken -> {
-                                if (ticket == generation) _uiState.update {
+                                if (ticket == generation) selectedState.update {
                                     if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
                                 }
                             }
@@ -2809,7 +2826,7 @@ class ChatViewModel private constructor(
                         }
                     } catch (e: CancellationException) { throw e
                     } catch (_: Exception) {
-                        if (ticket == generation) _uiState.update {
+                        if (ticket == generation) selectedState.update {
                             if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
                         }
                     }
@@ -2825,17 +2842,17 @@ class ChatViewModel private constructor(
                     val userCancelled = userCancelledTicket == ticket
                     if (userCancelled) {
                         withContext(NonCancellable) {
-                            try { sessionStore.markInterrupted(false) } catch (_: Exception) { }
+                            try { markTurnInterrupted(false) } catch (_: Exception) { }
                         }
                     } else {
-                        _uiState.update { it.copy(interruptedTurn = true) }
+                        selectedState.update { it.copy(interruptedTurn = true) }
                     }
                 }
                 throw e
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent setup failed: ${e.javaClass.simpleName}")
                 releaseTurn()
-                if (ticket == generation) _uiState.update { it.copy(streaming = false, streamingText = "",
+                if (ticket == generation) selectedState.update { it.copy(streaming = false, streamingText = "",
                     streamingReasoning = "",
                     activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
@@ -2859,9 +2876,9 @@ class ChatViewModel private constructor(
                                 }
                                 checkpointGate.finishRunCheckpoint(live.workspaceId)
                                 try { runJournal?.save(paused) } catch (_: Exception) { }
-                                try { sessionStore.markInterrupted(true) } catch (_: Exception) { }
+                                try { markTurnInterrupted(true) } catch (_: Exception) { }
                                 managedProcesses.updateRunStatus(null, null, 0)
-                                _uiState.update {
+                                selectedState.update {
                                     it.copy(run = paused, interruptedTurn = true,
                                         runRecovery = "Run ${paused.plainState()} after ${paused.lastCompletedStep} step(s). Resume to continue.")
                                 }
@@ -2873,8 +2890,8 @@ class ChatViewModel private constructor(
                     }
                     turnSessionId = null
                     releaseTurn()
-                    if (ticket == generation && _uiState.value.streaming) {
-                        _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
+                    if (ticket == generation && selectedState.value.streaming) {
+                        selectedState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                             activity = null, pendingApproval = null,
                             toolLifecycle = emptyList(), commandRunning = false,
                             notice = if (spendLedger.budgetPaused) it.notice
@@ -2882,10 +2899,10 @@ class ChatViewModel private constructor(
                     }
                     // The conversation picked mid-reply opens now that the turn is over,
                     // whether it finished, failed or was stopped.
-                    val queued = _uiState.value.queuedSessionId
-                    if (queued != null && ticket == generation && !_uiState.value.streaming) {
-                        _uiState.update { it.copy(queuedSessionId = null, notice = null) }
-                        if (queued != _uiState.value.currentSessionId) {
+                    val queued = selectedState.value.queuedSessionId
+                    if (queued != null && ticket == generation && !selectedState.value.streaming) {
+                        selectedState.update { it.copy(queuedSessionId = null, notice = null) }
+                        if (queued != selectedState.value.currentSessionId) {
                             changeSession { store -> store.select(queued) }
                         }
                     }
@@ -2921,9 +2938,9 @@ class ChatViewModel private constructor(
                         store.clearAutoTitle(sessionId)
                     }
                     val history = store.list()
-                    val current = _uiState.value.currentSessionId
+                    val current = selectedState.value.currentSessionId
                     val usage = current?.let { store.usage(it) }
-                    _uiState.update { state ->
+                    selectedState.update { state ->
                         val unchanged = renameRevision == titleRenameRevision
                         state.copy(sessions = if (unchanged) history else state.sessions,
                             currentSessionTitle = if (unchanged) history.firstOrNull {
@@ -2977,8 +2994,8 @@ class ChatViewModel private constructor(
         }
         val renameRevision = titleRenameRevision
         val history = sessions?.list()
-        val usage = _uiState.value.currentSessionId?.let { sessions?.usage(it) }
-        val visible = _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: persisted
+        val usage = selectedState.value.currentSessionId?.let { sessions?.usage(it) }
+        val visible = selectedState.value.currentSessionId?.let { sessions?.recent(it) } ?: persisted
         val errorAction = when {
             // A refusal that says the request cannot fit is not retryable — the same
             // transcript against the same window stops the same way.
@@ -2988,10 +3005,10 @@ class ChatViewModel private constructor(
             ) -> ChatErrorAction.RetryTurn
             else -> null
         }
-        val startedWallClock = _uiState.value.turnStartedWallClock
+        val startedWallClock = selectedState.value.turnStartedWallClock
         var completedDuration: Long? = null
         var completedTurnIndex: Int? = null
-        _uiState.update { state ->
+        selectedState.update { state ->
             val remapped = com.kaiser.rivet.ui.chat.remapTurnMetadataAfterVisibilityChange(
                 oldMessages = state.messages,
                 newMessages = visible,
@@ -3046,10 +3063,10 @@ class ChatViewModel private constructor(
     }
 
     fun retryProjectChanges() {
-        val state = _uiState.value
+        val state = selectedState.value
         val identity = state.projectIdentity ?: return
         if (state.streaming || state.projectLoading || state.undoing || state.recoveringProjectChanges) return
-        _uiState.update { it.copy(error = null, errorAction = null,
+        selectedState.update { it.copy(error = null, errorAction = null,
             activity = "Saving project changes…", recoveringProjectChanges = true) }
         viewModelScope.launch {
             try {
@@ -3062,7 +3079,7 @@ class ChatViewModel private constructor(
                     else -> "Rivet couldn't finish saving the project changes. Some files may already be saved; Rivet kept the pending changes. Try again."
                 }
                 val action = if (error == null || result == null) null else ChatErrorAction.RetryProjectChanges
-                _uiState.update { it.copy(error = error, errorAction = action,
+                selectedState.update { it.copy(error = error, errorAction = action,
                     notice = if (error == null) "Project changes saved. You can continue." else null,
                     activity = null, recoveringProjectChanges = false) }
             } catch (e: CancellationException) { throw e
@@ -3070,11 +3087,11 @@ class ChatViewModel private constructor(
                 val message = if (error.code == "unsafe_entry")
                     "Rivet found a project item it couldn't safely save. Remove or rename it, then try again."
                 else "Rivet couldn't check these project changes yet. Try again."
-                _uiState.update { it.copy(error = message,
+                selectedState.update { it.copy(error = message,
                     errorAction = ChatErrorAction.RetryProjectChanges, activity = null,
                     recoveringProjectChanges = false) }
             } catch (_: Exception) {
-                _uiState.update { it.copy(error = "Rivet couldn't check these project changes yet. Try again.",
+                selectedState.update { it.copy(error = "Rivet couldn't check these project changes yet. Try again.",
                     errorAction = ChatErrorAction.RetryProjectChanges, activity = null,
                     recoveringProjectChanges = false) }
             }
@@ -3082,30 +3099,30 @@ class ChatViewModel private constructor(
     }
 
     fun discardProjectChanges(expectedWorkspace: String) {
-        val state = _uiState.value
+        val state = selectedState.value
         if (state.projectIdentity != expectedWorkspace ||
             state.currentSessionWorkspaceId?.let { it != expectedWorkspace } == true ||
             state.streaming || state.projectLoading || state.undoing || state.recoveringProjectChanges) return
         val ticket = generation
-        _uiState.update { it.copy(activity = "Reloading the current project…", recoveringProjectChanges = true) }
+        selectedState.update { it.copy(activity = "Reloading the current project…", recoveringProjectChanges = true) }
         viewModelScope.launch {
             try {
                 runtimeController.discardPendingChanges(expectedWorkspace)
-                if (ticket == generation && _uiState.value.projectIdentity == expectedWorkspace) {
-                    _uiState.update { it.copy(error = null, errorAction = null,
+                if (ticket == generation && selectedState.value.projectIdentity == expectedWorkspace) {
+                    selectedState.update { it.copy(error = null, errorAction = null,
                         notice = "Pending Rivet changes discarded. The current project was reloaded.") }
                 }
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
-                if (ticket == generation && _uiState.value.projectIdentity == expectedWorkspace) {
-                    _uiState.update { it.copy(error = if (e is MirrorFailure && e.code == "workspace_changed")
+                if (ticket == generation && selectedState.value.projectIdentity == expectedWorkspace) {
+                    selectedState.update { it.copy(error = if (e is MirrorFailure && e.code == "workspace_changed")
                         "The selected project changed. Rivet didn't reload another project."
                         else "Rivet couldn't reload the project. Your project files were not changed. Try again.",
                         errorAction = ChatErrorAction.RetryProjectChanges) }
                 }
             } finally {
-                if (ticket == generation && _uiState.value.projectIdentity == expectedWorkspace) {
-                    _uiState.update { it.copy(activity = null, recoveringProjectChanges = false) }
+                if (ticket == generation && selectedState.value.projectIdentity == expectedWorkspace) {
+                    selectedState.update { it.copy(activity = null, recoveringProjectChanges = false) }
                 }
             }
         }
@@ -3113,7 +3130,7 @@ class ChatViewModel private constructor(
 
     private fun rollbackAcceptedUser(accepted: AgentMessage?) {
         if (accepted == null) return
-        _uiState.update { state ->
+        selectedState.update { state ->
             val index = state.messages.indexOfLast { it === accepted }
             if (index < 0) return@update state
             val updated = state.messages.toMutableList().apply { removeAt(index) }
@@ -3132,10 +3149,20 @@ class ChatViewModel private constructor(
         try { persistTurn(durable, interrupted = true) }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { }
-        _uiState.update { state ->
+        selectedState.update { state ->
             if (state.messages.lastOrNull() == accepted) state
             else state.copy(messages = (state.messages + accepted).takeLast(100))
         }
+    }
+
+    private fun canSaveTurn(messages: List<AgentMessage>, reserve: Int): Boolean =
+        sessions?.canSaveWithReserve(messages, reserve, turnSessionId)
+            ?: sessionStore.canSaveWithReserve(messages, reserve)
+
+    private suspend fun markTurnInterrupted(interrupted: Boolean) {
+        val sql = sessions
+        if (sql != null) sql.markInterrupted(interrupted, turnSessionId ?: selectedState.value.currentSessionId)
+        else sessionStore.markInterrupted(interrupted)
     }
 
     private suspend fun persistTurn(messages: List<AgentMessage>, interrupted: Boolean) {
@@ -3149,19 +3176,16 @@ class ChatViewModel private constructor(
                                       action: ChatErrorAction? = null,
                                       reasoningNotice: UnsupportedReasoningNotice? = null) {
         if (ticket != generation) return
-        val bound = turnSessionId
-        val sql = sessions
         val persistenceError = try {
-            if (bound != null && sql != null) sql.markInterrupted(false, bound)
-            else sessionStore.markInterrupted(false)
+            markTurnInterrupted(false)
             false
         } catch (e: CancellationException) { throw e }
             catch (_: Exception) { true }
         activeMessages = durable
-        val visible = try { _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: durable }
+        val visible = try { selectedState.value.currentSessionId?.let { sessions?.recent(it) } ?: durable }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { durable.takeLast(100) }
-        _uiState.update {
+        selectedState.update {
             // The turn is over, so nothing is running: leaving these set shows "a command is
             // running" and disables the Retry button on the row that just appeared.
             it.copy(messages = visible, streaming = false, streamingText = "", streamingReasoning = "",
@@ -3189,7 +3213,7 @@ class ChatViewModel private constructor(
     }
 
     private fun failBeforeStart(message: String, interruptedTurn: Boolean = false): Nothing? {
-        _uiState.update { it.copy(streaming = false, activity = null, error = message,
+        selectedState.update { it.copy(streaming = false, activity = null, error = message,
             errorAction = ChatErrorAction.OpenSettings, interruptedTurn = interruptedTurn) }
         return null
     }
@@ -3215,7 +3239,7 @@ class ChatViewModel private constructor(
 
     /** Notification Pause: stop this turn but persist the run as resumable, not stopped. */
     fun pauseCurrentRun(reason: RunPauseReason = RunPauseReason.User) {
-        if (!_uiState.value.streaming) return
+        if (!selectedState.value.streaming) return
         browser.dismissChatPreview()
         pauseRequestedTicket = generation
         pauseReason = reason
@@ -3267,7 +3291,7 @@ class ChatViewModel private constructor(
                     val store = sessions ?: return@launch
                     val id = store.importSession(
                         workspaceId = transcript.worker.workspaceId
-                            ?: _uiState.value.currentSessionWorkspaceId,
+                            ?: selectedState.value.currentSessionWorkspaceId,
                         title = "Subagent · ${transcript.worker.job}",
                         events = transcript.events,
                         active = transcript.messages,
@@ -3282,8 +3306,8 @@ class ChatViewModel private constructor(
                     }
                     id
                 }
-                if (_uiState.value.streaming) {
-                    _uiState.update {
+                if (selectedState.value.streaming) {
+                    selectedState.update {
                         it.copy(queuedSessionId = promotedId,
                             notice = "Rivet will open that conversation when this reply finishes.")
                     }
@@ -3293,7 +3317,7 @@ class ChatViewModel private constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (_: Exception) {
-                _uiState.update { it.copy(error = "Could not open that subagent conversation.") }
+                selectedState.update { it.copy(error = "Could not open that subagent conversation.") }
             }
         }
     }
@@ -3305,11 +3329,11 @@ class ChatViewModel private constructor(
     }
 
     fun dismissBatteryAsk() {
-        _uiState.update { it.copy(batteryAsk = false) }
+        selectedState.update { it.copy(batteryAsk = false) }
     }
 
     fun clearError() {
-        _uiState.update { it.copy(error = null, errorAction = null, unsupportedReasoning = null) }
+        selectedState.update { it.copy(error = null, errorAction = null, unsupportedReasoning = null) }
     }
 
     // What the Undo row shows for one checkpoint: the regular files it touched, five named on
@@ -3336,7 +3360,7 @@ class ChatViewModel private constructor(
         val row = try { undoRowFor(record) }
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { return }
-        _uiState.update { state ->
+        selectedState.update { state ->
             // The conversation can move while the checkpoint is read; a row from another
             // project's or session's checkpoint must never appear over this one.
             if (state.currentSessionWorkspaceId != workspaceId ||
@@ -3360,14 +3384,14 @@ class ChatViewModel private constructor(
 
     private fun undoBarOwned(record: CheckpointRecord?): Boolean {
         val id = record?.id ?: return false
-        return undoBarVisible(record, _uiState.value.currentSessionId) &&
+        return undoBarVisible(record, selectedState.value.currentSessionId) &&
             id !in dismissedUndoBars
     }
 
     fun dismissUndoBar() {
-        val id = _uiState.value.undoCheckpointId ?: return
+        val id = selectedState.value.undoCheckpointId ?: return
         dismissedUndoBars += id
-        _uiState.update { it.copy(lastTurnFiles = emptyList(), lastTurnFileCount = 0,
+        selectedState.update { it.copy(lastTurnFiles = emptyList(), lastTurnFileCount = 0,
             undoCheckpointId = null) }
         viewModelScope.launch {
             try { runtimeController.markUndoBarDismissed(id) }
@@ -3377,34 +3401,34 @@ class ChatViewModel private constructor(
     }
 
     fun undoLastTurn() {
-        val id = _uiState.value.undoCheckpointId ?: return
+        val id = selectedState.value.undoCheckpointId ?: return
         val controller = runtimeController
-        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges || activeSupervisor?.hasLiveWorkers() == true) {
-            _uiState.update { it.copy(error = "Cannot undo while a run or subagent is active.") }
+        if (selectedState.value.streaming || selectedState.value.undoing || selectedState.value.recoveringProjectChanges || activeSupervisor?.hasLiveWorkers() == true) {
+            selectedState.update { it.copy(error = "Cannot undo while a run or subagent is active.") }
             return
         }
-        _uiState.update { it.copy(undoing = true, error = null, notice = null) }
+        selectedState.update { it.copy(undoing = true, error = null, notice = null) }
         viewModelScope.launch {
             try {
                 if (controller.latestCheckpoint()?.id != id) {
-                    _uiState.update { it.copy(undoing = false, undoCheckpointId = null,
+                    selectedState.update { it.copy(undoing = false, undoCheckpointId = null,
                         error = "This change is no longer the latest one Rivet can undo.") }
                     return@launch
                 }
                 val outcome = controller.undoLastCheckpoint()
                 if (outcome.state == MirrorSync.Ok || outcome.state == MirrorSync.NoChanges) {
                     if (terminalSession.recoverAfterRestore()) recordTerminalRestoreNotice()
-                    _uiState.update { it.copy(undoing = false, undoCheckpointId = null,
+                    selectedState.update { it.copy(undoing = false, undoCheckpointId = null,
                         lastTurnFiles = emptyList(), lastTurnFileCount = 0, notice = "Changes undone.") }
                 } else {
-                    _uiState.update { it.copy(undoing = false,
+                    selectedState.update { it.copy(undoing = false,
                         error = if (outcome.state == MirrorSync.Conflict)
                             undoFailureMessage(MirrorFailure("conflict"))
                         else undoFailureMessage(null)) }
                 }
             } catch (e: CancellationException) { throw e
             } catch (e: Exception) {
-                _uiState.update { it.copy(undoing = false,
+                selectedState.update { it.copy(undoing = false,
                     error = undoFailureMessage(e)) }
             }
         }
@@ -3455,8 +3479,8 @@ class ChatViewModel private constructor(
                 activeMessages = selected.messages
                 activeSummary = selected.summary
                 val usage = selected.id?.let { sessions?.usage(it) }
-                val project = _uiState.value
-                _uiState.value = ChatUiState(ready = true, sessions = sessions?.list().orEmpty(),
+                val project = selectedState.value
+                selectedState.value = ChatUiState(ready = true, sessions = sessions?.list().orEmpty(),
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
                     currentSessionWorkspaceId = selected.workspaceId, usage = usage,
                     projectName = project.projectName, projectIdentity = project.projectIdentity,
@@ -3472,11 +3496,11 @@ class ChatViewModel private constructor(
     }
 
     fun newSession() {
-        changeSession { store -> store.create(workspaceSelection.currentIdentity(), reuseEmpty = _uiState.value.goal == null) }
+        changeSession { store -> store.create(workspaceSelection.currentIdentity(), reuseEmpty = selectedState.value.goal == null) }
     }
 
     fun resumeSession(id: String) {
-        val state = _uiState.value
+        val state = selectedState.value
         if (!state.streaming) {
             changeSession { store -> store.select(id) }
             return
@@ -3485,11 +3509,11 @@ class ChatViewModel private constructor(
         // would file this reply into the other conversation. Wait for the turn.
         if (id == state.currentSessionId) {
             if (state.queuedSessionId != null) {
-                _uiState.update { it.copy(queuedSessionId = null, notice = null) }
+                selectedState.update { it.copy(queuedSessionId = null, notice = null) }
             }
             return
         }
-        _uiState.update {
+        selectedState.update {
             it.copy(queuedSessionId = id,
                 notice = "Rivet will open that conversation when this reply finishes.")
         }
@@ -3508,29 +3532,30 @@ class ChatViewModel private constructor(
 
     fun renameSession(id: String, title: String) {
         val store = sessions ?: return
-        if (_uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
+        if (selectedState.value.undoing || selectedState.value.recoveringProjectChanges) return
         titleRenameRevision++
         viewModelScope.launch {
             try {
                 store.rename(id, title)
                 val history = store.list()
-                _uiState.update { it.copy(sessions = history,
+                selectedState.update { it.copy(sessions = history,
                     currentSessionTitle = history.firstOrNull { row -> row.id == it.currentSessionId }?.title) }
             } catch (e: CancellationException) { throw e
-            } catch (_: Exception) { _uiState.update { it.copy(error = "Could not rename the session.") } }
+            } catch (_: Exception) { selectedState.update { it.copy(error = "Could not rename the session.") } }
         }
     }
 
     fun setSessionPinned(id: String, pinned: Boolean) {
         val store = sessions ?: return
-        if (_uiState.value.undoing || _uiState.value.recoveringProjectChanges) return
+        if (selectedState.value.undoing || selectedState.value.recoveringProjectChanges) return
         viewModelScope.launch {
             try {
                 store.setPinned(id, pinned)
-                _uiState.update { it.copy(sessions = store.list()) }
+                val history = store.list()
+                selectedState.update { it.copy(sessions = history) }
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
-                _uiState.update { it.copy(error = "Could not update this conversation.") }
+                selectedState.update { it.copy(error = "Could not update this conversation.") }
             }
         }
     }
@@ -3541,7 +3566,7 @@ class ChatViewModel private constructor(
     private fun changeSession(onSelected: () -> Unit = {},
                               action: suspend (CodingSessions) -> com.kaiser.rivet.storage.AgentSession): Job? {
         val store = sessions ?: return null
-        if (_uiState.value.streaming || _uiState.value.undoing || _uiState.value.recoveringProjectChanges) return null
+        if (selectedState.value.streaming || selectedState.value.undoing || selectedState.value.recoveringProjectChanges) return null
         closeWorker()
         _subagents.value = emptyList()
         val ticket = ++generation
@@ -3558,12 +3583,12 @@ class ChatViewModel private constructor(
                 val visible = selected.id?.let { store.recent(it) } ?: selected.messages
                 val interruptedTurn = selected.interrupted &&
                     (visible.isNotEmpty() || selected.messages.isNotEmpty())
-                val project = _uiState.value
+                val project = selectedState.value
                 // The bar belongs to the session that made the change; rehydration below
                 // restores it only for that session (and only while it is not dismissed).
                 val keepUndo = undoSurvivesSwitch(project.currentSessionId, selected.id)
                 val durations = selected.id?.let { store.turnDurations(it) }.orEmpty()
-                if (ticket == generation) _uiState.value = ChatUiState(
+                if (ticket == generation) selectedState.value = ChatUiState(
                     messages = visible, ready = true, sessions = history,
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
                     currentSessionWorkspaceId = selected.workspaceId,
@@ -3586,7 +3611,7 @@ class ChatViewModel private constructor(
                 if (ticket == generation) onSelected()
             } catch (e: CancellationException) { throw e
             } catch (_: Exception) {
-                if (ticket == generation) _uiState.update { it.copy(error = "Could not open the session.") }
+                if (ticket == generation) selectedState.update { it.copy(error = "Could not open the session.") }
             }
         }
     }
