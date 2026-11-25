@@ -81,6 +81,9 @@ class BrowserKeyModalTest {
         val (session, view) = readySession()
         view.webChromeClient!!.onJsAlert(view, url, "Game Over! Score: 0", jsResult())
         view.webViewClient.onPageStarted(view, url, null)
+        // Navigation completion is the point at which the new page can take a key.
+        // loadForInteraction correctly waits for it instead of racing the old page.
+        view.webViewClient.onPageFinished(view, url)
 
         val prepared = BrowserTools(session).prepare(keyCall())
         assertNotNull(prepared)
