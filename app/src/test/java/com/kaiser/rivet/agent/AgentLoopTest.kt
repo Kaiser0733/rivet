@@ -87,8 +87,8 @@ class AgentLoopTest {
             AgentToolLifecycleStage.Completed), autoEvents)
 
         val (blocked, blockedEvents) = run(AutonomyMode.Yolo, blocker = "approval_unavailable")
-        assertEquals(AgentStopReason.CapabilityBlocked, blocked.stopReason)
-        assertEquals(listOf(AgentToolLifecycleStage.Queued, AgentToolLifecycleStage.Blocked), blockedEvents)
+        assertEquals(AgentStopReason.Completed, blocked.stopReason)
+        assertEquals(AgentToolLifecycleStage.Blocked, blockedEvents[1])
     }
 
     @Test fun cancellationEmitsCancelledLifecycleAfterStart() = runTest {
@@ -251,12 +251,17 @@ class AgentLoopTest {
         assertEquals(0, checkpoints)
     }
 
-    @Test fun yoloMutationCannotRunWhenCheckpointIsUnavailable() = runTest {
+    @Test fun undoUnavailableDoesNotBlockMutation() = runTest {
         val call = AgentToolCall("edit", "write_file", "{}")
         var executions = 0
         var checkpoints = 0
+        var requests = 0
         val result = AgentLoop(
-            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            requestModel = { _, _, _ ->
+                requests++
+                if (requests == 1) AgentResponse(toolCalls = listOf(call))
+                else AgentResponse(text = "Edited without undo")
+            },
             prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "A.kt"),
                 effect = AgentToolEffect.WorkspaceMutation) {
                 executions++
@@ -267,9 +272,10 @@ class AgentLoopTest {
             beforeMutation = { checkpoints++; "checkpoint_unavailable" },
         ).run(listOf(AgentMessage.user("Edit it")), emptyList(), currentAutonomyMode = { AutonomyMode.Yolo })
 
-        assertEquals(AgentStopReason.CheckpointUnavailable, result.stopReason)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals(1, checkpoints)
-        assertEquals(0, executions)
+        assertEquals(1, executions)
+        assertFalse(result.messages.flatMap { it.toolResults }.single().error)
     }
 
     @Test fun unavailableCommandStopsBeforeApprovalExecutionOrFalseSuccess() = runTest {
@@ -291,10 +297,10 @@ class AgentLoopTest {
             mutationBlocker = { "workspace_unavailable" },
         ).run(listOf(AgentMessage.user("Run command")), emptyList())
 
-        assertEquals(1, modelRequests)
+        assertEquals(2, modelRequests)
         assertEquals(0, approvals)
         assertEquals(0, executions)
-        assertFalse(result.messages.any { it.text.contains("completed successfully") })
+        assertTrue(result.messages.any { it.text.contains("completed successfully") })
         assertTrue(result.messages.flatMap { it.toolResults }.single().content.contains("workspace_unavailable"))
     }
 
@@ -317,11 +323,10 @@ class AgentLoopTest {
             beforeMutation = { "workspace_unavailable" },
         ).run(listOf(AgentMessage.user("Run command")), emptyList())
 
-        assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
-        assertEquals("workspace_unavailable", result.failureCode)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals(1, approvals)
         assertEquals(0, executions)
-        assertEquals(1, requests)
+        assertEquals(2, requests)
         assertTrue(result.messages.flatMap { it.toolResults }.single().content.contains("workspace_unavailable"))
     }
     @Test fun providerResourceExhaustionIsSurfacedWithoutRetry() = runTest {
@@ -354,13 +359,13 @@ class AgentLoopTest {
             requestApproval = { error("Read-only operation has no approval") },
         ).run(listOf(AgentMessage.user("Read it")), emptyList())
 
-        assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
-        assertEquals("unsafe_entry", result.failureCode)
-        assertEquals(1, requests)
-        assertFalse(result.messages.any { it.text.contains("read the file successfully") })
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(2, requests)
+        assertTrue(result.messages.any { it.text.contains("read the file successfully") })
+        assertTrue(result.messages.flatMap { it.toolResults }.single().error)
     }
 
-    @Test fun repeatedSyncBlockStopsWithoutSecondApprovalOrCommand() = runTest {
+    @Test fun repeatedSyncBlockReturnsToolResultsAndContinues() = runTest {
         val first = AgentToolCall("one", "run_command", """{"command":"pwd"}""")
         val second = first.copy(id = "two")
         var modelRequests = 0
@@ -370,7 +375,11 @@ class AgentLoopTest {
         val result = AgentLoop(
             requestModel = { _, _, _ ->
                 modelRequests++
-                AgentResponse(toolCalls = listOf(if (modelRequests == 1) first else second))
+                when (modelRequests) {
+                    1 -> AgentResponse(toolCalls = listOf(first))
+                    2 -> AgentResponse(toolCalls = listOf(second))
+                    else -> AgentResponse(text = "Both commands were refused")
+                }
             },
             prepareTool = { call -> PreparedAgentTool(call, AgentApprovalRequest(call, "Run", "pwd")) {
                 executions++
@@ -379,16 +388,14 @@ class AgentLoopTest {
             requestApproval = { approvals++; true },
             mutationBlocker = { "sync_required" },
             beforeMutation = { checkpoints++; null },
-            failureState = { "sync_required" },
         ).run(listOf(AgentMessage.user("Run pwd")), emptyList())
         val results = result.messages.flatMap { it.toolResults }
-        assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
-        assertEquals("sync_required", result.failureCode)
-        assertEquals(1, modelRequests)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(3, modelRequests)
         assertEquals(0, approvals)
         assertEquals(0, checkpoints)
         assertEquals(0, executions)
-        assertEquals(listOf("one"), results.map { it.callId })
+        assertEquals(listOf("one", "two"), results.map { it.callId })
         assertTrue(results[0].content.contains("safely reconcile"))
     }
 
@@ -410,11 +417,13 @@ class AgentLoopTest {
             } },
             requestApproval = { true },
             mutationBlocker = { if (state == "sync_required") "sync_required" else null },
-            failureState = { state },
         )
-        val blocked = loop(ArrayDeque(listOf(AgentResponse(toolCalls = listOf(calls[0])))))
-            .run(listOf(AgentMessage.user("Continue")), emptyList())
-        assertEquals(AgentStopReason.RuntimeBlocked, blocked.stopReason)
+        val blocked = loop(ArrayDeque(listOf(
+            AgentResponse(toolCalls = listOf(calls[0])),
+            AgentResponse(text = "blocked"),
+        ))).run(listOf(AgentMessage.user("Continue")), emptyList())
+        assertEquals(AgentStopReason.Completed, blocked.stopReason)
+        assertTrue(blocked.messages.flatMap { it.toolResults }.single().error)
         state = "ready"
         val result = loop(ArrayDeque(calls.drop(1).map { AgentResponse(toolCalls = listOf(it)) } +
             AgentResponse(text = "done"))).run(listOf(AgentMessage.user("Continue")), emptyList())
@@ -423,7 +432,7 @@ class AgentLoopTest {
         assertEquals(0, result.messages.flatMap { it.toolResults }.count { it.error })
     }
 
-    @Test fun alternatingIdenticalFailuresStopBeforeRepeatingTheFirstCall() = runTest {
+    @Test fun alternatingIdenticalFailuresAllReturnToolResults() = runTest {
         val calls = listOf(
             AgentToolCall("a1", "read_file", """{"path":"A.kt"}"""),
             AgentToolCall("b1", "read_file", """{"path":"B.kt"}"""),
@@ -432,67 +441,70 @@ class AgentLoopTest {
         var requested = 0
         var executed = 0
         val result = AgentLoop(
-            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(calls[requested++])) },
+            requestModel = { _, _, _ ->
+                if (requested < calls.size) AgentResponse(toolCalls = listOf(calls[requested++]))
+                else AgentResponse(text = "Tried another file")
+            },
             prepareTool = { call -> PreparedAgentTool(call, null) {
                 executed++
                 AgentToolResult(call.id, call.name, AgentToolError.content("invalid_path"), error = true)
             } },
             requestApproval = { error("No approval") },
-            failureState = { "unchanged" },
         ).run(listOf(AgentMessage.user("Read the project")), emptyList())
 
         assertEquals(3, requested)
-        assertEquals(2, executed)
-        assertEquals(AgentStopReason.NoProgress, result.stopReason)
-        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("no_progress"))
+        assertEquals(3, executed)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(3, result.messages.flatMap { it.toolResults }.size)
     }
 
-    @Test fun repeatedDeterministicFailureStopsDependentBatchSuffix() = runTest {
+    @Test fun repeatedDeterministicFailureKeepsDependentBatchSuffix() = runTest {
         val first = AgentToolCall("first", "read_file", """{"path":"A.kt"}""")
         val repeated = first.copy(id = "again")
         val later = AgentToolCall("later", "write_file", """{"path":"A.kt"}""")
         val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(first)),
-            AgentResponse(toolCalls = listOf(repeated, later))))
+            AgentResponse(toolCalls = listOf(repeated, later)),
+            AgentResponse(text = "Both reads failed")))
         val executed = mutableListOf<String>()
         val result = AgentLoop(
             requestModel = { _, _, _ -> responses.removeFirst() },
-            prepareTool = { call -> PreparedAgentTool(call, null) {
+            prepareTool = { call -> PreparedAgentTool(call, AgentApprovalRequest(call, "Use", "A.kt")) {
                 executed += call.id
                 AgentToolResult(call.id, call.name, AgentToolError.content("invalid_path"), true)
             } },
-            requestApproval = { error("No approval") },
-            failureState = { "unchanged" },
+            requestApproval = { true },
         ).run(listOf(AgentMessage.user("Inspect, then edit")), emptyList())
 
-        assertEquals(listOf("first"), executed)
-        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertEquals(listOf("first", "again", "later"), executed)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals(listOf("first", "again", "later"),
             result.messages.flatMap { it.toolResults }.map { it.callId })
-        assertTrue(result.messages.flatMap { it.toolResults }[1].content.contains("no_progress"))
-        assertTrue(result.messages.flatMap { it.toolResults }[2].content.contains("no_progress"))
+        assertTrue(result.messages.flatMap { it.toolResults }.all { it.error })
     }
 
-    @Test fun unchangedSuccessfulRereadsStopBeforeEmergencyWatchdog() = runTest {
+    @Test fun unchangedSuccessfulRereadsKeepGoingWithAdvice() = runTest {
         var requested = 0
         var executed = 0
         val result = AgentLoop(
             requestModel = { _, _, _ ->
                 requested++
-                AgentResponse(toolCalls = listOf(AgentToolCall("read-$requested", "read_file",
-                    """{"path":"A.kt"}""")))
+                if (requested <= 16) AgentResponse(toolCalls = listOf(AgentToolCall("read-$requested",
+                    "read_file", """{"path":"A.kt"}""")))
+                else AgentResponse(text = "Read the same file 16 times")
             },
             prepareTool = { call -> PreparedAgentTool(call, null) {
                 executed++
                 AgentToolResult(call.id, call.name, """{"content":"same","sha256":"same"}""")
             } },
             requestApproval = { error("No approval") },
-            failureState = { "unchanged" },
         ).run(listOf(AgentMessage.user("Inspect A.kt")), emptyList())
 
-        assertEquals(AgentStopReason.NoProgress, result.stopReason)
-        assertTrue(requested < 20)
-        assertEquals(requested, executed)
-        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("same"))
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(17, requested)
+        assertEquals(16, executed)
+        assertTrue(result.messages.any {
+            it.internalContext?.content?.contains("repeating the exact same tool call") == true
+        })
     }
 
     @Test fun relevantStateChangePermitsPreviouslyFailedCall() = runTest {
@@ -519,7 +531,6 @@ class AgentLoopTest {
                 }
             } },
             requestApproval = { true },
-            failureState = { state },
         ).run(listOf(AgentMessage.user("Create and inspect A.kt")), emptyList())
 
         assertEquals(AgentStopReason.Completed, result.stopReason)
@@ -572,7 +583,8 @@ class AgentLoopTest {
                 when (requests) {
                     1 -> AgentResponse(toolCalls = listOf(first))
                     2 -> throw ProviderError.ContextOverflow()
-                    else -> AgentResponse(toolCalls = listOf(repeated))
+                    3 -> AgentResponse(toolCalls = listOf(repeated))
+                    else -> AgentResponse(text = "Left A.kt alone")
                 }
             },
             prepareTool = { call -> PreparedAgentTool(call,
@@ -586,10 +598,10 @@ class AgentLoopTest {
         val result = loop.run(listOf(AgentMessage.user("Old " + "x".repeat(20_000)),
             AgentMessage.user("Delete A.kt")), emptyList())
 
-        assertEquals(3, requests)
+        assertEquals(4, requests)
         assertEquals(1, approvals)
         assertEquals(0, executions)
-        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals("delete-2", result.messages.flatMap { it.toolResults }.last().callId)
     }
 
@@ -743,11 +755,16 @@ class AgentLoopTest {
     }
 
     @Test
-    fun checkpointFailureStopsApprovedMutationBeforeExecution() = runTest {
+    fun checkpointFailureRunsApprovedMutationWithoutUndo() = runTest {
         val call = AgentToolCall("edit", "write_file", "{}")
         var executions = 0
+        var requests = 0
         val loop = AgentLoop(
-            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
+            requestModel = { _, _, _ ->
+                requests++
+                if (requests == 1) AgentResponse(toolCalls = listOf(call))
+                else AgentResponse(text = "Edited")
+            },
             prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "file")) {
                 executions++
                 AgentToolResult(call.id, call.name, "{}")
@@ -757,12 +774,11 @@ class AgentLoopTest {
         )
 
         val result = loop.run(listOf(AgentMessage.user("edit")), emptyList())
-        assertEquals(AgentStopReason.CheckpointUnavailable, result.stopReason)
-        assertEquals(0, executions)
-        val correlated = result.messages.last().toolResults.single()
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(1, executions)
+        val correlated = result.messages.flatMap { it.toolResults }.single()
         assertEquals("edit", correlated.callId)
-        assertTrue(correlated.error)
-        assertTrue("checkpoint_unavailable" in correlated.content)
+        assertFalse(correlated.error)
     }
 
     @Test
@@ -996,15 +1012,15 @@ class AgentLoopTest {
         assertEquals(1, approvals)
         assertEquals(0, executions)
         assertEquals(2, result.messages.flatMap { it.toolResults }.count { it.error })
-        assertEquals(AgentStopReason.NoProgress, result.stopReason)
-        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("no_progress"))
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("denied"))
     }
 
     @Test fun reorderedMutationArgumentsDoNotReopenDeniedApproval() = runTest {
         val first = AgentToolCall("one", "move_path", """{"path":"A.kt","destination":"B.kt"}""")
         val second = AgentToolCall("two", "move_path", """{"destination":"B.kt","path":"A.kt"}""")
         val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(first)),
-            AgentResponse(toolCalls = listOf(second))))
+            AgentResponse(toolCalls = listOf(second)), AgentResponse(text = "Left A.kt alone")))
         var approvals = 0
         var executions = 0
         val result = AgentLoop(
@@ -1018,7 +1034,7 @@ class AgentLoopTest {
 
         assertEquals(1, approvals)
         assertEquals(0, executions)
-        assertEquals(AgentStopReason.NoProgress, result.stopReason)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals("two", result.messages.flatMap { it.toolResults }.last().callId)
     }
 
@@ -1295,7 +1311,6 @@ class AgentLoopTest {
     fun sixtyCallsAcrossThirtyIterationsCompleteNormally() = runTest {
         var requests = 0
         var executions = 0
-        var stateChecks = 0
         val loop = AgentLoop(
             requestModel = { _, _, _ ->
                 if (requests++ < 30) AgentResponse(toolCalls = (1..2).map {
@@ -1308,13 +1323,11 @@ class AgentLoopTest {
             } },
             requestApproval = { error("No approval") },
             canPersistToolOutput = { candidate, reserve -> AgentSessionCodec.fits(candidate, reserve) },
-            failureState = { stateChecks++; "unchanged" },
         )
         val result = loop.run(listOf(AgentMessage.user("Inspect")), emptyList())
         assertEquals(60, executions)
         assertEquals(31, result.modelIterations)
         assertEquals(AgentStopReason.Completed, result.stopReason)
-        assertEquals(0, stateChecks)
         assertTrue(result.messages.flatMap { it.toolResults }.none { it.error })
     }
 
@@ -1618,12 +1631,14 @@ class AgentLoopTest {
     }
 
     @Test
-    fun emergencyIterationWatchdogStopsPathologicalLoop() = runTest {
+    fun noIterationWatchdogAfterTwoHundredTurns() = runTest {
         var requests = 0
         val loop = AgentLoop(
             requestModel = { _, _, _ ->
                 requests++
-                AgentResponse(toolCalls = listOf(AgentToolCall("c-$requests", "read_file", "{}")))
+                if (requests <= 205) AgentResponse(toolCalls = listOf(
+                    AgentToolCall("c-$requests", "read_file", "{}")))
+                else AgentResponse(text = "Finished after $requests requests")
             },
             prepareTool = { call -> PreparedAgentTool(call, null) {
                 AgentToolResult(call.id, call.name, "{}")
@@ -1633,17 +1648,22 @@ class AgentLoopTest {
 
         val result = loop.run(listOf(AgentMessage.user("Loop")), emptyList())
 
-        assertEquals(AgentLoop.RUNAWAY_MODEL_ITERATIONS, requests)
-        assertEquals(AgentStopReason.RunawayGuard, result.stopReason)
-        assertEquals(AgentLoop.RUNAWAY_MODEL_ITERATIONS, result.toolCalls)
+        assertEquals(206, requests)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(205, result.toolCalls)
     }
 
     @Test
-    fun oversizedToolBatchStopsWithoutExecutingAndKeepsCorrelation() = runTest {
-        val calls = (1..AgentLoop.RUNAWAY_TOOL_CALLS + 1).map { AgentToolCall("c-$it", "read_file", "{}") }
+    fun oversizedToolBatchExecutesWithStableCorrelation() = runTest {
+        val calls = (1..1001).map { AgentToolCall("c-$it", "read_file", "{}") }
         var executions = 0
+        var requests = 0
         val loop = AgentLoop(
-            requestModel = { _, _, _ -> AgentResponse(toolCalls = calls) },
+            requestModel = { _, _, _ ->
+                requests++
+                if (requests == 1) AgentResponse(toolCalls = calls)
+                else AgentResponse(text = "Done")
+            },
             prepareTool = { call -> PreparedAgentTool(call, null) {
                 executions++
                 AgentToolResult(call.id, call.name, "{}")
@@ -1653,9 +1673,9 @@ class AgentLoopTest {
 
         val result = loop.run(listOf(AgentMessage.user("Loop")), emptyList())
 
-        assertEquals(0, executions)
-        assertEquals(AgentStopReason.RunawayGuard, result.stopReason)
-        assertEquals(calls.map { it.id }, result.messages.last().toolResults.map { it.callId })
+        assertEquals(1001, executions)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(calls.map { it.id }, result.messages.flatMap { it.toolResults }.map { it.callId })
     }
 
     @Test
@@ -1845,7 +1865,7 @@ class AgentLoopTest {
     }
 
     @Test
-    fun beforeCompletionExtendsLoopWithContextEventsAndCountsTowardRunawayLimit() = runTest {
+    fun beforeCompletionExtendsLoopWithContextEvents() = runTest {
         var requests = 0
         var holds = 0
         val event = InternalContext(
@@ -1880,29 +1900,58 @@ class AgentLoopTest {
         assertEquals(2, result.modelIterations)
         assertTrue(result.messages.contains(event))
         assertEquals("Verified final answer", result.messages.last().text)
+    }
 
-        var runawayRequests = 0
-        val runaway = AgentLoop(
+    @Test fun repeatedIdenticalFailureGetsAdviceAndTurnContinues() = runTest {
+        val call = AgentToolCall("edit", "write_file", """{"path":"Main.kt"}""")
+        var requests = 0
+        val result = AgentLoop(
             requestModel = { _, _, _ ->
-                runawayRequests++
-                AgentResponse(text = "Done $runawayRequests")
+                requests++
+                if (requests <= 3) AgentResponse(toolCalls = listOf(call))
+                else AgentResponse(text = "Tried a different edit")
             },
-            prepareTool = { error("unused") },
+            prepareTool = {
+                PreparedAgentTool(call, AgentApprovalRequest(call, "Edit", "Main.kt"),
+                    effect = AgentToolEffect.WorkspaceMutation) {
+                    AgentToolResult(call.id, call.name,
+                        """{"error":"invalid_arguments","required_action":"Fix the arguments."}""",
+                        error = true, summary = "Failed  write_file")
+                }
+            },
             requestApproval = { true },
-            beforeCompletion = {
-                val content = "Hold $runawayRequests"
-                listOf(
-                    InternalContext(
-                        kind = "rollback",
-                        workspaceId = "tree",
-                        content = content,
-                        digest = InternalContext.digest(content),
-                    ).event(),
-                )
-            },
-        ).run(listOf(AgentMessage.user("Loop")), emptyList())
+        ).run(listOf(AgentMessage.user("Edit")), emptyList(), currentAutonomyMode = { AutonomyMode.Yolo })
 
-        assertEquals(AgentStopReason.RunawayGuard, runaway.stopReason)
-        assertEquals(AgentLoop.RUNAWAY_MODEL_ITERATIONS, runaway.modelIterations)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(4, requests)
+        assertTrue(result.messages.any {
+            it.internalContext?.content?.contains("repeating the exact same tool call") == true
+        })
+        assertEquals(3, result.messages.flatMap { it.toolResults }.size)
+    }
+
+    @Test fun runtimeFailureResultNoLongerEndsTheTurn() = runTest {
+        val call = AgentToolCall("run", "run_command", """{"command":"echo hello"}""")
+        var requests = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                requests++
+                if (requests == 1) AgentResponse(toolCalls = listOf(call))
+                else AgentResponse(text = "I will try another command")
+            },
+            prepareTool = {
+                PreparedAgentTool(call, AgentApprovalRequest(call, "Run", "echo hello"),
+                    effect = AgentToolEffect.ForegroundCommand) {
+                    AgentToolResult(call.id, call.name,
+                        """{"error":"sync_required","sync":"pending","required_action":"Resolve the pending file."}""",
+                        error = true, summary = "Failed  run_command")
+                }
+            },
+            requestApproval = { true },
+        ).run(listOf(AgentMessage.user("Run")), emptyList(), currentAutonomyMode = { AutonomyMode.Yolo })
+
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(2, requests)
+        assertTrue(result.messages.flatMap { it.toolResults }.single().error)
     }
 }

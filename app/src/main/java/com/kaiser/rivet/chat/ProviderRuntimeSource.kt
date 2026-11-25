@@ -24,31 +24,6 @@ internal fun undoFailureMessage(error: Throwable?): String = when {
     else -> "Rivet couldn't finish Undo. Check the project before trying again."
 }
 
-internal fun runtimeFailureMessage(code: String?): String = when (code) {
-    "phone_shot_denied" -> "Screen capture was declined. Rivet paused the run."
-    "phone_shot_cancelled" -> "Screen capture was cancelled. Rivet paused the run."
-    "process_limit" -> "Rivet already has several project operations running. Stop one in Tools, then try again."
-    "foreground_service_unavailable" -> "Rivet couldn't keep the local preview running. Try again while Rivet is open."
-    "preview_unavailable" -> "Rivet couldn't start a local preview for this project. Check the selected files and try again."
-    "workspace_unavailable", "runtime_unavailable" ->
-        "Rivet couldn't prepare command access for this project. Choose the project again and retry."
-    "workspace_changed" ->
-        "The project changed while Rivet was working, so it stopped before running the command."
-    "sync_required", "mirror_dirty" ->
-        "Rivet found pending project changes it couldn't safely reconcile. It kept the pending copy and did not overwrite newer project files."
-    "sync_conflict", "conflict" ->
-        "The project changed outside Rivet. Rivet kept its pending changes and stopped before overwriting newer work."
-    "sync_failed" ->
-        "Rivet couldn't finish saving the command's project changes. Some files may already be saved; Rivet kept the pending changes."
-    "sync_interrupted", "interrupted" ->
-        "The command ran, but Rivet couldn't confirm its project changes. Check the project before retrying."
-    "checkpoint_unavailable" ->
-        "Rivet couldn't prepare a safe Undo, so it stopped before running the command. Try again."
-    "unsafe_entry" ->
-        "Rivet found a project item it couldn't safely access, so it stopped. Remove or rename that item before trying again."
-    else -> "Rivet couldn't start the project command. Check the project and try again."
-}
-
 // Kaiser's ruling on the device, 2026-11-02: the old refusal was incomprehensible to a
 // non-technical user, quoted a number nothing compared against, and told someone who had worked
 // for hours to start over. No numbers, no "budget", no "token", no "context window", and no

@@ -79,8 +79,8 @@ class CommandToolTest {
         val run = running.await()
         val result = run.messages.flatMap { it.toolResults }.single()
         val value = Json.parseToJsonElement(result.content).jsonObject
-        assertEquals(AgentStopReason.RuntimeBlocked, run.stopReason)
-        assertEquals(1, requests)
+        assertEquals(AgentStopReason.Completed, run.stopReason)
+        assertEquals(2, requests)
         assertEquals(1, executions)
         assertEquals(call.id, result.callId)
         assertEquals("7", value["exit_code"]!!.jsonPrimitive.content)
@@ -114,24 +114,6 @@ class CommandToolTest {
         assertNull(invalid.approval)
         assertTrue(invalid.execute().error)
         assertEquals(0, executions)
-    }
-
-    @Test fun pendingSyncPreventsSafToolResultsAndMutations() = runTest {
-        val workspace = AgentToolExecutorTest.FakeWorkspace()
-        val executor = AgentToolExecutor(workspace, requireSafCurrent = {
-            throw MirrorFailure("sync_required")
-        })
-        val read = executor.prepare(AgentToolCall("read", "read_file", """{"path":"Main.kt"}""")).execute()
-        val write = executor.prepare(AgentToolCall("write", "write_file",
-            """{"path":"Main.kt","content":"edit","expected_sha256":"${"a".repeat(64)}"}"""))
-        val blockedWrite = write.execute()
-
-        assertEquals("sync_required", Json.parseToJsonElement(read.content).jsonObject["error"]!!.jsonPrimitive.content)
-        assertEquals("false", Json.parseToJsonElement(read.content).jsonObject["retryable"]!!.jsonPrimitive.content)
-        assertTrue(Json.parseToJsonElement(read.content).jsonObject["required_action"]!!.jsonPrimitive.content.contains("reconcile"))
-        assertNotNull(write.approval)
-        assertEquals("sync_required", Json.parseToJsonElement(blockedWrite.content).jsonObject["error"]!!.jsonPrimitive.content)
-        assertEquals(0, workspace.writes)
     }
 
     @Test fun blockedCommandExplainsRequiredActionWithoutInventingExitStatus() = runTest {
@@ -170,11 +152,11 @@ class CommandToolTest {
         assertEquals(call.id, gate.pending.value?.call?.id)
         assertTrue(gate.resolve(gate.pending.value!!.approvalToken, true))
         val result = running.await()
-        assertEquals(AgentStopReason.RuntimeBlocked, result.stopReason)
-        assertEquals("workspace_unavailable", result.failureCode)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals(1, attempts)
-        assertEquals(1, requests)
-        assertFalse(result.messages.any { it.text.contains("command succeeded") })
+        assertEquals(2, requests)
+        assertTrue(result.messages.any { it.text.contains("command succeeded") })
+        assertTrue(result.messages.flatMap { it.toolResults }.single().error)
     }
 
     @Test fun captureRetainsBoundedHeadAndTailOfBinaryOutput() {

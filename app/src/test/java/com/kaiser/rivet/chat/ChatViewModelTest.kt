@@ -256,24 +256,6 @@ class ChatViewModelTest {
         viewModel.deny(awaiting.pendingApproval!!.approvalToken)
     }
 
-    @Test fun runtimeFailureMessagesGiveChatRecoveryWithoutRemovedControls() {
-        assertTrue(runtimeFailureMessage("workspace_unavailable").contains("Choose the project again"))
-        assertTrue(runtimeFailureMessage("workspace_changed").contains("stopped before running"))
-        assertTrue(runtimeFailureMessage("sync_required").contains("kept the pending copy"))
-        listOf("workspace_unavailable", "sync_required").forEach { code ->
-            val message = runtimeFailureMessage(code)
-            assertFalse(message.contains("Terminal"))
-            assertFalse(message.contains("Sync"))
-            assertFalse(message.contains("SAF"))
-        }
-    }
-
-    @Test fun partialSyncFailureDoesNotClaimNothingChanged() {
-        val message = runtimeFailureMessage("sync_failed")
-        assertTrue(message.contains("may already"))
-        assertFalse(message.contains("overwriting anything"))
-    }
-
     @Test fun partialMultiFileSyncShowsSavedAndPendingChangesInChat() = runBlocking {
         val authority = "com.kaiser.rivet.partial-sync-chat"
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
@@ -301,17 +283,10 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) {
-            it.ready && !it.projectLoading && it.projectIdentity == tree.toString() &&
-                it.errorAction == ChatErrorAction.RetryProjectChanges
-        }
+        await(viewModel) { it.ready && !it.projectLoading && it.projectIdentity == tree.toString() }
 
-        // Loading the project runs commandBlocker, which settles the initial pending
-        // changes and consumes the provider's one-shot write rejection. Its recovery
-        // banner is the generic pending-changes message, not the retry-specific
-        // "may already be saved" text, so wait for its Retry action above. Arm the
-        // rejection again before exercising the explicit retry this test is about.
-        documents.rejectWriteOnceFor = "b.txt"
+        // The explicit recovery action still saves what it can. Pending state is
+        // never a startup banner; this call is the user asking to settle it.
         viewModel.retryProjectChanges()
         val failed = await(viewModel) { !it.recoveringProjectChanges && it.error?.contains("may already be saved") == true }
         assertEquals("after a", documents.nodes[a.documentId]!!.bytes.readText())
@@ -360,6 +335,7 @@ class ChatViewModelTest {
         val provider = QueueProvider(ArrayDeque(listOf(
             AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
             AgentResponse(toolCalls = listOf(AgentToolCall("create-b", "create_file", """{"path":"B.kt"}"""))),
+            AgentResponse(text = "Created both files"),
         )))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
@@ -372,27 +348,22 @@ class ChatViewModelTest {
         viewModel.approve(first.pendingApproval!!.approvalToken)
         val second = await(viewModel) { it.pendingApproval?.call?.id == "create-b" }
         viewModel.approve(second.pendingApproval!!.approvalToken)
-        val stopped = await(viewModel) { !it.streaming && it.error != null }
+        val stopped = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Created both files" }
 
+        // A checkpoint that cannot be finished costs the Undo row, not the edit.
         assertTrue(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "A.kt" })
-        assertFalse(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "B.kt" })
-        assertTrue(stopped.error!!.contains("Earlier project changes"))
+        assertTrue(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "B.kt" })
+        assertNull(stopped.error)
+        assertTrue(stopped.notice.orEmpty().contains("couldn't prepare Undo"))
         assertNull(stopped.undoCheckpointId)
     }
 
     @Test fun fileToolRuntimeGateDoesNotTreatMissingProjectAsReady() = runBlocking {
         val runtime = RuntimeController(app)
         assertEquals("workspace_unavailable", runtime.commandBlocker())
-        assertTrue(runtime.agentFailureState().endsWith(":workspace_unavailable"))
-        try {
-            runtime.requireSafCurrent()
-            error("Expected unavailable project")
-        } catch (failure: MirrorFailure) {
-            assertEquals("workspace_unavailable", failure.code)
-        }
     }
 
-    @Test fun unavailableCommandShowsTruthfulRecoveryWithoutAnotherModelRequest() = runBlocking {
+    @Test fun unavailableCommandReturnsToolResultAndModelContinues() = runBlocking {
         val provider = QueueProvider(ArrayDeque(listOf(
             AgentResponse(toolCalls = listOf(AgentToolCall("run-1", "run_command", """{"command":"printf ok"}"""))),
             AgentResponse(text = "The command succeeded"),
@@ -404,11 +375,11 @@ class ChatViewModelTest {
         await(viewModel) { it.ready && !it.projectLoading }
 
         viewModel.send("Run printf ok")
-        val failed = await(viewModel) { !it.streaming && it.error != null }
-        assertTrue(failed.error!!.contains("Choose the project again"))
-        assertNull(failed.pendingApproval)
-        assertEquals(1, provider.requests.size)
-        assertFalse(failed.messages.any { it.text.contains("command succeeded") })
+        val done = await(viewModel) { !it.streaming && it.messages.any { m -> m.text.contains("command succeeded") } }
+        assertNull(done.error)
+        assertNull(done.pendingApproval)
+        assertEquals(2, provider.requests.size)
+        assertTrue(done.messages.flatMap { it.toolResults }.single().error)
     }
 
     @Test fun activityLabelsDescribeObservedToolKinds() {

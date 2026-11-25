@@ -2,10 +2,7 @@ package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.runtime.TermuxCommand
 import com.kaiser.rivet.workspace.WorkspaceFailure
-import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.buildJsonObject
-import kotlinx.serialization.json.jsonObject
-import kotlinx.serialization.json.jsonPrimitive
 import kotlinx.serialization.json.put
 
 internal object AgentToolError {
@@ -16,10 +13,6 @@ internal object AgentToolError {
     private val workspaceActions = WorkspaceFailure.Reason.entries.associate {
         it.name.lowercase() to it.message
     }
-    // A genuine retry can clear these. Everything else describes the identical call
-    // failing in the identical way, which is what the no-progress guard catches.
-    private val transientWorkspaceCodes = setOf("provider", "write")
-
     private val actions = workspaceActions + mapOf(
         "sync_required" to "Rivet could not safely reconcile project changes. Stop and review the project before retrying.",
         "workspace_unavailable" to "Choose the project again before retrying the command.",
@@ -115,31 +108,6 @@ internal object AgentToolError {
         "browser_too_large" to "Use a smaller page or open it in the phone's browser.",
         "browser_redirect" to "Use the final page URL or check the server redirects.",
     )
-    private val deterministic = (workspaceActions.keys - transientWorkspaceCodes) + setOf(
-        "sync_required", "workspace_unavailable",
-        "workspace_changed", "runtime_unavailable", "denied", "checkpoint_unavailable",
-        "invalid_arguments", "invalid_path", "unknown_tool", "unsafe_entry", "stale_target",
-        "unsupported_system_management", "approval_unavailable", "process_limit", "output_unavailable",
-        "thermal_blocked", "battery_low",
-        "foreground_service_unavailable", "preview_unavailable", "process_unavailable",
-        "capability_addon_required", "app_not_found", "no_app_for_file", "share_unavailable", "compose_unavailable",
-        "invalid_url", "redirect_blocked", "download_too_large", "download_sha_mismatch",
-        "destination_exists", "invalid_checksum", "skill_not_found", "skill_manual_only",
-        "secret", "garden_first", "empty", "too_long", "reserved_goal",
-        "outside_file_scope", "worker_read_only", "owned_by_worker", "browser_busy", "page_modal_blocked",
-        "termux_missing", "termux_permission_required", "termux_external_apps_off", "termux_no_result", "termux_cwd_unavailable",
-        "grant_missing", "grant_revoked", "grant_read_only", "inbox_read_only", "cross_folder_move",
-        "browser_eval_exception", "browser_origin_mismatch", "browser_js_disabled",
-        "browser_sensitive_field", "browser_target",
-        "browser_cleartext_blocked", "browser_loopback_unreachable",
-        "browser_handoff", "browser_empty", "browser_chunk_out_of_range",
-        "browser_page_loading", "browser_screenshot_blocked", "browser_teardown_pending")
-    private val runtimeStops = setOf("sync_required", "workspace_unavailable",
-        "workspace_changed", "runtime_unavailable", "checkpoint_unavailable", "interrupted",
-        "materialize_failed", "baseline_invalid", "storage", "mirror_dirty", "unsafe_entry", "process_limit",
-        "foreground_service_unavailable", "preview_unavailable", "phone_shot_denied", "phone_shot_cancelled",
-        "phone_shot_needs_foreground")
-
     fun content(code: String, statusCode: Int? = null, subject: String? = null): String {
         val baseCode = if (code.startsWith("owned_by_worker:")) "owned_by_worker" else code
         val workerJob = if (code.startsWith("owned_by_worker:")) {
@@ -157,37 +125,6 @@ internal object AgentToolError {
             subject?.let { put("path", it) }
         }.toString()
     }
-
-    fun noProgress(code: String): String = buildJsonObject {
-        put("error", "no_progress")
-        put("reason", code)
-        put("retryable", false)
-        put("required_action", actions[code] ?: "Change the request or relevant workspace state before retrying.")
-    }.toString()
-
-    fun deterministicCode(result: AgentToolResult): String? {
-        if (!result.error) return null
-        val code = code(result)
-        return code?.takeIf { it in deterministic }
-    }
-
-    fun runtimeStopCode(result: AgentToolResult): String? {
-        val value = runCatching { Json.parseToJsonElement(result.content).jsonObject }.getOrNull()
-            ?: return null
-        val code = if (result.error) value["error"]?.jsonPrimitive?.content else null
-        if (code != null && code in runtimeStops) return code
-        if (result.name == "run_command") return when (value["sync"]?.jsonPrimitive?.content) {
-            "conflict" -> "sync_conflict"
-            "failed" -> "sync_failed"
-            "interrupted" -> "sync_interrupted"
-            else -> null
-        }
-        return null
-    }
-
-    private fun code(result: AgentToolResult): String? = runCatching {
-        Json.parseToJsonElement(result.content).jsonObject["error"]?.jsonPrimitive?.content
-    }.getOrNull()
 
     fun action(code: String): String? =
         actions[if (code.startsWith("owned_by_worker:")) "owned_by_worker" else code]

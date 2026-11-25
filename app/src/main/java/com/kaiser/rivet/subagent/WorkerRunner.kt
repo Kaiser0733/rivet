@@ -100,7 +100,6 @@ internal class RunServices(
     val commandBlocker: suspend () -> String? = { null },
     val backgroundBlocker: suspend () -> String? = { null },
     val canStartPreview: () -> Boolean = { true },
-    val failureState: suspend () -> String = { "ready" },
     val isProjectLockBusy: () -> Boolean = { false },
     val approvedSkillScripts: () -> Set<String> = { emptySet() },
     val recordSkillScriptApproval: suspend (String) -> Unit = {},
@@ -461,7 +460,6 @@ internal class WorkerRunner(
                     ModelLimitLearningPolicy.observeOutput(config, config.model, error)
                         ?.let { persistLearning(it.learning) }
                 },
-                failureState = services.failureState,
                 compactContext = { candidate, force ->
                     val compacted = context.prepare(candidate, force)
                     if (compacted != candidate) {

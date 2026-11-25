@@ -13,6 +13,9 @@ internal const val SKILL_CATALOG_KIND = "skill_catalog"
 /** Context kind for a skill the user loaded with a `/name` gesture on this turn. */
 internal const val SKILL_INVOCATION_KIND = "skill_invocation"
 
+/** Advisory warning when the same tool call repeats; copied from dsh-repeat-tool-reminder. */
+internal const val REPEAT_REMINDER_KIND = "repeat_reminder"
+
 /** App-observed data in event order; never a system instruction or authorization. */
 @Serializable
 data class InternalContext(
@@ -31,7 +34,8 @@ data class InternalContext(
                 SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND, ToolchainContext.KIND,
                 GoalMemoryContext.KIND, RunContext.KIND, "rollback",
                 SubagentContext.POOL_KIND, SubagentContext.RESULT_KIND, CompactionNotice.KIND,
-                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND, MemoryProposalDeclined.KIND, StarterBrief.KIND) ||
+                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND, MemoryProposalDeclined.KIND,
+                StarterBrief.KIND, REPEAT_REMINDER_KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
@@ -39,7 +43,8 @@ data class InternalContext(
         if (kind == "summary" && content.toByteArray(Charsets.UTF_8).size > TaskState.MAX_BYTES) return false
         if (workspaceId != null && workspaceId.isBlank()) return false
         if (kind !in setOf("summary", GoalMemoryContext.KIND, CompactionNotice.KIND,
-                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND, MemoryProposalDeclined.KIND) && workspaceId == null) return false
+                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND, MemoryProposalDeclined.KIND,
+                REPEAT_REMINDER_KIND) && workspaceId == null) return false
         if (removed && content.isNotEmpty()) return false
         if (kind == "project_snapshot") {
             if (projectFiles.size > ProjectInstructions.MAX_FILES || content.isNotEmpty() ||
@@ -91,6 +96,10 @@ data class InternalContext(
             CompactionNotice.KIND, CompactionNotice.RESTORE_KIND -> append(content)
             SubagentContext.POOL_KIND -> append(content)
             SubagentContext.RESULT_KIND -> append(content)
+            REPEAT_REMINDER_KIND -> {
+                append("Tool-loop advisory (not a permission or a stop):\n")
+                append(content)
+            }
             SKILL_INVOCATION_KIND -> {
                 append("The user loaded this skill for the current request. Follow its instructions ")
                 append("while answering the task that follows them.\n")
