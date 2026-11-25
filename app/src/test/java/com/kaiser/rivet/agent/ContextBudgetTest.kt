@@ -1,7 +1,7 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.provider.AgentRequest
-import com.kaiser.rivet.provider.DEFAULT_CONTEXT_WINDOW_TOKENS
+import com.kaiser.rivet.provider.ModelLimits
 import com.kaiser.rivet.provider.ModelContextLimit
 import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderConfig
@@ -103,11 +103,12 @@ class ContextBudgetTest {
     // it and the plan aims a margin below that (dsh's two-margin scheme).
     @Test fun compactionTriggersBeforeTheCeilingAndAimsLowerStill() {
         val wide = ProviderConfig("c", ProviderType.OpenAiCompatible, "Compat",
-            "https://api.example/v1", "glm-5.1")
+            "https://api.example/v1", "totally-unknown-model-xyz")
         val assessed = ContextBudget.assess(wide, 0, TokenEstimateSource.Estimated)
-        // No window was entered or detected, so the 256K default is a guess and planning uses
-        // 220K of it (kaiser's number). The trigger/aim relationship this test checks is unchanged.
-        assertEquals(220_000, assessed.allowedInputTokens)
+        // No window was entered or detected, so the 32K default is a guess. Its
+        // proportional 8K reserve leaves 24K of prompt; the trigger/aim relationship is
+        // what this test checks.
+        assertEquals(24_576, assessed.allowedInputTokens)
         assertTrue("trigger must leave room", assessed.compactAtTokens < assessed.allowedInputTokens)
         assertTrue("target must sit below the trigger", assessed.compactToTokens < assessed.compactAtTokens)
 
@@ -134,7 +135,7 @@ class ContextBudgetTest {
     // and leave nothing to send, so every request failed with "context too small".
     @Test fun aManualOutputLimitAtOrAboveTheWindowLeavesRoomToSend() {
         val base = ProviderConfig("c", ProviderType.OpenAiCompatible, "Compat",
-            "https://api.example/v1", "glm-5.1")
+            "https://api.example/v1", "totally-unknown-model-xyz")
         val equal = base.withManualContextWindow(32_000).withManualMaxOutputTokens(32_000)
         val assessed = ContextBudget.assess(equal, 1, TokenEstimateSource.Estimated)
         assertEquals(16_000, assessed.reservedTokens)
@@ -149,8 +150,8 @@ class ContextBudgetTest {
     // exactly as it always was.
     @Test fun aGuessedWindowPlansLowerWhileMeasuredWindowsAreUnchanged() {
         val guessed = ProviderConfig("c", ProviderType.OpenAiCompatible, "Compat",
-            "https://api.example/v1", "glm-5.1")
-        assertEquals(220_000,
+            "https://api.example/v1", "totally-unknown-model-xyz")
+        assertEquals(24_576,
             ContextBudget.assess(guessed, 0, TokenEstimateSource.Estimated).allowedInputTokens)
         // The same distinction the refusal copy reads: only the guess is flagged, so copy that
         // prints a number can tell the two apart without re-deciding which one it has.
@@ -170,21 +171,30 @@ class ContextBudgetTest {
             ContextBudget.assess(detected, 0, TokenEstimateSource.Estimated).windowIsGuessed)
     }
 
+    @Test fun learnedPromptCapAppliesWithoutSubtractingTheReserveTwice() {
+        val base = ProviderConfig("c", ProviderType.OpenAiCompatible, "Compat",
+            "https://api.example/v1", "totally-unknown-model-xyz")
+        val assessed = ContextBudget.assess(base, 0, TokenEstimateSource.Estimated,
+            learnedPromptCap = 20_000)
+        assertEquals(20_000, assessed.allowedInputTokens)
+        assertTrue(assessed.compactAtTokens < assessed.allowedInputTokens)
+    }
+
     @Test fun contextWindowResolutionOrderManualBeatsDetectedBeats256kDefault() {
         val base = ProviderConfig(
             id = "compat",
             type = ProviderType.OpenAiCompatible,
             name = "Custom",
             baseUrl = "https://api.example/v1",
-            model = "glm-5.1",
+            model = "totally-unknown-model-xyz",
         )
-        assertEquals(DEFAULT_CONTEXT_WINDOW_TOKENS, base.resolvedContextWindowTokens())
-        assertEquals(262_144, base.resolvedContextWindowTokens())
-        val defaultAssessment = ContextBudget.assess(base, 100_000, TokenEstimateSource.Estimated)
+        assertEquals(ModelLimits.UNKNOWN_CONTEXT_WINDOW_TOKENS, base.resolvedContextWindowTokens())
+        assertEquals(32_768, base.resolvedContextWindowTokens())
+        val defaultAssessment = ContextBudget.assess(base, 20_000, TokenEstimateSource.Estimated)
         assertNull(defaultAssessment.knownInputLimitTokens)
-        // Resolution still reports 262 144 (asserted above); only the planning target for a
-        // guessed window changed, and this test's subject is the resolution order (F4).
-        assertEquals(220_000, defaultAssessment.allowedInputTokens)
+        // Resolution reports 32 768 (asserted above); the planning target subtracts the
+        // proportional 8K reserve, and this test's subject is the resolution order.
+        assertEquals(24_576, defaultAssessment.allowedInputTokens)
         assertFalse(defaultAssessment.needsReduction)
 
         val detected = base.selectListedModel(ModelInfo("glm-5.1", "GLM 5.1", inputLimitTokens = 200_000))

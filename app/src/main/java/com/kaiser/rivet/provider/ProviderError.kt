@@ -8,7 +8,14 @@ sealed class ProviderError(message: String) : Exception(message) {
     class RateLimited : ProviderError("rate limited")
     class ResourceExhausted : ProviderError("resource exhausted")
     class UsageLimit : ProviderError("provider usage limit")
-    class ContextOverflow : ProviderError("context overflow")
+    class ContextOverflow(
+        val reportedLimitTokens: Int? = null,
+        val attemptedTokens: Long? = null,
+    ) : ProviderError("context overflow")
+    class OutputLimitExceeded(
+        val reportedLimitTokens: Int? = null,
+        val attemptedTokens: Long? = null,
+    ) : ProviderError("output limit exceeded")
     class ModelNotFound(val model: String) : ProviderError("model not found: $model")
     class UnsupportedEndpoint : ProviderError("endpoint not supported")
     class UnsupportedConfiguration : ProviderError("unsupported generation configuration")
@@ -42,6 +49,7 @@ sealed class ProviderError(message: String) : Exception(message) {
         is ResourceExhausted -> "The provider's request capacity is exhausted. Wait before trying again or choose another model."
         is UsageLimit -> "The provider account has reached its usage limit. Check its billing or usage settings."
         is ContextOverflow -> "The model's context is full. Rivet could not reduce this request enough to continue."
+        is OutputLimitExceeded -> "The model's output limit is lower than Rivet requested. Rivet will use the smaller limit next time."
         is ModelNotFound -> "Model \"$model\" was not found by this provider."
         is UnsupportedEndpoint -> "This endpoint is not supported by the provider."
         is UnsupportedConfiguration -> "This model's output limit is too small for manual thinking. Select a model with a larger output limit or set reasoning to Provider default."

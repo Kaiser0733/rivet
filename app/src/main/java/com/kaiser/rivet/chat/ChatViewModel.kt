@@ -89,6 +89,7 @@ import com.kaiser.rivet.agent.SkillRootKind
 import com.kaiser.rivet.agent.skillGesture
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ALL_REASONING_LEVELS
+import com.kaiser.rivet.provider.ModelLimitLearningPolicy
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderError
@@ -101,6 +102,7 @@ import com.kaiser.rivet.provider.isUnsupportedReasoningError
 import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.provider.providerClient
 import com.kaiser.rivet.provider.recommendedFallbackReasoning
+import com.kaiser.rivet.provider.withLimitLearning
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
 import com.kaiser.rivet.runtime.RunCheckpointGate
@@ -2276,6 +2278,13 @@ class ChatViewModel private constructor(
             val textWindow = PreviewWindow()
             checkpointGate.beginTurn(workspaceId, currentSessionRun()?.takeIf { workspaceId != null }?.id, turnSessionId)
 
+            suspend fun persistLearning(learning: com.kaiser.rivet.provider.ModelLimitLearning) {
+                runCatching {
+                    providerSource.updateLimits(snapshot.config.id) { current ->
+                        current.withLimitLearning(snapshot.config.model, learning)
+                    }
+                }
+            }
             val loop = AgentLoop(
                 requestModel = request@{ messages, _, onText ->
                     if (recalling) return@request AgentResponse(text = ArchiveRecall.directAnswer(recallWindows, recallQueries))
@@ -2335,6 +2344,11 @@ class ChatViewModel private constructor(
                             response.toolCalls.sumOf { call -> call.arguments.length.toLong() },
                     )
                     recordSpend(snapshot.config, responseUsage, estimated = response.usage == null)
+                    response.usage?.inputTokens?.let { observed ->
+                        ModelLimitLearningPolicy.observeUsage(
+                            snapshot.config, snapshot.config.model, observed,
+                        )?.let { persistLearning(it) }
+                    }
                     response
                 },
                 prepareTool = { call ->
@@ -2425,6 +2439,19 @@ class ChatViewModel private constructor(
                 },
                 afterMutation = { call, result ->
                     if (!(phone != null && (externalFileMutation(call) || call.name == "termux_command"))) checkpointGate.afterMutation(RunCheckpointGate.COORDINATOR, call, result)
+                },
+                onContextLimitObserved = { error, estimate ->
+                    ModelLimitLearningPolicy.observeContext(
+                        snapshot.config, snapshot.config.model, error, estimate,
+                    )?.let { learned ->
+                        context.learnedPromptCap = learned.promptCap
+                        persistLearning(learned.learning)
+                    }
+                },
+                onOutputLimitObserved = { error ->
+                    ModelLimitLearningPolicy.observeOutput(
+                        snapshot.config, snapshot.config.model, error,
+                    )?.let { persistLearning(it.learning) }
                 },
                 beforeCompletion = {
                     if (workspaceId != null) {

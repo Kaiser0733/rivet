@@ -67,6 +67,8 @@ class AgentLoop(
     private val approvedSkillScripts: Set<String> = emptySet(),
     private val recordSkillScriptApproval: suspend (String) -> Unit = {},
     private val afterMutation: suspend (AgentToolCall, AgentToolResult?) -> Unit = { _, _ -> },
+    private val onContextLimitObserved: suspend (ProviderError.ContextOverflow, Long) -> Unit = { _, _ -> },
+    private val onOutputLimitObserved: suspend (ProviderError.OutputLimitExceeded) -> Unit = { },
     private val beforeCompletion: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
     private val writeMemoryBatch: (suspend (AgentToolCall, List<String>) -> AgentToolResult)? = null,
 ) {
@@ -211,6 +213,13 @@ class AgentLoop(
             val response = try {
                 try { requestOnce() }
                 catch (overflow: ProviderError.ContextOverflow) {
+                    try {
+                        onContextLimitObserved(overflow, ContextBudget.estimateHistoryTokens(messages.toList()))
+                    } catch (e: CancellationException) {
+                        throw e
+                    } catch (_: Exception) {
+                        // Learning is best-effort; the turn still compacts and retries.
+                    }
                     if (streamed.isNotEmpty()) throw overflow
                     val before = contextFootprint(messages.toList())
                     val reduced = try { compactContext(messages.toList(), true) }
@@ -227,6 +236,10 @@ class AgentLoop(
                     if (contextFootprint(messages.toList()) >= before) throw overflow
                     requestOnce()
                 }
+            } catch (limit: ProviderError.OutputLimitExceeded) {
+                try { onOutputLimitObserved(limit) } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { }
+                throw limit
             } catch (incomplete: ProviderError.IncompleteGeneration) {
                 if (!incomplete.isLengthCut || incomplete.truncatedToolCalls.isEmpty()) {
                     val partial = streamed.toString().ifEmpty { DsmlToolCalls.hideIncomplete(incomplete.partialText) }

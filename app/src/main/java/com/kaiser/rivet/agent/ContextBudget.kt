@@ -1,20 +1,16 @@
 package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.provider.AgentRequest
-import com.kaiser.rivet.provider.DEFAULT_CONTEXT_WINDOW_TOKENS
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderVisionAttachments
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.anthropicOutputCeiling
-import com.kaiser.rivet.provider.detectedContextWindowForModel
-import com.kaiser.rivet.provider.manualContextWindowForModel
 import com.kaiser.rivet.provider.openRouterOutputCeiling
-import com.kaiser.rivet.provider.resolvedContextWindowTokens
+import com.kaiser.rivet.provider.resolveLimits
 import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
-import com.kaiser.rivet.provider.trustedInputLimitTokens
 
 enum class TokenEstimateSource { Reported, Estimated, Unknown }
-enum class CapacitySource { ProviderMetadata, Unknown }
+enum class CapacitySource { ProviderMetadata, KnownTable, Learned, Manual, Local, Unknown }
 
 data class ContextAssessment(
     val inputTokens: Long?,
@@ -47,13 +43,7 @@ internal class ContextCapacityTooSmall : Exception("context_capacity_too_small")
 
 /** Estimates request occupancy, while keeping unverified capacity explicitly unknown. */
 internal object ContextBudget {
-    private const val DEFAULT_PLANNING_LIMIT = DEFAULT_CONTEXT_WINDOW_TOKENS
     private const val UNKNOWN_RESERVE = 16_000
-    // Kaiser's ruling on the device, 2026-11-02: planning the guess at half of the 256K default
-    // refused a long chat at 115,072 tokens when the guess could have carried it. The guess is now
-    // planned at 220K of the 256K. Trade accepted with it: a model whose real window is smaller
-    // than the guess fails at the provider instead of at Rivet's polite wall.
-    private const val GUESSED_INPUT_TOKENS = 220_000
     private const val IMAGE_TOKEN_ESTIMATE = 1_024L
 
     fun attachedImageCount(messages: List<AgentMessage>): Int {
@@ -82,37 +72,47 @@ internal object ContextBudget {
         return (messageBytes + fixedBytes + toolBytes + 2) / 3 + imageTokens
     }
 
-    fun assess(config: ProviderConfig, inputTokens: Long?, source: TokenEstimateSource): ContextAssessment {
-        val known = config.trustedInputLimitTokens()
-        val indicatedWindow = config.manualContextWindowForModel()
-            ?: config.detectedContextWindowForModel()
-        val guessedWindow = indicatedWindow == null
-        val resolvedWindow = (indicatedWindow ?: DEFAULT_PLANNING_LIMIT).takeIf { it > 0 }
-            ?: DEFAULT_PLANNING_LIMIT
-        // Nothing was measured: the window is Rivet's 256K guess. Planning compaction as if the
-        // guess were fact leaves a provider with a smaller window to discover the problem through
-        // an overflow error, so the guess is planned below the whole of it — but at 220K, not at
-        // half, which is what turned a long session into a dead end. The reserve is added on top so
-        // [ContextAssessment.allowedInputTokens] lands on the 220K itself. An entered or detected
-        // window is used exactly as it is and never goes through this branch.
-        val planWindow =
-            if (guessedWindow) minOf(resolvedWindow, GUESSED_INPUT_TOKENS + UNKNOWN_RESERVE) else resolvedWindow
+    fun assess(
+        config: ProviderConfig,
+        inputTokens: Long?,
+        source: TokenEstimateSource,
+        learnedPromptCap: Int? = null,
+    ): ContextAssessment {
+        val resolved = config.resolveLimits()
+        val known = resolved.input.tokens.takeIf { resolved.inputIsTrusted }
+        val guessedWindow = resolved.windowIsGuessed
+        val planWindow = resolved.input.tokens.coerceAtLeast(1)
         val manualMaxOutput = config.resolvedManualMaxOutputTokens()
         val reserve = when {
             // A manual output limit at or above the window would leave no room to send
             // anything, and every request would be refused with "context too small". Half
             // the window keeps a usable input budget; the editor accepts the same pairing.
-            manualMaxOutput != null -> minOf(resolvedWindow / 2, manualMaxOutput)
-            known == null -> UNKNOWN_RESERVE
+            manualMaxOutput != null -> minOf(planWindow / 2, manualMaxOutput)
+            // Nothing was measured. A flat 16K reserve on a 32K guess would leave only
+            // 16K of prompt, which is still too close to a 16K model's whole window;
+            // scale the reserve instead.
+            known == null -> minOf(UNKNOWN_RESERVE, maxOf(2_048, planWindow / 4))
             config.type == ProviderType.Gemini -> 0 // Gemini publishes a separate input limit.
             config.type == ProviderType.Anthropic -> minOf(known, anthropicOutputCeiling(config))
             config.type == ProviderType.OpenRouter -> config.openRouterOutputCeiling() ?: UNKNOWN_RESERVE
-            else -> minOf(known, minOf(UNKNOWN_RESERVE, maxOf(2048, known / 4)))
+            else -> minOf(known ?: 0, minOf(UNKNOWN_RESERVE, maxOf(2048, (known ?: 0) / 4)))
         }
-        val target = (planWindow - reserve).coerceAtLeast(0)
+        var target = (planWindow - reserve).coerceAtLeast(0)
+        // A learned cap is already net of output; applying it here must not subtract
+        // the reserve a second time.
+        if (learnedPromptCap != null && learnedPromptCap > 0) {
+            target = minOf(target, learnedPromptCap)
+        }
         val headroom = (target / 8).coerceAtLeast(1024)
+        val capacitySource = when (resolved.input.source) {
+            com.kaiser.rivet.provider.LimitSource.Learned -> CapacitySource.Learned
+            com.kaiser.rivet.provider.LimitSource.KnownTable -> CapacitySource.KnownTable
+            com.kaiser.rivet.provider.LimitSource.Manual -> CapacitySource.Manual
+            com.kaiser.rivet.provider.LimitSource.Local -> CapacitySource.Local
+            else -> if (known == null) CapacitySource.Unknown else CapacitySource.ProviderMetadata
+        }
         return ContextAssessment(inputTokens, source, known,
-            if (known == null) CapacitySource.Unknown else CapacitySource.ProviderMetadata,
+            capacitySource,
             target, reserve,
             compactAtTokens = (target - headroom).coerceAtLeast(0),
             compactToTokens = (target - 2 * headroom).coerceAtLeast(0),
