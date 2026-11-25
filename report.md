@@ -173,3 +173,43 @@ a parent test run I could not perform.
 - The GGUF parser is tested with synthetic v2/v3 headers. A real model whose
   metadata sits beyond the 32 MB header cap will be treated as having no
   training ceiling and fall back to the device budget.
+
+## Gate-fix: cheap pruning across a provider switch (Hermes round, 2026-11-25)
+
+CI run `45599253948` on `model-limits-detect` @`e6b0cf3c` failed only
+`ChatViewModelTest > cheapPruningKeepsFullHistoryAndSendsSmallerContext` with a
+`TimeoutCancellationException`. The branch reproduces it locally: the named
+test fails before the fix and passes after it. Base `0729dabc` passes the same
+test in the same harness.
+
+**Root cause.** The test creates its second provider with
+`config.copy(id = "provider-b", model = "model-b")` and no
+`modelContextLimit`. That fixture relied on the old 256K fallback window. The
+first turn deliberately prunes the 22 large tool results but keeps the full
+event history; the second model is unknown, so the intended new behavior
+resolves it to 32K. The preserved transcript is still larger than 32K, so
+`ContextPreparation` correctly raises `ContextCapacityTooSmall`, the turn ends
+with the “This chat is too long…” error, and the test never sees
+`"After switch"`. There is no hang in the resolver, table load, learning path,
+or provider request. The test’s second fixture encoded the old default, not a
+pruning failure.
+
+**Fix.** Commit `e12eb99c` pins the switched provider to an explicit 40K
+`ModelContextLimit`, matching the first provider’s 40K window. This keeps the
+test about pruning across provider switches rather than about the unknown-model
+fallback. No timeout, assertion, or production behavior was changed.
+
+**Tests run.**
+
+- Named test, branch before fix: **fail** (`TimeoutCancellationException`).
+- Named test, branch with `e12eb99c`: **pass**.
+- Full `ChatViewModelTest`: **55/69 passed**. The 14 failures are the same
+  undo/checkpoint/approval timeouts that occur on base `0729dabc` in this
+  manual Robolectric harness; the named test is not among them. CI remains the
+  authoritative full-class run.
+- Model-limit suites: **100/100 passed** (the same list as the main report).
+- Provider wire-shape suites: **77/77 passed**.
+- Python generator suite: **100/100 passed**.
+- `:app:compileDebugKotlin`: **BUILD SUCCESSFUL**.
+
+No merge, PR, tag, release, APK, or version change was made.
