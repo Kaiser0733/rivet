@@ -35,6 +35,7 @@ import com.kaiser.rivet.chat.ContextPreparation
 import com.kaiser.rivet.chat.ProviderRuntimeSource
 import com.kaiser.rivet.local.LocalPrompt
 import com.kaiser.rivet.provider.AgentRequest
+import com.kaiser.rivet.provider.ModelLimitLearningPolicy
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
@@ -42,6 +43,7 @@ import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.VisionCapability
 import com.kaiser.rivet.agent.SpendGuard
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
+import com.kaiser.rivet.provider.withLimitLearning
 import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.runtime.ToolchainAvailability
 import com.kaiser.rivet.workspace.WorkspacePath
@@ -238,6 +240,13 @@ internal class WorkerRunner(
             services.workerStore.saveMessages(currentWorker.id, durable, interrupted = true)
             publishUpdate { it.copy(activity = "Working on it…", updatedAt = System.currentTimeMillis()) }
 
+            suspend fun persistLearning(learning: com.kaiser.rivet.provider.ModelLimitLearning) {
+                runCatching {
+                    services.providerSource.updateLimits(config.id) { current ->
+                        current.withLimitLearning(config.model, learning)
+                    }
+                }
+            }
             val loop = AgentLoop(
                 requestModel = { messages, _, onText ->
                     val request = context.requestFor(messages)
@@ -290,6 +299,10 @@ internal class WorkerRunner(
                             response.toolCalls.sumOf { call -> call.arguments.length.toLong() },
                     )
                     services.recordSpend(config, responseUsage, response.usage == null)
+                    response.usage?.inputTokens?.let { observed ->
+                        ModelLimitLearningPolicy.observeUsage(config, config.model, observed)
+                            ?.let { persistLearning(it) }
+                    }
                     response
                 },
                 prepareTool = { call ->
@@ -435,6 +448,18 @@ internal class WorkerRunner(
                 },
                 afterMutation = { call, result ->
                     services.checkpointGate.afterMutation(currentWorker.id, call, result)
+                },
+                onContextLimitObserved = { error, estimate ->
+                    ModelLimitLearningPolicy.observeContext(
+                        config, config.model, error, estimate,
+                    )?.let { learned ->
+                        context.learnedPromptCap = learned.promptCap
+                        persistLearning(learned.learning)
+                    }
+                },
+                onOutputLimitObserved = { error ->
+                    ModelLimitLearningPolicy.observeOutput(config, config.model, error)
+                        ?.let { persistLearning(it.learning) }
                 },
                 failureState = services.failureState,
                 compactContext = { candidate, force ->

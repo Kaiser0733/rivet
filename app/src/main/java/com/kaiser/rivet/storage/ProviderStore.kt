@@ -80,6 +80,23 @@ class ProviderStore(
         }
     }
 
+    /**
+     * Read-modify-write one provider. Learning runs in the background while the
+     * editor can save; a whole-config [save] would overwrite a manual value that
+     * was typed in between. The transform sees the latest stored value.
+     */
+    suspend fun mutate(id: String, transform: (ProviderConfig) -> ProviderConfig) {
+        migrateLegacyHeaderValues()
+        dataStore.edit { prefs ->
+            val current = decodeOrThrow(prefs[configsKey]).toMutableList()
+            val idx = current.indexOfFirst { it.id == id }
+            if (idx < 0) return@edit
+            val updated = protectHeaders(transform(current[idx]))
+            current[idx] = updated
+            prefs[configsKey] = json.encodeToString(ListSerializer(ProviderConfig.serializer()), current)
+        }
+    }
+
     suspend fun delete(id: String) {
         migrateLegacyHeaderValues()
         dataStore.edit { prefs ->

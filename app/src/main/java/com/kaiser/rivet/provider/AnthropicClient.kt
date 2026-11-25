@@ -407,7 +407,7 @@ internal fun anthropicOutputCeiling(config: ProviderConfig): Int {
             DEFAULT_OUTPUT_TOKENS + config.reasoning.anthropicBudget
         else -> DEFAULT_OUTPUT_TOKENS
     }
-    val outputLimit = config.trustedAnthropicModelMetadata()?.maxOutputTokens
+    val outputLimit = config.resolvedMaxOutputTokens()
     val inputWindowOutputCap = config.trustedInputLimitTokens()?.let { maxOf(1, it / 4) }
     val actualMaximum = listOfNotNull(outputLimit, inputWindowOutputCap).minOrNull()
     return actualMaximum?.let { minOf(legacyCeiling, it) } ?: legacyCeiling

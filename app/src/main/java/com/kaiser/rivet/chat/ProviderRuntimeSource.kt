@@ -74,6 +74,7 @@ internal fun interface ProviderRuntimeSource {
     suspend fun configs(): List<ProviderConfig> =
         (load() as? ProviderRuntimeResult.Ready)?.let { listOf(it.config) }.orEmpty()
     suspend fun updateReasoning(providerId: String, level: ReasoningLevel) {}
+    suspend fun updateLimits(providerId: String, transform: (ProviderConfig) -> ProviderConfig) {}
 }
 
 internal class StoredProviderRuntimeSource(
@@ -122,5 +123,9 @@ internal class StoredProviderRuntimeSource(
         if (current.reasoning != level) {
             providerStore.save(current.copy(reasoning = level))
         }
+    }
+
+    override suspend fun updateLimits(providerId: String, transform: (ProviderConfig) -> ProviderConfig) {
+        providerStore.mutate(providerId, transform)
     }
 }

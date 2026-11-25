@@ -60,6 +60,9 @@ internal class ContextPreparation(
     // stubs. Beyond that the turn stops paying for summaries that are not converging.
     private var summaryCalls = 0
 
+    /** Net prompt cap learned from a provider error during this turn. */
+    @Volatile var learnedPromptCap: Int? = null
+
     fun requestFor(messages: List<AgentMessage>): AgentRequest = request(messages, summary)
 
     fun footprint(messages: List<AgentMessage>): Long =
@@ -101,7 +104,7 @@ internal class ContextPreparation(
             "estimated" -> TokenEstimateSource.Estimated
             else -> TokenEstimateSource.Unknown
         }
-        val budget = ContextBudget.assess(config, attempt.beforeTokens, source)
+        val budget = ContextBudget.assess(config, attempt.beforeTokens, source, learnedPromptCap)
         val baseline = ContextBudget.estimateRequestTokens(requestFor(messages))
         val idleManual = attempt.reason == "manual" && messages.lastOrNull { it.role != AgentRole.Context }
             ?.let { it.role == AgentRole.Assistant && it.toolCalls.isEmpty() } == true

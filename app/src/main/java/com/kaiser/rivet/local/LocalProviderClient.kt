@@ -12,6 +12,7 @@ import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.TestResult
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
 import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
+import com.kaiser.rivet.provider.resolvedMaxOutputTokens
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -60,7 +61,11 @@ class LocalProviderClient(
         val compact = config.resolvedContextWindowTokens() <= 4096
         val system = if (LocalPrompt.isWired(request.system)) request.system
         else request.system + LocalToolProtocol.systemSuffix(tools, compact = compact)
-        val maxTokens = config.resolvedManualMaxOutputTokens() ?: 512
+        val maxTokens = (config.resolvedMaxOutputTokens() ?: 512)
+            .coerceAtMost((config.resolvedContextWindowTokens() / 4).coerceAtLeast(256))
+        // Load the model at the window the planner is using, but never above
+        // the GGUF/device ceiling. A manual lower value is allowed.
+        manager.requestContext(config.resolvedContextWindowTokens())
 
         return withContext(Dispatchers.IO) {
             val owner = Any()

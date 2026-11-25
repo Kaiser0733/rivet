@@ -109,7 +109,13 @@ object SubagentPool {
         if (entry.catalogEndpoint == null) return config.takeIf { it.model == entry.model }
         if (config.type == ProviderType.Local || config.baseUrl != entry.catalogEndpoint) return null
         val selected = if (config.model == entry.model) config else config.withModelId(entry.model)
-        return selected.copy(modelContextLimit = entry.modelContextLimit ?: selected.modelContextLimit)
+        // A PoolEntry is a snapshot taken when the model was ticked. The live
+        // config may have since learned a smaller cap or received fresh
+        // provider metadata; do not let the stale snapshot override it.
+        val live = selected.modelContextLimit?.takeIf {
+            it.model == entry.model && it.baseUrl == entry.catalogEndpoint
+        }
+        return selected.copy(modelContextLimit = live ?: entry.modelContextLimit ?: selected.modelContextLimit)
     }
 
     /**

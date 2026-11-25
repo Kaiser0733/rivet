@@ -75,7 +75,7 @@ internal class OpenAiCompatibleClient(
         val body = buildJsonObject {
             put("model", request.model)
             put("stream", true)
-            (config.resolvedManualMaxOutputTokens(request.model) ?: config.openRouterOutputCeiling(request.model))?.let {
+            config.requestOutputLimit(request.model)?.let {
                 put("max_completion_tokens", it)
             }
             if (config.type == ProviderType.OpenAi || config.type == ProviderType.OpenRouter) {
@@ -294,6 +294,7 @@ internal fun extractModelContextWindow(model: JsonObject): Int? =
         model["top_provider"]?.obj()?.get("context_length").positiveInt(),
     ).minOrNull()
         ?: model["context_window"].positiveInt()
+        ?: model["contextLength"].positiveInt()
         ?: model["max_context_length"].positiveInt()
         ?: model["max_model_len"].positiveInt()
         ?: model["max_input_tokens"].positiveInt()
@@ -309,6 +310,9 @@ internal fun extractModelOutputLimit(model: JsonObject): Int? =
     model["top_provider"]?.obj()?.get("max_completion_tokens").positiveInt()
         ?: model["max_completion_tokens"].positiveInt()
         ?: model["max_output_tokens"].positiveInt()
+        ?: model["maxOutputTokens"].positiveInt()
+        ?: model["maxCompletionTokens"].positiveInt()
+        ?: model["outputTokenLimit"].positiveInt()
         ?: model["output_token_limit"].positiveInt()
         ?: model["max_tokens"].positiveInt()
         ?: model["limits"]?.obj()?.let { limits ->

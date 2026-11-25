@@ -12,7 +12,6 @@ import com.kaiser.rivet.provider.revokeChatGptRefreshToken
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.ProviderType
-import com.kaiser.rivet.provider.detectedContextWindowForModel
 import com.kaiser.rivet.provider.manualContextWindowForModel
 import com.kaiser.rivet.provider.parseHeaders
 import com.kaiser.rivet.provider.parseTokenCount
@@ -22,7 +21,12 @@ import com.kaiser.rivet.provider.resolveSignInClientId
 import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
 import com.kaiser.rivet.provider.runSignIn
 import com.kaiser.rivet.provider.selectListedModel
+import com.kaiser.rivet.provider.LimitSource
+import com.kaiser.rivet.provider.ModelIdNormalizer
 import com.kaiser.rivet.provider.ModelInfo
+import com.kaiser.rivet.provider.resolveLimits
+import com.kaiser.rivet.provider.withLimitLearning
+import com.kaiser.rivet.provider.withMatchedLimits
 import com.kaiser.rivet.provider.withManualContextWindow
 import com.kaiser.rivet.provider.withManualMaxOutputTokens
 import com.kaiser.rivet.provider.withModelId
@@ -728,6 +732,18 @@ class ProvidersViewModel private constructor(
         }
     }
 
+    fun resetLearnedLimits() {
+        val config = _editorState.value.config
+        val model = config.model
+        if (model.isBlank()) return
+        _editorState.update {
+            it.copy(config = it.config.withLimitLearning(model, null))
+        }
+        viewModelScope.launch {
+            runCatching { store.mutate(config.id) { it.withLimitLearning(model, null) } }
+        }
+    }
+
     fun setMaxOutputTokensInput(value: String) {
         cancelEditorRequests()
         _editorState.update { state ->
@@ -799,7 +815,8 @@ class ProvidersViewModel private constructor(
             _listState.update { list ->
                 if (list.activeId == null) list.copy(activeId = config.id) else list
             }
-            val needsAutoDetect = config.detectedContextWindowForModel() == null && state.models.isEmpty()
+            val needsAutoDetect = config.type != ProviderType.Local &&
+                config.resolveLimits().input.source == LimitSource.Default
             if (_editorState.value.config.id == config.id) {
                 _editorState.value = ProviderEditorState()
             }
@@ -903,8 +920,12 @@ class ProvidersViewModel private constructor(
                                 it.config.model.isBlank() && models.isNotEmpty() ->
                                     it.config.selectListedModel(models.first())
                                 it.config.model.isNotBlank() ->
-                                    models.firstOrNull { m -> m.id == it.config.model }?.let { matched ->
-                                        it.config.selectListedModel(matched)
+                                    ModelIdNormalizer.matchListed(it.config.model, models)?.let { matched ->
+                                        if (matched.id.equals(it.config.model, ignoreCase = true)) {
+                                            it.config.selectListedModel(matched)
+                                        } else {
+                                            it.config.withMatchedLimits(it.config.model, matched)
+                                        }
                                     } ?: it.config
                                 else -> it.config
                             }
@@ -971,10 +992,12 @@ class ProvidersViewModel private constructor(
             val credential = resolveEditorCredential(saved, "")
             if (saved.type != ProviderType.ChatGptPlan && credential.isEmpty()) return
             val models = providerClient(saved, credential).listModels()
-            val matched = models.firstOrNull { it.id == targetModel } ?: return
+            val matched = ModelIdNormalizer.matchListed(targetModel, models) ?: return
             val latest = store.configSnapshot().firstOrNull { it.id == providerId && it.model == targetModel }
                 ?: return
-            val updated = latest.selectListedModel(matched)
+            val updated = if (matched.id.equals(targetModel, ignoreCase = true)) {
+                latest.selectListedModel(matched)
+            } else latest.withMatchedLimits(targetModel, matched)
             if (updated != latest) {
                 store.save(updated)
             }

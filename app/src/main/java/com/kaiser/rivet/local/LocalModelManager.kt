@@ -18,12 +18,34 @@ import kotlinx.serialization.json.Json
 
 class LocalFailure(message: String) : Exception(message)
 
+/**
+ * Refresh the detected local limit without turning a previous user edit into
+ * the new default. The old code wrote the device budget into manual and then
+ * regenerated it on every activation, so a real manual value could not survive.
+ */
+internal fun mergeLocalProviderConfig(base: ProviderConfig, existing: ProviderConfig?): ProviderConfig {
+    if (existing == null) return base
+    return base.copy(
+        name = existing.name.ifBlank { base.name },
+        reasoning = existing.reasoning,
+        headers = existing.headers,
+        manualContextWindowTokens = existing.manualContextWindowTokens,
+        manualMaxOutputTokens = existing.manualMaxOutputTokens,
+        modelTokenSettings = existing.modelTokenSettings,
+        modelLimitLearning = existing.modelLimitLearning,
+        localContextCeilingTokens = base.localContextCeilingTokens,
+    )
+}
+
 @Serializable
 data class InstalledLocalModel(
     val entry: LocalModelEntry,
     val byo: Boolean = false,
     val checksumVerified: Boolean = false,
     val installedAt: Long = System.currentTimeMillis(),
+    /** Training context declared by the GGUF, independent of the device budget. */
+    val trainingContextTokens: Int? = null,
+    val trainingContextSource: String? = null,
 )
 
 @Serializable
@@ -51,6 +73,7 @@ class LocalModelManager(val app: Application) {
     val modelFootprintBytes: StateFlow<Long> = _modelFootprintBytes.asStateFlow()
     @Volatile private var active: LoadedLocal? = null
     @Volatile private var generatingOwner: Any? = null
+    @Volatile private var requestedContextTokens: Int? = null
 
     internal interface NativeRunner {
         fun isAvailable(): Boolean = LlamaBridge.isAvailable()
@@ -96,31 +119,61 @@ class LocalModelManager(val app: Application) {
 
     fun providerId(entry: LocalModelEntry): String = "local-${hash(entry.id).take(12)}"
 
-    fun providerConfig(entry: LocalModelEntry): ProviderConfig = ProviderConfig(
-        id = providerId(entry),
-        type = ProviderType.Local,
-        name = "Local · ${entry.name}",
-        baseUrl = ProviderType.Local.defaultBaseUrl,
-        model = entry.id,
-        manualContextWindowTokens = entry.contextMax,
-        manualMaxOutputTokens = (entry.contextMax / 4).coerceIn(256, 1024),
-    )
+    fun effectiveContextTokens(entry: LocalModelEntry): Int =
+        LocalLimitPolicy.effectiveContext(entry.contextMax, installedFor(entry.id)?.trainingContextTokens)
+
+    /** Called by the provider client before a turn; a manual lower value is honored. */
+    fun requestContext(tokens: Int) {
+        requestedContextTokens = tokens.takeIf { it > 0 }
+    }
+
+    fun providerConfig(entry: LocalModelEntry): ProviderConfig {
+        val effective = effectiveContextTokens(entry)
+        return ProviderConfig(
+            id = providerId(entry),
+            type = ProviderType.Local,
+            name = "Local · ${entry.name}",
+            baseUrl = ProviderType.Local.defaultBaseUrl,
+            model = entry.id,
+            // The old code wrote the device budget into manual, which made a
+            // phone guess look like a user decision and let syncProviders
+            // overwrite real edits. The effective context is detected/local;
+            // a real manual value stays in manual and is preserved below.
+            modelContextLimit = com.kaiser.rivet.provider.ModelContextLimit(
+                model = entry.id,
+                baseUrl = ProviderType.Local.defaultBaseUrl,
+                inputLimitTokens = effective,
+                maxOutputTokens = LocalLimitPolicy.effectiveOutput(effective),
+                inputLimitKind = com.kaiser.rivet.provider.LimitKind.TotalWindow,
+                fetchedAt = System.currentTimeMillis(),
+            ),
+            localContextCeilingTokens = effective,
+        )
+    }
 
     /** Registers one local provider per installed GGUF; removes providers whose file disappeared. */
     suspend fun syncProviders(selectEntry: LocalModelEntry? = null) {
         val current = providers.configSnapshot()
         val models = _installed.value
-        val wanted = models.map { providerConfig(it.entry) }
+        val wanted = models.map { entry -> mergedProviderConfig(entry.entry, current) }
         for (config in wanted) providers.save(config)
         val wantedIds = wanted.map { it.id }.toSet()
         for (old in current.filter { it.type == ProviderType.Local && it.id !in wantedIds }) {
             providers.delete(old.id)
         }
         if (selectEntry != null) {
-            val target = providerConfig(selectEntry)
+            val target = mergedProviderConfig(selectEntry, providers.configSnapshot())
             providers.save(target)
             providers.setActive(target.id)
         }
+    }
+
+    private fun mergedProviderConfig(
+        entry: LocalModelEntry,
+        current: List<ProviderConfig>,
+    ): ProviderConfig {
+        val base = providerConfig(entry)
+        return mergeLocalProviderConfig(base, current.firstOrNull { it.id == base.id })
     }
 
     suspend fun activate(entry: LocalModelEntry) {
@@ -133,7 +186,12 @@ class LocalModelManager(val app: Application) {
             if (!file.isFile || file.length() != entry.size) {
                 throw LocalFailure("The downloaded model file is incomplete.")
             }
-            val model = InstalledLocalModel(entry, byo, checksumVerified)
+            val training = GgufMetadata.read(file)
+            val model = InstalledLocalModel(
+                entry, byo, checksumVerified,
+                trainingContextTokens = training?.tokens,
+                trainingContextSource = training?.source,
+            )
             synchronized(stateLock) {
                 val next = _installed.value.filterNot { it.entry.id == entry.id } + model
                 _installed.value = next
@@ -218,9 +276,30 @@ class LocalModelManager(val app: Application) {
         if (!runner.isAvailable()) {
             throw LocalFailure("Local inference isn't available in this build of Rivet.")
         }
+        // Models installed before this build have no training context yet.
+        // Read it once, outside the provider store, and persist it for the
+        // next activation. This is a header read, not a model load.
+        if (installedFor(entry.id)?.trainingContextTokens == null) {
+            GgufMetadata.read(file)?.let { header ->
+                synchronized(stateLock) {
+                    val next = _installed.value.map {
+                        if (it.entry.id == entry.id) {
+                            it.copy(
+                                trainingContextTokens = header.tokens,
+                                trainingContextSource = header.source,
+                            )
+                        } else it
+                    }
+                    _installed.value = next
+                    persist(next)
+                }
+            }
+        }
         val threads = Runtime.getRuntime().availableProcessors().coerceIn(2, 6)
         val before = ownPssBytes()
-        val loaded = runner.load(file.absolutePath, entry.contextMax, threads)
+        val ceiling = effectiveContextTokens(entry)
+        val effective = minOf(ceiling, requestedContextTokens ?: ceiling)
+        val loaded = runner.load(file.absolutePath, effective, threads)
             ?: throw LocalFailure("Rivet couldn't load this model. The file may be damaged.")
         active = LoadedLocal(entry, loaded)
         _loadedId.value = entry.id

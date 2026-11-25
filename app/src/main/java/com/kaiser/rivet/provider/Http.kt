@@ -106,12 +106,19 @@ internal fun errorBodyCode(body: String?): String? {
 fun httpError(code: Int, body: String?): ProviderError {
     val detail = errorBodyText(body)
     val providerCode = errorBodyCode(body)
+    val evidence = ModelLimitEvidence.parse(code, body, providerCode)
     return when {
         // The body says what the key is missing (an unpaid plan, a disabled API, a region
         // block); the fixed sentence alone sent users to re-check a working key.
         code == 401 -> ProviderError.Unauthorized(detail)
         code == 403 -> ProviderError.Forbidden(detail)
-        code in setOf(400, 413, 422) && isContextOverflow(body.orEmpty()) -> ProviderError.ContextOverflow()
+        code in setOf(400, 413, 422) && evidence?.outputLimitTokens != null ->
+            ProviderError.OutputLimitExceeded(
+                evidence.outputLimitTokens,
+                evidence.attemptedTokens,
+            )
+        code in setOf(400, 413, 422) && isContextOverflow(body.orEmpty()) ->
+            ProviderError.ContextOverflow(evidence?.contextLimitTokens, evidence?.attemptedTokens)
         // Resource exhaustion is the per-minute capacity signal, so it must be read before
         // the billing words: Google says "Quota exceeded … per minute" for a limit that
         // clears on its own, and "check your billing" is the wrong advice for it.
@@ -135,7 +142,10 @@ fun httpError(code: Int, body: String?): ProviderError {
 private class StreamCallbackFailure(cause: Throwable) : Exception(cause)
 
 internal fun providerMessage(message: String, code: String? = null): ProviderError = when {
-    isContextOverflow(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ContextOverflow()
+    isContextOverflow(listOfNotNull(code, message).joinToString(" ")) -> {
+        val evidence = ModelLimitEvidence.parse(null, message, code)
+        ProviderError.ContextOverflow(evidence?.contextLimitTokens, evidence?.attemptedTokens)
+    }
     // Same rule as httpError: a per-minute capacity rejection is read before the billing words,
     // because "quota exceeded … per minute" contains both and clears on its own.
     isResourceExhausted(listOfNotNull(code, message).joinToString(" ")) -> ProviderError.ResourceExhausted()

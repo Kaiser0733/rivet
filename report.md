@@ -1,108 +1,215 @@
-# Rivet tester-fix round 3
+# Model limits: automatic detection and learning
 
-Branch `tester-fix-3` starts at `598a10e09c0d061ce29cc593e995c12c809e5846` on `origin/batch/surface-fix`. The Termux work has the two commits requested in the brief. The reader verdict has an empty commit so it has a place in the sequence.
+Branch `model-limits-detect`, based on `origin/batch/surface-fix` at
+`0729dabcfb01b052c77ec6d5af3e0a82aab8a9f3`. Implementation HEAD before this
+report: `3fcc4c98`. Nothing was merged, tagged, released, or version-bumped.
 
-## 1. Termux output read-back
+The acceptance target was that a user can add a normal provider and model and
+Rivet fills both the context window and the maximum output itself. The resolver
+now does that for the known providers in the bundled table, for providers that
+report model metadata, and for limits learned from a provider error. The safe
+fallback is 32K, not the old 256K guess.
 
-Commits `ba5e161edbe8082d8350b9fc3c389f518bfe5e9f` and `0139829c5a3fdb6a353f156e243bdba3a05133f3`.
+## 1. Resolution order and the default
 
-Files changed · `runtime/TermuxBridge.kt`, `runtime/TermuxFileWait.kt`, `runtime/TermuxCommand.kt`, `agent/AgentToolError.kt`, `TermuxFileWaitTest.kt`, `TermuxBridgeTest.kt`.
+Commits `53c1be28`, `6e8fa6f1`, `3fcc4c98`.
 
-An empty successful broadcast now keeps the existing file poller alive for up to five seconds within the command's remaining timeout. The result uses the exit code published in the files. If the files stay unreadable, the error is `termux_output_missing` with a required action, the saved stdout path, and the last workspace failure reason. The wrapper now records stdout and stderr separately. The timeout result retains its `termux_timeout` label and can include whichever stream the workspace can read.
+Files · `provider/ModelLimits.kt`, `provider/ProviderConfig.kt`,
+`agent/ContextBudget.kt`, `agent/ContextBudgetTest.kt`.
 
-JiTTest · `TermuxFileWaitTest` ran against the original one-read policy extracted into the seam. The late-output and unreadable-file assertions failed. The non-empty broadcast assertion passed on both sides because the original fast path already skipped the file read. The fixed seam passed all 3 tests. `TermuxBridgeTest` ran 9 tests on each side, with the redirect assertion failing on the parent and all 9 passing on the branch. The parent already labeled stdout partial results as timed out. A host Bash run of the branch wrapper passed, with separate stdout and stderr files and exit code 7 published in the status file.
+The resolver applies a local hard ceiling, then a manual value, a learned cap,
+provider metadata, the known-model table, an observed usage floor, and finally
+32,768 tokens. A learned cap is scoped to provider id, endpoint and model and
+is ignored after expiry. Manual output wins for planning; the wire value is
+clamped to a provider or learned maximum so the user is not sent a request the
+provider already rejected. Manual context below a local ceiling is allowed;
+above it is clamped with a visible warning.
 
-## 2. Example.com reader verdict
+The default reserve is proportional: `min(16K, max(2K, window/4))` when the
+window is only assumed. On 32K that gives 24,576 allowed input tokens,
+21,504 compact-at, and 18,432 compact-to. A learned prompt cap is applied after
+the reserve so it is not subtracted twice.
 
-Commit `2c3cf0ba7f628a5c3a54b07bcfea0cad168949a7`. Files changed · none.
+## 2. Provider metadata and the bundled table
 
-The supplied research found no H1 in the rendered example.com DOM. The page's script inserts the aria-hidden book SVG and its CSS adds the large top padding. The research ran the production extractor and found that an actual H1 produces a heading block. It also confirmed the reader has a title fallback for pages without an H1. This round made no reader change and ran no new reader test. The Reader-view device check is still open.
+Commits `53c1be28`, `ffc91952`.
 
-## 3. Empty-chat context baseline
+Files · `provider/OpenAiCompatibleClient.kt`, `provider/AnthropicClient.kt`,
+`provider/GeminiClient.kt`, `provider/ModelIdNormalizer.kt`,
+`provider/KnownModelLimits.kt`, `app/src/main/resources/model-limits.tsv`.
 
-Commit `91328361c3441ae837b5307db71a065e4c809984`. File changed · `CoordinatorBudgetTest.kt`.
+Anthropic's `max_input_tokens` and `max_tokens`, Gemini's
+`inputTokenLimit`/`outputTokenLimit`, and the OpenAI-compatible spellings
+`context_length`, `context_window`, `contextLength`, `max_context_length`,
+`max_model_len`, `max_completion_tokens`, `maxOutputTokens`,
+`maxCompletionTokens`, and `outputTokenLimit` are parsed. OpenRouter's
+`top_provider` values still win within a listing because they describe the
+specific route. Generic gateways only get a completion cap when the user set
+it or an error taught it; documented first-party clients also send provider
+metadata. The OpenRouter request ceiling is unchanged for unknown routes.
 
-The measured empty cloud-project fixture uses the production system prompt and tool catalogs, a 16,000-token window, and the 10-byte model identifier `test-model`. Conversation history contains zero messages and zero images. The system prompt and tool declarations account for the bulk of the estimate. The rest is explicit estimator framing.
+The table is a 5,188-row models.dev snapshot from 2026-11-25. It is loaded from
+resources, not fetched at runtime. `ModelIdNormalizer` strips GGUF quantisation
+for local ids, one owner prefix, a routing suffix after `:`, Fireworks'
+`accounts/fireworks/models/` path, and date stamps. It deliberately leaves
+`-mini`, `-flash`, `-pro`, and `-32k` alone. Ambiguous normalised stems return
+no table answer rather than guessing. `scripts/generate_model_limits.py`
+regenerates the table; models.dev is MIT-licensed and the notice and licence are
+in `THIRD_PARTY_NOTICES.md` and `licenses/models.dev-MIT.txt`.
 
-| Request component | UTF-8 bytes |
-| --- | ---: |
-| System prompt | 2,238 |
-| 50 tool names | 584 |
-| 50 tool descriptions | 4,589 |
-| 50 tool parameter schemas | 9,197 |
-| Tool framing allowance at 96 bytes each | 4,800 |
-| Request framing allowance | 128 |
-| Model identifier | 10 |
-| Empty history serialization `[]` | 2 |
-| **Total** | **21,548** |
+## 3. Error learning
 
-The tool text comprises 17 browser declarations (4,558 B), 23 workspace declarations (7,047 B), 7 phone declarations (1,838 B), 2 subagent declarations (696 B), and 1 archive declaration (231 B). At the meter's three bytes per estimated token, the total is **7,183 estimated tokens**, or **45%** of this fixture's window. The 4,928 framing bytes are estimator allowances. They do not represent a provider-reported token count. The idle meter is a prospective request estimate, and the app has sent no request for this empty chat.
+Commit `6e8fa6f1`.
 
-Both `CoordinatorBudgetTest` cases passed in an isolated Kotlin run using the extracted production catalogs, system prompt and request estimator with empty-history fixtures. The new assertion derives the total from the request parts and checks that the meter matches. There is no red side for this audit because its accounting check passed with the existing estimator. The supplied tester material did not include the exact request or provider usage, so the device's **7,028** was not reproduced.
+Files · `provider/ModelLimitLearningPolicy.kt`, `provider/Http.kt`,
+`provider/ProviderError.kt`, `agent/AgentLoop.kt`,
+`chat/ChatViewModel.kt`, `chat/ProviderRuntimeSource.kt`,
+`subagent/WorkerRunner.kt`, `storage/ProviderStore.kt`.
 
-## 4. Phone screenshot flow
+Numeric context and output limits are parsed from HTTP 400/413/422 bodies and
+structured codes. Byte limits, rate limits, and unrelated 400s are rejected.
+A context observation must be between 512 and 10M, must be below the current
+estimate, and must be plausible against the attempted token count. The first
+observation is provisional for 24 hours; an identical second error confirms it
+for 90 days. Output learning is downward-only. A successful request that
+reports more input tokens than a learned cap clears that cap and records the
+observed floor. Nothing overwrites a manual value.
 
-Commit `4b53763336774efe0d6337ca22de1a62ddd36dc5`.
+The same-turn path stores a prompt cap in `ContextPreparation` before the loop
+compacts again. Output learning is persisted after the error and used on the
+next turn; it does not retry generation in the same turn. The editor exposes
+"Reset learned limit" whenever a learning exists and persists the reset
+immediately.
 
-Files changed · `ui/phone/PhoneCaptureService.kt`, `ui/chat/PresentedFiles.kt`, `ui/chat/ChatScreen.kt`, `PresentedFilesTest.kt`, `PhoneCaptureNotificationTest.kt`.
+## 4. Local models
 
-Tapping the collapsed notification invokes the same pending intent as the expanded capture action. The notification tells the user to tap it. Successful captures render in their turn at the existing inline image caps, even with a text-only model. A tap opens the same split preview as other images.
+Commit `fedd6a2a`.
 
-JiTTest · the old transcript projection failed the inline delivery assertion (1 failure of 5). The branch projection passed all 5 in the isolated JVM run. The notification source assertion found no content intent on the parent and found the shared capture intent on the branch. The Android 13 Robolectric notification test is included and did not run locally.
+Files · `local/GgufMetadata.kt`, `local/LocalModelManager.kt`,
+`local/LocalProviderClient.kt`, `local/GgufMetadataTest.kt`,
+`local/LocalLimitMergeTest.kt`.
 
-## 5. Read tool contract
+GGUF v2/v3 metadata is read up to 32 MB. The reader takes the architecture's
+`*.context_length`, falling back to the rope scaling original context, and
+returns null on malformed or truncated input. The effective local context is
+the smaller of the training context and the device budget. Old installs are
+parsed lazily when first needed. New installs get a detected
+`ModelContextLimit` instead of a manual value, and `syncProviders` merges
+manual values, reasoning, headers and learning forward rather than overwriting
+them. A manual lower context is passed to the native load as the requested
+size; it cannot raise the GGUF/device ceiling.
 
-Commit `e38f302648bd0b7e58d61a4c7bec7cb830ed291c`.
+## 5. Editor and meter
 
-Files changed · `agent/ReadFileArguments.kt`, `agent/AgentToolExecutor.kt`, `ReadFileArgumentsTest.kt`, `AgentToolExecutorTest.kt`.
+Commit `f1cb6a4b`.
 
-The parent Long decoder rejected JSON Schema's integral-number spelling `0.0` for an optional offset on a valid path such as `index.html`. The Read entry point now accepts exact integral JSON numbers, including exponent notation, and rejects fractional, negative, quoted or overflowing offsets, unexpected keys, and malformed paths. The tester's raw argument payload was unavailable, so the specific spelling the device sent remains unconfirmed.
+Files · `ui/provider/ProviderEditor.kt`, `ui/provider/ProviderEditorState.kt`,
+`ui/provider/ProvidersViewModel.kt`, `ui/chat/ContextMeter.kt`,
+`subagent/SubagentPool.kt`.
 
-JiTTest · the isolated parser test executed the parent's decoder and failed both cases. The decoder rejected `0.0` and accepted a quoted numeric offset. Both cases passed with the new parser. The executor regression covers the same valid and invalid arguments through `prepare().execute()` and did not run locally.
+The editor shows the resolved source (manual, learned, provider, known model,
+lower bound, default, local) under both fields. Detected output is shown as
+detected but is not described as a sent request cap. Endpoint changes clear
+detected and learned data. Saved providers whose model has no known limit are
+auto-detected when the model list is fetched; a normalised match keeps the
+user's typed model id. The meter says "assumed context window" when the number
+came from the fallback rather than a measurement. Subagent pool entries keep
+the live config's limit instead of overriding it with the snapshot taken when
+the model was ticked.
 
-## 6. Stop the turn from a pending approval
+## Tests actually run
 
-Commit `c45e6f8f9d312760d55c6af0d7b249eb69af8dbf`.
+- `:app:compileDebugKotlin` — **BUILD SUCCESSFUL** on the final implementation
+  (offline Gradle 8.13, JDK 17).
+- Manual JVM JUnit run of the touched suites — **100 tests, 0 failures**. The
+  classes were `ModelLimitsTest`, `ModelLimitEvidenceTest`,
+  `KnownModelLimitsTest`, `ProviderConfigLimitsTest`,
+  `ModelLimitLearningPolicyTest`, `GgufMetadataTest`, `LocalLimitMergeTest`,
+  `ModelLimitLoopTest`, `ContextBudgetTest`, `ProviderConfigTest`,
+  `HttpErrorTest`, `ProviderErrorClassificationTest`, and
+  `SubagentPoolTest`.
+- Provider wire-shape suites — **77 tests, 0 failures**: `AnthropicClientTest`,
+  `GeminiClientTest`, and `OpenAiCompatibleClientTest`. The runner needs
+  `-Djava.net.preferIPv4Stack=true` for MockWebServer in this sandbox.
+- `AgentLoopTest` — **60 of 66 passed** in the same harness. The 6 failures all
+  fail at `AgentToolExecutor` static initialisation with
+  `NoClassDefFoundError: android/content/pm/PackageManager$NameNotFoundException`;
+  the manual JVM classpath has no Android runtime. The new `ModelLimitLoopTest`
+  covers the overflow/retry and output-observer paths and passed 3/3.
+- Python generator tests — **100 tests, 0 failures** via
+  `python3 -m unittest discover -s scripts -p 'test_*.py'`.
+- `:app:processDebugJavaRes` — **BUILD SUCCESSFUL**; the 211 KB
+  `model-limits.tsv` was present in the processed Java resources.
 
-Files changed · `chat/ChatViewModel.kt`, `ui/RivetApp.kt`, `ui/chat/ChatScreen.kt`, `ApprovalDialogStopTest.kt`.
+I could not run the full Gradle unit suite offline: `:app:compileDebugUnitTestKotlin`
+failed to resolve `androidx.compose.ui:ui-test-junit4`, Robolectric,
+MockWebServer, `okhttp-tls`, and `kotlinx-coroutines-test`. That is why the
+suites above were compiled and run directly with the cached production classes.
+No GitHub Actions run has been started from this machine.
 
-The modal now exposes **Stop turn** beside the existing approval actions. It checks the active approval token and calls the existing turn cancellation path. That path cancels pending gate requests and the send job. The loop persists cancelled results for outstanding calls.
-
-JiTTest · the parent source check found no dialog stop control. The branch check found the control and its token callback. The existing approval-gate suite passed all 6 isolated JVM tests. The Compose test exercises the visible Stop turn button and a cancelled gate request. It did not run locally.
-
-## 7. Goal watcher
-
-Commit `8a011ed3321daefea53e1b81e91a08560514a3c4`.
-
-Files changed · `chat/ChatViewModel.kt`, `chat/ProjectGoalWatcher.kt`, `ProjectGoalWatcherTest.kt`.
-
-The watcher remembers each observation with its workspace identity. A first observation or a still-absent goal is quiet. A file appearing, changing or disappearing in the same workspace is reported. Rivet's own writes update the observation, and a failed refresh preserves the comparison baseline.
-
-JiTTest · the parent comparison failed the new-project and file-appeared assertions (2 failures of 3). The branch watcher passed all 3.
-
-## 8. Batch project memory proposals
-
-Commit `cfdee3961d2a5cc51ccb38e50c12056488d65681`.
-
-Files changed · `agent/AgentLoop.kt`, `agent/AgentProtocol.kt`, `agent/AgentToolExecutor.kt`, `agent/GoalMemory.kt`, `agent/ProjectStateFiles.kt`, `chat/ChatViewModel.kt`, `ui/chat/ChatScreen.kt`, `MemoryProposalBatchTest.kt`.
-
-The coordinator queues a turn's validated proposals across model responses and labels them as proposed. When the turn is ready to finish, it presents all distinct facts in one scrollable card if approval is required. Approval writes the batch through one checkpoint and one version-checked workspace write. Denial applies none.
-
-JiTTest · a two-response fixture produced two cards on the parent. Both the approve and deny cases failed there. Both passed with the branch loop in the isolated JVM run, including the assertions for one write containing both facts and zero writes on denial. A separate run of the production memory formatter passed the combined-write and hard-cap refusal checks.
-
-## 9. Auto-titles after a failure
-
-Commit `21dae2070342f2b5a6af2ecddd6cb2b853f90cf1`.
-
-Files changed · `chat/ChatViewModel.kt`, `chat/ConversationTitle.kt`, `ConversationTitleTest.kt`.
-
-Live and restored turns skip title generation when the answer reports failure or the last tool result group consists of failures. For command results that includes a nonzero exit code. The title sanitizer also rejects a returned failure report. A subsequent successful turn can still supply a title, and titles about investigating a failure are accepted.
-
-JiTTest · the old candidate logic and sanitizer failed the two failure regressions. All 5 tests passed with the branch title policy, including the recovered-command case.
+The new tests exercise APIs that do not exist on the parent, so the red side is
+a parent compile failure rather than a completed failing test. I did not claim
+a parent test run I could not perform.
 
 ## Honest gaps
 
-- The available frontend-design copy was used for items 4 and 6. It was supplied at `~/workspace/rivet-major-update/frontend-design-skill.md` rather than registered in the tool's skill catalog. Both changes use Rivet's existing components and sizing.
-- The Gradle wrapper's Java download failed during TLS. A portable Gradle 8.13 and Android 35 SDK got as far as project configuration after working around the daemon connection. The direct, trust-store, local-mirror and final Gradle test attempts failed resolving Android Gradle Plugin 8.9.2. The build never reached Android compilation or JUnit, including the notification, Compose approval, executor integration and full title lifecycle tests.
-- The isolated JUnit runs compile the relevant Kotlin and use narrow fixtures for Android or unrelated dependencies. The parent runs preserve the original logic behind the same test seam. Early isolated compiler or runner setup failures were corrected before collecting the results above.
-- No Android device was connected. Real Termux SAF visibility, the collapsed notification, inline screenshot appearance and split preview, the modal stop flow, the example.com Reader toggle, and the on-device meter baseline still need device verification.
+- No real provider was called. Limit parsing, request shapes, and learning are
+  covered by local tests, not live Anthropic/Gemini/DeepSeek/Mistral/Groq/
+  Together/OpenRouter traffic.
+- No Android device or Robolectric run. The editor layout, the clickable reset,
+  and the GGUF read on a real downloaded model remain device/CI verification.
+- `ContextPreparationTest` is Robolectric-based and did not compile in the
+  manual harness; it is left for CI.
+- Provider input-limit kind is stored (`InputOnly` for Anthropic/Gemini) but
+  planning still treats it as a total window. That is deliberately
+  conservative: it may reserve output space twice rather than send a request
+  that overflows.
+- Output-limit learning is next-turn only; there is no same-turn generation
+  retry after `OutputLimitExceeded`.
+- Output limits carried inside a streamed provider error are not learned; only
+  HTTP/body evidence is.
+- The table is a point-in-time snapshot. A model newer than 2026-11-25 falls
+  back to provider metadata, usage observations, or 32K.
+- The GGUF parser is tested with synthetic v2/v3 headers. A real model whose
+  metadata sits beyond the 32 MB header cap will be treated as having no
+  training ceiling and fall back to the device budget.
+
+## Gate-fix: cheap pruning across a provider switch (Hermes round, 2026-11-25)
+
+CI run `45599253948` on `model-limits-detect` @`e6b0cf3c` failed only
+`ChatViewModelTest > cheapPruningKeepsFullHistoryAndSendsSmallerContext` with a
+`TimeoutCancellationException`. The branch reproduces it locally: the named
+test fails before the fix and passes after it. Base `0729dabc` passes the same
+test in the same harness.
+
+**Root cause.** The test creates its second provider with
+`config.copy(id = "provider-b", model = "model-b")` and no
+`modelContextLimit`. That fixture relied on the old 256K fallback window. The
+first turn deliberately prunes the 22 large tool results but keeps the full
+event history; the second model is unknown, so the intended new behavior
+resolves it to 32K. The preserved transcript is still larger than 32K, so
+`ContextPreparation` correctly raises `ContextCapacityTooSmall`, the turn ends
+with the “This chat is too long…” error, and the test never sees
+`"After switch"`. There is no hang in the resolver, table load, learning path,
+or provider request. The test’s second fixture encoded the old default, not a
+pruning failure.
+
+**Fix.** Commit `e12eb99c` pins the switched provider to an explicit 40K
+`ModelContextLimit`, matching the first provider’s 40K window. This keeps the
+test about pruning across provider switches rather than about the unknown-model
+fallback. No timeout, assertion, or production behavior was changed.
+
+**Tests run.**
+
+- Named test, branch before fix: **fail** (`TimeoutCancellationException`).
+- Named test, branch with `e12eb99c`: **pass**.
+- Full `ChatViewModelTest`: **55/69 passed**. The 14 failures are the same
+  undo/checkpoint/approval timeouts that occur on base `0729dabc` in this
+  manual Robolectric harness; the named test is not among them. CI remains the
+  authoritative full-class run.
+- Model-limit suites: **100/100 passed** (the same list as the main report).
+- Provider wire-shape suites: **77/77 passed**.
+- Python generator suite: **100/100 passed**.
+- `:app:compileDebugKotlin`: **BUILD SUCCESSFUL**.
+
+No merge, PR, tag, release, APK, or version change was made.
