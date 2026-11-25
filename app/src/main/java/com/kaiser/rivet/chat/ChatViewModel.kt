@@ -2128,7 +2128,7 @@ class ChatViewModel private constructor(
                 val boundWorkspaceId = workspaceId ?: selectedWorkspace.tree.toString()
                 return AgentToolExecutor(
                     files,
-                    runCommand = runtime::runCommand,
+                    runCommand = if (coordinator) runtime::runCommand else null,
                     requireSafCurrent = runtime::requireSafCurrent,
                     gitStatus = runtime::gitStatus,
                     gitDiff = runtime::gitDiff,
@@ -2145,7 +2145,7 @@ class ChatViewModel private constructor(
                     readProcessOutput = { id, identity, offset, tail, grep, maxLines ->
                         identity?.let { runtime.outputFor(id, it) }
                     },
-                    spawnProcess = runtime::spawnProcess,
+                    spawnProcess = if (coordinator) runtime::spawnProcess else null,
                     worker = !coordinator,
                     prepareTermuxCommand = if (coordinator) prepareTermux else null,
                     preparePhoneShot = if (coordinator) prepareCapture else null,

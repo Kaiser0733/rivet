@@ -433,7 +433,7 @@ class SubagentEngineTest {
     }
 
     @Test
-    fun runCommandWrapperRecordsObservedCommandInEnvelope() = runBlocking {
+    fun workerCannotRunTheShellThroughACustomTool() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()
         var turn = 0
@@ -461,6 +461,7 @@ class SubagentEngineTest {
                 }
             }
         }
+        var executed = false
         val runCommandDef = AgentToolDefinition(
             name = "run_command",
             description = "Run a shell command",
@@ -480,6 +481,7 @@ class SubagentEngineTest {
                         resultContentLimitBytes = 4096,
                         effect = AgentToolEffect.ForegroundCommand,
                     ) {
+                        executed = true
                         AgentToolResult(
                             callId = call.id,
                             name = call.name,
@@ -502,10 +504,10 @@ class SubagentEngineTest {
         assertEquals(RunPhase.Done, worker.state)
         val envelope = ResultEnvelope.fromJson(worker.envelope!!).jsonObject
         val commands = envelope["verified"]!!.jsonObject["commands"]!!.jsonArray
-        assertEquals(1, commands.size)
-        val cmd = commands[0].jsonObject
-        assertEquals("pytest -q", cmd["command"]?.jsonPrimitive?.content)
-        assertEquals(0, cmd["exit_code"]?.jsonPrimitive?.int)
-        assertEquals("synced", cmd["sync"]?.jsonPrimitive?.content)
+        assertFalse(executed)
+        assertTrue(commands.isEmpty())
+        val result = store.loadTranscript(workerId).messages.flatMap { it.toolResults }.single()
+        assertTrue(result.error)
+        assertTrue(result.content.contains("worker_shell_scope_unavailable"))
     }
 }

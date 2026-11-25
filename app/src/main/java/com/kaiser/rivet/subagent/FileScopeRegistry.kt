@@ -82,13 +82,17 @@ class FileScopeRegistry {
     }
 
     /** Move destinations are checked in addition to the source path. */
-    fun checkWrite(writer: String, call: AgentToolCall): String? =
-        checkWrite(writer, mutationPaths(call))
+    fun checkWrite(writer: String, call: AgentToolCall): String? {
+        if (writer != COORDINATOR && call.name in SHELL_TOOLS) return WORKER_SHELL_SCOPE_UNAVAILABLE
+        return checkWrite(writer, mutationPaths(call))
+    }
 
     companion object {
         const val COORDINATOR = "coordinator"
         const val OUTSIDE_FILE_SCOPE = "outside_file_scope"
         const val READ_ONLY_WORKER = WorkerWritePolicy.READ_ONLY
+        const val WORKER_SHELL_SCOPE_UNAVAILABLE = "worker_shell_scope_unavailable"
+        internal val SHELL_TOOLS = setOf("run_command", "spawn_process")
         const val OWNED_BY_WORKER_PREFIX = "owned_by_worker:"
 
         fun overlaps(scopeA: Collection<WorkspacePath>, scopeB: Collection<WorkspacePath>): Boolean =

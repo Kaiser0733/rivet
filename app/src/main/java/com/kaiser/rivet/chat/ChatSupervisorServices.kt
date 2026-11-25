@@ -108,7 +108,6 @@ internal object ChatSupervisorServices {
         },
         canStartPreview = { managedProcesses.canStartPreview() },
         failureState = { runtime.agentFailureState() },
-        isProjectLockBusy = { runtime.isOperationsLocked() },
         approvedSkillScripts = approvedSkillScripts,
         recordSkillScriptApproval = { skillScriptApprovals.approve(it) },
         recordParentUsage = { wTurnId, wConfig, wUsage, wReq ->

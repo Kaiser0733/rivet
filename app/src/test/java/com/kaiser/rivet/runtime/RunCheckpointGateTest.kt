@@ -268,21 +268,19 @@ class RunCheckpointGateTest {
         files["src/auth/login.kt"] = "fun login() = true\nfun logout() = Unit\n".toByteArray()
         gate.afterMutation("worker-1", ownedByWorkerCall, ok("2"))
 
-        // Worker runs a shell command that modifies an out-of-scope file.
         val shellCall = AgentToolCall("3", "run_command", """{"command":"sed -i ..."}""")
-        assertNull(gate.beforeMutation("worker-1", shellCall))
-        files["src/ui/home.kt"] = "fun home() = 2\n".toByteArray()
-        gate.afterMutation("worker-1", shellCall, ok("3"))
+        assertEquals("worker_shell_scope_unavailable", gate.beforeMutation("worker-1", shellCall))
+        assertNull(gate.beforeMutation(RunCheckpointGate.COORDINATOR, shellCall))
+        gate.afterMutation(RunCheckpointGate.COORDINATOR, shellCall, ok("3"))
 
         val attribution = gate.writerAttribution("worker-1")
         assertEquals(
             listOf(
                 ChangedFile("src/auth/login.kt", FileChangeKind.Modified, additions = 2, deletions = 1),
-                ChangedFile("src/ui/home.kt", FileChangeKind.Modified, additions = 0, deletions = 0),
             ),
             attribution.files,
         )
-        assertEquals(listOf("src/ui/home.kt"), attribution.outOfScopeChanges)
+        assertTrue(attribution.outOfScopeChanges.isEmpty())
         assertTrue(attribution.diff != null)
         assertTrue(attribution.diff!!.text.contains("-fun login() = false"))
         assertTrue(attribution.diff!!.text.contains("+fun login() = true"))
