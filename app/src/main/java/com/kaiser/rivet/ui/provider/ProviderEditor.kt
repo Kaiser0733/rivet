@@ -18,6 +18,7 @@ import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.statusBarsPadding
 import androidx.compose.foundation.layout.widthIn
+import androidx.compose.foundation.layout.wrapContentWidth
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
@@ -109,23 +110,24 @@ fun ProviderEditor(
         return
     }
 
-    Column(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()) {
-        Row(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
-            .padding(start = 4.dp, end = 16.dp, top = 8.dp, bottom = 8.dp),
+    Column(
+        Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding().imePadding()
+            .wrapContentWidth(Alignment.CenterHorizontally).widthIn(max = MAX_WIDTH).fillMaxWidth()
+            .padding(horizontal = RivetLayout.pageGutter),
+    ) {
+        Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
             verticalAlignment = Alignment.CenterVertically) {
-            IconButton(onClick = viewModel::closeEditor) {
+            IconButton(onClick = viewModel::closeEditor, modifier = Modifier.size(48.dp)) {
                 Icon(painterResource(R.drawable.ic_back), stringResource(R.string.close),
                     tint = MaterialTheme.colorScheme.onBackground)
             }
             Text(if (state.isNew) "Add provider" else "Change model",
-                style = MaterialTheme.typography.titleLarge)
+                modifier = Modifier.weight(1f), style = MaterialTheme.typography.titleLarge,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
         }
         HorizontalDivider(color = MaterialTheme.colorScheme.outlineVariant)
-        Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().weight(1f)
-            .align(Alignment.CenterHorizontally).padding(bottom = 12.dp)
-            .verticalScroll(rememberScrollState())
-            .padding(horizontal = RivetLayout.pageGutter)
-            .padding(top = 16.dp, bottom = 32.dp)) {
+        Column(Modifier.fillMaxWidth().weight(1f).padding(bottom = 12.dp)
+            .verticalScroll(rememberScrollState()).padding(vertical = 16.dp)) {
             ProviderEditorField(
                 value = config.name,
                 onValueChange = { v -> viewModel.updateConfig { it.copy(name = v) } },
@@ -421,10 +423,9 @@ fun ProviderEditor(
             }
             Spacer(Modifier.size(16.dp))
         }
-        Column(Modifier.widthIn(max = MAX_WIDTH).fillMaxWidth().align(Alignment.CenterHorizontally)
-            .background(MaterialTheme.colorScheme.surfaceContainerLow)) {
+        Column(Modifier.fillMaxWidth().background(MaterialTheme.colorScheme.surfaceContainerLow)) {
             HorizontalDivider(color = MaterialTheme.colorScheme.onBackground.copy(alpha = 0.3f))
-            Row(Modifier.fillMaxWidth().padding(horizontal = RivetLayout.pageGutter, vertical = 8.dp),
+            Row(Modifier.fillMaxWidth().padding(vertical = 8.dp),
                 horizontalArrangement = Arrangement.spacedBy(8.dp),
                 verticalAlignment = Alignment.CenterVertically) {
                 RivetOutlinedButton(onClick = { viewModel.save(onSaved = onDone) },
@@ -438,7 +439,6 @@ fun ProviderEditor(
             }
         }
     }
-
 }
 
 @Composable
