@@ -248,12 +248,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                                         style = MaterialTheme.typography.bodySmall)
                                     if (state.errorRetry) {
                                         TextButton(onClick = {
-                                            val retryUrl = state.url.ifBlank { session.currentUrl() }
-                                            if (retryUrl.isNotBlank()) scope.launch {
-                                                try { session.openVisual(retryUrl, userInitiated = true) }
-                                                catch (failure: BrowserFailure) { session.showError(failure) }
-                                            }
-                                        }) { Text("Try again") }
+                                            scope.launch { session.reloadFromError() }
+                                        }) { Text("Reload") }
                                     }
                                     TextButton(onClick = onCloseSession) { Text("Close browser") }
                                 }
@@ -290,7 +286,8 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                         Text("Enter a web address to get started.",
                             color = MaterialTheme.colorScheme.onSurfaceVariant)
                     }
-                } else if (state.rendererVisible && !state.pageReady) {
+                } else if (state.error == null && !state.pageReady &&
+                    (state.rendererVisible || state.teardownRequested)) {
                     Box(Modifier.fillMaxSize().background(MaterialTheme.colorScheme.surface),
                         contentAlignment = Alignment.Center) {
                         CircularProgressIndicator()
@@ -298,7 +295,17 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
                 }
             }
             if (state.visible && pageOptions) {
-                BrowserOptions(state, session, { pageOptions = false }, onClose, onCloseSession)
+                BrowserOptions(state, session, { pageOptions = false }, onClose, onCloseSession,
+                    onReaderToggle = {
+                        pageOptions = false
+                        scope.launch {
+                            try {
+                                if (state.readerMode) session.hideReader() else session.showReader()
+                            } catch (failure: BrowserFailure) {
+                                session.showError(failure, retry = state.readerMode)
+                            }
+                        }
+                    })
             }
         }
 
@@ -432,7 +439,7 @@ private fun BrowserTabStrip(windows: List<BrowserWindowSummary>, onSelect: (Stri
 
 @Composable
 private fun BrowserOptions(state: BrowserUiState, session: BrowserSession, onBack: () -> Unit,
-                           onClose: () -> Unit, onCloseSession: () -> Unit) {
+                           onClose: () -> Unit, onCloseSession: () -> Unit, onReaderToggle: () -> Unit) {
     val scope = rememberCoroutineScope()
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.statusBarsPadding()) {
@@ -444,16 +451,7 @@ private fun BrowserOptions(state: BrowserUiState, session: BrowserSession, onBac
                         onBack()
                     }) { Text(if (state.driving == BrowserDriving.Agent) "Take control" else "Hand back") }
                 }
-                TextButton(onClick = {
-                    scope.launch {
-                        if (state.readerMode) session.hideReader() else try {
-                            session.showReader()
-                        } catch (error: BrowserFailure) {
-                            session.showError(error)
-                        }
-                        onBack()
-                    }
-                }) { Text(if (state.readerMode) "Page view" else "Reader view") }
+                TextButton(onClick = onReaderToggle) { Text(if (state.readerMode) "Page view" else "Reader view") }
                 TextButton(enabled = state.url.isNotBlank(), onClick = { session.openExternal(state.url) }) {
                     Text("Open in my browser")
                 }

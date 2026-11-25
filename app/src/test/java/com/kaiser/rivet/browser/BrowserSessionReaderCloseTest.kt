@@ -1,9 +1,9 @@
 package com.kaiser.rivet.browser
 
 import android.app.Activity
+import android.app.ActivityManager
 import android.app.Application
 import android.os.Looper
-import android.view.View
 import android.webkit.ValueCallback
 import android.webkit.WebView
 import java.io.File
@@ -27,6 +27,8 @@ import org.robolectric.RobolectricTestRunner
 import org.robolectric.RuntimeEnvironment
 import org.robolectric.Shadows
 import org.robolectric.annotation.Config
+import org.robolectric.shadow.api.Shadow
+import org.robolectric.shadows.ShadowActivityManager
 
 @OptIn(ExperimentalCoroutinesApi::class)
 @RunWith(RobolectricTestRunner::class)
@@ -40,8 +42,12 @@ class BrowserSessionReaderCloseTest {
         Dispatchers.resetMain()
     }
 
-    @Test fun closingActiveTabInReaderModeUnparksAndDefersRestoreUntilSurvivingPageFinishes() = runBlocking {
+    @Test fun closingActiveTabInReaderModeLoadsSurvivingPageOnANewRenderer() = runBlocking {
         val app: Application = RuntimeEnvironment.getApplication()
+        val manager = app.getSystemService(ActivityManager::class.java)
+        Shadow.extract<ShadowActivityManager>(manager).setMemoryInfo(ActivityManager.MemoryInfo().apply {
+            availMem = 1024L * 1024 * 1024
+        })
         val snapshotDir = File(app.filesDir, "browser-snapshots")
         snapshotDir.deleteRecursively()
         BrowserSnapshotStore(snapshotDir).save(
@@ -80,23 +86,37 @@ class BrowserSessionReaderCloseTest {
         // queues that post until attach, so mount it in an Activity as BrowserHost does.
         val activity = Robolectric.buildActivity(Activity::class.java).setup().get()
         activity.setContentView(webView)
-        session.userOpen()
         session.attach(webView)
         session.newWindow()
         val closingId = session.state.value.activeWindowId!!
         webView.webViewClient.onPageFinished(webView, "https://second.example/article")
 
         session.showReader()
-        assertEquals(View.INVISIBLE, webView.visibility)
+        assertTrue(session.state.value.teardownRequested)
         assertTrue(session.state.value.readerMode)
+        session.onRendererReleased(webView) { session.releaseRenderer(webView) }
+        assertFalse(session.state.value.rendererVisible)
 
+        val replacement = object : WebView(app) {
+            override fun loadUrl(url: String) {
+                loadedUrls += url
+                super.loadUrl(url)
+            }
+
+            override fun evaluateJavascript(script: String, resultCallback: ValueCallback<String>?) {
+                evaluatedScripts += script
+                resultCallback?.onReceiveValue("null")
+            }
+        }
+        activity.setContentView(replacement)
+        replacement.layout(0, 0, 300, 300)
         loadedUrls.clear()
         evaluatedScripts.clear()
         session.closeWindow(closingId)
+        session.attach(replacement)
         Shadows.shadowOf(Looper.getMainLooper()).idle()
 
         assertFalse(session.state.value.readerMode)
-        assertEquals(View.VISIBLE, webView.visibility)
         assertEquals("win-surviving", session.state.value.activeWindowId)
         assertEquals("https://first.example/page", session.state.value.url)
         assertTrue(loadedUrls.contains("https://first.example/page"))
@@ -106,7 +126,7 @@ class BrowserSessionReaderCloseTest {
             evaluatedScripts.none { it.contains("querySelectorAll") },
         )
 
-        webView.webViewClient.onPageFinished(webView, "https://first.example/page")
+        replacement.webViewClient.onPageFinished(replacement, "https://first.example/page")
         Shadows.shadowOf(Looper.getMainLooper()).idle()
         assertTrue(session.state.value.pageReady)
         assertTrue(

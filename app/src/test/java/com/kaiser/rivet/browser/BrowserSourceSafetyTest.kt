@@ -139,34 +139,34 @@ class BrowserSourceSafetyTest {
         assertTrue(screen.contains("state.notice?.let {"))
     }
 
-    @Test fun teardownTerminatesTrackedProcessesAndClearsPendingRestart() {
+    @Test fun teardownTerminatesOnlyTheDepartingViewAndCancelsRecoveryOnClose() {
         val host = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt"),
             File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt")).first { it.isFile }.readText()
         assertTrue(host.contains("HeldWebView"))
 
         val session = source("BrowserSession.kt")
         val endSessionBody = session.substringAfter("fun endSession()").substringBefore("fun clearNotice()")
-        assertTrue(endSessionBody.contains("pendingRestart = null"))
-        val teardownBody = session.substringAfter("fun requestRendererTeardown()").substringBefore("private fun armHangValve()")
-        assertTrue(teardownBody.contains("processRegistry.terminateAll"))
+        assertTrue(endSessionBody.contains("cancelRendererRecovery()"))
+        assertTrue(session.contains("processRegistry.terminateForView(view,"))
+        assertFalse(session.contains("terminateAll"))
     }
 
     @Test fun closeWindowDefersSnapshotRestoreAndReaderErrorsSurface() {
         val session = source("BrowserSession.kt")
         val closeWindowBody = session.substringAfter("fun closeWindow(id: String)").substringBefore("suspend fun bookmark()")
-        assertTrue(closeWindowBody.contains("unparkRenderer(verifyPaint = false)"))
+        assertTrue(closeWindowBody.contains("userOpen(activeUrl, restore = true)"))
         assertTrue(closeWindowBody.contains("pendingSnapshotRestore ="))
         assertFalse(closeWindowBody.contains("loadSnapshotState(view, it)"))
         // Restore is deferred: the surviving tab is loaded first, the snapshot follows
         // in onPageFinished rather than being evaluated against the outgoing page.
         assertTrue(closeWindowBody.indexOf("pendingSnapshotRestore =") <
-            closeWindowBody.indexOf("view.loadUrl(activeUrl)"))
+            closeWindowBody.indexOf("loadUrl(activeUrl)"))
 
         val screen = listOf(File("src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt"),
             File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserScreen.kt")).first { it.isFile }.readText()
         assertFalse(screen.contains("runCatching { session.showReader() }"))
-        val readerToggle = screen.substringAfter("session.showReader()").substringBefore("onBack()")
-        assertTrue(readerToggle.contains("session.showError(error)"))
+        val readerToggle = screen.substringAfter("session.hideReader()").substringBefore("private fun")
+        assertTrue(readerToggle.contains("session.showError(failure,"))
         assertTrue(screen.contains("state.url.isBlank() || state.url == \"about:blank\""))
     }
 

@@ -58,7 +58,9 @@ class RendererProcessRegistry {
     fun <T : Any> record(process: T?, ownerView: Any? = null, terminate: (T) -> Boolean) {
         pruneClearedLocked()
         if (process == null) return
-        if (entries.any { it.ref.get().let { existing -> existing === process || existing == process } }) return
+        if (entries.any { entry ->
+                entry.viewRef?.get() === ownerView && entry.ref.get() == process
+            }) return
         @Suppress("UNCHECKED_CAST")
         entries += TrackedEntry(
             ref = WeakReference(process),
@@ -76,26 +78,20 @@ class RendererProcessRegistry {
         }
     }
 
-    @Synchronized
-    fun terminateAll(supported: Boolean): Int {
-        pruneClearedLocked()
+    fun terminateForView(ownerView: Any, supported: Boolean): Int {
         if (!supported) return 0
-        var terminated = 0
-        val iterator = entries.iterator()
-        while (iterator.hasNext()) {
-            val entry = iterator.next()
-            val process = entry.ref.get()
-            if (process == null) {
-                iterator.remove()
-                continue
-            }
-            val ok = runCatching { entry.terminate(process) }.getOrDefault(false)
-            if (ok) {
-                terminated++
-                iterator.remove()
+        val owned = synchronized(this) {
+            pruneClearedLocked()
+            val targets = entries.filter { it.viewRef?.get() === ownerView }
+            entries.removeAll(targets.toSet())
+            targets.mapNotNull { entry ->
+                val process = entry.ref.get() ?: return@mapNotNull null
+                if (entries.any { it.ref.get() == process }) null else process to entry.terminate
             }
         }
-        return terminated
+        return owned.count { (process, terminate) ->
+            runCatching { terminate(process) }.getOrDefault(false)
+        }
     }
 
     @Synchronized

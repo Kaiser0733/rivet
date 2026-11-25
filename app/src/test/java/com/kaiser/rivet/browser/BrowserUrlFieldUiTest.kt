@@ -6,9 +6,11 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.ui.platform.LocalSoftwareKeyboardController
 import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.assertIsDisplayed
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasSetTextAction
 import androidx.compose.ui.test.junit4.createComposeRule
+import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performTextInput
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextRange
@@ -30,7 +32,7 @@ import org.robolectric.annotation.Config
 class BrowserUrlFieldUiTest {
     @get:Rule val compose = createComposeRule()
 
-    private fun sessionAt(url: String): BrowserSession {
+    private fun sessionAt(url: String, error: String? = null): BrowserSession {
         val app: Application = RuntimeEnvironment.getApplication()
         val session = BrowserSession(app, models = null)
         val field = BrowserSession::class.java.getDeclaredField("_state")
@@ -42,6 +44,8 @@ class BrowserUrlFieldUiTest {
             url = url,
             pageReady = true,
             activeWindowId = "test-window",
+            error = error,
+            errorRetry = error != null,
         )
         return session
     }
@@ -142,5 +146,23 @@ class BrowserUrlFieldUiTest {
 
         tapUrl()
         assertTrue(selection().collapsed)
+    }
+
+    @Test @Config(qualifiers = "w320dp-h640dp-port")
+    fun reloadIsVisibleOnAPhoneInPortrait() = assertRecoveryActionsDisplayed()
+
+    @Test @Config(qualifiers = "w640dp-h320dp-land")
+    fun reloadIsVisibleOnAPhoneInLandscape() = assertRecoveryActionsDisplayed()
+
+    @Test @Config(qualifiers = "w800dp-h1280dp-port")
+    fun reloadIsVisibleOnATabletInPortrait() = assertRecoveryActionsDisplayed()
+
+    @Test @Config(qualifiers = "w1280dp-h800dp-land")
+    fun reloadIsVisibleOnATabletInLandscape() = assertRecoveryActionsDisplayed()
+
+    private fun assertRecoveryActionsDisplayed() {
+        show(sessionAt("https://example.org/", error = "The browser view could not restart."))
+        compose.onNodeWithText("Reload").assertIsDisplayed()
+        compose.onNodeWithText("Close browser").assertIsDisplayed()
     }
 }

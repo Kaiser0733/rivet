@@ -39,6 +39,7 @@ import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
@@ -47,6 +48,7 @@ import kotlinx.coroutines.TimeoutCancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.flow.update
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -77,7 +79,7 @@ data class BrowserDownloadPrompt(
 )
 
 internal const val PAINT_WATCHDOG_ERROR =
-    "The page stopped rendering. Close the browser to recover."
+    "The page stopped rendering."
 
 internal fun shouldClearPaintError(
     state: BrowserUiState,
@@ -104,6 +106,7 @@ data class BrowserUiState(
     val chunkAnchor: String = "",
     val needsRenderer: Boolean = false,
     val rendererVisible: Boolean = false,
+    val rendererHostGeneration: Long = 0,
     val teardownRequested: Boolean = false,
     val pageReady: Boolean = false,
     val readerMode: Boolean = false,
@@ -282,14 +285,15 @@ class BrowserSession(
     private val tabIcons = mutableMapOf<String, Pair<String, android.graphics.Bitmap>>()
     private var activeWindowId: String? = null
     private var reader: ReaderDocument? = null
-    private var readerReloaded = false
-    private var readerSampleJob: kotlinx.coroutines.Job? = null
-    private val paintWatchdog = PaintWatchdog()
     private val hangValve = BrowserHangValve()
     private var hangArmed = false
     private var hangCallback: Choreographer.FrameCallback? = null
     private var paintWatchdogJob: kotlinx.coroutines.Job? = null
-    private var pendingRestart: PendingPaintRestart? = null
+    private var pendingRestart: RendererRestart? = null
+    private var rendererRecoveryJob: kotlinx.coroutines.Job? = null
+    private var rendererGeneration = 0L
+    private var navigationGeneration = 0L
+    private var lastRecoveryUrl: String? = null
     private var pageLoading: Boolean = false
     @Volatile private var pendingMainFrameError: BrowserFailure? = null
     private var lastMainHttpStatus: Int? = null
@@ -340,8 +344,7 @@ class BrowserSession(
     private var baselineJob: kotlinx.coroutines.Job? = null
     private var postLoadBudgetJob: kotlinx.coroutines.Job? = null
     private var teardownWatchdog: kotlinx.coroutines.Job? = null
-    private var forceDestroyed: WebView? = null
-    private var paintRecoveryJob: kotlinx.coroutines.Job? = null
+    private val releasedViews = java.util.Collections.newSetFromMap(java.util.WeakHashMap<WebView, Boolean>())
     private val rotationScroll = ScrollRestore()
     private var scrollLayoutListener: android.view.View.OnLayoutChangeListener? = null
     private var lastPaintedFrame: NavigationFrame? = null
@@ -396,20 +399,20 @@ class BrowserSession(
     fun userOpen() = userOpen(activeUrl.ifBlank { _state.value.url }
         .takeUnless { it.isBlank() || it == "about:blank" } ?: BrowserUrlPolicy.START_PAGE)
 
-    private fun userOpen(target: String) {
+    private fun userOpen(target: String, restore: Boolean = false) {
         idleJob?.cancel(); idleJob = null
         idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
-        unparkRenderer()
-        _state.update { it.copy(visible = true, readerMode = false, error = null) }
+        val wasReader = _state.value.readerMode
+        _state.update { it.copy(visible = true, readerMode = false, error = null, errorRetry = false) }
         if (target.isNotBlank() &&
-            (renderer == null || _state.value.teardownRequested || _state.value.url != target)) {
+            (wasReader || renderer == null || _state.value.teardownRequested || _state.value.url != target)) {
             scope.launch {
-                runCatching { openVisual(target, userInitiated = true) }.onFailure { err ->
-                    _state.update { state ->
-                        state.copy(error = (err as? BrowserFailure)?.message
-                            ?: "The visual browser could not open.")
-                    }
+                cancelRendererRecovery()
+                try {
+                    openVisual(target, userInitiated = true, restart = null, restoreSnapshot = restore || wasReader)
+                } catch (failure: BrowserFailure) {
+                    showError(failure)
                 }
             }
         }
@@ -422,8 +425,8 @@ class BrowserSession(
         idleJob?.cancel(); idleJob = null
         idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
-        if (renderer != null || _state.value.rendererVisible) {
-            unparkRenderer()
+        if (!_state.value.readerMode && !_state.value.teardownRequested &&
+            (renderer != null || _state.value.rendererVisible)) {
             _state.update { it.copy(visible = true, readerMode = false) }
         } else userOpen()
     }
@@ -446,7 +449,7 @@ class BrowserSession(
 
     /** Closing the screen hides the chat card and lets the visual session idle-expire. */
     fun close() {
-        unparkRenderer()
+        cancelRendererRecovery()
         _state.update { it.copy(visible = false, readerMode = false, watchVisible = false,
             chatPage = null, chatBrowserWorking = false) }
         idleArming.onHidden()
@@ -493,15 +496,13 @@ class BrowserSession(
 
     /** The visible Close control and browser_close: save, destroy, free, clear the card. */
     fun endSession() {
-        pendingRestart = null
+        cancelRendererRecovery()
         postLoadBudgetJob?.cancel()
         postLoadBudgetJob = null
         releaseJob?.cancel()
         releaseJob = null
         idleJob?.cancel()
         idleJob = null
-        readerSampleJob?.cancel()
-        readerSampleJob = null
         idleArming.onActivity()
         val id = activeWindowId
         val current = id?.let { windows[it] }
@@ -511,7 +512,6 @@ class BrowserSession(
         }
         saveActiveSnapshot()
         readerCache.invalidate()
-        unparkRenderer()
         elementRefs = emptyList()
         pendingSnapshotRestore = null
         _state.update {
@@ -586,7 +586,7 @@ class BrowserSession(
                     BrowserShedAction.TightenDiet -> {
                         _state.update { it.copy(fullPage = false) }
                         // Reload so the already-loaded page actually gets placeholders.
-                        renderer?.reload()
+                        renderer?.let { view -> navigate(view) { reload() } }
                         announcements += "diet tightened"
                     }
                     BrowserShedAction.UnloadFarthestWindow -> {
@@ -734,8 +734,26 @@ class BrowserSession(
     /** Full visual load for a human or an agent interaction. */
     suspend fun openVisual(rawUrl: String, userInitiated: Boolean = true,
                            newWindow: Boolean = false, projectPreview: Boolean = false,
-                           agentAction: Boolean = false): BrowserOpenResult =
+                           agentAction: Boolean = false): BrowserOpenResult {
+        cancelRendererRecovery()
+        return openVisual(rawUrl, userInitiated, newWindow, projectPreview, agentAction, restart = null)
+    }
+
+    private suspend fun openVisual(rawUrl: String, userInitiated: Boolean, newWindow: Boolean = false,
+                                   projectPreview: Boolean = false, agentAction: Boolean = false,
+                                   restart: RendererRestart?, forceLoad: Boolean = false,
+                                   restoreSnapshot: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
+            if (restart != null) {
+                if (pendingRestart !== restart || rendererGeneration != restart.generation ||
+                    activeWindowId != restart.windowId || activeUrl != restart.url) {
+                    throw CancellationException("Renderer recovery superseded")
+                }
+                pendingRestart = null
+            } else {
+                pendingRestart = null
+                lastRecoveryUrl = null
+            }
             idleJob?.cancel(); idleJob = null
             idleArming.onActivity()
             val url = BrowserUrlPolicy.normalize(rawUrl)
@@ -758,7 +776,6 @@ class BrowserSession(
             if (newWindow || activeWindowId == null) createWindow(url, publish = userInitiated)
             activeUrl = url
             reader = null
-            unparkRenderer()
             // Wait until ensureRenderer() eligibility checks pass before flipping rendererVisible.
             _state.update {
                 it.copy(visible = it.visible || userInitiated,
@@ -767,10 +784,17 @@ class BrowserSession(
                     readerMode = false, error = null, errorRetry = false, notice = null, handoff = null,
                     authNotice = null, loadValveNotice = null)
             }
+            pendingSnapshotRestore = activeWindowId?.let { id ->
+                val snapshot = restart?.snapshot ?: if (restoreSnapshot) windows[id] else null
+                snapshot?.let { id to it }
+            }
             val view = ensureRenderer(showWatch = !userInitiated,
-                allowUserDriving = userInitiated, agentAction = agentAction)
-            loadForInteraction(view, url)
+                allowUserDriving = userInitiated || restart != null, agentAction = agentAction)
+            loadForInteraction(view, url, forceLoad)
             awaitLaidOut(view)
+            if (view !== renderer || _state.value.teardownRequested) {
+                throw BrowserFailure("browser_renderer_unavailable", "The page renderer stopped.")
+            }
             pendingMainFrameError?.let { throw it }
             schedulePostLoadBudgetChecks()
             activeUrl = view.url ?: url
@@ -783,7 +807,7 @@ class BrowserSession(
                     activeWindowId = activeWindowId,
                     windows = if (userInitiated) windowSummaries() else it.windows)
             }
-            val diagnostics = runCatching {
+            val diagnostics = withTimeoutOrNull(1_500) {
                 val raw = evaluate(view, """
                     (function(){return JSON.stringify({
                       nodes:document.querySelectorAll('*').length,
@@ -791,8 +815,8 @@ class BrowserSession(
                     });})()
                 """.trimIndent())
                 val clean = BrowserElementRefs.unwrapJsResult(raw)
-                org.json.JSONObject(clean)
-            }.getOrNull()
+                runCatching { org.json.JSONObject(clean) }.getOrNull()
+            }
             val vw = withContext(Dispatchers.Main) { view.width }
             val vh = withContext(Dispatchers.Main) { view.height }
             BrowserOpenResult(activeUrl, activeTitle, 0, false, budget.tier, budget.capMb,
@@ -979,40 +1003,28 @@ class BrowserSession(
     suspend fun reset(reopen: Boolean = true, clearStorage: Boolean = false): BrowserResetResult {
         if (!reopen) dismissChatPreview()
         val previousUrl = activeUrl.ifBlank { _state.value.url }
-        pendingRestart = null
+        cancelRendererRecovery()
+        lastRecoveryUrl = null
         postLoadBudgetJob?.cancel(); postLoadBudgetJob = null
-        paintRecoveryJob?.cancel(); paintRecoveryJob = null
-        readerSampleJob?.cancel(); readerSampleJob = null
         paintWatchdogJob?.cancel(); paintWatchdogJob = null
         pendingSnapshotRestore = null
-        pendingGoneJob?.cancel(); pendingGoneJob = null
-        pendingGoneView = null
-        forceDestroyed = null
         rotationScroll.clear()
         lastPaintedFrame = null
-        rendererFailure = null
         pageLoading = false
         readerCache.invalidate()
         reader = null
         elementRefs = emptyList()
         consoleBuffer.clear()
-        renderer?.clearCache(true)
+        if (rendererFailure == null && !_state.value.teardownRequested) renderer?.clearCache(true)
         _state.update {
             it.copy(error = null, notice = null, loadValveNotice = null,
                 visualScreenshot = null, pageReady = false, handoff = null, authNotice = null,
                 downloadPrompt = null, budgetCloseAction = false)
         }
         requestRendererTeardown()
-        val stopped = withTimeoutOrNull(3_000L) {
-            while (renderer != null || _state.value.teardownRequested) delay(50L)
-            true
-        } == true
-        if (!stopped) {
-            renderer?.let { held -> releaseRenderer(held) }
-            finishRendererTeardown(null)
-        }
+        awaitRendererTeardown()
+        rendererFailure = null
         teardownWatchdog?.cancel(); teardownWatchdog = null
-        pendingRestart = null
         activeTitle = ""
         activeWindowId?.let { id -> windows[id]?.let { snapshot ->
             val clean = snapshot.copy(title = "", scrollY = 0, formFields = emptyMap(),
@@ -1461,63 +1473,23 @@ class BrowserSession(
         if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
         val cached = readerCache.cached()
         val document = if (cached != null && cached.url == activeUrl) cached
-        else if (renderer != null && activeUrl.isNotBlank()) readRenderedDocument()
+        else if (renderer != null && rendererFailure == null && !_state.value.teardownRequested) readRenderedDocument()
         else readerService.fetch(activeUrl).also {
             readerCache.record(readerCache.navigationToken, it)
         }
         val first = document.chunks.firstOrNull()
-        readerSampleJob?.cancel()
-        readerSampleJob = null
-        setReaderMode(true)
-        readerReloaded = false
         _state.update {
             it.copy(readerMode = true, readerText = first?.text.orEmpty(),
                 chunkIndex = 0, chunkCount = document.chunks.size,
                 chunkAnchor = first?.anchor.orEmpty(), needsRenderer = document.needsRenderer,
                 url = document.url, title = document.title)
         }
+        cancelRendererRecovery()
+        requestRendererTeardown()
     }
 
-    fun hideReader() {
-        setReaderMode(false)
-    }
-
-    /** The only writer of readerMode and the renderer pause/visibility state. */
-    private fun setReaderMode(enabled: Boolean, verifyPaint: Boolean = true) {
-        _state.update { it.copy(readerMode = enabled) }
-        val view = renderer ?: return
-        val surface = object : RendererSurface {
-            override fun pause() { view.onPause() }
-            override fun setVisible(visible: Boolean) {
-                view.visibility = if (visible) android.view.View.VISIBLE else android.view.View.INVISIBLE
-            }
-            override fun resume() { view.onResume() }
-        }
-        if (enabled) {
-            ReaderPark.apply(surface, ReaderPark.Mode.ReaderOn)
-        } else {
-            ReaderPark.unpark(surface)
-            if (verifyPaint) verifyReaderPaint()
-        }
-    }
-
-    private fun unparkRenderer(verifyPaint: Boolean = true) {
-        setReaderMode(false, verifyPaint = verifyPaint)
-    }
-
-    private fun verifyReaderPaint() {
-        readerSampleJob?.cancel()
-        readerSampleJob = scope.launch {
-            kotlinx.coroutines.delay(900)
-            if (_state.value.readerMode || readerReloaded) return@launch
-            val verdict = samplePaint(_state.value.url) ?: return@launch
-            if (verdict == PaintVerdict.Stale) {
-                recoverStalePaint(_state.value.url)
-            } else if (verdict == PaintVerdict.BlankWithDom) {
-                readerReloaded = true
-                reloadForReaderPaint()
-            }
-        }
+    suspend fun hideReader() {
+        openVisual(activeUrl, userInitiated = true, restart = null, restoreSnapshot = true)
     }
 
     internal var paintJsEvaluator: suspend (WebView, String) -> String = { view, script ->
@@ -1539,71 +1511,68 @@ class BrowserSession(
             File(firstShot.path).delete()
             return PaintVerdict.Unknown
         }
-        val startY = scrollY(view)
-        var scrolledY = startY
-        var secondHash = firstHash
-        if (startY != null) {
-            runCatching { paintJsEvaluator(view, "window.scrollBy(0,1)") }
-            delay(80)
-            scrolledY = scrollY(view) ?: startY
+        try {
+            val startY = scrollY(view)
+            var scrolledY = startY
+            var secondHash = firstHash
+            if (startY != null) {
+                runCatching { paintJsEvaluator(view, "window.scrollBy(0,1)") }
+                delay(80)
+                scrolledY = scrollY(view) ?: startY
+                try {
+                    // Capture at the scrolled offset before restoring scrollY so healthy pages
+                    // actually show shifted pixels instead of always matching firstShot.
+                    val secondShot = paintCapture(view)
+                    if (secondShot == null) return PaintVerdict.Unknown
+                    secondHash = runCatching { fileHash(secondShot.path) }.getOrNull().orEmpty()
+                    File(secondShot.path).delete()
+                } finally {
+                    val delta = scrolledY - startY
+                    if (delta != 0 && renderer === view && !pageLoading) {
+                        kotlinx.coroutines.currentCoroutineContext().ensureActive()
+                        runCatching { paintJsEvaluator(view, "window.scrollBy(0,${-delta})") }
+                    }
+                }
+            }
+            val bitmap = android.graphics.BitmapFactory.decodeFile(firstShot.path) ?: return PaintVerdict.Unknown
             try {
-                // Capture at the scrolled offset before restoring scrollY so healthy pages
-                // actually show shifted pixels instead of always matching firstShot.
-                val secondShot = paintCapture(view)
-                if (secondShot == null) {
-                    File(firstShot.path).delete()
-                    return PaintVerdict.Unknown
+                if (!sampledUrl.isNullOrBlank() &&
+                    PaintStaleness.isNavigationStale(lastPaintedFrame, NavigationFrame(sampledUrl, firstHash))) {
+                    return PaintVerdict.Stale
                 }
-                secondHash = runCatching { fileHash(secondShot.path) }.getOrNull().orEmpty()
-                File(secondShot.path).delete()
+                val scrolled = scrolledY
+                if (startY != null && scrolled != null && scrolled != startY && secondHash.isNotEmpty() &&
+                    PaintStaleness.isStale(FrameProbe(startY, firstHash),
+                        FrameProbe(scrolled, secondHash))) return PaintVerdict.Stale
+                val left = bitmap.width / 8
+                val right = bitmap.width - left
+                val top = bitmap.height / 4
+                val bottom = bitmap.height - bitmap.height / 8
+                val sampleStartX = left.coerceAtLeast(0)
+                val sampleStartY = top.coerceAtLeast(0)
+                val cols = if (right > sampleStartX) (right - sampleStartX + 7) / 8 else 0
+                val rows = if (bottom > sampleStartY) (bottom - sampleStartY + 7) / 8 else 0
+                val pixels = IntArray(cols * rows)
+                var total = 0
+                var y = sampleStartY
+                while (y < bottom) {
+                    var x = sampleStartX
+                    while (x < right) {
+                        pixels[total++] = bitmap.getPixel(x, y)
+                        x += 8
+                    }
+                    y += 8
+                }
+                val sampledPixels = if (total == pixels.size) pixels else pixels.copyOf(total)
+                val verdict = PaintVerdict.classifyPixels(dom, sampledPixels)
+                if (verdict == PaintVerdict.Painted && !sampledUrl.isNullOrBlank()) {
+                    lastPaintedFrame = NavigationFrame(sampledUrl, firstHash)
+                }
+                return verdict
             } finally {
-                val delta = scrolledY - startY
-                if (delta != 0) {
-                    runCatching { paintJsEvaluator(view, "window.scrollBy(0,${-delta})") }
-                }
+                bitmap.recycle()
             }
-        }
-        val bitmap = android.graphics.BitmapFactory.decodeFile(firstShot.path)
-        if (bitmap == null) {
-            File(firstShot.path).delete()
-            return PaintVerdict.Unknown
-        }
-        return try {
-            if (!sampledUrl.isNullOrBlank() &&
-                PaintStaleness.isNavigationStale(lastPaintedFrame, NavigationFrame(sampledUrl, firstHash))) {
-                return PaintVerdict.Stale
-            }
-            val scrolled = scrolledY
-            if (startY != null && scrolled != null && scrolled != startY && secondHash.isNotEmpty() &&
-                PaintStaleness.isStale(FrameProbe(startY, firstHash),
-                    FrameProbe(scrolled, secondHash))) return PaintVerdict.Stale
-            val left = bitmap.width / 8
-            val right = bitmap.width - left
-            val top = bitmap.height / 4
-            val bottom = bitmap.height - bitmap.height / 8
-            val sampleStartX = left.coerceAtLeast(0)
-            val sampleStartY = top.coerceAtLeast(0)
-            val cols = if (right > sampleStartX) (right - sampleStartX + 7) / 8 else 0
-            val rows = if (bottom > sampleStartY) (bottom - sampleStartY + 7) / 8 else 0
-            val pixels = IntArray(cols * rows)
-            var total = 0
-            var y = sampleStartY
-            while (y < bottom) {
-                var x = sampleStartX
-                while (x < right) {
-                    pixels[total++] = bitmap.getPixel(x, y)
-                    x += 8
-                }
-                y += 8
-            }
-            val sampledPixels = if (total == pixels.size) pixels else pixels.copyOf(total)
-            val verdict = PaintVerdict.classifyPixels(dom, sampledPixels)
-            if (verdict == PaintVerdict.Painted && !sampledUrl.isNullOrBlank()) {
-                lastPaintedFrame = NavigationFrame(sampledUrl, firstHash)
-            }
-            verdict
         } finally {
-            bitmap.recycle()
             File(firstShot.path).delete()
         }
     }
@@ -1624,97 +1593,84 @@ class BrowserSession(
         return digest.digest().joinToString("") { "%02x".format(it.toInt() and 0xff) }
     }
 
-    private suspend fun reloadForReaderPaint() {
-        val view = renderer ?: return
-        val snapshot = activeWindowId?.let { windows[it] }
-        _state.update { it.copy(pageReady = false, notice = "Page reloaded to restore the view.") }
-        val ready = CompletableDeferred<Unit>()
-        pageFinished = ready
-        withContext(Dispatchers.Main) { view.loadUrl(activeUrl) }
-        withTimeoutOrNull(10_000) { ready.await() }
-        if (snapshot != null) loadSnapshotState(view, snapshot)
+    private fun canCheckPaint(view: WebView, navigation: Long, url: String): Boolean {
+        val current = _state.value
+        return renderer === view && navigationGeneration == navigation && !pageLoading &&
+            current.visible && current.pageReady && !current.readerMode && !current.teardownRequested &&
+            current.url == url
     }
 
-    private fun recoverStalePaint(url: String) {
-        if (paintRecoveryJob?.isActive == true) return
-        paintRecoveryJob = scope.launch {
-            val view = renderer ?: return@launch
-            android.util.Log.w("BrowserPaint", "stale frame detected; starting recovery ladder url=$url")
-            unparkRenderer(verifyPaint = false)
-            view.onResume()
-            view.visibility = android.view.View.VISIBLE
-            view.invalidate()
-            delay(250)
-            if (samplePaint(url) != PaintVerdict.Stale) {
-                android.util.Log.i("BrowserPaint", "recovered-with-ladder step=resume")
-                return@launch
-            }
-            saveActiveSnapshot()
-            pendingRestart = PendingPaintRestart(url,
-                activeWindowId?.let { windows[it] })
-            _state.update { it.copy(notice = "The page stopped updating — Rivet recreated the browser view.") }
-            android.util.Log.w("BrowserPaint", "recovered-with-ladder step=recreate")
-            requestRendererTeardown()
-        }
-    }
-
-    private fun armPaintWatchdog(url: String) {
-        if (!_state.value.visible || _state.value.readerMode) return
-        if (paintWatchdog.onPageFinished(url) != PaintWatchdog.Directive.Arm) return
+    private fun armPaintWatchdog(view: WebView, url: String) {
+        if (url.isBlank() || url == "about:blank") return
+        val navigation = navigationGeneration
+        if (!canCheckPaint(view, navigation, url)) return
         paintWatchdogJob?.cancel()
         paintWatchdogJob = scope.launch {
-            kotlinx.coroutines.delay(1_500)
-            if (!_state.value.visible || _state.value.readerMode ||
-                _state.value.url != url || !_state.value.pageReady) return@launch
-            val verdict = samplePaint(url) ?: return@launch
-            if (verdict == PaintVerdict.Stale) {
-                recoverStalePaint(url)
-                return@launch
-            }
-            when (paintWatchdog.onSample(url, verdict)) {
-                PaintWatchdog.Directive.Restart -> restartForPaintWedge(url)
-                PaintWatchdog.Directive.Stop -> {
-                    _state.update { it.copy(error = PAINT_WATCHDOG_ERROR) }
-                    waitForPaintRecovery(url)
+            delay(1_500)
+            if (!canCheckPaint(view, navigation, url)) return@launch
+            val verdict = withTimeoutOrNull(3_000) { samplePaint(url) } ?: return@launch
+            if (!canCheckPaint(view, navigation, url)) return@launch
+            if (verdict == PaintVerdict.BlankWithDom || verdict == PaintVerdict.Stale) {
+                if (!queueRendererRestart(view, url, PAINT_WATCHDOG_ERROR)) {
+                    while (canCheckPaint(view, navigation, url) && _state.value.error == PAINT_WATCHDOG_ERROR) {
+                        delay(2_000)
+                        if (!canCheckPaint(view, navigation, url)) break
+                        val next = withTimeoutOrNull(3_000) { samplePaint(url) } ?: continue
+                        if (canCheckPaint(view, navigation, url) && shouldClearPaintError(_state.value, url, next)) {
+                            _state.update { it.copy(error = null, errorRetry = false) }
+                            break
+                        }
+                    }
                 }
-                else -> Unit
             }
         }
     }
 
-    private suspend fun waitForPaintRecovery(url: String) {
-        while (true) {
-            delay(2_000)
-            val current = _state.value
-            if (!current.visible || current.readerMode || current.url != url ||
-                !current.pageReady || current.error != PAINT_WATCHDOG_ERROR) return
-            val verdict = samplePaint(url) ?: continue
-            if (shouldClearPaintError(current, url, verdict)) {
-                _state.update { state ->
-                    if (shouldClearPaintError(state, url, verdict)) state.copy(error = null)
-                    else state
-                }
-                return
-            }
+    private fun queueRendererRestart(view: WebView, url: String, message: String): Boolean {
+        val current = _state.value
+        if (view !== renderer || current.teardownRequested || current.readerMode) return false
+        if (pendingRestart != null && pendingRestart?.generation == rendererGeneration) return true
+        if (url.isBlank() || url == "about:blank" || lastRecoveryUrl == url ||
+            rendererRecoveryJob?.isActive == true ||
+            (!current.visible && !current.watchVisible && !current.agentRendererUse)) {
+            _state.update { it.copy(error = message, errorRetry = url.isNotBlank()) }
+            return false
         }
-    }
-
-    private fun restartForPaintWedge(url: String) {
-        if (pendingRestart != null) return
-        saveActiveSnapshot()
-        pendingRestart = PendingPaintRestart(url,
+        lastRecoveryUrl = url
+        pendingRestart = RendererRestart(rendererGeneration, url, activeWindowId,
             activeWindowId?.let { windows[it] })
-        _state.update { it.copy(notice = "The page stopped rendering — Rivet restarted the browser view.",
-            error = null) }
         requestRendererTeardown()
+        return true
     }
 
-    fun showError(failure: BrowserFailure) {
+    fun showError(failure: BrowserFailure, retry: Boolean = false) {
         val copy = browserNoticeCopy(failure.code, failure.message)
-        _state.update { it.copy(error = copy.text, errorRetry = copy.retry) }
+        _state.update { it.copy(error = copy.text, errorRetry = retry || copy.retry) }
     }
 
-    private data class PendingPaintRestart(val url: String, val snapshot: BrowserSnapshot?)
+    suspend fun reloadFromError() {
+        val target = _state.value.url.ifBlank { activeUrl }
+        if (target.isBlank() || target == "about:blank") return
+        cancelRendererRecovery()
+        try {
+            openVisual(target, userInitiated = true, restart = null, forceLoad = true)
+        } catch (failure: BrowserFailure) {
+            showError(failure, retry = true)
+        }
+    }
+
+    private fun cancelRendererRecovery() {
+        pendingRestart = null
+        rendererRecoveryJob?.cancel()
+        rendererRecoveryJob = null
+    }
+
+    private data class RendererRestart(
+        val generation: Long,
+        val url: String,
+        val windowId: String?,
+        val snapshot: BrowserSnapshot?,
+    )
 
     private fun renderedHtmlScript(visibleOnly: Boolean): String {
         if (!visibleOnly || !_state.value.allowJs) return "document.documentElement.outerHTML"
@@ -1900,12 +1856,12 @@ class BrowserSession(
     }
 
     suspend fun back(): String = actionLock.withLock {
-        unparkRenderer()
         val view = ensureRenderer()
+        _state.update { it.copy(readerMode = false) }
         if (view.canGoBack()) {
             val ready = CompletableDeferred<Unit>()
             pageFinished = ready
-            withContext(Dispatchers.Main) { view.goBack() }
+            withContext(Dispatchers.Main) { navigate(view) { goBack() } }
             withTimeoutOrNull(10_000) { ready.await() }
             activeUrl = view.url ?: activeUrl
         } else {
@@ -1920,7 +1876,7 @@ class BrowserSession(
             activeUrl = target.url
             val ready = CompletableDeferred<Unit>()
             pageFinished = ready
-            withContext(Dispatchers.Main) { view.loadUrl(target.url) }
+            withContext(Dispatchers.Main) { navigate(view) { loadUrl(target.url) } }
             withTimeoutOrNull(10_000) { ready.await() }
             activeUrl = view.url ?: target.url
             _state.update {
@@ -1937,7 +1893,7 @@ class BrowserSession(
         loadForInteraction(view, activeUrl)
         val moved = withContext(Dispatchers.Main) {
             if (view.canGoForward()) {
-                view.goForward()
+                navigate(view) { goForward() }
                 true
             } else false
         }
@@ -1950,7 +1906,7 @@ class BrowserSession(
         val view = ensureRenderer()
         loadForInteraction(view, activeUrl)
         _state.update { it.copy(pageReady = false) }
-        withContext(Dispatchers.Main) { view.reload() }
+        withContext(Dispatchers.Main) { navigate(view) { reload() } }
         activeUrl
     }
 
@@ -1976,7 +1932,6 @@ class BrowserSession(
         val previousTeardown = teardown.prepareAttach()
         teardownWatchdog?.cancel()
         teardownWatchdog = null
-        forceDestroyed = null
         if (previousTeardown != RendererTeardown.State.Live &&
             previousTeardown != RendererTeardown.State.Destroyed) {
             android.util.Log.w("BrowserHost",
@@ -1987,6 +1942,7 @@ class BrowserSession(
         resolvePageModal()
         releasedRenderer = null
         renderer = view
+        rendererGeneration++
         recordRenderProcess(view)
         baselineAvailMem = availableMemBytes() ?: 0L
         baselineJob?.cancel()
@@ -1995,7 +1951,6 @@ class BrowserSession(
         }
         view.setLayerType(android.view.View.LAYER_TYPE_NONE, null)
         configure(view)
-        rendererReady?.complete(view)
         view.webChromeClient = chromeClientFor(view)
         view.webViewClient = clientFor(view)
         view.setDownloadListener { url, _, contentDisposition, mime, contentLength ->
@@ -2012,6 +1967,8 @@ class BrowserSession(
                 if (_state.value.visible) lastActivityAt = System.currentTimeMillis()
             }
         }
+        rendererReady?.complete(view)
+        rendererReady = null
     }
 
     internal suspend fun sampleAndRefreshBudget() {
@@ -2064,12 +2021,12 @@ class BrowserSession(
         renderer?.settings?.loadWithOverviewMode = enabled
         renderer?.settings?.userAgentString =
             if (enabled) BrowserDesktopMode.DESKTOP_USER_AGENT else null
-        renderer?.reload()
+        renderer?.let { view -> navigate(view) { reload() } }
     }
 
     fun setFullPage(enabled: Boolean) {
         _state.update { it.copy(fullPage = enabled) }
-        renderer?.reload()
+        renderer?.let { view -> navigate(view) { reload() } }
     }
 
     fun console(level: String, sinceId: Long, limit: Int, clear: Boolean): BrowserConsoleSnapshot {
@@ -2186,9 +2143,8 @@ class BrowserSession(
                 lastUsedAt = System.currentTimeMillis()))
         } }
         saveActiveSnapshot()
+        cancelRendererRecovery()
         requestRendererTeardown()
-        paintRecoveryJob?.cancel(); paintRecoveryJob = null
-        readerSampleJob?.cancel(); readerSampleJob = null
         consoleBuffer.clear()
         readerCache.invalidate()
         reader = null
@@ -2197,7 +2153,7 @@ class BrowserSession(
         pendingSnapshotRestore = null
         rotationScroll.clear()
         lastPaintedFrame = null
-        pendingRestart = null
+        lastRecoveryUrl = null
         pageLoading = false
         activeUrl = ""
         activeTitle = ""
@@ -2315,29 +2271,39 @@ class BrowserSession(
     fun selectWindow(id: String) {
         if (id == activeWindowId) return
         val target = windows[id] ?: snapshots.load(id) ?: return
+        cancelRendererRecovery()
+        lastRecoveryUrl = null
         windows[id] = target
         saveActiveSnapshot()
         activeWindowId = id
         activeUrl = target.currentUrl.orEmpty()
         activeTitle = target.title
         pendingSnapshotRestore = null
-        unparkRenderer()
         refreshBudget()
         _state.update { it.copy(activeWindowId = id, url = activeUrl, title = activeTitle,
-            fidelity = BrowserFidelity.Reloaded, windows = windowSummaries()) }
+            fidelity = BrowserFidelity.Reloaded, readerMode = false, pageReady = false,
+            windows = windowSummaries()) }
         val view = renderer
-        if (view != null && activeUrl.isNotBlank()) {
-            pendingSnapshotRestore = id to target
-            view.loadUrl(activeUrl)
+        if (activeUrl.isNotBlank() && activeUrl != "about:blank") {
+            if (view != null && !_state.value.teardownRequested) {
+                pendingSnapshotRestore = id to target
+                navigate(view) { loadUrl(activeUrl) }
+            } else {
+                userOpen(activeUrl, restore = true)
+            }
         }
     }
 
     fun newWindow() {
+        cancelRendererRecovery()
+        lastRecoveryUrl = null
         pendingSnapshotRestore = null
-        unparkRenderer()
+        activeUrl = ""
+        activeTitle = ""
         val id = createWindow("about:blank")
         activeWindowId = id
-        _state.update { it.copy(activeWindowId = id, windows = windowSummaries(), url = "", title = "") }
+        _state.update { it.copy(activeWindowId = id, windows = windowSummaries(), url = "", title = "",
+            readerMode = false, readerText = "", pageReady = false) }
     }
 
     fun closeWindow(id: String) {
@@ -2350,10 +2316,8 @@ class BrowserSession(
             id,
         )
         if (wasActive) {
-            readerSampleJob?.cancel()
-            readerSampleJob = null
-            readerReloaded = false
-            unparkRenderer(verifyPaint = false)
+            cancelRendererRecovery()
+            lastRecoveryUrl = null
         }
         windows.remove(id)
         snapshots.delete(id)
@@ -2374,18 +2338,20 @@ class BrowserSession(
             }
             val next = activeWindowId?.let { windows[it] }
             val view = renderer
-            if (view != null) {
+            if (view != null && !_state.value.teardownRequested) {
                 if (activeUrl.isNotBlank()) {
                     // Defer snapshot restoration to onPageFinished so closeWindow does not
                     // evaluate against the outgoing page or race the surviving tab's paint.
                     pendingSnapshotRestore = activeWindowId?.let { nextId -> next?.let { nextId to it } }
-                    view.loadUrl(activeUrl)
+                    navigate(view) { loadUrl(activeUrl) }
                     view.requestLayout()
                     view.invalidate()
                 } else {
                     pendingSnapshotRestore = null
-                    view.loadUrl("about:blank")
+                    navigate(view) { loadUrl("about:blank") }
                 }
+            } else if (activeUrl.isNotBlank() && activeUrl != "about:blank") {
+                userOpen(activeUrl, restore = true)
             }
         } else {
             _state.update { it.copy(windows = windowSummaries()) }
@@ -2466,7 +2432,7 @@ class BrowserSession(
         val titleSnapshot = activeTitle
         val urlSnapshot = activeUrl
         val view = renderer
-        if (view != null) {
+        if (view != null && rendererFailure == null && !_state.value.teardownRequested) {
             view.evaluateJavascript(snapshotScript()) { raw ->
                 if (!windows.containsKey(id)) return@evaluateJavascript
                 val latest = windows[id] ?: current
@@ -2585,9 +2551,26 @@ class BrowserSession(
         CookieManager.getInstance().setAcceptThirdPartyCookies(view, !_state.value.blockThirdParty)
     }
 
+    private fun beginNavigation(view: WebView) {
+        if (view !== renderer || _state.value.teardownRequested) return
+        navigationGeneration++
+        paintWatchdogJob?.cancel()
+        paintWatchdogJob = null
+        pageLoading = true
+        pendingMainFrameError = null
+        _state.update { it.copy(pageReady = false) }
+    }
+
+    private fun navigate(view: WebView, action: WebView.() -> Unit) {
+        if (view !== renderer || _state.value.teardownRequested) return
+        beginNavigation(view)
+        view.action()
+    }
+
     private fun clientFor(view: WebView): WebViewClient = object : WebViewClient() {
         override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
             val target = request.url.toString()
+            if (view !== renderer || _state.value.teardownRequested) return true
             if (BrowserAuthGuard.isAuthSurface(target)) {
                 stateHandoff(target, "identity")
                 return true
@@ -2597,9 +2580,10 @@ class BrowserSession(
         }
 
         override fun onPageStarted(view: WebView, url: String?, favicon: android.graphics.Bitmap?) {
+            if (view !== renderer || _state.value.teardownRequested) return
             recordRenderProcess(view)
             resolvePageModal()
-            pageLoading = true
+            beginNavigation(view)
             installConsoleErrorHook(view)
             if (url != null && BrowserAuthGuard.isAuthSurface(url)) {
                 stateHandoff(url, "identity")
@@ -2608,6 +2592,8 @@ class BrowserSession(
         }
 
         override fun onPageFinished(view: WebView, url: String?) {
+            if (view !== renderer || _state.value.teardownRequested) return
+            if (url != null && view.url != null && url != view.url) return
             recordRenderProcess(view)
             pageLoading = false
             installConsoleErrorHook(view)
@@ -2632,7 +2618,7 @@ class BrowserSession(
                     tabIcons[id] = actual to android.graphics.Bitmap.createScaledBitmap(favicon, 32, 32, true)
                 } else tabIcons.remove(id)
             }
-            pageFinished?.complete(Unit)
+            val finished = pageFinished
             pageFinished = null
             _state.update { it.copy(url = actual, title = activeTitle,
                 chatPage = it.chatPage?.let { page ->
@@ -2655,10 +2641,12 @@ class BrowserSession(
                     restoreScroll(view, maxOf(windowScroll, rotationScroll.target))
                 }
             }
-            armPaintWatchdog(actual)
-            if (!BrowserAuthGuard.isLoopback(actual)) {
+            if (pendingMainFrameError == null) armPaintWatchdog(view, actual)
+            finished?.complete(Unit)
+            if (view === renderer && !pageLoading && !BrowserAuthGuard.isLoopback(actual)) {
                 view.evaluateJavascript("document.querySelector('input[type=password]') !== null") { raw ->
-                    if (raw.trim('"') == "true") stateHandoff(actual, "sign-in-wall")
+                    if (view === renderer && !pageLoading && activeUrl == actual &&
+                        raw.trim('"') == "true") stateHandoff(actual, "sign-in-wall")
                 }
             }
         }
@@ -2691,6 +2679,7 @@ class BrowserSession(
             request: WebResourceRequest,
             error: android.webkit.WebResourceError,
         ) {
+            if (view !== renderer || _state.value.teardownRequested) return
             recordRenderProcess(view)
             val description = error.description?.toString().orEmpty()
             if (request.isForMainFrame) {
@@ -2713,6 +2702,7 @@ class BrowserSession(
             request: WebResourceRequest,
             errorResponse: WebResourceResponse,
         ) {
+            if (view !== renderer || _state.value.teardownRequested) return
             recordRenderProcess(view)
             if (request.isForMainFrame) lastMainHttpStatus = errorResponse.statusCode
             if (errorResponse.statusCode >= 400) {
@@ -2724,25 +2714,31 @@ class BrowserSession(
 
         override fun onRenderProcessGone(view: WebView, detail: android.webkit.RenderProcessGoneDetail?): Boolean {
             processRegistry.onProcessGoneForView(view)
-            android.util.Log.d("BrowserHost",
-                "onRenderProcessGone fired didCrash=${detail?.didCrash()} releasing=${view === releasingView}")
             if (view === pendingGoneView) {
-                android.util.Log.d("BrowserHost", "gone-handler cleanup started")
-                pendingGoneJob?.cancel()
-                pendingGoneJob = null
-                pendingGoneView = null
-                destroyGoneView(view)
+                completeGoneRenderer(view)
                 return true
             }
-            if (view === releasingView) return true
-            if (view !== renderer) {
-                android.util.Log.d("BrowserHost", "onRenderProcessGone for a stale view ignored")
-                return true
+            if (view !== renderer || view in releasedViews) return true
+            if (!_state.value.teardownRequested) {
+                val message = "The page renderer stopped."
+                rendererFailure = message
+                pageFinished?.completeExceptionally(BrowserFailure("browser_renderer_unavailable", message))
+                pageFinished = null
+                if (!queueRendererRestart(view, activeUrl, message)) requestRendererTeardown()
+            } else {
+                rendererFailure = "The page renderer stopped."
             }
-            rendererFailure = "The page renderer stopped. Reader mode and a reload are available."
-            requestRendererTeardown()
             return true
         }
+    }
+
+    private suspend fun awaitRendererTeardown() {
+        if (!_state.value.teardownRequested) return
+        val released = withTimeoutOrNull(5_000) {
+            state.first { !it.teardownRequested }
+        }
+        if (released == null) throw BrowserFailure("browser_teardown_pending",
+            "The browser is still resetting. Try again in a moment.")
     }
 
     private suspend fun ensureRenderer(showWatch: Boolean = true,
@@ -2769,15 +2765,7 @@ class BrowserSession(
         idleJob = null
         idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
-        if (_state.value.teardownRequested) {
-            withTimeoutOrNull(2_500) {
-                while (_state.value.teardownRequested) kotlinx.coroutines.delay(50)
-            }
-            if (_state.value.teardownRequested) {
-                throw BrowserFailure("browser_teardown_pending",
-                    "The visual browser is resetting. Try again in a moment.")
-            }
-        }
+        awaitRendererTeardown()
         if (agentAction) markChatBrowserWork()
         _state.update { it.copy(rendererVisible = true,
             watchVisible = it.watchVisible || showWatch || (agentAction && it.agentRunActive),
@@ -2795,16 +2783,22 @@ class BrowserSession(
         return attached
     }
 
-    private suspend fun loadForInteraction(view: WebView, url: String) {
-        if (_state.value.readerMode) unparkRenderer()
+    private suspend fun loadForInteraction(view: WebView, url: String, forceLoad: Boolean = false) {
+        if (_state.value.readerMode) _state.update { it.copy(readerMode = false) }
         if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
-        if (view.url == activeUrl) return
+        val samePage = view.url == url
+        if (samePage && !pageLoading && !forceLoad) return
         val ready = CompletableDeferred<Unit>()
         pageFinished = ready
-        withContext(Dispatchers.Main) { view.loadUrl(activeUrl) }
-        try { withTimeout(30_000) { ready.await() } }
-        catch (_: TimeoutCancellationException) {
+        try {
+            withContext(Dispatchers.Main) {
+                navigate(view) { if (samePage && forceLoad) reload() else loadUrl(url) }
+            }
+            withTimeout(30_000) { ready.await() }
+        } catch (_: TimeoutCancellationException) {
             throw BrowserFailure("browser_timeout", "The page took too long to load.")
+        } finally {
+            if (pageFinished === ready) pageFinished = null
         }
     }
 
@@ -2998,109 +2992,68 @@ class BrowserSession(
     }
 
     fun releaseRenderer(view: WebView): Throwable? {
-        if (releasingView === view) return null
+        if (!releasedViews.add(view)) return null
         releasingView = view
-        // Capture the active handle while the WebView is still attached and live.
-        recordRenderProcess(view)
         return try {
             (view.parent as? android.view.ViewGroup)?.removeView(view)
-            android.util.Log.d("BrowserHost", "releaseRenderer removed-from-parent")
-            runCatching { view.stopLoading() }
-            runCatching { view.clearHistory() }
-            pendingGoneView = view
-            val outcome = terminateRenderer(view)
-            if (outcome == RendererTerminationOutcome.Requested && pendingGoneView === view) {
-                android.util.Log.d("BrowserHost",
-                    "renderer destroy deferred to gone-handler")
-                armGoneFallback(view)
-            } else if (pendingGoneView === view) {
-                pendingGoneView = null
+            if (view === renderer && rendererFailure == null) {
+                recordRenderProcess(view)
+                runCatching { view.stopLoading() }
+                pendingGoneView = view
+                val terminated = processRegistry.terminateForView(view, rendererTerminateSupported())
+                if (pendingGoneView === view) {
+                    if (terminated > 0) {
+                        pendingGoneJob = scope.launch {
+                            delay(2_000)
+                            if (pendingGoneView === view) completeGoneRenderer(view)
+                        }
+                    } else {
+                        pendingGoneView = null
+                        view.destroy()
+                    }
+                }
+            } else {
                 view.destroy()
-                android.util.Log.d("BrowserHost", "releaseRenderer destroy reached")
             }
             null
         } catch (error: Throwable) {
-            android.util.Log.w("BrowserHost", "releaseRenderer failed", error)
+            if (pendingGoneView === view) pendingGoneView = null
             error
         } finally {
+            processRegistry.onProcessGoneForView(view)
             releasingView = null
         }
     }
 
-    private fun armGoneFallback(view: WebView) {
+    private fun completeGoneRenderer(view: WebView) {
         pendingGoneJob?.cancel()
-        pendingGoneJob = scope.launch {
-            kotlinx.coroutines.delay(2_000)
-            if (pendingGoneView === view) {
-                android.util.Log.w("BrowserHost",
-                    "gone-handler did not fire; destroying the terminated view")
-                pendingGoneView = null
-                destroyGoneView(view)
-            }
-        }
+        pendingGoneJob = null
+        pendingGoneView = null
+        val failure = runCatching { view.destroy() }.exceptionOrNull()
+        if (view !== releasingView && view === renderer) completeRendererRelease(failure)
     }
 
-    private fun destroyGoneView(view: WebView) {
-        runCatching { (view.parent as? android.view.ViewGroup)?.removeView(view) }
-        runCatching { view.stopLoading() }
-        runCatching { view.clearHistory() }
-        runCatching { view.destroy() }
-            .onFailure { android.util.Log.w("BrowserHost", "gone-handler destroy failed", it) }
-        android.util.Log.d("BrowserHost", "gone-handler destroy reached")
-    }
-
-    private fun terminateRenderer(view: WebView): RendererTerminationOutcome {
-        val supported = rendererTerminateSupported()
-        if (!supported) {
-            android.util.Log.d("BrowserHost", "renderer terminate unavailable")
-            return RendererTerminationOutcome.Unsupported
-        }
-        recordRenderProcess(view)
-        val handle = runCatching { renderProcessHandleProvider(view) }.getOrNull()
-        val hasAnyHandle = handle != null || processRegistry.liveCount() > 0
-        android.util.Log.d("BrowserHost",
-            "renderer termination supported=true handle=$hasAnyHandle " +
-                "steps=${RendererTerminationPolicy.teardownSteps(true, hasAnyHandle)}")
-        val outcome = RendererTerminationPolicy.request(true, hasAnyHandle) {
-            val terminatedCount = processRegistry.terminateAll(supported = true)
-            val directTerminated = if (terminatedCount == 0 && handle != null) {
-                handle.second(handle.first)
-            } else false
-            terminatedCount > 0 || directTerminated
-        }
-        android.util.Log.d("BrowserHost",
-            "renderer terminate called outcome=$outcome")
-        return outcome
-    }
-
-    /**
-     * Session side only marks the hand-off and clears what must not keep running.
-     * The view is not touched here. BrowserHost removes it from composition, then
-     * calls onRendererReleased with the actual cleanup lambda.
-     */
     fun requestRendererTeardown() {
+        if (_state.value.teardownRequested) return
         resolvePageModal()
         periodic?.cancel()
         periodic = null
         postLoadBudgetJob?.cancel()
         postLoadBudgetJob = null
-        saveActiveSnapshot()
+        paintWatchdogJob?.cancel()
+        paintWatchdogJob = null
+        if (rendererFailure == null && !pageLoading) saveActiveSnapshot()
+        pageLoading = false
+        pageFinished?.completeExceptionally(
+            BrowserFailure("browser_renderer_unavailable", "The browser view closed before the page loaded."))
+        pageFinished = null
         if (renderer == null) {
-            android.util.Log.d("BrowserHost", "teardown request with no renderer; finishing directly")
-            processRegistry.terminateAll(rendererTerminateSupported())
             finishRendererTeardown(null)
             return
         }
-        val requested = teardown.requestDetach()
-        android.util.Log.d("BrowserHost", "requestDetach state=${teardown.state} accepted=$requested")
-        if (!requested) {
-            android.util.Log.w("BrowserHost",
-                "requestDetach refused in state=${teardown.state}; forcing teardownRequested")
-            teardown.forceRequestDetach()
-        }
+        if (!teardown.requestDetach()) teardown.forceRequestDetach()
         _state.update { it.copy(teardownRequested = true, pageReady = false) }
         armTeardownWatchdog()
-        android.util.Log.d("BrowserHost", "teardownRequested published state=${teardown.state}")
     }
 
     private fun armHangValve() {
@@ -3141,71 +3094,44 @@ class BrowserSession(
         teardownWatchdog?.cancel()
         val held = renderer ?: return
         teardownWatchdog = scope.launch {
-            kotlinx.coroutines.delay(2_000)
-            if (renderer !== held || !_state.value.teardownRequested) return@launch
-            android.util.Log.w("BrowserHost",
-                "Renderer did not leave composition within 2s; destroying held view directly")
-            forceDestroyed = held
-            releaseRenderer(held)?.let {
-                android.util.Log.w("BrowserHost", "Direct held-view destroy failed", it)
+            delay(2_000)
+            if (renderer === held && _state.value.teardownRequested && pendingGoneView !== held) {
+                onRendererReleased(held) { releaseRenderer(held) }
             }
-            finishRendererTeardown(null)
         }
     }
 
-    /**
-     * Host side: composition has removed the view. This is the only place that may
-     * destroy it. The sequencer is advanced Released -> Destroyed around cleanup.
-     */
     fun onRendererReleased(view: WebView, cleanup: () -> Throwable?) {
-        android.util.Log.d("BrowserHost", "onRelease entry state=${teardown.state} stale=${view !== renderer}")
-        if (view === forceDestroyed) {
-            forceDestroyed = null
-            android.util.Log.d("BrowserHost", "onRelease after direct destroy; cleanup already performed")
-            return
-        }
+        if (releasedViews.contains(view)) return
         if (view !== renderer) {
-            // A stale AndroidView must still not leak; clean it, but do not let it
-            // clear the live session's state.
-            val failure = cleanup()
-            android.util.Log.d("BrowserHost",
-                "onRelease stale branch cleanup=${failure == null}")
-            if (failure != null) android.util.Log.w("BrowserHost", "Stale renderer cleanup failed", failure)
+            cleanup()?.let { android.util.Log.w("BrowserHost", "Stale renderer cleanup failed", it) }
             return
         }
         if (teardown.state == RendererTeardown.State.Live) teardown.requestDetach()
         val released = teardown.release()
-        android.util.Log.d("BrowserHost", "onRelease release accepted=$released state=${teardown.state}")
-        if (!released) {
-            val failure = cleanup()
-            android.util.Log.d("BrowserHost", "onRelease out-of-order cleanup=${failure == null}")
-            finishRendererTeardown(failure ?: IllegalStateException("renderer released out of order"))
-            return
-        }
         val failure = cleanup()
-        android.util.Log.d("BrowserHost", "onRelease cleanup=${failure == null}")
-        if (!teardown.destroy()) {
-            finishRendererTeardown(IllegalStateException("renderer could not reach Destroyed"))
-            return
+        if (pendingGoneView !== view) {
+            completeRendererRelease(failure ?: if (released) null
+                else IllegalStateException("Renderer released out of order"))
         }
-        android.util.Log.d("BrowserHost", "onRelease destroy reached")
-        finishRendererTeardown(failure)
+    }
+
+    private fun completeRendererRelease(failure: Throwable?) {
+        val destroyed = teardown.destroy()
+        finishRendererTeardown(failure ?: if (destroyed) null
+            else IllegalStateException("Renderer could not reach Destroyed"))
     }
 
     private fun finishRendererTeardown(failure: Throwable?) {
         teardownWatchdog?.cancel()
         teardownWatchdog = null
-        android.util.Log.d("BrowserHost", "finishRendererTeardown failure=${failure != null}")
         scrollLayoutListener?.let { renderer?.removeOnLayoutChangeListener(it) }
         scrollLayoutListener = null
         renderer?.let { releasedRenderer = it }
         renderer = null
-        readerSampleJob?.cancel()
-        readerSampleJob = null
+        pageLoading = false
         paintWatchdogJob?.cancel()
         paintWatchdogJob = null
-        paintRecoveryJob?.cancel()
-        paintRecoveryJob = null
         lastPaintedFrame = null
         baselineOwnPss = 0L
         baselineAvailMem = 0L
@@ -3217,33 +3143,40 @@ class BrowserSession(
         periodic = null
         postLoadBudgetJob?.cancel()
         postLoadBudgetJob = null
-        processRegistry.terminateAll(rendererTerminateSupported())
-        val message = rendererFailure ?: failure?.let { "The browser view could not be closed cleanly." }
-        if (rendererFailure != null && _state.value.chatPage?.excerpt.isNullOrBlank()) dismissChatPreview()
-        rendererFailure = null
+        if (pendingRestart == null && rendererFailure != null &&
+            _state.value.chatPage?.excerpt.isNullOrBlank()) dismissChatPreview()
+        val restart = pendingRestart
+        val message = if (restart != null && failure == null) null else
+            rendererFailure ?: failure?.let { "The browser view could not be closed cleanly." }
         _state.update {
             val combined = listOfNotNull(it.error, message).distinct().joinToString(" ")
             it.copy(teardownRequested = false, rendererVisible = false, watchVisible = false,
+                rendererHostGeneration = it.rendererHostGeneration + 1,
                 pageReady = false, mode = BrowserMode.Reader, budgetCloseAction = false,
-                agentRendererUse = false, error = if (combined.isBlank()) null else combined)
+                agentRendererUse = false, error = combined.ifBlank { null },
+                errorRetry = it.errorRetry || (message != null && activeUrl.isNotBlank()))
         }
         if (failure != null) android.util.Log.w("BrowserHost", "Renderer cleanup failed", failure)
-        val restart = pendingRestart
-        pendingRestart = null
         if (restart != null && failure == null) {
-            scope.launch { restartRenderer(restart) }
+            rendererRecoveryJob = scope.launch(start = CoroutineStart.LAZY) {
+                restartRenderer(restart)
+            }
+            rendererRecoveryJob?.start()
+        } else {
+            pendingRestart = null
         }
     }
 
-    private suspend fun restartRenderer(restart: PendingPaintRestart) {
-        runCatching {
-            openVisual(restart.url, userInitiated = false, agentAction = false)
-            val view = renderer
-            val snapshot = restart.snapshot
-            if (view != null && snapshot != null) loadSnapshotState(view, snapshot)
-        }.onFailure {
-            _state.update { state ->
-                state.copy(error = "The browser view could not restart. Close the browser to recover.")
+    private suspend fun restartRenderer(restart: RendererRestart) {
+        try {
+            val result = openVisual(restart.url, userInitiated = false, agentAction = false, restart = restart)
+            lastRecoveryUrl = result.url
+        } catch (cancelled: CancellationException) {
+            throw cancelled
+        } catch (_: Exception) {
+            if (activeWindowId == restart.windowId && activeUrl == restart.url &&
+                rendererGeneration <= restart.generation + 1) {
+                _state.update { it.copy(error = "The browser view could not restart.", errorRetry = true) }
             }
         }
     }

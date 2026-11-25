@@ -51,43 +51,25 @@ class RendererTerminationPolicyTest {
         assertFalse(steps.contains(RendererTeardownStep.TerminateRenderer))
     }
 
-    @Test fun registryTerminatesPrimaryAndSecondaryProcessesAndDropsOnlySuccessfulOrGone() {
+    @Test fun registryTerminatesOnlyProcessesOwnedByTheDepartingView() {
         val registry = RendererProcessRegistry()
-        val view1 = Any()
-        val view2 = Any()
-        var p1Terminated = 0
-        var p2Terminated = 0
-        var p3Terminated = 0
-        val p1 = Any()
-        val p2 = Any()
-        val p3 = Any()
+        val departing = Any()
+        val replacement = Any()
+        val oldProcess = Any()
+        val shared = Any()
+        var oldTerminations = 0
+        var sharedTerminations = 0
 
-        registry.record(p1, ownerView = view1) { p1Terminated++; true }
-        registry.record(p1, ownerView = view1) { p1Terminated++; true } // dedup
-        registry.record(p2, ownerView = view2) { p2Terminated++; false }
-        registry.record(p3, ownerView = view1) { p3Terminated++; true }
-        assertEquals(3, registry.liveCount())
+        registry.record(oldProcess, ownerView = departing) { oldTerminations++; true }
+        registry.record(oldProcess, ownerView = departing) { oldTerminations++; true }
+        registry.record(shared, ownerView = departing) { sharedTerminations++; true }
+        registry.record(shared, ownerView = replacement) { sharedTerminations++; true }
 
-        // onRenderProcessGone for view2 removes p2 without calling terminate on it.
-        registry.onProcessGoneForView(view2)
-        assertEquals(2, registry.liveCount())
-
-        assertEquals(2, registry.terminateAll(supported = true))
-        assertEquals(1, p1Terminated)
-        assertEquals(0, p2Terminated)
-        assertEquals(1, p3Terminated)
-        assertEquals(0, registry.liveCount())
-
-        // Refused termination stays tracked for a later close retry.
-        val p4 = Any()
-        var p4Calls = 0
-        var allowTerminate = false
-        registry.record(p4, ownerView = view1) { p4Calls++; allowTerminate }
-        assertEquals(0, registry.terminateAll(supported = true))
-        assertEquals(1, p4Calls)
-        assertEquals(1, registry.liveCount())
-        allowTerminate = true
-        assertTrue(registry.terminateAll(supported = true) == 1)
+        assertEquals(1, registry.terminateForView(departing, supported = true))
+        assertEquals(1, oldTerminations)
+        assertEquals(0, sharedTerminations)
+        assertEquals(1, registry.terminateForView(replacement, supported = true))
+        assertEquals(1, sharedTerminations)
         assertEquals(0, registry.liveCount())
     }
 }
