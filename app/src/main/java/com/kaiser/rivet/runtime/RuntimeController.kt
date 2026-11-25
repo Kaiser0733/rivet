@@ -162,6 +162,9 @@ class RuntimeController(
         val publisher: ((String, String) -> Unit)? =
             if (processId == null && onOutput == null) null else ::publish
         val memoryCap = governor.memoryCapBytes()
+        val run = currentCoroutineContext()[TurnRunContext]
+        run?.commandChangesPending?.set(true)
+        run?.log("command start")
         val result = try {
             CommandProcess().run(effectiveCommand, directory.absolutePath, environment, timeoutMs,
                 onOutput = publisher, memoryCapBytes = memoryCap)
@@ -172,6 +175,7 @@ class RuntimeController(
             processId?.let { managedProcesses?.failCommand(it) }
             throw e
         } finally {
+            run?.log("command exit")
             if (credentialFile != null) {
                 withContext(NonCancellable + Dispatchers.IO) { gitHub.clearCredentialFile() }
             }
@@ -191,17 +195,10 @@ class RuntimeController(
                 result.stderrTruncated, result.timedOut, cwd, "not_started",
                 tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit,
                 stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId)) }
-        val sync = try { active.sync() }
-            catch (_: CancellationException) {
-                // The command already ran. Return its exit status with an
-                // interrupted sync so the correlated event can be persisted.
-                return@withLock RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
-                    result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
-                    "interrupted", vcsNote = worktreeVcsNote(ready.worktree),
-                    tooManyChildren = result.tooManyChildren,
-                    memoryLimit = result.memoryLimit,
-                    stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId)
-            } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
+        val sync = syncAfterCommand { active.sync() }
+        if (sync.state == MirrorSync.Ok || sync.state == MirrorSync.NoChanges) {
+            run?.commandChangesPending?.set(false)
+        }
         RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
             result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
             sync.state.code, sync.path, syncSkipped = sync.skipped, syncConflicts = sync.conflicts,
@@ -310,7 +307,7 @@ class RuntimeController(
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
-        checkpoints(workspaceId).begin(ready.worktree, runId, sessionId)
+        runPhase("checkpoint") { checkpoints(workspaceId).begin(ready.worktree, runId, sessionId) }
     }
 
     suspend fun finishCheckpoint(workspaceId: String, id: String): Boolean = operations.withLock {
@@ -318,7 +315,7 @@ class RuntimeController(
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
-        checkpoints(workspaceId).finish(id, ready.worktree)
+        runPhase("checkpoint") { checkpoints(workspaceId).finish(id, ready.worktree) }
     }
 
     suspend fun recordCheckpointPost(workspaceId: String, id: String) = operations.withLock {
@@ -326,7 +323,7 @@ class RuntimeController(
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
-        checkpoints(workspaceId).recordPost(id, ready.worktree)
+        runPhase("checkpoint") { checkpoints(workspaceId).recordPost(id, ready.worktree) }
     }
 
     suspend fun checkpointMatchesPost(workspaceId: String, id: String): Boolean = operations.withLock {
@@ -399,7 +396,7 @@ class RuntimeController(
             val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
             val ready = active.prepare()
             if (ready.dirty && !allowDirty) throw MirrorFailure("sync_required")
-            runCheckpoints(workspaceId).begin(ready.worktree, runId, sequence, summary)
+            runPhase("checkpoint") { runCheckpoints(workspaceId).begin(ready.worktree, runId, sequence, summary) }
         }
 
     suspend fun finishRunCheckpoint(workspaceId: String, id: String) {
@@ -409,8 +406,16 @@ class RuntimeController(
             // A completed run is expected to leave local edits; that is the checkpoint's
             // reason to exist. prepare() still gives the canonical worktree path.
             val ready = active.prepare()
-            runCheckpoints(workspaceId).finish(id, ready.worktree)
+            runPhase("checkpoint") { runCheckpoints(workspaceId).finish(id, ready.worktree) }
         }
+    }
+
+    suspend fun markCheckpointDesynced(workspaceId: String, id: String) {
+        checkpoints(workspaceId).markDesynced(id)
+    }
+
+    suspend fun markRunCheckpointDesynced(workspaceId: String, id: String) {
+        runCheckpoints(workspaceId).markDesynced(id)
     }
 
     suspend fun runCheckpointHistory(limit: Int = 100): List<RunCheckpointInfo> = operations.withLock {
@@ -854,3 +859,14 @@ internal fun terminalEnvironment(base: List<String>): List<String> {
     return kept + "PAGER=cat" + "GIT_PAGER=cat" + "MANPAGER=cat" + "ENV=/dev/null" +
         "TERM=xterm-256color" + "PS1=${TerminalPrompt.PS1}"
 }
+
+internal suspend fun syncAfterCommand(sync: suspend () -> MirrorSyncResult): MirrorSyncResult =
+    runPhase("sync") {
+        try {
+            sync()
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            MirrorSyncResult(MirrorSync.Failed)
+        }
+    }

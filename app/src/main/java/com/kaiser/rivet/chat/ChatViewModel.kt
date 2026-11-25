@@ -106,6 +106,7 @@ import com.kaiser.rivet.provider.withLimitLearning
 import com.kaiser.rivet.provider.resolveChatGptAccessToken
 import com.kaiser.rivet.provider.resolvedContextWindowTokens
 import com.kaiser.rivet.runtime.RunCheckpointGate
+import com.kaiser.rivet.runtime.TurnRunContext
 import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.runtime.TurnCheckpointOutcome
 import com.kaiser.rivet.runtime.ManagedProcesses
@@ -158,6 +159,8 @@ import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.coroutineScope
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.SharingStarted
@@ -186,6 +189,7 @@ import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import java.io.File
 import java.util.UUID
+import java.util.concurrent.atomic.AtomicBoolean
 
 data class UnsupportedReasoningNotice(
     val providerId: String,
@@ -1682,14 +1686,14 @@ class ChatViewModel private constructor(
         update { it.copy(run = next) }
     }
 
-    private suspend fun SessionRun.finishRun(phase: RunPhase, failure: String? = null) {
+    private suspend fun SessionRun.finishRun(phase: RunPhase, failure: String? = null, finishCheckpoint: Boolean = true) {
         val run = currentSessionRun() ?: return
         if (run.phase in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped)) return
         val next = try { RunMachine.finish(run, phase, failure) }
             catch (_: IllegalStateException) { return }
+        if (finishCheckpoint) checkpointGate.finishRunCheckpoint(next.workspaceId)
         currentRun = next
         runResumeContext = false
-        checkpointGate.finishRunCheckpoint(next.workspaceId)
         try {
             runJournal?.save(next, mirrorToProject = next.lastCompletedStep > 0 || next.toolReceipts.isNotEmpty())
             if (phase == RunPhase.Done || phase == RunPhase.Stopped) spendStore.clearRunTotals(next.id)
@@ -1990,13 +1994,17 @@ class ChatViewModel private constructor(
         pauseRequested = false
         pauseAction = { reason -> pauseRun(this, reason) }
         raiseBudgetAction = { raiseOwnedBudgetCap() }
+        val runtime = TurnRunContext(value.currentSessionId)
+        runtimeContext = runtime
         reserveTurn(true)
         runRegistry.begin(this)
-        job = runRegistry.scope.launch(start = CoroutineStart.LAZY) {
+        job = runRegistry.scope.launch(runtime, start = CoroutineStart.LAZY) {
             try {
                 body(this)
             } finally {
+                runtime.finishEnd()
                 if (activeRun === this@launchRun) {
+                    runtimeContext = null
                     runRegistry.finish(this@launchRun)
                     reserveTurn(false)
                 }
@@ -2482,26 +2490,38 @@ class ChatViewModel private constructor(
                     if (recalling) return@request AgentResponse(text = ArchiveRecall.directAnswer(recallWindows, recallQueries))
                     val request = context.requestFor(messages)
                     lastSystem = request.system
-                    val response = client.streamAgent(
+                    val runtimePhase = owner.runtimeContext
+                    val sawToken = AtomicBoolean()
+                    fun firstToken(delta: String) {
+                        if (delta.isNotEmpty() && sawToken.compareAndSet(false, true)) {
+                            runtimePhase?.log("model request first token")
+                        }
+                    }
+                    runtimePhase?.log("model request start")
+                    val response = try { client.streamAgent(
                         request = request,
                         onReasoning = { delta ->
+                            firstToken(delta)
                             if (delta.isNotEmpty()) {
                                 reasoningPreview.append(delta)
                                 // Reasoning ends before the answer starts, so anything a
                                 // window held back would sit invisible for the whole answer
                                 // phase. Publish every delta; the collapsed row keeps the
                                 // cost of showing it small.
-                                if (activeRun === owner) {
+                                if (activeRun === owner && !userCancelled) {
                                     val preview = reasoningPreview.toString()
                                     owner.update { it.copy(streamingReasoning = preview) }
                                 }
                             }
                         },
-                        onDelta = onText,
-                    )
+                        onDelta = { delta ->
+                            firstToken(delta)
+                            onText(delta)
+                        },
+                    ) } finally { runtimePhase?.log("model request end") }
                     // Whatever the answer window held back must be visible the moment the
                     // stream stops, not when the next delta or the turn happens to arrive.
-                    if (activeRun === owner) {
+                    if (activeRun === owner && !userCancelled) {
                         val text = streamPreview.toString()
                         if (text.isNotEmpty() && owner.value.streamingText != text) {
                             owner.update { it.copy(streamingText = text) }
@@ -2707,14 +2727,14 @@ class ChatViewModel private constructor(
                         currentAutonomyMode = { readAutonomyMode() },
                         onText = { delta ->
                             streamPreview.append(delta)
-                            if (activeRun === owner && delta.isNotEmpty() &&
+                            if (activeRun === owner && !userCancelled && delta.isNotEmpty() &&
                                 textWindow.shouldPublish(System.nanoTime())) {
                                 val preview = streamPreview.toString()
                                 owner.update { it.copy(streamingText = preview) }
                             }
                         },
                         onToolLifecycle = { event ->
-                            if (activeRun === owner) owner.update { state ->
+                            if (activeRun === owner && !userCancelled) owner.update { state ->
                                 val current = state.toolLifecycle.filterNot {
                                     it.correlationKey == event.correlationKey
                                 }
@@ -2800,6 +2820,7 @@ class ChatViewModel private constructor(
                     }
                 }
                 if (activeRun === owner) {
+                    owner.runtimeContext?.finishStart()
                     finish(result, durable, snapshot.config)
                     if (!starterOpening && titleEligible && result.stopReason == AgentStopReason.Completed &&
                         owner.value.error == null) {
@@ -2844,6 +2865,7 @@ class ChatViewModel private constructor(
                             try { sessions?.clearAutoTitle(sessionId) } catch (_: Exception) { }
                         }
                         persistTurn(durable, interrupted = !userCancelled)
+                        val pendingProjectChanges = owner.runtimeContext?.commandChangesPending?.get() == true
                         releaseTurn()
                         owner.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                             pendingApproval = null, activity = null,
@@ -2899,12 +2921,14 @@ class ChatViewModel private constructor(
                 browserLease.clear()
                 approvals.cancelSession(sessionId)
                 withContext(NonCancellable) {
+                    if (userCancelled || pauseRequested) supervisorScopeJob?.cancel()
                     activeSupervisor?.joinAll()
                     supervisorCollector?.cancel()
                     supervisorScopeJob?.cancel()
                     activeSupervisor = null
-                    try {
-                        when (val outcome = owner.checkpointGate.finishTurnCheckpoint()) {
+                }
+                try {
+                    when (val outcome = owner.checkpointGate.finishTurnCheckpoint()) {
                             is TurnCheckpointOutcome.Finished -> {
                                 if (outcome.hasChanges && activeRun === owner) {
                                     val record = runtime.latestCheckpoint()
@@ -2926,11 +2950,11 @@ class ChatViewModel private constructor(
                             }
                             TurnCheckpointOutcome.None -> Unit
                         }
-                    } catch (e: CancellationException) { throw e
-                    } catch (_: Exception) {
-                        if (activeRun === owner) owner.update {
-                            if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
-                        }
+                } catch (e: CancellationException) {
+                    throw e
+                } catch (_: Exception) {
+                    if (activeRun === owner && !userCancelled) owner.update {
+                        if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
                     }
                     if (ticket == generation) {
                         try { rehydrateExternalUndo(externalUndoTurnStart) }
@@ -2958,12 +2982,15 @@ class ChatViewModel private constructor(
                     activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
+                owner.runtimeContext?.finishStart()
+                val cancelled = !currentCoroutineContext().isActive || userCancelled || pauseRequested
                 val accepted = acceptedUser
                 if (accepted != null && persistAcceptedOnExit && !acceptedPersisted) {
                     withContext(NonCancellable) { persistAcceptedTail(accepted) }
                 }
                 withContext(NonCancellable) {
                     val live = currentSessionRun()
+                    if (cancelled || live?.phase == RunPhase.Running) owner.checkpointGate.abandonCheckpoints()
                     if (live != null && live.phase !in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped, RunPhase.Paused)) {
                         try {
                             if (pauseRequested && live.phase == RunPhase.Running) {
@@ -2975,7 +3002,6 @@ class ChatViewModel private constructor(
                                 } else if (pauseReason == RunPauseReason.NetworkLost) {
                                     PersistentProcessService.showNetworkPause(getApplication<Application>(), sessionDisplayName)
                                 }
-                                owner.checkpointGate.finishRunCheckpoint(live.workspaceId)
                                 try { runJournal?.save(paused) } catch (_: Exception) { }
                                 try { markTurnInterrupted(true) } catch (_: Exception) { }
                                 managedProcesses.updateRunStatus(null, null, 0)
@@ -2985,7 +3011,7 @@ class ChatViewModel private constructor(
                                 }
                             } else {
                                 finishRun(if (userCancelled) RunPhase.Stopped else RunPhase.Failed,
-                                    if (userCancelled) null else "turn ended before the run finished")
+                                    if (userCancelled) null else "turn ended before the run finished", finishCheckpoint = false)
                             }
                         } catch (_: Exception) { }
                     }
@@ -3324,12 +3350,19 @@ class ChatViewModel private constructor(
         activeRun?.takeIf { it.value.currentSessionId == request.sessionId }?.let(::stopRun)
     }
 
-    fun cancel() = stopRun(selectedState)
+    fun stop() = stopRun(selectedState)
+
+    fun cancel() = stop()
 
     private fun stopRun(owner: SessionRun) {
-        if (activeRun !== owner) return
-        browser.dismissChatPreview()
+        if (activeRun !== owner || owner.userCancelled) return
         owner.userCancelled = true
+        owner.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
+            activity = null, pendingApproval = null, toolLifecycle = emptyList(), commandRunning = false,
+            notice = "Stopped. Any completed changes remain in the project.") }
+        owner.reserveTurn(false)
+        browser.dismissChatPreview()
+        owner.runtimeContext?.let { run -> runRegistry.scope.launch(Dispatchers.IO) { run.stopProcesses() } }
         approvals.cancelSession(owner.value.currentSessionId)
         owner.job?.cancel()
     }

@@ -9,6 +9,7 @@ import com.kaiser.rivet.agent.RunSpendLedger
 import com.kaiser.rivet.agent.SpendCaps
 import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.runtime.RunCheckpointInfo
+import com.kaiser.rivet.runtime.TurnRunContext
 import com.kaiser.rivet.storage.CodingSessionHeader
 import com.kaiser.rivet.storage.ContextEstimate
 import com.kaiser.rivet.storage.SessionUsage
@@ -102,6 +103,7 @@ internal class SessionRun(initial: ChatUiState = ChatUiState()) {
     var currentCloud: Boolean = true
     var pendingRollback: String? = null
     var job: Job? = null
+    var runtimeContext: TurnRunContext? = null
     var userCancelled = false
     var pauseRequested = false
     var pauseReason = RunPauseReason.User
