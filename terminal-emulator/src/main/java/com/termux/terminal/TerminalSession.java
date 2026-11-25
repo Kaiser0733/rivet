@@ -5,9 +5,6 @@ import android.annotation.SuppressLint;
 import android.os.Handler;
 import android.os.Message;
 import android.os.ParcelFileDescriptor;
-import android.system.ErrnoException;
-import android.system.Os;
-import android.system.OsConstants;
 
 import java.io.File;
 import java.io.IOException;
@@ -53,6 +50,7 @@ public final class TerminalSession extends TerminalOutput {
 
     /** The pid of the shell process. 0 if not started and -1 if finished running. */
     int mShellPid = -1;
+    private int mMonitorPid = -1;
 
     /** The exit status of the shell process. Only valid if ${@link #mShellPid} is -1. */
     int mShellExitStatus;
@@ -122,18 +120,19 @@ public final class TerminalSession extends TerminalOutput {
     public void initializeEmulator(int columns, int rows, int cellWidthPixels, int cellHeightPixels) {
         mEmulator = new TerminalEmulator(this, columns, rows, cellWidthPixels, cellHeightPixels, mTranscriptRows, mClient);
 
-        int[] processId = new int[1];
+        int[] processId = new int[2];
         ParcelFileDescriptor reader = null;
         ParcelFileDescriptor writer = null;
         try {
             mTerminalFileDescriptor = JNI.createSubprocess(mShellPath, mCwd, mArgs, mEnv, processId, rows, columns, cellWidthPixels, cellHeightPixels);
             mShellPid = processId[0];
+            mMonitorPid = processId[1];
             mTerminalParcelFileDescriptor = ParcelFileDescriptor.adoptFd(mTerminalFileDescriptor);
             reader = mTerminalParcelFileDescriptor.dup();
             writer = mTerminalParcelFileDescriptor.dup();
         } catch (IOException | RuntimeException e) {
             finishIfRunning();
-            if (mShellPid > 0) JNI.waitFor(mShellPid);
+            if (mShellPid > 0) JNI.waitFor(mMonitorPid);
             try { if (reader != null) reader.close(); } catch (IOException ignored) { }
             try { if (writer != null) writer.close(); } catch (IOException ignored) { }
             try { if (mTerminalParcelFileDescriptor != null) mTerminalParcelFileDescriptor.close(); }
@@ -189,7 +188,7 @@ public final class TerminalSession extends TerminalOutput {
         new Thread("TermSessionWaiter[pid=" + mShellPid + "]") {
             @Override
             public void run() {
-                int processExitCode = JNI.waitFor(mShellPid);
+                int processExitCode = JNI.waitFor(mMonitorPid);
                 mMainThreadHandler.sendMessage(mMainThreadHandler.obtainMessage(MSG_PROCESS_EXITED, processExitCode));
             }
         }.start();
@@ -274,26 +273,13 @@ public final class TerminalSession extends TerminalOutput {
         notifyScreenUpdate();
     }
 
-    /** Finish this terminal session by sending SIGKILL to the shell. */
+    /** Ask the monitor to stop the shell and its descendants. */
     public void finishIfRunning() {
-        if (isRunning()) {
-            try {
-                Os.kill(-mShellPid, OsConstants.SIGKILL);
-            } catch (ErrnoException e) {
-                try { Os.kill(mShellPid, OsConstants.SIGKILL); }
-                catch (ErrnoException direct) {
-                    Logger.logWarn(mClient, LOG_TAG, "Failed sending SIGKILL: " + direct.getMessage());
-                }
-            }
-        }
+        if (isRunning()) JNI.stopSubprocess(mMonitorPid);
     }
 
     /** Cleanup resources when the process exits. */
     void cleanupResources(int exitStatus) {
-        if (mShellPid > 0) {
-            try { Os.kill(-mShellPid, OsConstants.SIGKILL); }
-            catch (ErrnoException ignored) { }
-        }
         synchronized (this) {
             mShellPid = -1;
             mShellExitStatus = exitStatus;

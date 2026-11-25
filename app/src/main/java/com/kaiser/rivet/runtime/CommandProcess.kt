@@ -3,7 +3,6 @@ package com.kaiser.rivet.runtime
 import android.os.ParcelFileDescriptor
 import android.system.OsConstants
 import java.io.IOException
-import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
@@ -55,6 +54,7 @@ internal suspend fun watchCommandTree(
     onTooManyChildren: () -> Unit,
     onMemoryLimit: () -> Unit,
     terminate: suspend () -> Unit,
+    monitorChildren: Int = 0,
 ): TreeWatchStop {
     var memorySamples = 0
     var first = true
@@ -64,7 +64,7 @@ internal suspend fun watchCommandTree(
         val tree = try { descendants(root, ProcTree.parents()) }
             catch (_: Exception) { emptySet<Int>() }
         if (tree.isNotEmpty()) onSample(tree)
-        if (tree.size > MAX_DESCENDANTS) {
+        if (tree.size > MAX_DESCENDANTS + monitorChildren) {
             onTooManyChildren()
             terminate()
             return TreeWatchStop.TooManyChildren
@@ -90,8 +90,8 @@ internal object CommandNative {
     external fun start(command: String, cwd: String, environment: Array<String>,
                        addressSpaceLimitBytes: Long): IntArray
     external fun waitFor(pid: Int): Int
-    external fun signalGroup(pid: Int, signal: Int)
-    external fun signalLeader(pid: Int, signal: Int)
+    external fun stop(pid: Int, signal: Int)
+    external fun reapStaleMonitors()
     external fun closeFd(fd: Int)
 }
 
@@ -144,8 +144,7 @@ internal class CommandProcess {
             val pid = started[0]
             val stdoutFd = try { ParcelFileDescriptor.adoptFd(started[1]) }
                 catch (e: Exception) {
-                    CommandNative.signalGroup(pid, OsConstants.SIGKILL)
-                    CommandNative.signalLeader(pid, OsConstants.SIGKILL)
+                    CommandNative.stop(pid, OsConstants.SIGKILL)
                     try { CommandNative.waitFor(pid) } catch (_: Exception) { }
                     CommandNative.closeFd(started[1])
                     CommandNative.closeFd(started[2])
@@ -153,8 +152,7 @@ internal class CommandProcess {
                 }
             val stderrFd = try { ParcelFileDescriptor.adoptFd(started[2]) }
                 catch (e: Exception) {
-                    CommandNative.signalGroup(pid, OsConstants.SIGKILL)
-                    CommandNative.signalLeader(pid, OsConstants.SIGKILL)
+                    CommandNative.stop(pid, OsConstants.SIGKILL)
                     try { CommandNative.waitFor(pid) } catch (_: Exception) { }
                     stdoutFd.close()
                     CommandNative.closeFd(started[2])
@@ -179,60 +177,26 @@ internal class CommandProcess {
                     catch (_: Exception) { /* Display failures do not interrupt the command. */ }
                 }
             } }
-            // Rules 5/6 bookkeeping: every pid seen under this command, with its start
-            // time so a reused pid is never swept by mistake.
-            val strays = ConcurrentHashMap<Int, Long>()
             val tooManyChildren = AtomicBoolean(false)
             val memoryLimit = AtomicBoolean(false)
-            fun remember(tree: Set<Int>) {
-                for (child in tree) {
-                    if (strays.containsKey(child)) continue
-                    ProcTree.startTime(child)?.let { strays.putIfAbsent(child, it) }
-                }
-            }
-            fun rememberCurrentTree() {
-                try { remember(descendants(pid, ProcTree.parents())) } catch (_: Exception) { }
-            }
-            fun sweepStrays() {
-                for ((child, started) in strays) {
-                    if (ProcTree.startTime(child) == started) ProcTree.kill(child)
-                }
-            }
-            // The watcher samples every 2 s; a burst that exits before the first sample
-            // is still counted here, and the whole session is ended in one place.
-            fun endSession() {
-                val members = ProcTree.sessionMembers(pid)
-                if (overSessionCap(pid, members)) tooManyChildren.set(true)
-                for (member in members) ProcTree.kill(member)
-            }
             val treeWatch = launch(Dispatchers.IO) {
                 watchCommandTree(
                     root = pid,
                     memoryCapBytes = memoryCapBytes,
-                    onSample = { tree -> remember(tree) },
+                    onSample = {},
                     onTooManyChildren = { tooManyChildren.set(true) },
                     onMemoryLimit = { memoryLimit.set(true) },
                     terminate = { terminate(pid, exited) },
+                    monitorChildren = 1,
                 )
             }
             try {
                 val outcome = awaitExitOrTimeout(exited, timeoutMs) {
-                    rememberCurrentTree()
                     terminate(pid, exited)
                 }
                 val exitCode = outcome.exitCode
                 val timedOut = outcome.timedOut
                 treeWatch.cancel()
-                // The foreground shell may have exited while children kept
-                // inherited output pipes open. End that process group first, then its
-                // session (background jobs can move to their own process group).
-                CommandNative.signalGroup(pid, OsConstants.SIGKILL)
-                endSession()
-                // Rule 5: children that left the group (setsid) are not reached by that
-                // kill; sweep the strays the watcher saw. Best effort: a process that
-                // forked, setsid'd and lost its parent between two samples is invisible
-                // here (ponytail: 2 s sampling; a UID-wide turn-end sweep is the upgrade).
-                sweepStrays()
                 if (withTimeoutOrNull(3000) { joinAll(stdoutReader, stderrReader) } == null) {
                     stdoutFd.close()
                     stderrFd.close()
@@ -247,9 +211,7 @@ internal class CommandProcess {
                     stderrFullTruncated = fullStderr.truncated)
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
-                    rememberCurrentTree()
                     terminate(pid, exited)
-                    endSession()
                     stdoutFd.close()
                     stderrFd.close()
                     withTimeoutOrNull(3000) { joinAll(stdoutReader, stderrReader) }
@@ -258,9 +220,7 @@ internal class CommandProcess {
             } finally {
                 treeWatch.cancel()
                 outputPublisher?.cancel()
-                CommandNative.signalGroup(pid, OsConstants.SIGKILL)
-                endSession()
-                sweepStrays()
+                if (!exited.isCompleted) CommandNative.stop(pid, OsConstants.SIGKILL)
                 stdoutFd.close()
                 stderrFd.close()
                 stdoutReader.cancel()
@@ -269,11 +229,9 @@ internal class CommandProcess {
         }
 
     private suspend fun terminate(pid: Int, exited: CompletableDeferred<Int>): Int {
-        CommandNative.signalGroup(pid, OsConstants.SIGTERM)
-        if (!exited.isCompleted) CommandNative.signalLeader(pid, OsConstants.SIGTERM)
+        if (!exited.isCompleted) CommandNative.stop(pid, OsConstants.SIGTERM)
         val graceful = withTimeoutOrNull(750) { exited.await() }
-        CommandNative.signalGroup(pid, OsConstants.SIGKILL)
-        if (!exited.isCompleted) CommandNative.signalLeader(pid, OsConstants.SIGKILL)
+        if (!exited.isCompleted) CommandNative.stop(pid, OsConstants.SIGKILL)
         return graceful ?: withTimeoutOrNull(3000) { exited.await() } ?: -OsConstants.SIGKILL
     }
 
