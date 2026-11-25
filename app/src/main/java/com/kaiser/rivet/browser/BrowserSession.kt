@@ -335,6 +335,7 @@ class BrowserSession(
     private var observedBrowserBytes = 0L
     private var elementRefs: List<BrowserElementRef> = emptyList()
     private var pendingSnapshotRestore: Pair<String, BrowserSnapshot>? = null
+    private var pendingRendererLoad: String? = null
     private var idleJob: kotlinx.coroutines.Job? = null
     private val idleArming = BrowserIdleArming()
     private var appBackgrounded = false
@@ -1968,6 +1969,13 @@ class BrowserSession(
         }
         rendererReady?.complete(view)
         rendererReady = null
+        val pendingLoad = pendingRendererLoad
+        pendingRendererLoad = null
+        if (pendingLoad != null) {
+            navigate(view) { loadUrl(pendingLoad) }
+            view.requestLayout()
+            view.invalidate()
+        }
     }
 
     internal suspend fun sampleAndRefreshBudget() {
@@ -2350,7 +2358,14 @@ class BrowserSession(
                     navigate(view) { loadUrl("about:blank") }
                 }
             } else if (activeUrl.isNotBlank() && activeUrl != "about:blank") {
-                userOpen(activeUrl, restore = true)
+                pendingSnapshotRestore = activeWindowId?.let { nextId -> next?.let { nextId to it } }
+                if (_state.value.teardownRequested || releasedRenderer != null) {
+                    // The old renderer is gone but the host is about to attach its
+                    // replacement. Loading here would build a second hidden WebView.
+                    pendingRendererLoad = activeUrl
+                } else {
+                    userOpen(activeUrl, restore = true)
+                }
             }
         } else {
             _state.update { it.copy(windows = windowSummaries()) }
