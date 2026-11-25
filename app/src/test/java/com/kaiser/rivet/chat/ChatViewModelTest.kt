@@ -1668,7 +1668,9 @@ class ChatViewModelTest {
         assertEquals("the prompt must appear once", 1,
             second.count { it.role == com.kaiser.rivet.agent.AgentRole.User && it.text == "Explain the fix" })
         assertEquals("the cut-off answer is still the tail before the retry",
-            1, second.count { it.text == "Half an answer" })
+            1, second.count { it.text.startsWith("Half an answer") })
+        assertTrue("the retry carries the incomplete marker",
+            second.single { it.text.startsWith("Half an answer") }.text.contains("incomplete", ignoreCase = true))
     }
 
     // The device path for an ultra send on River: the refusal arrives inside the stream,
