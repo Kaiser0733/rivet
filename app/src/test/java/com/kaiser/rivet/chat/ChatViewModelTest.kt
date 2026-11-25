@@ -1713,21 +1713,14 @@ class ChatViewModelTest {
         val first = sessions.load().id!!
         val other = sessions.create(null).id!!
         sessions.select(first)
-        // The flag only means something on a conversation with an unfinished turn: load() derives
-        // `interrupted` from the transcript (CodingSessions.kt:569-576) and reports false — clearing
-        // the column on the way — for an empty or finished one. Seed the turn the flag is about.
         sessions.save(listOf(AgentMessage.user("Keep working")), interrupted = true)
+        sessions.save(listOf(AgentMessage.user("Other work")), interrupted = true, expectedSessionId = other)
 
-        sessions.markInterrupted(true, first)
-        try {
-            sessions.markInterrupted(false, other)
-            throw AssertionError("a stale pointer must not clear another conversation's flag")
-        } catch (_: IllegalStateException) { /* expected */ }
+        sessions.markInterrupted(false, other)
 
-        assertEquals("the flag was not cleared through the stale pointer", true,
-            sessions.load().interrupted)
-        sessions.select(other)
-        assertEquals("the other conversation was never touched", false, sessions.load().interrupted)
+        assertTrue(sessions.load().interrupted)
+        assertFalse(sessions.load(other).interrupted)
+        assertEquals(first, sessions.load().id)
     }
 
     // The live-status clock is a fact about the turn, not about the row that prints it. The row
@@ -2003,10 +1996,7 @@ class ChatViewModelTest {
         await(viewModel) { it.ready && it.currentSessionId == first }
 
         viewModel.send("Keep working")
-        // Wait until the turn's first write is durable before moving the pointer. S1 is about the
-        // reply not following the pointer into another conversation; moving it first makes even a
-        // correct turn refuse its own first write, and the conversation is then empty by design.
-        // Acceptance is synchronous now, so the UI counters say nothing about the write.
+        // The durable user message confirms the turn has started before selection moves.
         withTimeout(5_000) {
             while (sessions.recent(first).none { it.text == "Keep working" }) delay(10)
         }
@@ -2020,7 +2010,8 @@ class ChatViewModelTest {
         assertEquals("the turn keeps writing to the conversation it started in",
             listOf("Keep working"),
             sessions.recent(first).filter { it.role == com.kaiser.rivet.agent.AgentRole.User }.map { it.text })
-        assertTrue("the refused write surfaces as a failure", viewModel.uiState.value.error != null)
+        assertEquals("Done", sessions.recent(first).last().text)
+        assertNull(viewModel.uiState.value.error)
     }
 
     // A conversation picked while a reply is streaming must not fight the running turn
