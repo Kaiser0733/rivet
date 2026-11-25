@@ -1055,6 +1055,21 @@ class ChatViewModel private constructor(
     ) {
         val trimmed = text.trim()
         val sessionId = selectedState.value.currentSessionId
+        // Stop publishes the stopped UI before the old job has finished its
+        // cancellation cleanup, but the run registry still owns the slot until
+        // that cleanup ends. A send in that gap must wait for ownership rather
+        // than be silently dropped by canStartRun.
+        val stopping = activeRun?.takeIf { it === selectedState && it.userCancelled }
+        val stopJob = stopping?.job
+        if (stopJob != null) {
+            runRegistry.scope.launch {
+                stopJob.join()
+                if (selectedState.value.currentSessionId == sessionId) {
+                    send(text, onFeedback, onAutonomyChange)
+                }
+            }
+            return
+        }
         val attachments = _composerAttachments.value[sessionId].orEmpty()
         if ((trimmed.isEmpty() && attachments.isEmpty()) || sessionId in _composerImports.value ||
             !selectedState.value.ready || selectedState.value.recoveringProjectChanges) return
