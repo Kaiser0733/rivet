@@ -842,14 +842,16 @@ class BrowserSession(
         timeoutMs: Long = 2_000L,
     ): BrowserEvalResult = actionLock.withLock {
         requireNoPageModal()
+        // A handoff is a valid open state even though it has no page URL; report the
+        // reason the user needs, not "open a page first".
+        if (_state.value.handoff != null) {
+            throw BrowserFailure("browser_handoff",
+                "Identity work moved to the phone's browser. Continue there, then share the page back.")
+        }
         if (activeUrl.isBlank()) throw BrowserFailure("browser_not_open", "Open a page first.")
         if (!_state.value.allowJs) {
             throw BrowserFailure("browser_js_disabled",
                 "JavaScript is disabled. Enable JavaScript in browser settings or use browser_read.")
-        }
-        if (_state.value.handoff != null) {
-            throw BrowserFailure("browser_handoff",
-                "Identity work moved to the phone's browser. Continue there, then share the page back.")
         }
         val expected = expectedOrigin?.takeIf { it.isNotBlank() }
         if (expected != null && BrowserEvalPolicy.originOf(expected) == null) {
