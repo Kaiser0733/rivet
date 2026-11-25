@@ -158,6 +158,7 @@ data class BrowserOpenResult(
     val capMb: Int,
     val handoff: Boolean = false,
     val httpStatus: Int? = null,
+    val readerHttpStatus: Int? = null,
     val httpWarning: String? = null,
     val nodeCount: Int = 0,
     val hasCanvas: Boolean = false,
@@ -185,6 +186,7 @@ data class BrowserStatusResult(
     val alive: Boolean,
     val healthy: Boolean,
     val mode: String,
+    val errorKind: String?,
     val url: String,
     val title: String,
     val tier: BrowserTier,
@@ -702,18 +704,17 @@ class BrowserSession(
     suspend fun openText(rawUrl: String, newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
             val url = BrowserUrlPolicy.normalize(rawUrl)
-            activeUrl = url
-            elementRefs = emptyList()
-            readerCache.navigate()
-            refreshBudget(publish = false)
             if (BrowserAuthGuard.isAuthSurface(url)) {
                 stateHandoff(url, "identity")
                 return@withLock BrowserOpenResult(url, "", 0, false, budget.tier, budget.capMb, handoff = true)
             }
-            if (newWindow || activeWindowId == null) createWindow(url, publish = false)
-            activeUrl = url
             try {
                 val page = readerService.fetchPage(url, visibleOnly = true)
+                if (newWindow || activeWindowId == null) createWindow(url, publish = false)
+                activeUrl = url
+                elementRefs = emptyList()
+                readerCache.navigate()
+                refreshBudget(publish = false)
                 val document = page.document
                 readerCache.record(readerCache.navigationToken, document, visibleOnly = true)
                 page.rawHtml?.let { readerCache.recordRaw(readerCache.navigationToken, it) }
@@ -723,7 +724,7 @@ class BrowserSession(
                 updateActiveWindow(url, document.title, publish = false)
                 BrowserOpenResult(url, document.title, document.chunks.size,
                     document.needsRenderer, budget.tier, budget.capMb,
-                    httpStatus = page.httpStatus, nodeCount = page.nodeCount,
+                    readerHttpStatus = page.httpStatus, nodeCount = page.nodeCount,
                     hasCanvas = page.hasCanvas, jsEnabled = _state.value.allowJs)
             } catch (handoff: BrowserHandoff) {
                 stateHandoff(handoff.url, handoff.reason)
@@ -946,41 +947,37 @@ class BrowserSession(
      * other projects, cookies/DOM storage (unless asked), or the domain trail.
      */
     /** Non-destructive health probe. Never creates or attaches a renderer. */
-    suspend fun status(): BrowserStatusResult {
+    suspend fun status(): BrowserStatusResult = withContext(Dispatchers.Main.immediate) {
         refreshBudget(publish = false)
-        val alive = renderer != null && !_state.value.teardownRequested
-        var width = 0
-        var height = 0
-        if (renderer != null) {
-            withContext(Dispatchers.Main) {
-                width = renderer?.width ?: 0
-                height = renderer?.height ?: 0
-            }
-        }
+        val current = _state.value
+        val gone = rendererFailure != null
+        val live = renderer?.takeUnless { gone || current.teardownRequested }
+        val alive = live != null
+        val width = live?.width ?: 0
+        val height = live?.height ?: 0
         val loopback = budget.loopbackExempt || BrowserAuthGuard.isLoopback(activeUrl)
         val guide = BrowserGovernor.tierGuide(budget.tier, loopback)
-        val readerMode = renderer == null && activeUrl.isNotBlank()
-        val healthy = when {
-            readerMode -> true
-            alive -> width > 1 && height > 1 && rendererFailure == null
-            else -> false
-        }
-        val modal = _state.value.modal
+        val readerMode = renderer == null && (current.readerMode || reader != null)
+        val healthy = !gone && (readerMode || (alive && width > 1 && height > 1))
+        val modal = current.modal
         val hint = when {
+            gone -> "The renderer is gone. Call browser_reset(reopen=true) to rebuild it."
             modal != null -> "page_modal_blocked: a JavaScript ${modal.kind.name.lowercase()} dialog is showing. " +
                 "Call browser_reset(reopen=true) to clear it."
             alive && (width <= 1 || height <= 1) ->
                 "Viewport is degenerate (1x1). Call browser_reset(reopen=true) to rebuild the renderer."
             else -> null
         }
-        return BrowserStatusResult(
+        BrowserStatusResult(
             alive = alive,
             healthy = healthy,
             mode = when {
+                gone -> "gone"
                 alive -> "renderer"
                 readerMode -> "reader"
                 else -> "none"
             },
+            errorKind = if (gone) "browser_renderer_unavailable" else null,
             url = _state.value.url.ifBlank { activeUrl },
             title = _state.value.title.ifBlank { activeTitle },
             tier = budget.tier,
@@ -989,7 +986,7 @@ class BrowserSession(
             tierAllows = guide.summary,
             viewportWidth = width,
             viewportHeight = height,
-            pageReady = _state.value.pageReady,
+            pageReady = !gone && current.pageReady,
             allowJs = _state.value.allowJs,
             userDriving = _state.value.driving == BrowserDriving.User,
             handoff = _state.value.handoff != null,

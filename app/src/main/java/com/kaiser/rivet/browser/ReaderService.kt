@@ -18,7 +18,7 @@ data class ReaderPage(
     val hasCanvas: Boolean,
 )
 
-/** Renderer-free fetching and extraction. Never sets a User-Agent. */
+/** Renderer-free fetching and extraction. */
 class ReaderService(private val client: OkHttpClient = defaultClient()) {
     suspend fun fetch(url: String): ReaderDocument = fetchPage(url).document
 
@@ -29,18 +29,19 @@ class ReaderService(private val client: OkHttpClient = defaultClient()) {
             val request = Request.Builder()
                 .url(target)
                 .header("Accept", "text/html,application/xhtml+xml,text/plain;q=0.9,*/*;q=0.1")
+                .header("User-Agent", BrowserDesktopMode.DESKTOP_USER_AGENT)
                 .get().build()
             val response = try { client.newCall(request).execute() }
             catch (_: IOException) { throw BrowserFailure("browser_network", "Rivet couldn't reach that page. Check the address and connection.") }
             response.use {
                 if (it.code in 300..399) {
-                    val location = it.header("Location") ?: throw BrowserFailure("browser_http", "The page redirected without a target.")
+                    val location = it.header("Location") ?: throw BrowserFailure("browser_reader_http", "The reader received a redirect without a destination.")
                     target = it.request.url.resolve(location)?.toString()
-                        ?: throw BrowserFailure("browser_http", "The page redirected to an invalid address.")
+                        ?: throw BrowserFailure("browser_reader_http", "The reader received an invalid redirect address.")
                     if (BrowserAuthGuard.isAuthSurface(target)) throw BrowserHandoff(target, "identity")
                     return@use
                 }
-                if (!it.isSuccessful) throw BrowserFailure("browser_http", "The page returned HTTP ${it.code}. Use browser_open to inspect the real response or check preview_entry.")
+                if (!it.isSuccessful) throw BrowserFailure("browser_reader_http", "The reader request returned HTTP ${it.code}.")
                 val finalUrl = it.request.url.toString()
                 if (BrowserAuthGuard.isAuthSurface(finalUrl)) throw BrowserHandoff(finalUrl, "identity")
                 val body = it.body ?: throw BrowserFailure("browser_empty", "The page returned no content.")

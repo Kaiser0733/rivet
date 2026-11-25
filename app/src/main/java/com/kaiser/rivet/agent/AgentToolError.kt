@@ -111,7 +111,7 @@ internal object AgentToolError {
         "browser_teardown_pending" to "Wait for the browser to finish closing, then retry.",
         "browser_timeout" to "Check the server/process and retry browser_open, or call browser_reset(reopen=true).",
         "browser_network" to "Check the URL, server process, and connection, then retry.",
-        "browser_http" to "Check preview_entry/server routes or retry browser_open; a 4xx/5xx page may still be readable.",
+        "browser_reader_http" to "If the page is open in the browser view, try browser_read there. Check the URL if the reader request still fails.",
         "browser_too_large" to "Use a smaller page or open it in the phone's browser.",
         "browser_redirect" to "Use the final page URL or check the server redirects.",
     )

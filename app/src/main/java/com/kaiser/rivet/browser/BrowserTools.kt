@@ -117,6 +117,7 @@ class BrowserTools(private val session: BrowserSession) {
                         put("tier_note", BrowserGovernor.tierGuide(result.tier, loopback).summary)
                 }
                 result.httpStatus?.let { put("http_status", it) }
+                result.readerHttpStatus?.let { put("reader_http_status", it) }
                 result.httpWarning?.let { put("http_warning", it) }
                 put("node_count", result.nodeCount)
                 put("has_canvas", result.hasCanvas)
@@ -410,6 +411,7 @@ class BrowserTools(private val session: BrowserSession) {
             put("alive", result.alive)
             put("healthy", result.healthy)
             put("mode", result.mode)
+            result.errorKind?.let { put("error_kind", it) }
             put("url", result.url)
             put("title", result.title)
             put("tier", result.tier.name.lowercase())
