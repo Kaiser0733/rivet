@@ -128,6 +128,9 @@ the model was ticked.
   `ModelLimitLoopTest`, `ContextBudgetTest`, `ProviderConfigTest`,
   `HttpErrorTest`, `ProviderErrorClassificationTest`, and
   `SubagentPoolTest`.
+- Provider wire-shape suites — **77 tests, 0 failures**: `AnthropicClientTest`,
+  `GeminiClientTest`, and `OpenAiCompatibleClientTest`. The runner needs
+  `-Djava.net.preferIPv4Stack=true` for MockWebServer in this sandbox.
 - `AgentLoopTest` — **60 of 66 passed** in the same harness. The 6 failures all
   fail at `AgentToolExecutor` static initialisation with
   `NoClassDefFoundError: android/content/pm/PackageManager$NameNotFoundException`;
