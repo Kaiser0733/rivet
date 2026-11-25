@@ -221,3 +221,13 @@ FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR
 COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER
 IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN
 CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+## Model limit data
+
+Rivet bundles a trimmed snapshot of [models.dev](https://models.dev) model
+limits (`app/src/main/resources/model-limits.tsv`). The snapshot is generated
+by `scripts/generate_model_limits.py`; it ships offline and is not fetched at
+runtime. models.dev is MIT-licensed; the full text is in
+`licenses/models.dev-MIT.txt`.
+
+Snapshot: 2026-11-25. Fields used: model id, context window, max output.
