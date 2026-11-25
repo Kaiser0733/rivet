@@ -962,6 +962,10 @@ private fun TurnBlockView(
                 is TurnPart.Answer, is TurnPart.Notice -> TurnTextPart(part, state)
             }
         }
+
+        TranscriptWorkerRows(turn.processItems.flatMap { entry ->
+            (entry.item as? AgentConversationItem.Activity)?.group?.operations.orEmpty()
+        })
     }
 }
 
@@ -1111,7 +1115,7 @@ internal fun ActivityRow(
                         id = "thinking-$groupKey-$index",
                     )
                 }
-                operations.forEach { operation -> ActivityOperationRow(operation) }
+                operations.forEach { operation -> ActivityOperationRow(operation, compact = true) }
             }
         }
     }
@@ -1120,12 +1124,16 @@ internal fun ActivityRow(
 internal val LocalOpenTranscriptWorker = staticCompositionLocalOf<((String) -> Unit)?> { null }
 
 @Composable
-internal fun ActivityOperationRow(operation: AgentActivityOperation) {
+internal fun ActivityOperationRow(operation: AgentActivityOperation, compact: Boolean = false) {
     val open = LocalOpenTranscriptWorker.current
     val workerId = operation.workerId
     val openWorker = if (open != null && workerId != null) {
         Modifier.clickable(onClickLabel = "Open worker") { open(workerId) }
     } else Modifier
+    if (workerId != null && !compact) {
+        TranscriptWorkerDetails(operation, Modifier.fillMaxWidth().then(openWorker))
+        return
+    }
     Column(Modifier.fillMaxWidth().then(openWorker)) {
         val outcome = activityOutcomeText(operation.outcome)
         Row(verticalAlignment = Alignment.CenterVertically,
