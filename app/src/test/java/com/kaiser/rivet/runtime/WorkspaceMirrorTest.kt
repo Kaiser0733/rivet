@@ -432,9 +432,8 @@ class WorkspaceMirrorTest {
         val newer = "newer external".toByteArray()
         provider.nodes.values.first { it.name == "file.txt" }.bytes.writeBytes(newer)
         val runtime = RuntimeController(runtimeContext, selection)
-        // Local-only work is settled by commandBlocker now; a same-path edit on
-        // both sides is the case that still has to be resolved by a person.
-        assertEquals("sync_required", runtime.commandBlocker())
+        // A pending same-path edit is a warning, not a command gate.
+        assertNull(runtime.commandBlocker())
         assertEquals(MirrorSync.Conflict, runtime.retryPendingChanges(tree.toString())!!.state)
 
         val otherTree = DocumentsContract.buildTreeDocumentUri(tree.authority!!, "other")
@@ -465,7 +464,6 @@ class WorkspaceMirrorTest {
             .putString("tree", tree.toString()).commit()
         runtime.discardPendingChanges(tree.toString())
         assertNull(runtime.commandBlocker())
-        runtime.requireSafCurrent()
         assertArrayEquals(newer, bytes("file.txt"))
         val tools = com.kaiser.rivet.agent.SafAgentWorkspace(workspace)
         val read = tools.read("file.txt")
@@ -677,24 +675,8 @@ class WorkspaceMirrorTest {
 
         val runtime = RuntimeController(runtimeContext, pendingSelection(runtimeContext))
 
-        runtime.requireSafCurrent()
+        runtime.retryPendingChanges(tree.toString())
         assertEquals("pending", String(bytes("file.txt")))
-    }
-
-    @Test fun aPendingCopyThatCannotSyncNamesTheBlockingPath() = runBlocking {
-        source("file.txt", "base".toByteArray())
-        val runtimeContext = pendingRuntimeContext()
-        val mirror = mirror()
-        File(mirror.prepare().worktree, "file.txt").writeText("pending")
-        provider.rejectWriteOnceFor = "file.txt"
-
-        val runtime = RuntimeController(runtimeContext, pendingSelection(runtimeContext))
-
-        try { runtime.requireSafCurrent(); fail("Expected a blocked sync") }
-        catch (failure: MirrorFailure) {
-            assertEquals("sync_required", failure.code)
-            assertEquals("file.txt", failure.path)
-        }
     }
 
     private fun pendingRuntimeContext() = object : ContextWrapper(app) {

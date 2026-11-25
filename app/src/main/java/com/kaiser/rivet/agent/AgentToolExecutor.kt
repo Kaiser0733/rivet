@@ -100,7 +100,6 @@ interface AgentWorkspace {
 class AgentToolExecutor(
     private val workspace: AgentWorkspace,
     private val runCommand: (suspend (String, String, Long) -> RuntimeCommandResult)? = null,
-    private val requireSafCurrent: suspend () -> Unit = {},
     private val gitStatus: (suspend () -> RepositoryStatus)? = null,
     private val gitDiff: (suspend (String) -> RepositoryDiff)? = null,
     private val managedProcesses: ManagedProcesses? = null,
@@ -399,7 +398,7 @@ class AgentToolExecutor(
                         skillScript = matchedScripts.firstOrNull(),
                         skillScripts = matchedScripts,
                     ) {
-                        execute(call) { requireSafCurrent()
+                        execute(call) {
                             val result = runCommand?.invoke(args.command, cwd, args.timeoutMs.toLong())
                                 ?: throw AgentWorkspaceFailure("runtime_unavailable")
                             commandResult(call, result, args)
@@ -425,7 +424,6 @@ class AgentToolExecutor(
                         blockedReason = ApprovalPolicy.blockedCommandReason(args.command),
                     ) {
                         execute(call) {
-                            requireSafCurrent()
                             val result = spawnProcess?.invoke(
                                 args.command, cwd, args.ttlMs.toLong(),
                                 args.readyWaitMs.toLong(), args.readyPattern,
@@ -576,9 +574,7 @@ class AgentToolExecutor(
                         modelRequestsApproval = args.askUser,
                     ) {
                         execute(call) {
-                            requireFileState(call)
                             client.download(args.url, contentHash).use { staged ->
-                                requireFileState(call)
                                 val saved = FileInputStream(staged.file).use { input ->
                                     workspace.writeDownloaded(target, input, overwriteHash)
                                 }
@@ -616,15 +612,9 @@ class AgentToolExecutor(
         }
     }
 
-    private suspend fun requireFileState(call: AgentToolCall) {
-        if (workspace !is RoutedAgentWorkspace || FileScopeRegistry.mutationPaths(call).none { GrantPath.isExternal(it.value) }) {
-            requireSafCurrent()
-        }
-    }
-
     private fun readOnly(call: AgentToolCall, action: suspend () -> AgentToolResult) =
         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
-            execute(call) { requireFileState(call); action() }
+            execute(call) { action() }
         }
 
     private suspend fun mutation(
@@ -650,7 +640,7 @@ class AgentToolExecutor(
                 else BasicAutonomyRisk.Elevated,
             modelRequestsApproval = modelRequestsApproval,
             memoryFact = memoryFact,
-        ) { execute(call) { requireFileState(call); action() } }
+        ) { execute(call) { action() } }
     }
 
     private suspend fun externalTargets(call: AgentToolCall): Boolean {

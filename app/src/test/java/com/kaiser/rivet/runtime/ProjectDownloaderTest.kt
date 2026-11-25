@@ -227,9 +227,7 @@ class ProjectDownloaderTest {
             val content = "downloaded bytes".toByteArray()
             server.enqueue(MockResponse().setBody(Buffer().write(content)))
             val workspace = AgentToolExecutorTest.FakeWorkspace()
-            var safChecks = 0
             val executor = AgentToolExecutor(workspace,
-                requireSafCurrent = { safChecks++ },
                 downloader = ProjectDownloader(folder, client))
             val prepared = kotlinx.coroutines.runBlocking {
                 executor.prepare(AgentToolCall("download", "download_file",
@@ -241,7 +239,6 @@ class ProjectDownloaderTest {
             val result = kotlinx.coroutines.runBlocking { prepared.execute() }
             val value = Json.parseToJsonElement(result.content).jsonObject
             assertFalse(result.error)
-            assertEquals(2, safChecks)
             assertEquals(content.toList(), workspace.downloadedBytes!!.toList())
             assertEquals("assets/asset.svg", value["path"]!!.jsonPrimitive.content)
             assertEquals(sha256(content), value["sha256"]!!.jsonPrimitive.content)

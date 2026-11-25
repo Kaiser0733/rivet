@@ -125,7 +125,8 @@ class RunCheckpointGateTest {
         // Untracked external edit changes the workspace without afterMutation updating post.
         backend.mirrorGeneration += 1
 
-        assertEquals("checkpoint_unavailable", gate.beforeMutation("worker-1", call("w1")))
+        assertNull(gate.beforeMutation("worker-1", call("w1")))
+        gate.afterMutation("worker-1", call("w1"), ok("w1"))
         assertTrue(gate.checkpointBroken)
         assertEquals(TurnCheckpointOutcome.Broken, gate.finishTurnCheckpoint())
     }
@@ -151,17 +152,19 @@ class RunCheckpointGateTest {
         worker.await()
         assertTrue(workerEntered)
 
-        // Blocker via MirrorFailure must release writeLease instead of deadlocking the next caller.
+        // A checkpoint failure keeps the mutation available and releases the
+        // write lease through afterMutation, so the next writer is not wedged.
         gate.beginTurn("ws-1", "run-1", "sess-2")
         backend.throwOnBegin = MirrorFailure("sync_required")
-        assertEquals("sync_required", gate.beforeMutation(RunCheckpointGate.COORDINATOR, call("c2")))
+        assertNull(gate.beforeMutation(RunCheckpointGate.COORDINATOR, call("c2")))
+        gate.afterMutation(RunCheckpointGate.COORDINATOR, call("c2"), ok("c2"))
         backend.throwOnBegin = null
         assertNull(gate.beforeMutation("worker-1", call("w2")))
         gate.afterMutation("worker-1", call("w2"), ok("w2"))
 
-        // Missing workspaceId also returns checkpoint_unavailable without leaking writeLease.
+        // Missing workspaceId blocks that call without leaking writeLease.
         gate.beginTurn(null, null, "sess-3")
-        assertEquals("checkpoint_unavailable", gate.beforeMutation(RunCheckpointGate.COORDINATOR, call("c3")))
+        assertEquals("workspace_unavailable", gate.beforeMutation(RunCheckpointGate.COORDINATOR, call("c3")))
         gate.beginTurn("ws-1", "run-1", "sess-4")
         assertNull(gate.beforeMutation(RunCheckpointGate.COORDINATOR, call("c4")))
         gate.afterMutation(RunCheckpointGate.COORDINATOR, call("c4"), ok("c4"))
