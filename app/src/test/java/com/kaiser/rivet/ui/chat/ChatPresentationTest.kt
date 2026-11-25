@@ -95,7 +95,7 @@ class ChatPresentationTest {
 
         val summary = processGroupSummary(listOf(operation), closed = false)
         assertEquals(ProcessActivityKind.Commands, summary.running)
-        assertEquals("Running commands · gradlew test", summary.liveLabel())
+        assertEquals("Running commands", summary.liveLabel())
 
     }
 

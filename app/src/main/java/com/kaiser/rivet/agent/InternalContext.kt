@@ -31,7 +31,7 @@ data class InternalContext(
                 SKILL_CATALOG_KIND, SKILL_INVOCATION_KIND, ToolchainContext.KIND,
                 GoalMemoryContext.KIND, RunContext.KIND, "rollback",
                 SubagentContext.POOL_KIND, SubagentContext.RESULT_KIND, CompactionNotice.KIND,
-                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND, MemoryProposalDeclined.KIND, StarterBrief.KIND) ||
+                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND, MemoryProposalDeclined.KIND, TranscriptRetry.KIND, StarterBrief.KIND) ||
             content.toByteArray(Charsets.UTF_8).size > MAX_CONTENT_BYTES ||
             digest != (if (kind == "project_snapshot") digest(encodeFiles(projectFiles)) else digest(content)) || order !in 0..64 ||
             workspaceId?.length?.let { it > 8192 } == true) return false
@@ -39,7 +39,7 @@ data class InternalContext(
         if (kind == "summary" && content.toByteArray(Charsets.UTF_8).size > TaskState.MAX_BYTES) return false
         if (workspaceId != null && workspaceId.isBlank()) return false
         if (kind !in setOf("summary", GoalMemoryContext.KIND, CompactionNotice.KIND,
-                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND, MemoryProposalDeclined.KIND) && workspaceId == null) return false
+                CompactionNotice.RESTORE_KIND, CompactionNotice.COMMAND_KIND, MemoryProposalDeclined.KIND, TranscriptRetry.KIND) && workspaceId == null) return false
         if (removed && content.isNotEmpty()) return false
         if (kind == "project_snapshot") {
             if (projectFiles.size > ProjectInstructions.MAX_FILES || content.isNotEmpty() ||
@@ -221,7 +221,7 @@ fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
     return messages.mapNotNull { message ->
         if (message.role != AgentRole.Context) message.takeIf { it.internalContext == null }
         else message.validatedContext()?.takeIf { !enforceWorkspace || it.workspaceId == workspace }
-            ?.takeIf { !CompactionNotice.isNotice(it.kind) && it.kind != MemoryProposalDeclined.KIND &&
+            ?.takeIf { !CompactionNotice.isNotice(it.kind) && it.kind != MemoryProposalDeclined.KIND && it.kind != TranscriptRetry.KIND &&
                 (it.kind != SKILL_CATALOG_KIND || message === lastCatalog) &&
                 (it.kind != ToolchainContext.KIND || message === lastToolchain) &&
                 (it.kind != GoalMemoryContext.KIND || message === lastGoalMemory && it.content.isNotBlank()) &&
@@ -230,6 +230,13 @@ fun modelMessages(messages: List<AgentMessage>, workspace: String? = null,
                 (it.kind != SubagentContext.POOL_KIND || message === lastSubagentPool) }
             ?.let { AgentMessage.user(it.modelText()) }
     }
+}
+
+internal object TranscriptRetry {
+    const val KIND = "transcript_retry"
+    const val MESSAGE = "Retrying"
+
+    fun event() = InternalContext(kind = KIND, content = MESSAGE, digest = InternalContext.digest(MESSAGE)).event()
 }
 
 internal object MemoryProposalDeclined {

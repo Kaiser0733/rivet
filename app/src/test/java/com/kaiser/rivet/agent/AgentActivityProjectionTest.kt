@@ -224,7 +224,7 @@ class AgentActivityProjectionTest {
             .single() as AgentConversationItem.Activity).group
         val rendered = group.operations.joinToString(" ") { "${it.title} ${it.detail}" }
         assertTrue(rendered.contains("Browser"))
-        assertTrue(rendered.contains("document.title"))
+        assertFalse(rendered.contains("document.title"))
         assertTrue(rendered.contains("ArrowUp"))
         assertTrue(rendered.contains("network_idle"))
         assertFalse(rendered.contains("Project operation"))
@@ -248,9 +248,38 @@ class AgentActivityProjectionTest {
             .single() as AgentConversationItem.Activity).group
         val rendered = group.operations.joinToString(" ") { "${it.title} ${it.detail}" }
         assertTrue(rendered.contains("background process"))
-        assertTrue(rendered.contains("npm run dev"))
+        assertFalse(rendered.contains("npm run dev"))
         assertTrue(rendered.contains("process-1"))
         assertFalse(rendered.contains("Project operation"))
+    }
+
+    @Test fun toolsGetConciseVerbAndTargetWithOnlyTheFirstLineOfAnError() {
+        val calls = listOf(
+            AgentToolCall("image", "read_image", """{"path":"qa-shots/t10.png"}"""),
+            AgentToolCall("memory", "remember", """{"fact":"private fact"}"""),
+            AgentToolCall("skill", "skill", """{"name":"review"}"""),
+            AgentToolCall("shell", "run_command", """{"command":"echo long command"}"""),
+        )
+        val operations = (AgentActivityProjection.conversation(listOf(
+            AgentMessage.assistant("", calls),
+            AgentMessage.tools(listOf(AgentToolResult("skill", "skill",
+                """{"error":"failed","required_action":"Could not load skill\nPrivate instructions"}""",
+                error = true))),
+        )).single() as AgentConversationItem.Activity).group.operations
+        assertEquals(listOf("Read image", "Save memory", "Load skill", "Run"), operations.map { it.title })
+        assertEquals(listOf("qa-shots/t10.png", "", "review", ""), operations.map { it.detail })
+        assertEquals("Could not load skill", operations[2].outcomeDetail)
+    }
+
+    @Test fun aRetryBreaksTheTranscriptWithoutSendingAnotherUserMessage() {
+        val action = AgentMessage.assistant("", listOf(AgentToolCall("a", "read_file", "{}")))
+        val next = AgentMessage.assistant("", listOf(AgentToolCall("b", "read_file", "{}")))
+        val user = AgentMessage.user("Keep going")
+        val messages = listOf(user, action, TranscriptRetry.event(), next)
+        val items = AgentActivityProjection.conversation(messages)
+        assertEquals(4, items.size)
+        assertEquals(AgentConversationItem.SystemNotice("Retrying"), items[2])
+        assertEquals(listOf(user, action, next), modelMessages(messages))
     }
 
 }

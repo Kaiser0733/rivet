@@ -12,6 +12,7 @@ import android.util.Log
 import com.kaiser.rivet.RivetApplication
 import androidx.lifecycle.AndroidViewModel
 import androidx.lifecycle.viewModelScope
+import com.kaiser.rivet.agent.TranscriptRetry
 import com.kaiser.rivet.agent.StarterBrief
 import com.kaiser.rivet.starter.StarterInstall
 import com.kaiser.rivet.starter.StarterInstallFailure
@@ -2193,10 +2194,11 @@ class ChatViewModel private constructor(
             // A retry always re-runs the transcript that is already there. The failed
             // request left its user message in it, and a failure after partial output also
             // left the cut-off answer, so appending the prompt again sent it twice.
-            val reuseExistingTail = retryingInterrupted
-            val pendingUser = if (reuseExistingTail || starterOpening) emptyList()
+            val pendingUser = if (retryingInterrupted || starterOpening) emptyList()
                 else listOf(acceptedUser ?: AgentMessage.user(prompt))
-            if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
+            val retryBoundary = if (retryingInterrupted) listOf(TranscriptRetry.event()) else emptyList()
+            val turnOpening = pendingUser + retryBoundary
+            if (!sessionStore.canSaveWithReserve(activeMessages + initialContext(activeMessages) + turnOpening, 0)) {
                 try {
                     val reduced = try {
                         context.prepare(activeMessages, force = true, reason = "storage_pressure")
@@ -2219,7 +2221,7 @@ class ChatViewModel private constructor(
                     return@launch
                 }
             }
-            val durable = (activeMessages + initialContext(activeMessages) + pendingUser).toMutableList()
+            val durable = (activeMessages + initialContext(activeMessages) + turnOpening).toMutableList()
             try {
                 persistTurn(durable, interrupted = true)
                 acceptedPersisted = true
@@ -2255,8 +2257,8 @@ class ChatViewModel private constructor(
             } else null
             _uiState.update {
                 it.copy(
-                    // send() already appended the accepted bubble; retries reuse the tail.
-                    messages = it.messages,
+                    // send() already appended the accepted bubble.
+                    messages = it.messages + retryBoundary,
                     sessions = updatedHistory ?: it.sessions,
                     streaming = true,
                     error = null, errorAction = null, notice = notice, unsupportedReasoning = null,

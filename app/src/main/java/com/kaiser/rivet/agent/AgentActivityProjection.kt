@@ -80,6 +80,8 @@ object AgentActivityProjection {
                 AgentRole.Context -> {
                     val context = message.validatedContext()
                     when {
+                        context?.kind == TranscriptRetry.KIND ->
+                            items += AgentConversationItem.SystemNotice(TranscriptRetry.MESSAGE)
                         context?.kind == MemoryProposalDeclined.KIND ->
                             items += AgentConversationItem.SystemNotice(MemoryProposalDeclined.MESSAGE)
                         context != null && CompactionNotice.isNotice(context.kind) ->
@@ -121,7 +123,7 @@ object AgentActivityProjection {
             title = title(call.name),
             detail = detail(call.name, args, value),
             outcome = outcome,
-            outcomeDetail = outcomeDetail,
+            outcomeDetail = outcomeDetail?.lineSequence()?.first()?.let { safeText(it, MAX_DETAIL_CHARS) },
             toolName = call.name,
         )
         val workerId = value["worker_id"].primitiveContent()?.takeIf(String::isNotBlank)
@@ -205,18 +207,17 @@ object AgentActivityProjection {
         val path = output("path") ?: arg("path")
         val text = when (name) {
             "read_file", "list_directory", "write_file", "apply_patch", "create_file", "create_directory",
-            "delete_path", "download_file" -> path ?: ""
+            "delete_path", "download_file", "read_image" -> path ?: ""
+            "skill" -> output("skill") ?: arg("name").orEmpty()
             "search_files" -> arg("query")?.let { "\"$it\"${path?.let { p -> " in $p" }.orEmpty()}" }.orEmpty()
             "git_status" -> "Git status"
             "git_diff" -> path?.takeIf(String::isNotEmpty) ?: "Project changes"
             "rename_path" -> "${arg("path").orEmpty()} → ${output("path") ?: arg("new_name").orEmpty()}"
             "move_path" -> "${arg("path").orEmpty()} → ${output("path") ?: arg("destination").orEmpty()}"
-            "run_command", "spawn_process" -> arg("command").orEmpty()
             "process_output" -> arg("process_id").orEmpty()
             "start_preview" -> output("entry") ?: arg("entry").orEmpty()
             "list_processes" -> result["processes"]?.let { "${runCatching { it.jsonArray.size }.getOrDefault(0)} active" }.orEmpty()
             "browser_open" -> arg("url") ?: arg("preview_entry") ?: ""
-            "browser_eval" -> arg("expression").orEmpty()
             "browser_key" -> arg("key").orEmpty()
             "browser_wait_for" -> listOfNotNull(
                 arg("selector")?.let { "selector:$it" },
@@ -227,7 +228,7 @@ object AgentActivityProjection {
             "browser_read", "browser_find" -> ""
             else -> ""
         }
-        return safeText(text, if (name == "run_command") MAX_COMMAND_DISPLAY_CHARS else MAX_DETAIL_CHARS)
+        return safeText(text, MAX_DETAIL_CHARS)
     }
 
     private fun title(name: String): String = when (name) {
@@ -235,6 +236,9 @@ object AgentActivityProjection {
         "await_subagents" -> "Await worker"
         "present" -> "Present files"
         "read_file" -> "Read"
+        "read_image" -> "Read image"
+        "remember" -> "Save memory"
+        "skill" -> "Load skill"
         "list_directory" -> "List"
         "search_files" -> "Search"
         "git_status", "git_diff" -> "Inspect Git"
@@ -354,5 +358,4 @@ object AgentActivityProjection {
     }
 
     private const val MAX_DETAIL_CHARS = 180
-    private const val MAX_COMMAND_DISPLAY_CHARS = 260
 }

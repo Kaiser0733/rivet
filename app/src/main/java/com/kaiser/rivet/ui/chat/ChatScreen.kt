@@ -130,7 +130,6 @@ import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.font.FontStyle
 import androidx.compose.ui.graphics.graphicsLayer
-import androidx.compose.ui.graphics.lerp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.SpanStyle
@@ -176,7 +175,6 @@ import com.kaiser.rivet.chat.PROJECT_ACCESS_LOST_MESSAGE
 import com.kaiser.rivet.chat.PROJECT_BINDING_MISMATCH_MESSAGE
 import com.kaiser.rivet.chat.projectBindingState
 import com.kaiser.rivet.ui.FoldReveal
-import com.kaiser.rivet.ui.foldOutcomeProgress
 import com.kaiser.rivet.ui.foldChevronRotation
 import com.kaiser.rivet.ui.RivetOutlinedButton
 import com.kaiser.rivet.provider.ProviderError
@@ -529,7 +527,7 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 }
                 is AgentConversationItem.Activity -> {
                     var matched: Int? = null
-                    for (idx in cursor until state.messages.size) {
+                    for (idx in (cursor - 1).coerceAtLeast(0) until state.messages.size) {
                         val m = state.messages[idx]
                         if (m.internalContext != null && m.role != AgentRole.Context) continue
                         if (m.role == AgentRole.Assistant && m.toolCalls.isNotEmpty()) {
@@ -886,98 +884,12 @@ private fun LiveStatusRow(label: String, startedAt: Long) {
 }
 
 @Composable
-private fun TurnProcessRow(
-    spec: ChatTurnProcessSpec,
-    label: String,
-    labelColor: Color,
-    open: Boolean,
-    onToggle: () -> Unit,
-    modifier: Modifier = Modifier,
-) {
-    val rotation = foldChevronRotation(open)
-    val hairlineColor = MaterialTheme.colorScheme.outlineVariant.copy(alpha = 0.5f)
-
-    Row(
-        modifier = modifier
-            .fillMaxWidth()
-            .heightIn(min = 33.dp)
-            .drawBehind {
-                val strokeWidth = 0.5.dp.toPx()
-                val y = size.height - strokeWidth / 2
-                drawLine(
-                    color = hairlineColor,
-                    start = Offset(0f, y),
-                    end = Offset(size.width, y),
-                    strokeWidth = strokeWidth
-                )
-            }
-            .then(
-                if (spec.canFold) Modifier.clickable(role = Role.Button, onClick = onToggle)
-                else Modifier
-            )
-            .padding(bottom = 4.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.SpaceBetween
-    ) {
-        Row(
-            verticalAlignment = Alignment.CenterVertically,
-            modifier = Modifier.weight(1f, fill = false)
-        ) {
-            if (spec.durationMs != null && label.startsWith("Completed in ")) {
-                Text(
-                    text = "Completed in ",
-                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                    color = labelColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-                Text(
-                    text = formatRunDuration(spec.durationMs),
-                    style = MaterialTheme.typography.bodyMedium.copy(
-                        fontSize = 14.sp,
-                        fontFamily = FontFamily.Monospace
-                    ),
-                    color = labelColor,
-                    maxLines = 1,
-                )
-            } else {
-                Text(
-                    text = label,
-                    style = MaterialTheme.typography.bodyMedium.copy(fontSize = 14.sp),
-                    color = labelColor,
-                    maxLines = 1,
-                    overflow = TextOverflow.Ellipsis
-                )
-            }
-        }
-        if (spec.canFold) {
-            Icon(
-                painter = painterResource(R.drawable.ic_chevron_down),
-                contentDescription = if (open) "Collapse turn process" else "Expand turn process",
-                modifier = Modifier
-                    .size(14.dp)
-                    .graphicsLayer { rotationZ = rotation },
-                tint = MaterialTheme.colorScheme.tertiary
-            )
-        }
-    }
-}
-
-@Composable
 private fun TurnBlockView(
     turn: SegmentedTurn<TimelineDisplayEntry>,
     state: ChatUiState,
     isLastTurn: Boolean,
     messageProgress: Float,
 ) {
-    var turnOpen by rememberSaveable(turn.turnIndex) {
-        mutableStateOf(initialFoldOpen(turn.spec.canFold))
-    }
-    LaunchedEffect(turn.spec.canFold, turn.spec.isLive) {
-        turnOpen = nextFoldOpenAfterState(turnOpen, turn.spec.canFold, turn.spec.isLive)
-    }
-    val isOpen = !turn.spec.canFold || turnOpen
-
     val lastAnswer = turn.answerItem?.item as? AgentConversationItem.Message
     val hasAnswer = lastAnswer?.message?.text?.isNotBlank() == true
     val outcome = FoldOutcomeObservation(
@@ -1021,50 +933,33 @@ private fun TurnBlockView(
             }
         }
 
-        if (turn.processItems.isNotEmpty()) {
-            if (!turn.spec.isLive) {
-                val stoppedNotice = isLastTurn && (state.notice == "Stopped. Any saved project changes remain." ||
-                    state.notice == "Stopped. Any completed changes remain in the project.")
-                val label = when {
-                    isLastTurn && turn.spec.isStopped && state.runRecovery != null &&
-                        state.run?.phase == RunPhase.Paused -> state.run.plainState().replaceFirstChar { it.titlecase() }
-                    turn.spec.isError -> "Failed"
-                    turn.spec.isStopped || stoppedNotice -> "Stopped"
-                    hasAnswer && turn.spec.durationMs != null -> turn.spec.foldLabel()
-                    else -> stringResource(R.string.open_tools)
-                }
-                val progress = key(outcome.turnStartedAt, outcome.acceptedMessageCount) {
-                    foldOutcomeProgress(revealOutcome && label.startsWith("Completed in "))
-                }
-                TurnProcessRow(
-                    spec = turn.spec,
-                    label = label,
-                    labelColor = lerp(MaterialTheme.colorScheme.onSurfaceVariant, MaterialTheme.colorScheme.onSurface, progress),
-                    open = isOpen,
-                    onToggle = { if (turn.spec.canFold) turnOpen = !turnOpen },
-                )
-            }
-            val lastProcess = turn.parts.lastOrNull { it is TurnPart.Process }
-            turn.processBody.forEach { part ->
-                when (part) {
-                    is TurnPart.Process -> {
-                        FoldReveal(expanded = isOpen) {
-                            val groups = part.items.mapNotNull { entry ->
-                                (entry.item as? AgentConversationItem.Activity)?.group
-                            }
-                            val thinking = part.items.mapNotNull { it.standaloneThinking }
-                                .filter { it.isNotBlank() }
-                            if (groups.isNotEmpty() || thinking.isNotEmpty()) {
-                                ActivityRow(
-                                    groups = groups,
-                                    thinking = thinking,
-                                    isLive = state.streaming && isLastTurn && part == lastProcess,
-                                )
-                            }
+        turn.processBody.forEachIndexed { index, part ->
+            when (part) {
+                is TurnPart.Process -> {
+                    val groups = part.items.mapNotNull { (it.item as? AgentConversationItem.Activity)?.group }
+                    val thinking = part.items.mapNotNull { it.standaloneThinking }
+                    val isTail = index == turn.parts.lastIndex
+                    if (groups.isNotEmpty()) {
+                        key(groups.first().id) {
+                            ActivityRow(
+                                groups = groups,
+                                thinking = thinking,
+                                isLive = turn.spec.isLive && isTail,
+                                turnOutcome = when {
+                                    turn.spec.isLive || index != turn.processBody.lastIndex -> null
+                                    turn.spec.isError -> "Failed"
+                                    isLastTurn && turn.spec.isStopped && state.runRecovery != null &&
+                                        state.run?.phase == RunPhase.Paused ->
+                                        state.run.plainState().replaceFirstChar { it.titlecase() }
+                                    turn.spec.isStopped -> "Stopped"
+                                    hasAnswer && turn.spec.durationMs != null -> turn.spec.foldLabel()
+                                    else -> null
+                                },
+                            )
                         }
                     }
-                    is TurnPart.Answer, is TurnPart.Notice -> TurnTextPart(part, state)
                 }
+                is TurnPart.Answer, is TurnPart.Notice -> TurnTextPart(part, state)
             }
         }
     }
@@ -1108,7 +1003,7 @@ private fun ProcessGroupHeader(
     open: Boolean,
     isLive: Boolean,
     onToggle: () -> Unit,
-    modifier: Modifier = Modifier,
+    turnOutcome: String?,
 ) {
     val rotation = foldChevronRotation(open)
     val iconRes = when (activityKind) {
@@ -1127,12 +1022,10 @@ private fun ProcessGroupHeader(
     }
 
     Row(
-        modifier = modifier
+        modifier = Modifier
             .fillMaxWidth()
-            .clickable(
-                role = Role.Button,
-                onClick = onToggle
-            )
+            .clickable(role = Role.Button, onClick = onToggle)
+            .semantics { stateDescription = if (open) "Expanded" else "Collapsed" }
             .padding(vertical = 4.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.spacedBy(6.dp)
@@ -1165,31 +1058,29 @@ private fun ProcessGroupHeader(
             overflow = TextOverflow.Ellipsis,
             modifier = Modifier.weight(1f)
         )
+        if (turnOutcome != null) {
+            Text(turnOutcome, style = MaterialTheme.typography.labelSmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+        }
     }
 }
 
 @Composable
-private fun ActivityRow(
+internal fun ActivityRow(
     groups: List<AgentActivityGroup>,
     thinking: List<String> = emptyList(),
     isLive: Boolean = false,
+    turnOutcome: String? = null,
 ) {
-    val groupKey = remember(groups, thinking) {
-        groups.joinToString("|") { it.id } + "#thinking=" + thinking.joinToString("|")
-    }
-    var expanded by rememberSaveable(groupKey) {
-        mutableStateOf(initialFoldOpen(canFold = !isLive))
-    }
-    LaunchedEffect(isLive) {
-        expanded = nextFoldOpenAfterState(expanded, canFold = !isLive, isLive = isLive)
-    }
+    val groupKey = groups.first().id
+    var expanded by rememberSaveable(groupKey) { mutableStateOf(false) }
 
     val operations = remember(groups) { groups.flatMap { it.operations } }
     val summary = remember(operations, thinking, isLive) {
         processGroupSummary(operations, thinking, closed = !isLive)
     }
     val counts = summary.counts
-    val title = if (isLive) summary.liveLabel() else summary.title()
+    val title = if (isLive && summary.running != null) summary.liveLabel() else summary.title()
     val primaryKind = counts.firstOrNull()?.kind ?: ProcessActivityKind.Thinking
 
     val config = LocalConfiguration.current
@@ -1201,7 +1092,8 @@ private fun ActivityRow(
             activityKind = primaryKind,
             open = expanded,
             isLive = isLive,
-            onToggle = { expanded = !expanded }
+            onToggle = { expanded = !expanded },
+            turnOutcome = turnOutcome,
         )
         FoldReveal(expanded = expanded) {
             Column(
@@ -1209,7 +1101,7 @@ private fun ActivityRow(
                     .fillMaxWidth()
                     .heightIn(max = maxBodyHeight)
                     .verticalScroll(rememberScrollState())
-                    .padding(top = 4.dp, bottom = 4.dp),
+                    .padding(start = 22.dp, top = 4.dp, bottom = 4.dp),
                 verticalArrangement = Arrangement.spacedBy(6.dp)
             ) {
                 thinking.forEachIndexed { index, text ->
@@ -1234,27 +1126,30 @@ internal fun ActivityOperationRow(operation: AgentActivityOperation) {
     val openWorker = if (open != null && workerId != null) {
         Modifier.clickable(onClickLabel = "Open worker") { open(workerId) }
     } else Modifier
-    Row(Modifier.fillMaxWidth().then(openWorker), verticalAlignment = Alignment.Top) {
-        Text(operation.title, Modifier.widthIn(min = 64.dp),
-            style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onBackground)
-        Column(Modifier.weight(1f)) {
-            if (operation.toolName == "spawn_subagent" || operation.toolName == "await_subagents") {
-                operation.detail.lineSequence().filter(String::isNotBlank).forEach { line ->
-                    Text(displaySafeText(line), style = MaterialTheme.typography.bodySmall,
-                        maxLines = 2, overflow = TextOverflow.Ellipsis)
-                }
-            } else if (operation.detail.isNotBlank()) Text(displaySafeText(operation.detail),
-                style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Monospace),
-                maxLines = 3, overflow = TextOverflow.Ellipsis)
-            operation.outcomeDetail?.let { Text(displaySafeText(it),
-                style = MaterialTheme.typography.bodySmall, color = MaterialTheme.colorScheme.onSurfaceVariant) }
+    Column(Modifier.fillMaxWidth().then(openWorker)) {
+        val outcome = activityOutcomeText(operation.outcome)
+        Row(verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            val target = displaySafeText(operation.detail).lineSequence().firstOrNull().orEmpty()
+            Text(
+                if (target.isBlank()) operation.title else "${operation.title} · $target",
+                modifier = Modifier.weight(1f),
+                style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onBackground,
+                maxLines = 1,
+                overflow = TextOverflow.Ellipsis,
+            )
+            Text(outcome,
+                style = MaterialTheme.typography.labelSmall, color = when (operation.outcome) {
+                    ActivityOutcome.Failed, ActivityOutcome.Denied, ActivityOutcome.Blocked -> MaterialTheme.colorScheme.error
+                    ActivityOutcome.Running, ActivityOutcome.WaitingApproval -> MaterialTheme.colorScheme.primary
+                    else -> MaterialTheme.colorScheme.onSurfaceVariant
+                })
         }
-        Text(activityOutcomeText(operation.outcome), Modifier.padding(start = 8.dp),
-            style = MaterialTheme.typography.labelSmall, color = when (operation.outcome) {
-                ActivityOutcome.Failed, ActivityOutcome.Denied, ActivityOutcome.Blocked -> MaterialTheme.colorScheme.error
-                ActivityOutcome.Running, ActivityOutcome.WaitingApproval -> MaterialTheme.colorScheme.primary
-                else -> MaterialTheme.colorScheme.onSurfaceVariant
-            })
+        operation.outcomeDetail?.takeUnless { it == outcome }?.let {
+            Text(displaySafeText(it).lineSequence().first(), style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant, maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
     }
 }
 
