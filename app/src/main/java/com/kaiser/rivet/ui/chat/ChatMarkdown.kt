@@ -244,11 +244,11 @@ private fun listItem(line: String): ListMarker? {
     return ListMarker(true, number, line.drop(end + 2))
 }
 
-internal fun parseInlineMarkdown(source: String): List<InlineRun> {
-    val codeSpans = pairSpans(source, "`", InlineStyle.Code)
-    val boldSpans = pairSpans(source, "**", InlineStyle.Bold, codeSpans)
+internal fun parseInlineMarkdown(source: String, streaming: Boolean = false): List<InlineRun> {
+    val codeSpans = pairSpans(source, "`", InlineStyle.Code, streaming = streaming)
+    val boldSpans = pairSpans(source, "**", InlineStyle.Bold, codeSpans, streaming = streaming)
     val italicSpans = pairSpans(source, "*", InlineStyle.Italic, codeSpans + boldSpans,
-        skipDoubleAsterisk = true)
+        skipDoubleAsterisk = true, streaming = streaming)
     val spans = codeSpans + boldSpans + italicSpans
     if (spans.isEmpty()) return listOf(InlineRun(source))
 
@@ -315,6 +315,7 @@ private fun pairSpans(
     style: InlineStyle,
     excluded: List<DelimitedSpan> = emptyList(),
     skipDoubleAsterisk: Boolean = false,
+    streaming: Boolean = false,
 ): List<DelimitedSpan> {
     val result = ArrayList<DelimitedSpan>()
     val excludedRanges = excluded.sortedBy { it.openStart }
@@ -345,6 +346,12 @@ private fun pairSpans(
             open = -1
         }
         index += delimiter.length
+    }
+    if (streaming && open >= 0) {
+        val contentStart = open + delimiter.length
+        val closeStart = if (style == InlineStyle.Bold && source.endsWith('*') &&
+            !source.endsWith("**") && source.lastIndex >= contentStart) source.lastIndex else source.length
+        result += DelimitedSpan(delimiter, style, open, contentStart, closeStart)
     }
     return result
 }

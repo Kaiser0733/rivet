@@ -168,4 +168,17 @@ class ChatMarkdownTest {
         assertEquals(parseAssistantMarkdown(text), first)
         assertTrue("the same text must not be parsed twice", first === again)
     }
+
+    @Test fun streamedPrefixesNeverDisplayBoldOrCodeDelimiters() {
+        val reply = "Open **the project** and read `src/App.kt`."
+        for (end in 1..reply.length) {
+            val source = reply.take(end)
+            val rendered = parseInlineMarkdown(source, streaming = true)
+            assertEquals(source.filterNot { it == '*' || it == '`' }, rendered.joinToString("") { it.text })
+        }
+        assertEquals(listOf(InlineRun("important", bold = true)), parseInlineMarkdown("**important*", streaming = true))
+        assertEquals(listOf(InlineRun("src/App.kt", code = true)), parseInlineMarkdown("`src/App.kt", streaming = true))
+        assertEquals(listOf(InlineRun("**literal")), parseInlineMarkdown("**literal"))
+    }
+
 }

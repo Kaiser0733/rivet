@@ -1373,18 +1373,16 @@ private fun MarkdownTable(table: ChatMarkdownBlock.Table) {
 @Composable
 private fun AssistantMessage(text: String, streaming: Boolean) {
     val decoded = remember(text) { com.kaiser.rivet.chat.decodeEntities(text) }
-    Column(
-        modifier = Modifier.fillMaxWidth(),
-        verticalArrangement = Arrangement.spacedBy(16.dp),
-    ) {
-        if (streaming) {
-            Text(streamingAssistantText(decoded), style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
-        } else AssistantMarkdown(decoded)
+    val source = remember(decoded, streaming) {
+        if (streaming) streamingAssistantText(decoded) else decoded
+    }
+    Box(Modifier.fillMaxWidth()) {
+        AssistantMarkdown(source, streaming = streaming)
     }
 }
 
 @Composable
-internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
+internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true, streaming: Boolean = false) {
     // The answer grows a few characters at a time while it streams. A full parse per publication
     // re-splits and re-joins the whole reply; this keeps the blocks before the last one and
     // re-parses only that block, with the same result (see MarkdownBlocks).
@@ -1393,7 +1391,7 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
     val blocks = remember(parsed) { parsed.flatMap { block ->
         if (block is ChatMarkdownBlock.Paragraph) splitParagraphImages(block.text) else listOf(block)
     } }
-    val links = LocalAssistantFileLinks.current
+    val links = LocalAssistantFileLinks.current.takeUnless { streaming }
     val paths = remember(blocks, links != null) {
         if (links == null) emptySet() else fileReferencePaths(blocks)
     }
@@ -1411,7 +1409,7 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
     Column(verticalArrangement = Arrangement.spacedBy(16.dp)) {
         blocks.forEach { block ->
             when (block) {
-                is ChatMarkdownBlock.Paragraph -> InlineMarkdown(block.text, files = files, open = open)
+                is ChatMarkdownBlock.Paragraph -> InlineMarkdown(block.text, files = files, open = open, streaming = streaming)
                 is ChatMarkdownBlock.Heading -> {
                     val style = when (block.level) {
                         1 -> MaterialTheme.typography.titleLarge
@@ -1419,20 +1417,20 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true) {
                         else -> MaterialTheme.typography.titleSmall
                     }
                     InlineMarkdown(block.text, style = style.copy(fontFamily = FontFamily.Default,
-                        fontWeight = FontWeight.SemiBold), files = files, open = open)
+                        fontWeight = FontWeight.SemiBold), files = files, open = open, streaming = streaming)
                 }
                 is ChatMarkdownBlock.Quote -> Surface(
                     color = MaterialTheme.colorScheme.surfaceVariant.copy(alpha = 0.7f),
                     shape = RoundedCornerShape(4.dp),
                 ) { InlineMarkdown(block.text, modifier = Modifier.padding(horizontal = 9.dp, vertical = 6.dp),
-                    files = files, open = open) }
+                    files = files, open = open, streaming = streaming) }
                 is ChatMarkdownBlock.ListItems -> Column(verticalArrangement = Arrangement.spacedBy(3.dp)) {
                     block.items.forEachIndexed { index, item ->
                         Row(verticalAlignment = Alignment.Top) {
                             Text(if (block.ordered) "${block.start + index}." else "•",
                                 modifier = Modifier.widthIn(min = 24.dp),
                                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default))
-                            InlineMarkdown(item, modifier = Modifier.weight(1f), files = files, open = open)
+                            InlineMarkdown(item, modifier = Modifier.weight(1f), files = files, open = open, streaming = streaming)
                         }
                     }
                 }
@@ -1502,9 +1500,10 @@ private fun InlineMarkdown(
     style: TextStyle? = null,
     files: Set<String> = emptySet(),
     open: ((String) -> Unit)? = null,
+    streaming: Boolean = false,
 ) {
     val textStyle = style ?: MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)
-    val runs = remember(text) { parseInlineMarkdown(text) }
+    val runs = remember(text, streaming) { parseInlineMarkdown(text, streaming) }
     val color = MaterialTheme.colorScheme.onBackground
     val codeBackground = MaterialTheme.colorScheme.surfaceContainer
     val linkColor = MaterialTheme.colorScheme.primary
