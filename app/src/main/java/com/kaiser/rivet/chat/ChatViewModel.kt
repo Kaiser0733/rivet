@@ -31,7 +31,6 @@ import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentToolEffect
 import com.kaiser.rivet.agent.AgentToolLifecycle
 import com.kaiser.rivet.agent.AgentRunControl
-import com.kaiser.rivet.agent.NotificationApprovals
 import com.kaiser.rivet.agent.GoalCommand
 import com.kaiser.rivet.agent.GoalDocument
 import com.kaiser.rivet.agent.GoalMemoryContext
@@ -288,6 +287,7 @@ class ChatViewModel private constructor(
     ) : this(app, sessionPersistence, providerSource, WorkspaceSelection(app), clientFactory, workerStore)
 
     private val approvals = AgentApprovalGate()
+    val pendingApproval = approvals.pending
     private val autonomyStore = AutonomyStore(app)
     val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
     val browser: BrowserSession = BrowserRuntime.forApp(app, com.kaiser.rivet.local.LocalRuntime.models())
@@ -749,7 +749,6 @@ class ChatViewModel private constructor(
                 }
             }
         }
-        NotificationApprovals.gate = approvals
         viewModelScope.launch {
             approvals.pending.collect { pending ->
                 managedProcesses.updateApproval(pending)
@@ -3182,7 +3181,7 @@ class ChatViewModel private constructor(
     }
 
     fun approve(approvalToken: Long) {
-        approvals.resolve(approvalToken, approved = true)
+        viewModelScope.launch { approvals.grant(approvalToken) }
     }
 
     fun deny(approvalToken: Long) {
@@ -3535,7 +3534,6 @@ class ChatViewModel private constructor(
 
     override fun onCleared() {
         try { connectivity?.unregisterNetworkCallback(networkCallback) } catch (_: Exception) { }
-        if (NotificationApprovals.gate === approvals) NotificationApprovals.gate = null
         terminalSession.close()
         super.onCleared()
     }

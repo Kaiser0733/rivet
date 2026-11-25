@@ -1635,12 +1635,14 @@ internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> 
         title = { Text(displaySafeText(approvalTitle(request)),
             style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            request.requester?.let { Text(displaySafeText(it), style = MaterialTheme.typography.labelMedium) }
             Text(displaySafeText(request.detail),
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily =
                     if (command) FontFamily.Monospace else FontFamily.Default))
             if (command) Text(COMMAND_APPROVAL_WARNING,
                 style = MaterialTheme.typography.bodySmall.copy(fontFamily = FontFamily.Default),
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Text("Requests expire after two minutes.", style = MaterialTheme.typography.bodySmall)
         } },
         confirmButton = { RivetOutlinedButton(onClick = { onApprove(request.approvalToken) }) {
             Text(if (delete) "Delete" else "Allow")

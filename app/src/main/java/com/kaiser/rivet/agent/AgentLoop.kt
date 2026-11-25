@@ -129,7 +129,14 @@ class AgentLoop(
                     val approval = requireNotNull(first.approval).copy(
                         detail = facts.joinToString("\n") { "• $it" },
                     )
-                    if (!requestApproval(approval)) {
+                    val approved = try { requestApproval(approval) }
+                    catch (e: ApprovalUnavailable) {
+                        stage(AgentToolLifecycleStage.Blocked)
+                        append(InternalContext.commandReply("Project memory",
+                            AgentToolError.action(e.code).orEmpty(), workspace = null))
+                        return AgentStopReason.Completed
+                    }
+                    if (!approved) {
                         stage(AgentToolLifecycleStage.Denied)
                         append(MemoryProposalDeclined.event())
                         return AgentStopReason.Completed
@@ -422,7 +429,8 @@ class AgentLoop(
                         it.first == denialKey
                     }
                     if (previous != null &&
-                        (previous.second == "denied" || previous.third == failureState())) {
+                        (previous.second in setOf("denied", "approval_expired", "approval_changed") ||
+                            previous.third == failureState())) {
                         lifecycle(call, AgentToolLifecycleStage.Blocked)
                         results += AgentToolResult(call.id, call.name,
                             AgentToolError.noProgress(previous.second), true, "Stopped  ${call.name}")
@@ -523,35 +531,43 @@ class AgentLoop(
                     }
                     val approval = if (asking) prepared.approval?.let { request ->
                         val target = request.destructivePath
+                        val createdFolder = target != null && call.name == "delete_path" && target in createdDirectories
+                        val describeLive = target != null && !createdFolder &&
+                            (target !in createdPaths || movedExistingPaths.any { it == target || it.startsWith("$target/") })
                         val described = when {
-                            target != null && call.name == "delete_path" && target in createdDirectories -> request.copy(
+                            createdFolder -> request.copy(
                                 title = "Delete folder?",
                                 detail = "${request.detail}\nThis folder may contain files added outside Rivet.",
                                 dangerous = true,
                             )
-                            target != null &&
-                                (target !in createdPaths || movedExistingPaths.any { it == target || it.startsWith("$target/") }) ->
-                                describeDestructive(request)
+                            describeLive -> describeDestructive(request)
                             else -> request
                         }
                         val describedHits = unapprovedScripts.ifEmpty { listOfNotNull(scriptHit) }
-                        if (describedHits.isNotEmpty() && scriptGate != SkillScriptGate.None) described.copy(
+                        val reviewed = described.copy(reviewAtGrant = {
+                            workspaceIsCurrent() && (!describeLive ||
+                                describeDestructive(request).let { it.title == described.title && it.detail == described.detail })
+                        })
+                        if (describedHits.isNotEmpty() && scriptGate != SkillScriptGate.None) reviewed.copy(
                             detail = described.detail +
                                 "\nBundled skill: ${describedHits.joinToString(", ") { it.skill.name }}" +
                                 "\nScript: ${describedHits.joinToString(", ") { it.path }}" +
                                 "\nApproving lets this skill's scripts run without asking again.",
-                        ) else described
+                        ) else reviewed
                     } else null
-                    val denied = asking &&
-                        (previouslyDenied || run {
+                    val rejection = if (!asking) null else if (previouslyDenied) "denied" else {
+                        try {
                             lifecycle(call, AgentToolLifecycleStage.AwaitingApproval)
-                            !requestApproval(requireNotNull(approval))
-                        })
-                    if (denied) {
-                        deniedMutations += denialKey
+                            if (requestApproval(requireNotNull(approval))) null else "denied"
+                        } catch (e: ApprovalUnavailable) {
+                            e.code
+                        }
+                    }
+                    if (rejection != null) {
+                        if (rejection == "denied") deniedMutations += denialKey
                         lifecycle(call, AgentToolLifecycleStage.Denied)
-                        results += stopped(call, "denied")
-                        deterministicFailures += Triple(denialKey, "denied", "")
+                        results += stopped(call, rejection)
+                        deterministicFailures += Triple(denialKey, rejection, "")
                         if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
                         continue
                     }
@@ -793,6 +809,8 @@ class AgentLoop(
         call.id, call.name, AgentToolError.content(code), error = true,
         summary = when (code) {
             "denied" -> "Denied  ${call.name}"
+            "approval_expired" -> "Approval expired · ${call.name}"
+            "approval_changed" -> "Approval changed · ${call.name}"
             "tool_failed" -> "Failed  ${call.name}"
             else -> "Stopped  ${call.name}"
         }.take(256).dropLastWhile { it.isHighSurrogate() },

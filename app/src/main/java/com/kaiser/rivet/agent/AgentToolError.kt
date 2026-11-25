@@ -40,6 +40,8 @@ internal object AgentToolError {
         "too_long" to "The memory fact is too long. Keep one fact under 500 characters.",
         "reserved_goal" to "goal.md belongs to the /goal command. Use /goal to change it; do not edit the goal file with file tools.",
         "approval_unavailable" to "Rivet could not safely request confirmation for this operation, so it stopped.",
+        "approval_expired" to "The approval expired. Rivet withheld the action.",
+        "approval_changed" to "The target or workspace changed while approval was pending. Rivet withheld the action.",
         "process_limit" to "Rivet already has the maximum number of active project operations. Stop one in Tools and retry.",
         "output_unavailable" to "Cached command output expired or does not exist. Re-run the command with grep, tail, or max_lines.",
         "thermal_blocked" to "The phone is too hot. Wait for it to cool before retrying, and do not retry the same long command now.",

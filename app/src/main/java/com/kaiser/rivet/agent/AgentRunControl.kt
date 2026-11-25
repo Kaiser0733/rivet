@@ -15,10 +15,3 @@ object AgentRunControl {
     }
     fun requestRaise() { mutableRaises.tryEmit(Unit) }
 }
-
-object NotificationApprovals {
-    @Volatile var gate: AgentApprovalGate? = null
-
-    fun resolve(token: Long, approved: Boolean): Boolean =
-        gate?.resolve(token, approved) ?: false
-}
