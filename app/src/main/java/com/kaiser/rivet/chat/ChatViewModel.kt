@@ -636,11 +636,7 @@ class ChatViewModel private constructor(
             val activeSend = sendJob
             if (activeSend?.isActive == true) activeSend.join()
             if (currentSessionRun()?.pause == RunPauseReason.NetworkLost) {
-                if (retryInterruptedTurn()) {
-                    _uiState.update {
-                        it.copy(notice = "Network returned — resuming the paused run.")
-                    }
-                }
+                retryInterruptedTurn(notice = "Network returned — resuming the paused run.")
             }
         }
     }
@@ -1782,7 +1778,7 @@ class ChatViewModel private constructor(
         }
     }
 
-    fun retryInterruptedTurn(): Boolean {
+    fun retryInterruptedTurn(notice: String? = null): Boolean {
         if (_uiState.value.streaming || !_uiState.value.ready ||
             _uiState.value.recoveringProjectChanges || _uiState.value.undoing ||
             !_uiState.value.interruptedTurn) return false
@@ -1793,7 +1789,7 @@ class ChatViewModel private constructor(
             openPendingStarter()
             return false
         }
-        startTurn(lastUser, retryingInterrupted = true)
+        startTurn(lastUser, retryingInterrupted = true, notice = notice)
         return true
     }
 
@@ -1847,14 +1843,15 @@ class ChatViewModel private constructor(
     }
 
     private fun startTurn(trimmed: String, retryingInterrupted: Boolean,
-                         acceptedUser: AgentMessage? = null, starterOpening: Boolean = false) {
+                         acceptedUser: AgentMessage? = null, starterOpening: Boolean = false,
+                         notice: String? = null) {
         val wasInterrupted = _uiState.value.interruptedTurn
         val ticket = ++generation
         _uiState.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
             turnStartedWallClock = System.currentTimeMillis(),
             streamingText = "", streamingReasoning = "",
             activity = "Getting ready…",
-            toolLifecycle = emptyList(), commandRunning = false, error = null, errorAction = null, notice = null,
+            toolLifecycle = emptyList(), commandRunning = false, error = null, errorAction = null, notice = notice,
             interruptedTurn = false) }
         val previous = sendJob
         sendJob = viewModelScope.launch {
@@ -2262,7 +2259,7 @@ class ChatViewModel private constructor(
                     messages = it.messages,
                     sessions = updatedHistory ?: it.sessions,
                     streaming = true,
-                    error = null, errorAction = null, notice = null, unsupportedReasoning = null,
+                    error = null, errorAction = null, notice = notice, unsupportedReasoning = null,
                     activity = "Working on it…",
                     lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
                     acceptedMessageCount = it.acceptedMessageCount,
