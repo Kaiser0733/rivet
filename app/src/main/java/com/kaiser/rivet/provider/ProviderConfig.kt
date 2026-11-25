@@ -46,15 +46,44 @@ fun recommendedFallbackReasoning(failed: ReasoningLevel): ReasoningLevel? = when
     ReasoningLevel.Default -> null
 }
 
+/** Legacy 256K guess. Kept for decoding old UI/test expectations only. */
 const val DEFAULT_CONTEXT_WINDOW_TOKENS = 262_144
 
 @Serializable
 data class ProviderHeader(val name: String, val value: String)
 
 @Serializable
-data class ModelContextLimit(val model: String, val baseUrl: String, val inputLimitTokens: Int,
-                             val maxOutputTokens: Int? = null,
-                             val supportsVision: Boolean? = null)
+enum class LimitKind {
+    @SerialName("input_only") InputOnly,
+    @SerialName("total_window") TotalWindow,
+    @SerialName("unknown") Unknown,
+}
+
+@Serializable
+data class ModelContextLimit(
+    val model: String,
+    val baseUrl: String,
+    val inputLimitTokens: Int,
+    val maxOutputTokens: Int? = null,
+    val supportsVision: Boolean? = null,
+    /** The field was an input-only cap, not a total window. */
+    val inputLimitKind: LimitKind = LimitKind.Unknown,
+    /** When this snapshot was fetched, so a newer error can win. */
+    val fetchedAt: Long = 0,
+)
+
+@Serializable
+data class ModelLimitLearning(
+    val baseUrl: String = "",
+    val contextWindowTokens: Int? = null,
+    val maxOutputTokens: Int? = null,
+    val attemptedTokens: Long? = null,
+    val observedInputTokens: Long? = null,
+    val confirmations: Int = 1,
+    val firstSeenAt: Long = 0,
+    val lastSeenAt: Long = 0,
+    val expiresAt: Long = 0,
+)
 
 @Serializable
 data class ModelTokenSettings(
@@ -88,6 +117,12 @@ data class ProviderConfig(
     val manualContextWindowTokens: Int? = null,
     val manualMaxOutputTokens: Int? = null,
     val modelTokenSettings: Map<String, ModelTokenSettings> = emptyMap(),
+    val modelLimitLearning: Map<String, ModelLimitLearning> = emptyMap(),
+    /**
+     * Local models only. The smaller of the GGUF training context and the
+     * device budget; a manual value cannot raise the native context above it.
+     */
+    val localContextCeilingTokens: Int? = null,
 )
 
 fun parseTokenCount(raw: String): Int? {
@@ -123,18 +158,34 @@ fun ProviderConfig.detectedContextWindowForModel(targetModel: String = model): I
         it.model == targetModel && it.baseUrl == baseUrl && it.inputLimitTokens > 0
     }?.inputLimitTokens
 
-fun ProviderConfig.trustedInputLimitTokens(targetModel: String = model): Int? =
-    manualContextWindowForModel(targetModel) ?: detectedContextWindowForModel(targetModel)
-
-fun ProviderConfig.resolvedContextWindowTokens(targetModel: String = model): Int =
-    manualContextWindowForModel(targetModel)
-        ?: detectedContextWindowForModel(targetModel)
-        ?: DEFAULT_CONTEXT_WINDOW_TOKENS
-
-fun ProviderConfig.resolvedManualMaxOutputTokens(targetModel: String = model): Int? =
+fun ProviderConfig.manualMaxOutputForModel(targetModel: String = model): Int? =
     (modelTokenSettings[targetModel]?.manualMaxOutputTokens
         ?: manualMaxOutputTokens?.takeIf { targetModel == model })
         ?.takeIf { it > 0 }
+
+fun ProviderConfig.resolveLimits(
+    targetModel: String = model,
+    table: KnownModelLimits = KnownModelLimits.bundled,
+    now: Long = System.currentTimeMillis(),
+): ResolvedModelLimits = ModelLimits.resolve(this, targetModel, table, now)
+
+/**
+ * A number the rest of the app may present as measured. Falls back to null
+ * for the 32K guess, so the meter and editor never print a default as fact.
+ */
+fun ProviderConfig.trustedInputLimitTokens(targetModel: String = model): Int? {
+    val resolved = resolveLimits(targetModel)
+    return resolved.input.tokens.takeIf { resolved.inputIsTrusted }
+}
+
+fun ProviderConfig.resolvedContextWindowTokens(targetModel: String = model): Int =
+    resolveLimits(targetModel).input.tokens
+
+fun ProviderConfig.resolvedMaxOutputTokens(targetModel: String = model): Int? =
+    resolveLimits(targetModel).output?.tokens?.takeIf { it > 0 }
+
+fun ProviderConfig.resolvedManualMaxOutputTokens(targetModel: String = model): Int? =
+    manualMaxOutputForModel(targetModel)
 
 fun ProviderConfig.withManualContextWindow(tokens: Int?): ProviderConfig {
     val normalized = tokens?.takeIf { it > 0 }
@@ -183,6 +234,37 @@ internal fun ProviderConfig.openRouterOutputCeiling(targetModel: String = model)
     return minOf(planned, cap ?: planned)
 }
 
+/** The value to put on the wire, gated by where it came from. */
+internal fun ProviderConfig.requestOutputLimit(targetModel: String = model): Int? {
+    if (type == ProviderType.OpenRouter && manualMaxOutputForModel(targetModel) == null) {
+        return openRouterOutputCeiling(targetModel)
+    }
+    val output = resolveLimits(targetModel).output ?: return null
+    val trusted = output.source == LimitSource.Manual ||
+        output.source == LimitSource.Provider ||
+        output.source == LimitSource.Learned ||
+        output.source == LimitSource.Local
+    if (!trusted) return null
+    // A generic gateway may reject max_completion_tokens; only a value the
+    // user set or an error taught us is worth that risk. Provider lists are
+    // sent for the first-party types, where the field is documented.
+    if (type == ProviderType.OpenAiCompatible && output.source == LimitSource.Provider) return null
+    if (output.source == LimitSource.Manual) {
+        // Manual wins for planning, but sending a value the provider has
+        // already named as too high can only fail. Clamp the wire value.
+        val cap = modelContextLimit?.takeIf { it.model == targetModel && it.baseUrl == baseUrl }
+            ?.maxOutputTokens?.takeIf { it > 0 }
+            ?: modelLimitLearning[targetModel]?.maxOutputTokens?.takeIf { it > 0 }
+            ?: localContextCeilingTokens?.takeIf { type == ProviderType.Local }?.let {
+                LocalLimitPolicyOutput(it)
+            }
+        if (cap != null && output.tokens > cap) return cap
+    }
+    return output.tokens.takeIf { it > 0 }
+}
+
+private fun LocalLimitPolicyOutput(context: Int): Int = (context / 4).coerceIn(256, 1_024)
+
 internal fun ProviderConfig.trustedAnthropicModelMetadata(): AnthropicModelMetadata? = anthropicModelMetadata?.takeIf {
     type == ProviderType.Anthropic && it.model == model && it.baseUrl == baseUrl
 }
@@ -204,7 +286,13 @@ fun ProviderConfig.selectListedModel(info: ModelInfo): ProviderConfig {
     return copy(
         model = info.id,
         modelContextLimit = if (detectedInput != null || info.supportsVision != null) {
-            ModelContextLimit(info.id, baseUrl, detectedInput ?: 0, detectedOutput, info.supportsVision)
+            ModelContextLimit(
+                info.id, baseUrl, detectedInput ?: 0, detectedOutput, info.supportsVision,
+                inputLimitKind = if (type == ProviderType.Anthropic || type == ProviderType.Gemini) {
+                    LimitKind.InputOnly
+                } else LimitKind.TotalWindow,
+                fetchedAt = System.currentTimeMillis(),
+            )
         } else null,
         anthropicModelMetadata = info.anthropicMetadata?.takeIf {
             type == ProviderType.Anthropic && it.model == info.id && it.baseUrl == baseUrl
@@ -216,8 +304,9 @@ fun ProviderConfig.selectListedModel(info: ModelInfo): ProviderConfig {
 }
 
 fun ProviderConfig.withModelId(newModel: String, listedModels: List<ModelInfo> = emptyList()): ProviderConfig {
-    val matched = listedModels.firstOrNull { it.id == newModel }
-    if (matched != null) return selectListedModel(matched)
+    val matched = ModelIdNormalizer.matchListed(newModel, listedModels)
+    if (matched != null && matched.id.equals(newModel, ignoreCase = true)) return selectListedModel(matched)
+    if (matched != null) return withMatchedLimits(newModel, matched)
     val savedManual = modelTokenSettings[newModel]
     val carryFromBlank = model.isBlank() && newModel.isNotBlank()
     val manualContext = savedManual?.manualContextWindowTokens
@@ -237,6 +326,48 @@ fun ProviderConfig.withModelId(newModel: String, listedModels: List<ModelInfo> =
         modelTokenSettings = updatedSettings,
     )
 }
+
+/**
+ * Attaches the limits of a listed model but keeps the id the user typed. A
+ * gateway may accept `openai/gpt-4o` while listing `gpt-4o`; rewriting the
+ * id would change what is sent on the wire.
+ */
+internal fun ProviderConfig.withMatchedLimits(typedModel: String, info: ModelInfo): ProviderConfig {
+    val detectedInput = info.inputLimitTokens?.takeIf { it > 0 }
+    val detectedOutput = info.outputLimitTokens?.takeIf { it > 0 }
+        ?: info.anthropicMetadata?.maxOutputTokens?.takeIf { it > 0 }
+    if (detectedInput == null && info.supportsVision == null) return copy(model = typedModel)
+    return copy(
+        model = typedModel,
+        modelContextLimit = ModelContextLimit(
+            typedModel, baseUrl, detectedInput ?: 0, detectedOutput, info.supportsVision,
+            inputLimitKind = if (type == ProviderType.Anthropic || type == ProviderType.Gemini) {
+                LimitKind.InputOnly
+            } else LimitKind.TotalWindow,
+            fetchedAt = System.currentTimeMillis(),
+        ),
+        anthropicModelMetadata = info.anthropicMetadata?.takeIf {
+            type == ProviderType.Anthropic && it.model == typedModel && it.baseUrl == baseUrl
+        },
+    )
+}
+
+/** Endpoint edits invalidate everything that was measured against the old one. */
+fun ProviderConfig.withEndpoint(type: ProviderType, baseUrl: String): ProviderConfig = copy(
+    type = type,
+    baseUrl = baseUrl,
+    modelContextLimit = null,
+    anthropicModelMetadata = null,
+    modelLimitLearning = emptyMap(),
+    localContextCeilingTokens = if (type == ProviderType.Local) localContextCeilingTokens else null,
+)
+
+fun ProviderConfig.withLimitLearning(model: String, learning: ModelLimitLearning?): ProviderConfig {
+    val next = if (learning == null) modelLimitLearning - model
+    else modelLimitLearning + (model to learning)
+    return copy(modelLimitLearning = next)
+}
+
 
 internal enum class AnthropicThinkingMode { Unsupported, Manual, Adaptive }
 
