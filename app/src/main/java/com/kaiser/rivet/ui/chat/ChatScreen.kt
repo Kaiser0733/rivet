@@ -745,13 +745,7 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         }
                         items(deliverables[turn.userItem?.messageIndex].orEmpty()) { file ->
                             if (file.inlineImage) {
-                                val links = LocalAssistantFileLinks.current
-                                val image = ChatMarkdownBlock.Image(file.description, file.path)
-                                if (isAppChatImagePath(file.path)) {
-                                    BrowserImage(image, "Screenshot unavailable.", inline = true)
-                                } else if (links != null) {
-                                    ProjectInlineImage(image, file.path, links, onOpenPreview)
-                                }
+                                TranscriptScreenshot(file, onOpenPreview)
                             } else {
                                 ProjectFileCard(PresentedFile(file.path, file.description),
                                     missing = file.path in missingFiles, onOpen = { onOpenPreview(file.path) })
@@ -1473,6 +1467,33 @@ internal fun AssistantMarkdown(text: String, showInlineImages: Boolean = true, s
                 }
             }
         }
+    }
+}
+
+@Composable
+internal fun TranscriptScreenshot(file: TurnDeliverable, onOpen: (String) -> Unit) {
+    val context = LocalContext.current
+    val links = LocalAssistantFileLinks.current
+    val localPath = file.path.takeIf(::isAppChatImagePath)
+    val projectPath = file.projectImageFallback ?: file.path.takeUnless(::isAppChatImagePath)
+    var openedPath by remember(file, links) { mutableStateOf(file.path) }
+    val image by produceState<ChatImageState>(ChatImageState.Pending, file, links) {
+        value = ChatImageState.Pending
+        loadChatImage { bounds ->
+            val local = localPath?.let { loadAppChatImage(context, it, onImageBounds = bounds) }
+            if (local is FilePreviewResult.Image) {
+                openedPath = requireNotNull(localPath)
+                local
+            } else {
+                openedPath = projectPath ?: file.path
+                if (projectPath != null && links != null) links.load(projectPath, bounds)
+                else FilePreviewResult.Missing
+            }
+        }
+    }
+    ReservedChatImage(image, file.description, open = { onOpen(openedPath) }) {
+        Text("Screenshot unavailable.", style = MaterialTheme.typography.bodySmall,
+            color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 

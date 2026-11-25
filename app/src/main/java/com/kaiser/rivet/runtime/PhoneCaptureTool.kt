@@ -38,7 +38,8 @@ internal object PhoneCaptureTool {
             if (!attachment.attached) put("vision_note", "This model has no confirmed image support. The screenshot is saved but the model can't view it.")
         }
         AgentToolResult(call.id, call.name, content.toString(), summary = label,
-            imagePath = attachment.imagePath, imageMime = if (attachment.attached) "image/png" else null)
+            imagePath = attachment.imagePath, imageMime = if (attachment.attached) "image/png" else null,
+            displayImagePath = path)
     }
 
     private fun failure(call: AgentToolCall, code: String) =

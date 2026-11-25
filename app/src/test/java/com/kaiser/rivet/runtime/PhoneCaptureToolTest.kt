@@ -1,6 +1,8 @@
 package com.kaiser.rivet.runtime
 
+import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.ui.chat.presentedFilesForTurns
 import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.provider.VisionSupport
 import kotlinx.coroutines.runBlocking
@@ -21,6 +23,20 @@ class PhoneCaptureToolTest {
         assertNull(textOnly.imagePath)
         assertTrue(textOnly.content.contains("\"vision_attached\":false"))
         assertTrue(textOnly.content.contains("the model can't view it"))
+    }
+
+    @Test fun textOnlyCaptureKeepsItsPrivateImageForTheTranscript() = runBlocking {
+        val cache = "/cache/phone-shots/shot.png"
+        val capture = PhoneCaptureResult(path = cache, width = 100, height = 200)
+        val result = PhoneCaptureTool.prepare(call, { VisionSupport.Unsupported("Text only") },
+            saveToProject = { "screenshot-shot.png" }) { capture }.execute()
+        val transcript = listOf(AgentMessage.tools(listOf(result)))
+        val image = presentedFilesForTurns(transcript).getValue(null).single()
+
+        assertNull(result.imagePath)
+        assertTrue(result.content.contains("\"path\":\"screenshot-shot.png\""))
+        assertEquals(cache, image.path)
+        assertTrue(image.inlineImage)
     }
 
     @Test fun returnsTheProjectFileAndUsesTheCaptureForVision() = runBlocking {

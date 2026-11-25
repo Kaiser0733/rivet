@@ -7,7 +7,12 @@ import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
 import kotlinx.serialization.json.jsonPrimitive
 
-internal data class TurnDeliverable(val path: String, val description: String, val inlineImage: Boolean = false)
+internal data class TurnDeliverable(
+    val path: String,
+    val description: String,
+    val inlineImage: Boolean = false,
+    val projectImageFallback: String? = null,
+)
 
 /** Keyed by the index of the user message that opened each turn, null for an initial assistant turn. */
 internal fun presentedFilesForTurns(messages: List<AgentMessage>): Map<Int?, List<TurnDeliverable>> {
@@ -29,8 +34,12 @@ internal fun presentedFilesForTurns(messages: List<AgentMessage>): Map<Int?, Lis
                     val path = runCatching {
                         Json.parseToJsonElement(result.content).jsonObject["path"]?.jsonPrimitive?.contentOrNull
                     }.getOrNull()?.takeIf(String::isNotBlank) ?: return@forEach
-                    files.getOrPut(turn, ::LinkedHashMap)[path] =
-                        TurnDeliverable(path, "Phone screenshot", inlineImage = true)
+                    files.getOrPut(turn, ::LinkedHashMap)[path] = TurnDeliverable(
+                        path = result.displayImagePath ?: path,
+                        description = "Phone screenshot",
+                        inlineImage = true,
+                        projectImageFallback = result.displayImagePath?.takeUnless { it == path }?.let { path },
+                    )
                 }
             }
         }
