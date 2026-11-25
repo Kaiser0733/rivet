@@ -256,14 +256,14 @@ internal fun ProviderConfig.requestOutputLimit(targetModel: String = model): Int
             ?.maxOutputTokens?.takeIf { it > 0 }
             ?: modelLimitLearning[targetModel]?.maxOutputTokens?.takeIf { it > 0 }
             ?: localContextCeilingTokens?.takeIf { type == ProviderType.Local }?.let {
-                LocalLimitPolicyOutput(it)
+                localOutputCap(it)
             }
         if (cap != null && output.tokens > cap) return cap
     }
     return output.tokens.takeIf { it > 0 }
 }
 
-private fun LocalLimitPolicyOutput(context: Int): Int = (context / 4).coerceIn(256, 1_024)
+private fun localOutputCap(context: Int): Int = (context / 4).coerceIn(256, 1_024)
 
 internal fun ProviderConfig.trustedAnthropicModelMetadata(): AnthropicModelMetadata? = anthropicModelMetadata?.takeIf {
     type == ProviderType.Anthropic && it.model == model && it.baseUrl == baseUrl
