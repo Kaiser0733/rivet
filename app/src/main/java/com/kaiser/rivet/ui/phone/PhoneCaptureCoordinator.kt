@@ -32,7 +32,7 @@ internal class PhoneCaptureCoordinator(context: Context) {
         if (active != null || awaitingActivityResult) return@withContext error("phone_shot_busy")
         val notifications = app.getSystemService(NotificationManager::class.java)
         if (!notifications.areNotificationsEnabled() ||
-            notifications.getNotificationChannel(PhoneCaptureService.CHANNEL)?.importance == NotificationManager.IMPORTANCE_NONE) {
+            PhoneCaptureService.captureNotificationChannel(notifications).importance == NotificationManager.IMPORTANCE_NONE) {
             return@withContext error("phone_shot_notifications_off")
         }
         val projection = app.getSystemService(MediaProjectionManager::class.java)
@@ -102,6 +102,7 @@ internal class PhoneCaptureCoordinator(context: Context) {
     }
 
     fun consent(resultCode: Int, data: Intent?) {
+        if (!awaitingActivityResult) return
         awaitingActivityResult = false
         val request = active ?: return
         if (resultCode != Activity.RESULT_OK || data == null) {

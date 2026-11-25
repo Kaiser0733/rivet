@@ -23,6 +23,7 @@ import android.os.IBinder
 import android.os.Looper
 import android.util.DisplayMetrics
 import android.view.WindowManager
+import com.kaiser.rivet.MainActivity
 import com.kaiser.rivet.RivetApplication
 import com.kaiser.rivet.runtime.PhoneCaptureResult
 import java.io.File
@@ -85,11 +86,10 @@ internal class PhoneCaptureService : Service() {
             }
             val notifications = getSystemService(NotificationManager::class.java)
             if (!notifications.areNotificationsEnabled() ||
-                notifications.getNotificationChannel(CHANNEL).importance == NotificationManager.IMPORTANCE_NONE) {
+                notifications.getNotificationChannel(notification.channelId).importance == NotificationManager.IMPORTANCE_NONE) {
                 finish(PhoneCaptureResult(error = "phone_shot_notifications_off"))
                 return
             }
-            notifications.notify(NOTIFICATION_ID, notification)
             main.postDelayed(captureDeadline, ACTION_TIMEOUT_MS)
             scope.launch {
                 repeat(20) {
@@ -109,19 +109,25 @@ internal class PhoneCaptureService : Service() {
 
     private fun notification(id: String): Notification {
         val manager = getSystemService(NotificationManager::class.java)
-        manager.createNotificationChannel(NotificationChannel(CHANNEL, "Screen capture", NotificationManager.IMPORTANCE_DEFAULT))
+        val channel = captureNotificationChannel(manager)
+        val openApp = PendingIntent.getActivity(
+            this, 0, Intent(this, MainActivity::class.java)
+                .setAction(Intent.ACTION_MAIN)
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK or Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
+            PendingIntent.FLAG_IMMUTABLE,
+        )
         fun action(name: String): PendingIntent = PendingIntent.getService(
             this, 0, intent(this, name, id), PendingIntent.FLAG_IMMUTABLE,
         )
         val capture = action(CAPTURE)
         val cancel = action(CANCEL)
-        return Notification.Builder(this, CHANNEL)
+        return Notification.Builder(this, channel.id)
             .setSmallIcon(android.R.drawable.ic_menu_camera)
             .setContentTitle("Rivet is ready to capture")
-            .setStyle(Notification.BigTextStyle().bigText("Switch apps, tap this notification, then close the notification shade."))
-            .setContentText("Switch apps, then tap this notification.")
-            .setContentIntent(capture)
+            .setContentText("Switch apps, then tap Capture now.")
+            .setContentIntent(openApp)
             .setOngoing(true)
+            .setOnlyAlertOnce(true)
             .setForegroundServiceBehaviorCompat()
             .setDeleteIntent(cancel)
             .addAction(Notification.Action.Builder(android.R.drawable.ic_menu_camera, "Capture now", capture).build())
@@ -231,13 +237,24 @@ internal class PhoneCaptureService : Service() {
     }
 
     companion object {
-        const val CHANNEL = "rivet_phone_capture"
+        private const val LEGACY_CHANNEL = "rivet_phone_capture"
+        private const val CHANNEL = "rivet_phone_capture_ready"
         private const val NOTIFICATION_ID = 648
         internal const val ACTION_TIMEOUT_MS = 120_000L
         const val ARM = "com.kaiser.rivet.phone.ARM"
         const val CONSENT = "consent"
         private const val CAPTURE = "com.kaiser.rivet.phone.CAPTURE"
         private const val CANCEL = "com.kaiser.rivet.phone.CANCEL"
+
+        internal fun captureNotificationChannel(manager: NotificationManager): NotificationChannel {
+            manager.getNotificationChannel(CHANNEL)?.let { return it }
+            val legacy = manager.getNotificationChannel(LEGACY_CHANNEL)
+            if (legacy != null && (legacy.importance != NotificationManager.IMPORTANCE_DEFAULT ||
+                    Build.VERSION.SDK_INT < 29 || legacy.hasUserSetImportance())) return legacy
+            val channel = NotificationChannel(CHANNEL, "Screen capture", NotificationManager.IMPORTANCE_HIGH)
+            manager.createNotificationChannel(channel)
+            return channel
+        }
 
         fun intent(context: Context, action: String, id: String) = Intent(context, PhoneCaptureService::class.java)
             .setAction(action).setData(Uri.parse("rivet-capture://request/$id"))
