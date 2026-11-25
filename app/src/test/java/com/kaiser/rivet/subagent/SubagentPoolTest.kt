@@ -44,7 +44,7 @@ class SubagentPoolTest {
         assertEquals(listOf("m1", "m2", "m3"), resolved.aliases)
         assertTrue(resolved.entries[0].label.contains("OpenAI"))
         assertTrue(resolved.entries[0].label.contains("gpt-4o-mini"))
-        assertTrue(resolved.entries[0].label.contains("262k"))
+        assertTrue(resolved.entries[0].label.contains("128k"))
         assertTrue(resolved.entries[0].label.contains("budget"))
         assertTrue(resolved.entries[2].label.contains("local"))
     }

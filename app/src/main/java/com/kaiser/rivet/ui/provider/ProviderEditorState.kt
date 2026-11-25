@@ -5,6 +5,7 @@ import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.manualContextWindowForModel
+import com.kaiser.rivet.provider.withEndpoint
 import com.kaiser.rivet.provider.resolvedManualMaxOutputTokens
 import java.util.Locale
 
@@ -89,8 +90,10 @@ data class TestUi(val ok: Boolean, val message: String)
 internal fun ProviderEditorState.withConfigUpdate(
     transform: (ProviderConfig) -> ProviderConfig,
 ): ProviderEditorState {
-    val next = transform(config)
-    val endpointChanged = next.type != config.type || next.baseUrl != config.baseUrl
+    val transformed = transform(config)
+    val endpointChanged = transformed.type != config.type || transformed.baseUrl != config.baseUrl
+    val next = if (endpointChanged) transformed.withEndpoint(transformed.type, transformed.baseUrl)
+        else transformed
     val modelChanged = next.model != config.model
     val enteringModelFromBlank = config.model.isBlank() && next.model.isNotBlank()
     return copy(

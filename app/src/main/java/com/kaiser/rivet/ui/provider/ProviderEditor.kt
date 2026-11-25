@@ -58,7 +58,7 @@ import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
-import com.kaiser.rivet.provider.DEFAULT_CONTEXT_WINDOW_TOKENS
+import com.kaiser.rivet.provider.resolveLimits
 import com.kaiser.rivet.provider.detectedContextWindowForModel
 import com.kaiser.rivet.provider.manualContextWindowForModel
 import com.kaiser.rivet.provider.offeredReasoning
@@ -280,41 +280,71 @@ fun ProviderEditor(
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )
 
-            val detectedContextWindow = config.detectedContextWindowForModel()
-            val manualContextWindow = config.manualContextWindowForModel()
+            val resolvedLimits = config.resolveLimits()
+            val activeWindow = resolvedLimits.input.tokens
+            val activeFormatted = String.format(Locale.US, "%,d", activeWindow)
+            val windowSource = when (resolvedLimits.input.source) {
+                com.kaiser.rivet.provider.LimitSource.Manual -> "Manual limit"
+                com.kaiser.rivet.provider.LimitSource.Learned -> "Learned from a provider error"
+                com.kaiser.rivet.provider.LimitSource.Provider -> "From provider"
+                com.kaiser.rivet.provider.LimitSource.KnownTable -> "Known model"
+                com.kaiser.rivet.provider.LimitSource.Local -> "Local model"
+                com.kaiser.rivet.provider.LimitSource.UsageFloor -> "Lower bound from a successful request"
+                com.kaiser.rivet.provider.LimitSource.Default -> "Assumed — this model was not detected"
+            }
             ProviderEditorField(
                 value = state.contextWindowInput,
                 onValueChange = viewModel::setContextWindowInput,
                 label = stringResource(R.string.provider_context_window_label),
                 placeholder = {
                     Text(
-                        if (detectedContextWindow != null) {
-                            String.format(Locale.US, "%,d (auto-detected)", detectedContextWindow)
-                        } else {
+                        if (resolvedLimits.input.source == com.kaiser.rivet.provider.LimitSource.Default) {
                             stringResource(R.string.provider_context_window_hint)
+                        } else {
+                            "$activeFormatted (auto-detected)"
                         }
                     )
                 },
                 supportingText = {
-                    val activeWindow = manualContextWindow ?: detectedContextWindow ?: DEFAULT_CONTEXT_WINDOW_TOKENS
-                    val formatted = String.format(Locale.US, "%,d", activeWindow)
-                    Text(
-                        when {
-                            manualContextWindow != null -> "Manual limit: $formatted tokens"
-                            detectedContextWindow != null -> "Auto-detected: $formatted tokens"
-                            else -> "Default: $formatted tokens (256K)"
-                        }
-                    )
+                    Text("$windowSource: $activeFormatted tokens")
+                    if (config.type == com.kaiser.rivet.provider.ProviderType.Local &&
+                        config.manualContextWindowForModel() == null
+                    ) {
+                        Text("Device-capped; the GGUF's own training context is the ceiling.")
+                    }
+                    if (config.modelLimitLearning.containsKey(config.model)) {
+                        Text(
+                            "Reset learned limit",
+                            color = MaterialTheme.colorScheme.primary,
+                            modifier = Modifier.clickable { viewModel.resetLearnedLimits() },
+                        )
+                    }
                 },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )
 
+            val resolvedOutput = resolvedLimits.output
             ProviderEditorField(
                 value = state.maxOutputTokensInput,
                 onValueChange = viewModel::setMaxOutputTokensInput,
                 label = stringResource(R.string.provider_max_output_tokens_label),
-                placeholder = { Text(stringResource(R.string.provider_max_output_tokens_hint)) },
+                placeholder = {
+                    Text(
+                        resolvedOutput?.let { String.format(Locale.US, "%,d (auto-detected)", it.tokens) }
+                            ?: stringResource(R.string.provider_max_output_tokens_hint)
+                    )
+                },
+                supportingText = if (resolvedOutput == null) null else {
+                    val source = when (resolvedOutput.source) {
+                        com.kaiser.rivet.provider.LimitSource.Manual -> "Manual limit"
+                        com.kaiser.rivet.provider.LimitSource.Learned -> "Learned from a provider error"
+                        com.kaiser.rivet.provider.LimitSource.Provider -> "From provider"
+                        com.kaiser.rivet.provider.LimitSource.KnownTable -> "Known model"
+                        else -> "Local model"
+                    }
+                    { Text("$source: ${String.format(Locale.US, "%,d", resolvedOutput.tokens)} tokens") }
+                },
                 singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(top = 8.dp),
             )

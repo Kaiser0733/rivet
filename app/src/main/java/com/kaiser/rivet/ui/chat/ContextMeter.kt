@@ -23,7 +23,7 @@ internal fun ConversationContextMeter(reading: ContextMeterReading, modifier: Mo
     val track = MaterialTheme.colorScheme.outline
     val ink = MaterialTheme.colorScheme.primary
     val label = "${reading.percent}%"
-    val window = if (reading.estimatedWindow) "estimated context window" else "context window"
+    val window = if (reading.estimatedWindow) "assumed context window" else "context window"
     Row(
         modifier.clearAndSetSemantics {
             contentDescription = "$label of $window used. About ${reading.usedTokens} of ${reading.contextWindow} tokens."
