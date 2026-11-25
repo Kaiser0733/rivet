@@ -6,6 +6,7 @@ import android.os.CancellationSignal
 import android.os.ParcelFileDescriptor
 import android.provider.DocumentsContract
 import android.provider.DocumentsContract.Document
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.io.FileNotFoundException
@@ -184,16 +185,20 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
             }
             if (entry.directory) fail(WorkspaceFailure.Reason.NOT_FILE)
             if (!entry.capabilities.write) fail(WorkspaceFailure.Reason.UNSUPPORTED)
-            if (stream(entry, null).sha256 != expectedSha256) fail(WorkspaceFailure.Reason.CONFLICT)
+            val rollback = RollbackBuffer(entry.size, MAX_ROLLBACK_BYTES)
+            if (stream(entry, rollback).sha256 != expectedSha256) fail(WorkspaceFailure.Reason.CONFLICT)
+            val original = rollback.take()
             currentCoroutineContext().ensureActive()
-            // A truncating SAF write cannot be rolled back. Keep the verified
-            // commit and its result together even if the caller is cancelled.
+            // Opening "rwt" truncates and SAF has no atomic replace, so keep the
+            // previous bytes until the new content is verified.
             withContext(NonCancellable) {
-                val descriptor = resolver.openFileDescriptor(uri(entry.documentId), "rwt")
-                    ?: fail(WorkspaceFailure.Reason.WRITE)
+                var truncated = false
                 val written = MessageDigest.getInstance("SHA-256")
                 var count = 0L
                 try {
+                    val descriptor = resolver.openFileDescriptor(uri(entry.documentId), "rwt")
+                        ?: fail(WorkspaceFailure.Reason.WRITE)
+                    truncated = true
                     ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
                         val buffer = ByteArray(64 * 1024)
                         while (true) {
@@ -210,9 +215,11 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
                         fail(WorkspaceFailure.Reason.WRITE)
                     }
                     verified
-                } catch (e: CancellationException) { throw e
-                } catch (e: WorkspaceFailure) { throw e
-                } catch (_: Exception) { fail(WorkspaceFailure.Reason.WRITE) }
+                } catch (e: Exception) {
+                    if (truncated) restore(entry, original)
+                    if (e is CancellationException || e is WorkspaceFailure) throw e
+                    fail(WorkspaceFailure.Reason.WRITE)
+                }
             }
         }
     }
@@ -234,20 +241,26 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         val bytes = WorkspaceText.encode(content)
         val entry = resolve(path)
         if (entry.directory || !entry.capabilities.write) fail(WorkspaceFailure.Reason.UNSUPPORTED)
-        WorkspaceText.requireHash(read(entry, WorkspaceText.MAX_BYTES), expectedHash)
+        val original = read(entry, WorkspaceText.MAX_BYTES)
+        WorkspaceText.requireHash(original, expectedHash)
         currentCoroutineContext().ensureActive()
-        // SAF has no portable compare-and-swap or atomic replace. Do not interrupt a commit after truncation.
+        // SAF has no portable compare-and-swap or atomic replace. Opening "rwt"
+        // truncates, so keep the previous bytes to put back if the write fails.
         return withContext(NonCancellable) {
+            var truncated = false
             try {
                 val descriptor = resolver.openFileDescriptor(uri(entry.documentId), "rwt")
                     ?: fail(WorkspaceFailure.Reason.WRITE)
+                truncated = true
                 ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { it.write(bytes); it.flush() }
                 val updated = resolve(path)
                 val actual = read(updated, WorkspaceText.MAX_BYTES)
                 if (!actual.contentEquals(bytes)) fail(WorkspaceFailure.Reason.WRITE)
                 WorkspaceText.snapshot(path, actual, updated.modifiedTime)
             } catch (e: Exception) {
-                throw WorkspaceFailure(WorkspaceFailure.Reason.WRITE)
+                if (truncated) restore(entry, original)
+                if (e is CancellationException) throw e
+                fail(WorkspaceFailure.Reason.WRITE)
             }
         }
     }
@@ -544,6 +557,16 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         }
     }
 
+    // Puts back the bytes that were there before a failed write. Best effort: a
+    // failed restore must not hide the write failure the caller needs to see.
+    private suspend fun restore(entry: WorkspaceEntry, original: ByteArray?) {
+        if (original == null) return
+        try {
+            val descriptor = resolver.openFileDescriptor(uri(entry.documentId), "rwt") ?: return
+            ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { it.write(original); it.flush() }
+        } catch (_: Exception) { }
+    }
+
     private fun requireNonRoot(path: WorkspacePath) {
         if (path.isRoot) fail(WorkspaceFailure.Reason.ROOT)
     }
@@ -553,5 +576,33 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
     private companion object {
         const val MAX_STRUCTURAL_ENTRIES = 50_000
         const val MAX_STRUCTURAL_BYTES = 1024L * 1024 * 1024
+        // A failed write can only be undone while the previous bytes are still
+        // in memory. Larger files are written without a rollback copy.
+        const val MAX_ROLLBACK_BYTES = 8 * 1024 * 1024
     }
+}
+
+// Holds a document's previous bytes so a failed write can put them back. A file
+// over the cap is not held, and the write then runs without a rollback copy.
+private class RollbackBuffer(size: Long?, private val limit: Int) : OutputStream() {
+    private val bytes = ByteArrayOutputStream(
+        if (size != null && size in 0..limit.toLong()) size.toInt() else 0,
+    )
+    private var overflowed = false
+
+    override fun write(b: Int) {
+        if (bytes.size() >= limit) overflowed = true else bytes.write(b)
+    }
+
+    override fun write(b: ByteArray, off: Int, len: Int) {
+        val room = limit - bytes.size()
+        if (len > room) {
+            overflowed = true
+            if (room > 0) bytes.write(b, off, room)
+        } else {
+            bytes.write(b, off, len)
+        }
+    }
+
+    fun take(): ByteArray? = if (overflowed) null else bytes.toByteArray()
 }

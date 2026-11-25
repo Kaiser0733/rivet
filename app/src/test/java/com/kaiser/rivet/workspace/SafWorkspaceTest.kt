@@ -599,4 +599,53 @@ class SafWorkspaceTest {
         assertTrue(result.content, result.error)
         assertTrue(result.content, result.content.contains("invalid_offset"))
     }
+
+    @Test fun failedVerifyOrMidStreamWriteLeavesOriginalSafFileByteIdentical() = runBlocking {
+        val textEntry = workspace.createFile(path("notes.txt"))
+        val emptyText = workspace.readTextFile(textEntry.path)
+        val originalText = "important user notes\nline 2\n"
+        val savedText = workspace.writeTextFile(textEntry.path, originalText, emptyText.sha256)
+
+        provider.truncateOnVerifyReadOnceFor = "notes.txt"
+        failure(WorkspaceFailure.Reason.WRITE) {
+            workspace.writeTextFile(textEntry.path, "replacement text", savedText.sha256)
+        }
+        assertEquals(originalText, provider.nodes[textEntry.documentId]!!.bytes.readText())
+        assertEquals(originalText, workspace.readTextFile(textEntry.path).text)
+
+        val binEntry = workspace.createFile(path("blob.bin"))
+        val originalBytes = byteArrayOf(1, 2, 3, 4, 5, 6, 7, 8)
+        val savedBin = workspace.writeFileFrom(
+            binEntry.path,
+            ByteArrayInputStream(originalBytes),
+            WorkspaceText.sha256(byteArrayOf()),
+            binEntry.documentId,
+        )
+
+        provider.truncateOnVerifyReadOnceFor = "blob.bin"
+        failure(WorkspaceFailure.Reason.WRITE) {
+            workspace.writeFileFrom(
+                binEntry.path,
+                ByteArrayInputStream(byteArrayOf(9, 10)),
+                savedBin.sha256,
+                binEntry.documentId,
+            )
+        }
+        assertArrayEquals(originalBytes, provider.nodes[binEntry.documentId]!!.bytes.readBytes())
+
+        val failingStream = object : java.io.InputStream() {
+            private var emitted = false
+            override fun read(): Int {
+                if (!emitted) {
+                    emitted = true
+                    return 0x55
+                }
+                throw java.io.IOException("mid-stream failure")
+            }
+        }
+        failure(WorkspaceFailure.Reason.WRITE) {
+            workspace.writeFileFrom(binEntry.path, failingStream, savedBin.sha256, binEntry.documentId)
+        }
+        assertArrayEquals(originalBytes, provider.nodes[binEntry.documentId]!!.bytes.readBytes())
+    }
 }
