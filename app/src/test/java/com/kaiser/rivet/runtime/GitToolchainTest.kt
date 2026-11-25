@@ -34,8 +34,6 @@ class GitToolchainTest {
 
     @Test fun environmentIsByteIdenticalWithoutGit() {
         assertEquals(base, gitEnvironment(base, null, null, null))
-        // A credential file must never add variables on its own.
-        assertEquals(base, gitEnvironment(base, null, null, File("/creds")))
     }
 
     @Test fun environmentAddsTheFixedGitContract() {
@@ -48,14 +46,12 @@ class GitToolchainTest {
         assertFalse(env.any { it.startsWith("GIT_CONFIG_COUNT=") })
     }
 
-    @Test fun credentialInjectionNamesOnlyTheHelperAndFile() {
-        val credential = File("/zone/git-credentials")
-        val env = gitEnvironment(base, File("/zone/exec"), File("/zone/templates"), credential)
-
-        assertEquals(1, env.count { it.startsWith("GIT_CONFIG_COUNT=") })
-        assertTrue("GIT_CONFIG_KEY_0=credential.helper" in env)
-        assertTrue("GIT_CONFIG_VALUE_0=store --file=${credential.absolutePath}" in env)
-        assertFalse(env.joinToString("\n").contains("ghp_"))
+    @Test fun shellEnvironmentNeverNamesACredentialPath() {
+        val env = gitEnvironment(base, File("/zone/exec"), File("/zone/templates"), null)
+        assertFalse(env.any { it.startsWith("GIT_CONFIG_COUNT=") })
+        assertFalse(env.any { it.startsWith("GIT_CONFIG_KEY_") })
+        assertFalse(env.any { it.startsWith("GIT_CONFIG_VALUE_") })
+        assertFalse(env.joinToString("\n").contains("git-credentials"))
     }
 
     @Test fun execFarmCreatesRepairsAndRemovesLinks() {

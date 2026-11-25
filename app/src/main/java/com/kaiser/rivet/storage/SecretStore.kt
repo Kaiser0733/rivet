@@ -8,6 +8,9 @@ import java.security.GeneralSecurityException
 import java.security.KeyStore
 import java.util.Base64
 import javax.crypto.Cipher
+import kotlinx.serialization.json.Json
+import kotlinx.serialization.json.JsonPrimitive
+import kotlinx.serialization.json.jsonObject
 import javax.crypto.KeyGenerator
 import javax.crypto.SecretKey
 import javax.crypto.spec.GCMParameterSpec
@@ -153,6 +156,48 @@ class SecretStore internal constructor(context: Context, private val keyProvider
 
     fun clearOAuthBundle(providerId: String) {
         prefs.edit().remove(oauthPrefsKey(providerId)).apply()
+    }
+
+    /**
+     * Decryptable credential values, for redacting live tool output. This is the same
+     * data the provider and GitHub paths use; callers must not print the result.
+     */
+    fun sensitiveValues(): Set<String> {
+        val values = linkedSetOf<String>()
+        for ((key, stored) in prefs.all) {
+            val encoded = stored as? String ?: continue
+            val record = decodeSecretRecord(encoded) ?: continue
+            val isOAuth = key.endsWith(":oauth")
+            val aad = if (isOAuth) key.removeSuffix(":oauth") else key
+            val plain = decryptRecord(aad, record) ?: continue
+            if (isOAuth) {
+                addOAuthValues(plain, values)
+            } else {
+                plain.takeIf { it.length >= 8 }?.let(values::add)
+            }
+        }
+        return values
+    }
+
+    private fun addOAuthValues(plain: String, values: MutableSet<String>) {
+        val json = try { Json.parseToJsonElement(plain).jsonObject } catch (_: Exception) { return }
+        for (field in listOf("access_token", "refresh_token", "id_token", "token")) {
+            (json[field] as? JsonPrimitive)?.takeIf { it.isString }?.content
+                ?.takeIf { it.length >= 8 }?.let(values::add)
+        }
+    }
+
+    private fun decryptRecord(aad: String, record: SecretRecord): String? = try {
+        val cipher = Cipher.getInstance(TRANSFORMATION)
+        cipher.init(Cipher.DECRYPT_MODE, encryptionKey(), GCMParameterSpec(GCM_TAG_BITS, record.iv))
+        cipher.updateAAD(aad.toByteArray(Charsets.UTF_8))
+        String(cipher.doFinal(record.ciphertext), Charsets.UTF_8)
+    } catch (_: GeneralSecurityException) {
+        null
+    } catch (_: IOException) {
+        null
+    } catch (_: RuntimeException) {
+        null
     }
 
     private fun oauthPrefsKey(providerId: String) = "$providerId:oauth"

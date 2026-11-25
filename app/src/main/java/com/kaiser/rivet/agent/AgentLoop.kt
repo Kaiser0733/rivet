@@ -65,6 +65,7 @@ class AgentLoop(
     private val contextFootprint: (List<AgentMessage>) -> Long = { AgentContext.serializedBytes(it).toLong() },
     private val contextUpdates: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
     private val approvedSkillScripts: Set<String> = emptySet(),
+    private val secretValues: List<String> = emptyList(),
     private val recordSkillScriptApproval: suspend (String) -> Unit = {},
     private val afterMutation: suspend (AgentToolCall, AgentToolResult?) -> Unit = { _, _ -> },
     private val onContextLimitObserved: suspend (ProviderError.ContextOverflow, Long) -> Unit = { _, _ -> },
@@ -588,7 +589,9 @@ class AgentLoop(
                     if (prepared.effect.changesWorkspace && mutationBlocker == null && !result.error) {
                         mutationsCompleted++
                     }
-                    val bounded = boundResult(result, prepared.resultContentLimitBytes)
+                    val bounded = SecretRedactor.redact(
+                        boundResult(result, prepared.resultContentLimitBytes), secretValues,
+                    )
                     val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "workspace_changed") }
                     if (prepared.effect == AgentToolEffect.ReadOnly && !fits(results + bounded + remaining)) {
                         results += pending("session_limit")
@@ -634,10 +637,10 @@ class AgentLoop(
                 }
             } catch (e: CancellationException) {
                 results += pending("cancelled")
-                append(AgentMessage.tools(results))
+                append(SecretRedactor.redact(AgentMessage.tools(results), secretValues))
                 throw e
             }
-            val toolMessage = AgentMessage.tools(results)
+            val toolMessage = SecretRedactor.redact(AgentMessage.tools(results), secretValues)
             // A SAF mutation can finish inside its non-cancellable commit section.
             // Persist its correlated result even if cancellation arrived at that boundary.
             append(toolMessage)

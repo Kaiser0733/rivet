@@ -206,13 +206,13 @@ internal class Toolchain(context: Context) {
     }
 
     /** Toolchain environment; the exact input when neither Python nor git is ready. */
-    fun commandEnvironment(base: List<String>, credentialFile: File? = null): List<String> {
+    fun commandEnvironment(base: List<String>): List<String> {
         val certificates = caBundle?.takeIf { it.isFile && it.length() > 0 }
         val withPython = if (pythonReady) {
             pythonEnvironment(base, pythonHome, pythonTmp, certificates)
         } else base
         return if (gitReady) {
-            gitEnvironment(withPython, gitExecDir, gitTemplateDir, credentialFile, certificates)
+            gitEnvironment(withPython, gitExecDir, gitTemplateDir, certificates)
         } else withPython
     }
 
@@ -617,15 +617,13 @@ internal fun pythonEnvironment(
 }
 
 /**
- * Git's fixed environment, plus the credential-helper spec when a token is connected.
- * The spec names the helper and the app-private file; the token itself stays in that file
- * and never enters the environment.
+ * Git's fixed environment. Credential material is never injected here; a git
+ * network command gets its helper from GitCommandAuth instead.
  */
 internal fun gitEnvironment(
     base: List<String>,
     execPath: File?,
     templateDir: File?,
-    credentialFile: File?,
     certificates: File? = null,
 ): List<String> {
     if (execPath == null || templateDir == null) return base
@@ -640,10 +638,7 @@ internal fun gitEnvironment(
         environment += "GIT_SSL_CAINFO=${certificates.absolutePath}"
         environment += "SSL_CERT_FILE=${certificates.absolutePath}"
     }
-    if (credentialFile != null) {
-        environment += "GIT_CONFIG_COUNT=1"
-        environment += "GIT_CONFIG_KEY_0=credential.helper"
-        environment += "GIT_CONFIG_VALUE_0=store --file=${credentialFile.absolutePath}"
-    }
+    // Credential material is never part of the shared shell environment. Git auth is
+    // injected only for an explicit network command by GitCommandAuth.
     return environment
 }

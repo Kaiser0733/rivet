@@ -103,6 +103,7 @@ internal class RunServices(
     val failureState: suspend () -> String = { "ready" },
     val isProjectLockBusy: () -> Boolean = { false },
     val approvedSkillScripts: () -> Set<String> = { emptySet() },
+    val secretValues: () -> List<String> = { emptyList() },
     val recordSkillScriptApproval: suspend (String) -> Unit = {},
     val recordParentUsage: suspend (turnId: String, config: ProviderConfig, usage: AgentUsage?, request: AgentRequest) -> Unit =
         { _, _, _, _ -> },
@@ -193,6 +194,7 @@ internal class WorkerRunner(
             turnId = "worker-${currentWorker.id}-$turnId",
             initialSummary = activeSummary,
             workspaceId = services.workspaceId,
+            redactions = services.secretValues(),
         ) { messages, _ ->
             val baseSystem = services.systemInstruction(
                 true,
@@ -248,6 +250,7 @@ internal class WorkerRunner(
                 }
             }
             val loop = AgentLoop(
+                secretValues = services.secretValues(),
                 requestModel = { messages, _, onText ->
                     val request = context.requestFor(messages)
                     val response = client.streamAgent(

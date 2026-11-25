@@ -20,7 +20,7 @@ class CaBundleToolchainTest {
             "LANG=C.UTF-8", "TERM=xterm-256color")
         val python = pythonEnvironment(base, File("/zone/python"), File("/zone/tmp"), target)
         assertTrue("SSL_CERT_FILE=${target.absolutePath}" in python)
-        val git = gitEnvironment(base, File("/zone/exec"), File("/zone/templates"), null, target)
+        val git = gitEnvironment(base, File("/zone/exec"), File("/zone/templates"), target)
         assertTrue("SSL_CERT_FILE=${target.absolutePath}" in git)
         assertTrue("GIT_SSL_CAINFO=${target.absolutePath}" in git)
     }
