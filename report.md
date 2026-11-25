@@ -1,59 +1,39 @@
-# Rivet browser round 5
+# browser-round5 gate-fix
 
-Branch `browser-round5` starts at `0729dabcfb01b052c77ec6d5af3e0a82aab8a9f3` on `origin/batch/surface-fix`. The base has no root `AGENTS.md`. I used the Rivet instructions in the companion workspace.
+Base: `batch/surface-fix` @ `0729dabc`.
 
-## 1. Keyboard inside a page
+## 1. `BrowserEvalSessionTest.evalRefusesAnIdentityHandoff` · `c530e6f2`
 
-Commit `63a252c1c46c1a59420e6ee03ba566a20b454107`.
+**Root cause:** `openText()` correctly records an identity handoff, but leaves `activeUrl` blank. `eval()` checked `activeUrl.isBlank()` first, so a handoff was reported as `browser_not_open` instead of `browser_handoff`.
 
-**Root cause.** `BrowserHost` called the address bar’s focus-clearing and keyboard-hide action on page touches and again when the WebView gained focus. That gave Compose a chance to dismiss the IME during the native WebView input handoff. The browser also omitted the IME inset in the edge-to-edge activity.
+**Fix:** check the handoff state before requiring a page URL. This is production-code behaviour; the existing red test is the JiT case.
 
-**Fix.** Page touch releases the address bar’s Compose focus, gives the WebView native focus in touch mode, and passes the event through to it. The browser viewport resizes with the keyboard, and the address bar still dismisses its keyboard on Go and toolbar actions.
+`BrowserEvalSessionTest` passes, including the timeout/origin cases.
 
-**Files.** `ui/browser/BrowserHost.kt`, `ui/browser/BrowserScreen.kt`, `BrowserUrlFieldUiTest.kt`, `BrowserSourceSafetyTest.kt`.
+## 2. `BrowserKeyModalTest.navigationClearsTheModalBlock` · `8c467f16`
 
-**JiTTest.** `BrowserUrlFieldUiTest.pageTouchesLeaveKeyboardControlToTheWebView` checks the keyboard-hide calls during the handoff, including a second tap.
+**Root cause:** not a production bug. The branch's `loadForInteraction` now correctly waits for an in-flight page load. The test simulated `onPageStarted` (which clears the modal) but never `onPageFinished`, then expected a key action on a page that was still loading.
 
-## 2. Start page and address-bar search
+**Fix:** complete the simulated navigation in the fixture before pressing the key. The test still proves the modal block is gone and the key is dispatched after navigation.
 
-Commit `ea45cfba35735926961ac6e6a7fbb74de465540f`.
+`BrowserKeyModalTest` passes.
 
-**Root cause.** `userOpen` skipped navigation when the session URL was blank, and the address bar passed all input to the strict visual URL validator. The URI keyboard also made multiple-word input harder.
+## 3. `BrowserSessionReaderCloseTest.closingActiveTabInReaderModeLoadsSurvivingPageOnANewRenderer` · `e7349956`
 
-**Fix.** A browser session with no page opens `https://www.google.com/`. The address bar resolves full URLs and bare hosts, and encodes other input as a Google query. The Go keyboard allows spaces. Existing URL security checks still apply. An explicitly opened new tab keeps its blank starting state.
+**Root cause:** after the reader renderer was released, closing the active tab took the `userOpen()` path, which built a new hidden WebView and loaded the surviving URL there. The test's replacement renderer therefore never received a `loadUrl`, and the surviving page was not loaded on the view the host attaches.
 
-**Files.** `browser/BrowserSession.kt`, `browser/BrowserUrlPolicy.kt`, `ui/browser/BrowserScreen.kt`, `BrowserAddressBarTest.kt`, `BrowserStatusTest.kt`.
+**Fix:** when the old renderer is gone or tearing down, record the surviving URL and defer the load until `attach()` receives the replacement renderer. `attach()` then loads once, and the existing `onPageFinished` path performs the deferred snapshot restore on that same renderer.
 
-**JiTTests.** `BrowserStatusTest.openingAnEmptyBrowserStartsAtGoogle` checks the normal opening path. `BrowserAddressBarTest` checks URL, loopback, and query handling.
+`BrowserSessionReaderCloseTest` passes, including the assertion that snapshot restore JS waits for `onPageFinished`.
 
-## 3. Reader transitions and renderer recovery
+## Test results
 
-Commit `70069564b8548edabe93a8a11d84b98c64c4eb2a`.
-
-**Root cause.** The code matches the reported race. Leaving Reader armed `verifyReaderPaint` while a new load could already be under way on the parked WebView. The sample could compare the new page DOM with the old frame. Release, no-view teardown, and teardown finalization could all call `terminateAll`. A spontaneous renderer exit requested teardown without scheduling recovery.
-
-**Fix.** Reader releases its WebView and Page view loads on a fresh one. Main-frame navigation invalidates pending paint work. Paint recovery and renderer exit share one restart path tied to the departing renderer generation and active tab. Teardown waits for that view’s exit or destruction before allowing replacement. The error banner offers Reload, which retries the current page with a fresh renderer when needed.
-
-**Files.** `browser/BrowserSession.kt`, `browser/RendererTerminationPolicy.kt`, `ui/browser/BrowserHost.kt`, `ui/browser/BrowserScreen.kt`, `BrowserSessionReaderCloseTest.kt`, `BrowserSessionTeardownTest.kt`, `BrowserSourceSafetyTest.kt`, `BrowserUrlFieldUiTest.kt`, `RendererTerminationPolicyTest.kt`.
-
-**JiTTests.** `BrowserSessionTeardownTest` covers stale release against a replacement, teardown completion, navigation during a scheduled paint check, and retry after a second renderer failure. `BrowserSessionReaderCloseTest` covers reloading a surviving tab and deferring its restore until the replacement finishes. The four Compose layout tests check visibility of Reload and Close browser at phone and tablet sizes in both orientations.
-
-## 4. Reader HTTP and renderer status
-
-Commit `26c070faf1ae4cd55a7c51e8e30b9097bbb66769`.
-
-**Root cause.** The code matches both reported failures. The agent’s remote open path starts with OkHttp’s Reader request, which carried no browser User-Agent and described its 403 as a page failure. Status inferred a healthy Reader from a retained URL after the renderer had died.
-
-**Fix.** Reader sends the browser’s Chrome User-Agent, including on redirects. Reader HTTP failures use `browser_reader_http`, successful Reader responses use `reader_http_status`, and visual responses use `http_status`. A renderer exit reports `mode=gone`, `alive=false`, `healthy=false`, `error_kind=browser_renderer_unavailable`, and a `browser_reset(reopen=true)` hint. A failed Reader fetch preserves the active page.
-
-**Files.** `agent/AgentToolError.kt`, `browser/BrowserSession.kt`, `browser/BrowserTools.kt`, `browser/ReaderService.kt`, `BrowserSourceSafetyTest.kt`, `BrowserStatusTest.kt`, `ReaderServiceHttpTest.kt`.
-
-**JiTTests.** `ReaderServiceHttpTest` covers the header on the first request and redirect, and the error kind for a Reader 403. `BrowserStatusTest.aGoneRendererStaysGoneAfterReleaseAndHasAResetHint` checks the tool JSON after release. A direct GET to Wikipedia’s Google article returned **403** with the OkHttp 4.12 User-Agent and **200** with Rivet’s Chrome User-Agent.
-
-## Local verification
-
-The standalone Kotlin/JUnit run passed **11 of 11** address policy, Reader HTTP, and renderer termination tests. Both Reader HTTP tests failed against the base because it sent OkHttp’s User-Agent and returned `browser_http` for a Reader 403. The terminal emulator’s `ByteQueueTest` passed **2 of 2** in a standalone JUnit run.
+- Branch production compile: **BUILD SUCCESSFUL**.
+- `BrowserEvalSessionTest`, `BrowserKeyModalTest`, `BrowserSessionReaderCloseTest`: **7/7 pass** in the local JUnit/Robolectric harness.
+- Full Gradle test suite was not run in this sandbox; CI remains the gate.
 
 ## Honest gaps
 
-ADB showed no physical device. The VM has no KVM support, and the emulator stayed offline after forced software startup. Native keyboard entry, real Chromium process recovery, and on-device appearance in portrait and landscape at phone and tablet sizes still need device verification.
+- No production change was made for the modal test; the test contradicted the branch's intended wait-for-navigation behaviour.
+- The surrounding browser package was not exhaustively run; the three named classes account for the gate failures.
+- No APK, release, version, self-updater, or other branch changes.
