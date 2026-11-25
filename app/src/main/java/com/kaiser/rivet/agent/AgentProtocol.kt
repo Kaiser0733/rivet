@@ -102,6 +102,8 @@ data class AgentApprovalRequest(
     /** True when a recent turn checkpoint or a staged external-delete copy can restore this mutation. */
     val undoable: Boolean = false,
     val reviewAtGrant: (suspend () -> Boolean)? = null,
+    val sessionId: String? = null,
+    val sessionTitle: String? = null,
 )
 
 /** Execution effects drive integrity work independently from human confirmation. */

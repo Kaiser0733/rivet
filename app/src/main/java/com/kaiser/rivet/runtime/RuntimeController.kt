@@ -784,6 +784,9 @@ class RuntimeController(
     fun startTurn(onStop: () -> Unit = {}): String? =
         managedProcesses?.startTurn(app, onStop)
 
+    fun startTurn(title: String, onStop: () -> Unit, onPause: (com.kaiser.rivet.agent.RunPauseReason) -> Unit): String? =
+        managedProcesses?.startTurn(app, title, onStop, onPause)
+
     fun finishTurn(id: String?) {
         if (id != null) managedProcesses?.finishTurn(id)
     }

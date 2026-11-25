@@ -1,6 +1,9 @@
 package com.kaiser.rivet.chat
 
 import android.app.Application
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -55,6 +58,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -106,6 +110,7 @@ class ChatViewModelTest {
 
     @After fun cleanup() = runBlocking {
         models.forEach { it.viewModelScope.coroutineContext[Job]?.cancelAndJoin() }
+        models.map { it.runRegistry }.distinct().forEach { it.scope.coroutineContext[Job]?.cancelAndJoin() }
         models.clear()
         Dispatchers.resetMain()
     }
@@ -1791,7 +1796,9 @@ class ChatViewModelTest {
         val config: ProviderConfig,
     )
 
-    private suspend fun undoFixture(authority: String, responses: List<AgentResponse>): UndoFixture {
+    private suspend fun undoFixture(
+        authority: String, responses: List<AgentResponse>, keepProvider: Boolean = false,
+    ): UndoFixture {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
@@ -1808,9 +1815,10 @@ class ChatViewModelTest {
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
         val sessions = CodingSessions(app)
+        val sharedProvider = if (keepProvider) QueueProvider(ArrayDeque(responses)) else null
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
-            { _, _ -> QueueProvider(ArrayDeque(responses)) })
+            { _, _ -> sharedProvider ?: QueueProvider(ArrayDeque(responses)) })
         await(viewModel) { it.ready && !it.projectLoading }
         viewModel.selectProject(tree, flags)
         await(viewModel) { it.currentSessionWorkspaceId == tree.toString() && !it.projectLoading }
@@ -2055,6 +2063,99 @@ class ChatViewModelTest {
         viewModel.resumeSession(first)
         val finished = await(viewModel) { !it.streaming && it.currentSessionId == first }
         assertEquals("Done", finished.messages.lastOrNull()?.text)
+    }
+
+    @Test fun aRunningTurnSurvivesViewModelStoreClearAndReattaches() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val sessionId = sessions.load().id!!
+        val release = CompletableDeferred<Unit>()
+        val source = ProviderRuntimeSource {
+            ProviderRuntimeResult.Ready(
+                ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "model-a"), "key")
+        }
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit): AgentResponse {
+                onDelta("Still working")
+                release.await()
+                return AgentResponse(text = "Finished after recreation")
+            }
+        }
+        val first = newChatViewModel(app, sessions, source) { _, _ -> provider }
+        val store = ViewModelStore()
+        val factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = first as T
+        }
+        assertSame(first, ViewModelProvider(store, factory)[ChatViewModel::class.java])
+        await(first) { it.ready }
+        first.send("Work in the background")
+        await(first) { it.streamingText == "Still working" }
+
+        store.clear()
+
+        val registry = first.runRegistry
+        assertTrue(registry.active.value?.job?.isActive == true)
+        val recreated = ChatViewModel(app, sessions, source, { _, _ -> provider }, runRegistry = registry)
+            .also { models += it }
+        val attached = await(recreated) { it.ready && it.currentSessionId == sessionId }
+        assertTrue(attached.streaming)
+        assertEquals("Still working", attached.streamingText)
+
+        release.complete(Unit)
+        val completed = await(recreated) { !it.streaming }
+        assertEquals("Finished after recreation", completed.messages.last().text)
+        assertEquals("Finished after recreation", sessions.load(sessionId).messages.last().text)
+        assertFalse(sessions.load(sessionId).interrupted)
+    }
+
+    @Test fun backgroundApprovalIdentifiesItsConversationAndStopsOnlyItsRun() = runBlocking {
+        val fixture = undoFixture("com.kaiser.rivet.background-approval", listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
+            AgentResponse(text = "Done"),
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-b", "create_file", """{"path":"B.kt"}"""))),
+        ), keepProvider = true)
+        val vm = fixture.viewModel
+        val first = vm.uiState.value.currentSessionId!!
+        val other = fixture.sessions.create(fixture.tree.toString()).id!!
+        fixture.sessions.select(first)
+        vm.renameSession(first, "Project A")
+        await(vm) { it.currentSessionTitle == "Project A" }
+
+        vm.send("Create A")
+        await(vm) { it.pendingApproval != null }
+        vm.resumeSession(other)
+        val banner = await(vm) { it.currentSessionId == other && it.backgroundApproval != null }
+        val approval = banner.backgroundApproval!!
+        assertEquals(first, vm.runRegistry.approvals.pending.value?.sessionId)
+        assertEquals("Project A", approval.sessionTitle)
+        assertNull(banner.pendingApproval)
+        assertEquals(ConversationActivity.NeedsApproval, banner.conversationActivity[first])
+        vm.cancel()
+        assertEquals(approval.approvalToken, vm.runRegistry.approvals.pending.value?.approvalToken)
+        vm.approve(approval.approvalToken)
+        val finished = await(vm) { it.conversationActivity[first] == ConversationActivity.FinishedUnseen }
+        assertTrue(finished.messages.isEmpty())
+        assertTrue(fixture.sessions.recent(other).isEmpty())
+
+        vm.resumeSession(first)
+        val returned = await(vm) { it.currentSessionId == first && !it.streaming }
+        assertEquals("Done", returned.messages.last().text)
+        assertNull(returned.conversationActivity[first])
+        vm.send("Create B in this project")
+        await(vm) { it.pendingApproval?.call?.id == "create-b" }
+        vm.resumeSession(other)
+        val second = await(vm) { it.currentSessionId == other && it.backgroundApproval?.call?.id == "create-b" }
+        vm.stopForApproval(second.backgroundApproval!!.approvalToken)
+        await(vm) { it.backgroundApproval == null && it.conversationActivity[first] == ConversationActivity.FinishedUnseen }
+        assertTrue(fixture.sessions.recent(other).isEmpty())
+        assertTrue(fixture.sessions.recent(first).flatMap { it.toolResults }.none {
+            it.callId == "create-b" && !it.error
+        })
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =

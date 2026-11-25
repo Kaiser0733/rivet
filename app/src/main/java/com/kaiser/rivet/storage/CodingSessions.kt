@@ -103,7 +103,12 @@ internal class CodingSessions(
     private val summaryBytes = ConcurrentHashMap<String, Int>()
     @Volatile private var selectedId: String? = null
 
-    override suspend fun load(): AgentSession = onDatabase { db -> load(db, activeId(db)) }
+    override suspend fun load(): AgentSession = loadSelected(null)
+
+    suspend fun loadSelected(liveSessionId: String?): AgentSession = onDatabase { db ->
+        val id = activeId(db)
+        load(db, id, recover = id != liveSessionId)
+    }
 
     suspend fun load(sessionId: String): AgentSession = onDatabase { db -> load(db, sessionId) }
 
