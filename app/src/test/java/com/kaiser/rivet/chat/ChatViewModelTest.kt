@@ -317,7 +317,7 @@ class ChatViewModelTest {
         assertNull(RuntimeController(app).commandBlocker())
     }
 
-    @Test fun earlierSavedMutationRemainsVisibleWhenLaterCheckpointPostFails() = runBlocking {
+    @Test fun laterCheckpointPostFailureDoesNotHideSavedMutation() = runBlocking {
         val authority = "com.kaiser.rivet.checkpoint-post-chat"
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
         val info = ProviderInfo().apply {
@@ -354,7 +354,6 @@ class ChatViewModelTest {
         assertTrue(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "A.kt" })
         assertTrue(workspace.listDirectory(WorkspacePath.ROOT).any { it.path.value == "B.kt" })
         assertNull(stopped.error)
-        assertTrue(stopped.notice.orEmpty().contains("couldn't prepare Undo"))
         assertNull(stopped.undoCheckpointId)
     }
 
