@@ -110,6 +110,9 @@ change).
   (`repeatedIdenticalFailureGetsAdviceAndTurnContinues` at its completion
   assertion, `runtimeFailureResultNoLongerEndsTheTurn` likewise), then pass on
   the branch.
+- Parent check for the pending-changes gate: with the parent
+  `RuntimeController`, `runtimeDiscardChecksExactSelectionAndUnblocksCommandsAndSafTools`
+  fails (`commandBlocker()` returns `sync_required`); it passes on the branch.
 - Full `:app:testDebugUnitTest` — **pass**, 1887 tests in 323 classes, 0
   failures / 0 errors / 0 skipped (`BUILD SUCCESSFUL in 3m 22s`).
 
