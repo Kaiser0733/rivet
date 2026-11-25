@@ -305,7 +305,9 @@ class OpenAiCompatibleClientTest {
         }
 
         assertEquals("partial answer", streamedText.toString())
-        assertEquals(listOf(AgentMessage.assistant("partial answer")), durableMessages)
+        assertEquals(1, durableMessages.size)
+        assertTrue(durableMessages.single().text.startsWith("partial answer"))
+        assertTrue(durableMessages.single().text.contains("incomplete", ignoreCase = true))
         assertEquals(0, prepared)
         assertEquals(0, approvals)
         assertEquals(0, executions)
