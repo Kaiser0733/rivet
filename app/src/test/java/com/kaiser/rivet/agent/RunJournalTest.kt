@@ -14,6 +14,47 @@ import org.junit.rules.TemporaryFolder
 class RunJournalTest {
     @get:Rule val temp = TemporaryFolder()
 
+    @Test fun receiptSavedBeforeTheToolBatchSurvivesReopening() = runBlocking {
+        val journal = RunJournal(DirectoryRunStorage(temp.root))
+        var run = RunMachine.start(RunMachine.begin("r", "ws", "Write", sessionId = "chat"))
+        val write = AgentToolCall("first", "write_file", """{"path":"marker","content":"effect"}""")
+        val wait = AgentToolCall("second", "run_command", """{"command":"wait"}""")
+        val file = File(temp.root, "marker")
+        try {
+            AgentLoop(
+                requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(write, wait)) },
+                prepareTool = { call ->
+                    PreparedAgentTool(call, AgentApprovalRequest(call, "Run tool", call.name)) {
+                        if (call == wait) throw kotlinx.coroutines.CancellationException("process disappeared")
+                        file.appendText("effect")
+                        AgentToolResult(call.id, call.name, "{}")
+                    }
+                },
+                requestApproval = { true },
+                journalTool = { key, receipt ->
+                    run = run.copy(toolReceipts = run.toolReceipts + (key to receipt))
+                    journal.save(run)
+                },
+            ).run(listOf(AgentMessage.user("Write a marker")), emptyList())
+        } catch (_: kotlinx.coroutines.CancellationException) { }
+        assertEquals("effect", file.readText())
+
+        val reopened = RunJournal(DirectoryRunStorage(temp.root)).recoverLatest("chat")!!
+        var requests = 0
+        val resumed = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = listOf(write, wait))
+                else AgentResponse(text = "Finished")
+            },
+            prepareTool = { error("A previously attempted operation was prepared again") },
+            requestApproval = { true },
+            resumeReceipts = reopened.toolReceipts,
+        ).run(listOf(AgentMessage.user("Write a marker")), emptyList())
+        val results = resumed.messages.flatMap { it.toolResults }
+        assertEquals("Already done · write_file", results[0].summary)
+        assertEquals("Outcome unknown · run_command", results[1].summary)
+    }
+
     @Test fun stateMachineOnlyMovesForwardLegally() {
         var run = RunMachine.begin("r1", "ws", "Fix tests", now = 1)
         assertEquals(RunPhase.Queued, run.phase)

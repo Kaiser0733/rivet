@@ -39,9 +39,11 @@ import com.kaiser.rivet.agent.GoalState
 import com.kaiser.rivet.agent.MemoryFormat
 import com.kaiser.rivet.agent.PreparedAgentTool
 import com.kaiser.rivet.agent.ProjectRunStorage
+import com.kaiser.rivet.agent.DirectoryRunStorage
 import com.kaiser.rivet.agent.ProjectStateFiles
 import com.kaiser.rivet.agent.RunContext
 import com.kaiser.rivet.agent.RunJournal
+import com.kaiser.rivet.agent.RunToolReceipt
 import com.kaiser.rivet.agent.RunMachine
 import com.kaiser.rivet.agent.RunPauseReason
 import com.kaiser.rivet.agent.RunPhase
@@ -608,6 +610,12 @@ class ChatViewModel private constructor(
     private val batteryAskStore = BatteryAskStore(app)
     private var projectState: ProjectStateFiles? = null
     private var runJournal: RunJournal? = null
+
+    private fun workspaceRunJournal(workspaceId: String, files: ProjectStateFiles): RunJournal {
+        val workspaceKey = InternalContext.digest(workspaceId)
+        val filesDir = getApplication<Application>().filesDir
+        return RunJournal(DirectoryRunStorage(File(filesDir, "run-journal/$workspaceKey")), ProjectRunStorage(files))
+    }
     private var projectGoal: GoalDocument? = null
     private var sessionGoal: GoalDocument? = null
     private var memoryMarkdown: String = ""
@@ -791,7 +799,7 @@ class ChatViewModel private constructor(
      */
     private suspend fun refreshGoalMemory(workspace: SafWorkspace?, sessionId: String?) {
         val files = workspace?.let(::ProjectStateFiles)
-        val journal = files?.let { RunJournal(ProjectRunStorage(it)) }
+        val journal = workspace?.let { workspaceRunJournal(it.tree.toString(), requireNotNull(files)) }
         projectState = files
         runJournal = journal
         val goalRead = try { Result.success(files?.loadGoal()?.takeIf { it.state != GoalState.Dropped }) }
@@ -1081,7 +1089,7 @@ class ChatViewModel private constructor(
                 val workspace = workspaceSelection.restore()?.first
                 val files = workspace?.let(::ProjectStateFiles)
                 projectState = files
-                runJournal = files?.let { RunJournal(ProjectRunStorage(it)) }
+                runJournal = workspace?.let { workspaceRunJournal(it.tree.toString(), requireNotNull(files)) }
                 if (_uiState.value.currentSessionId != sessionId) return@launch
                 val projectStored = files?.loadGoal()?.takeIf { it.state != GoalState.Dropped }
                 val sessionStored = sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped }
@@ -1534,13 +1542,15 @@ class ChatViewModel private constructor(
     private suspend fun startRun(workspaceId: String, title: String,
                                  sessionId: String?, resuming: Boolean): RunRecord? {
         if (sessionId == null || _uiState.value.currentSessionId != sessionId) return null
-        val journal = runJournal ?: projectState?.let { RunJournal(ProjectRunStorage(it)) } ?: return null
+        val journal = runJournal ?: projectState?.let { workspaceRunJournal(workspaceId, it) } ?: return null
         runJournal = journal
-        val resumed = if (resuming) currentSessionRun()?.takeIf { it.resumable && it.workspaceId == workspaceId } else null
+        val previous = if (resuming) currentSessionRun()?.takeIf { it.workspaceId == workspaceId } else null
+        val resumed = previous?.takeIf { it.phase == RunPhase.Paused }
         val next = if (resumed != null) RunMachine.resume(resumed)
         else RunMachine.start(RunMachine.begin(UUID.randomUUID().toString(), workspaceId, title, sessionId = sessionId))
+            .copy(toolReceipts = previous?.toolReceipts.orEmpty())
         currentRun = next
-        runResumeContext = resumed != null
+        runResumeContext = previous != null
         if (resumed != null) PersistentProcessService.cancelBudgetPause(getApplication<Application>())
         if (resumed == null) {
             if (batteryAskStore.shouldAsk()) {
@@ -1554,11 +1564,21 @@ class ChatViewModel private constructor(
             spendLedger.syncMonth(spendStore.month())
         }
         checkpointGate.startRun(workspaceId, next.id, title, resuming = resumed != null)
-        // Save on the first completed step, not at start: a run that never gets a
-        // step must not create project files or a checkpoint-sized journal.
+        // The first side-effect receipt or completed step creates the journal.
         managedProcesses.updateRunStatus(next.title, "Getting ready…", next.startedAt)
         _uiState.update { it.copy(run = next, runRecovery = null) }
         return next
+    }
+
+    private suspend fun persistToolReceipt(key: String, receipt: RunToolReceipt) {
+        val run = checkNotNull(currentSessionRun())
+        val journal = checkNotNull(runJournal)
+        val next = run.copy(toolReceipts = run.toolReceipts + (key to receipt),
+            updatedAt = System.currentTimeMillis())
+        withContext(NonCancellable) {
+            journal.save(next)
+            currentRun = next
+        }
     }
 
     private suspend fun persistRunStep(summary: String) {
@@ -1580,7 +1600,7 @@ class ChatViewModel private constructor(
         currentRun = next
         runResumeContext = false
         checkpointGate.finishRunCheckpoint(next.workspaceId)
-        if (next.lastCompletedStep > 0 || next.phase == RunPhase.Paused) {
+        if (next.lastCompletedStep > 0 || next.toolReceipts.isNotEmpty()) {
             try { runJournal?.save(next) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
         }
         managedProcesses.updateRunStatus(null, null, 0)
@@ -2417,6 +2437,10 @@ class ChatViewModel private constructor(
                     }
                 },
                 requestApproval = approvals::await,
+                resumeReceipts = currentSessionRun()?.toolReceipts.orEmpty(),
+                journalTool = { key, receipt ->
+                    if (workspaceId != null && currentSessionRun() != null) persistToolReceipt(key, receipt)
+                },
                 writeMemoryBatch = workspace?.let { selected ->
                     { call, facts -> writeMemoryProposals(selected, call, facts) }
                 },

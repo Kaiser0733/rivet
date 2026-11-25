@@ -71,6 +71,8 @@ class AgentLoop(
     private val onOutputLimitObserved: suspend (ProviderError.OutputLimitExceeded) -> Unit = { },
     private val beforeCompletion: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
     private val writeMemoryBatch: (suspend (AgentToolCall, List<String>) -> AgentToolResult)? = null,
+    private val resumeReceipts: Map<String, RunToolReceipt> = emptyMap(),
+    private val journalTool: suspend (String, RunToolReceipt) -> Unit = { _, _ -> },
 ) {
     private data class MemoryProposal(val tool: PreparedAgentTool, val fact: String, val asksUser: Boolean)
 
@@ -85,6 +87,7 @@ class AgentLoop(
         onToolLifecycle: (AgentToolLifecycle) -> Unit = {},
     ): AgentRunResult {
         val messages = initial.toMutableList()
+        val priorAttempts = previousToolReceipts(initial) + resumeReceipts
         suspend fun append(message: AgentMessage) {
             // Completed protocol events must remain durable when cancellation
             // arrives during their persistence callback.
@@ -112,8 +115,13 @@ class AgentLoop(
             val write = writeMemoryBatch ?: return AgentStopReason.Completed
             val first = memoryProposals.firstOrNull()?.tool ?: return AgentStopReason.Completed
             val facts = memoryProposals.map { it.fact }.distinct()
+            val key = operationKey(first.call.copy(arguments = JsonArray(facts.map(::JsonPrimitive)).toString()))
             fun stage(value: AgentToolLifecycleStage) {
                 memoryProposals.forEach { lifecycle(it.tool.call, value) }
+            }
+            if (key in priorAttempts) {
+                stage(AgentToolLifecycleStage.Blocked)
+                return AgentStopReason.Completed
             }
             try {
                 if (memoryProposals.any { it.asksUser }) {
@@ -138,9 +146,15 @@ class AgentLoop(
                     return AgentStopReason.CheckpointUnavailable
                 }
                 mutationsAttempted++
-                stage(AgentToolLifecycleStage.Started)
                 var result: AgentToolResult? = null
                 try {
+                    try { journalTool(key, RunToolReceipt(first.call.name)) }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) {
+                        stage(AgentToolLifecycleStage.Blocked)
+                        return AgentStopReason.CheckpointUnavailable
+                    }
+                    stage(AgentToolLifecycleStage.Started)
                     result = write(first.call, facts).also {
                         if (!it.error) mutationsCompleted++
                     }
@@ -149,7 +163,13 @@ class AgentLoop(
                 } catch (_: Exception) {
                     result = failed(first.call)
                 } finally {
-                    withContext(NonCancellable) { afterMutation(first.call, result) }
+                    withContext(NonCancellable) {
+                        try {
+                            result?.let { journalTool(key, RunToolReceipt(first.call.name, it.error)) }
+                        } catch (e: CancellationException) { throw e }
+                        catch (_: Exception) { /* The start marker is still durable. */ }
+                        finally { afterMutation(first.call, result) }
+                    }
                 }
                 stage(if (result?.error == false) AgentToolLifecycleStage.Completed else AgentToolLifecycleStage.Failed)
                 return AgentStopReason.Completed
@@ -381,6 +401,15 @@ class AgentLoop(
                         break
                     }
                     toolCalls++
+                    lifecycle(call, AgentToolLifecycleStage.Queued)
+                    val denialKey = operationKeys[callIndex]
+                    val replayKey = operationKey(call, replay = true)
+                    val receipt = priorAttempts[replayKey]
+                    if (receipt != null) {
+                        lifecycle(call, AgentToolLifecycleStage.Blocked)
+                        results += resumedResult(call, receipt)
+                        continue
+                    }
                     val prepared = try {
                         prepareTool(call)
                     } catch (e: CancellationException) {
@@ -388,8 +417,6 @@ class AgentLoop(
                     } catch (_: Exception) {
                         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) { failed(call) }
                     }
-                    lifecycle(call, AgentToolLifecycleStage.Queued)
-                    val denialKey = operationKeys[callIndex]
                     val previouslyDenied = denialKey in deniedMutations
                     val previous = deterministicFailures.firstOrNull {
                         it.first == denialKey
@@ -551,23 +578,35 @@ class AgentLoop(
                         lifecycle(call, AgentToolLifecycleStage.Blocked)
                         stopped(call, mutationBlocker)
                     } else {
-                        if (prepared.effect.changesWorkspace) mutationsAttempted++
-                        // The grant is durable once the command is actually about to run.
-                        if (scriptGate != SkillScriptGate.None) {
-                            val toApprove = unapprovedScripts.ifEmpty { listOfNotNull(scriptHit) }
-                            toApprove.forEach { hit ->
-                                scriptApprovals += hit.skill.name
+                        val hasEffect = prepared.effect != AgentToolEffect.ReadOnly
+                        try {
+                            if (hasEffect) {
                                 try {
-                                    recordSkillScriptApproval(hit.skill.name)
-                                } catch (e: CancellationException) {
-                                    throw e
-                                } catch (_: Exception) {
-                                    // The grant still covers this turn if the store cannot persist it.
+                                    journalTool(replayKey, RunToolReceipt(call.name))
+                                } catch (e: CancellationException) { throw e }
+                                catch (_: Exception) {
+                                    lifecycle(call, AgentToolLifecycleStage.Blocked)
+                                    results += pending("journal_unavailable")
+                                    stopReason = AgentStopReason.CheckpointUnavailable
+                                    break
                                 }
                             }
-                        }
-                        lifecycle(call, AgentToolLifecycleStage.Started)
-                        try {
+                            if (prepared.effect.changesWorkspace) mutationsAttempted++
+                            // Record standing grants only after recording that execution may start.
+                            if (scriptGate != SkillScriptGate.None) {
+                                val toApprove = unapprovedScripts.ifEmpty { listOfNotNull(scriptHit) }
+                                toApprove.forEach { hit ->
+                                    scriptApprovals += hit.skill.name
+                                    try {
+                                        recordSkillScriptApproval(hit.skill.name)
+                                    } catch (e: CancellationException) {
+                                        throw e
+                                    } catch (_: Exception) {
+                                        // The grant still covers this turn if the store cannot persist it.
+                                    }
+                                }
+                            }
+                            lifecycle(call, AgentToolLifecycleStage.Started)
                             prepared.execute().also { executedResult = it }
                         } catch (e: CancellationException) {
                             lifecycle(call, AgentToolLifecycleStage.Cancelled)
@@ -576,9 +615,21 @@ class AgentLoop(
                         } catch (_: Exception) {
                             failed(call)
                         } finally {
-                            if (acquiredMutation) {
+                            if (hasEffect || acquiredMutation) {
                                 withContext(NonCancellable) {
-                                    afterMutation(call, executedResult)
+                                    try {
+                                        val recorded = executedResult
+                                        if (hasEffect && recorded != null) {
+                                            try {
+                                                journalTool(replayKey, RunToolReceipt(call.name, recorded.error))
+                                            } catch (e: CancellationException) { throw e }
+                                            catch (_: Exception) {
+                                                // The durable start marker still prevents replay.
+                                            }
+                                        }
+                                    } finally {
+                                        if (acquiredMutation) afterMutation(call, executedResult)
+                                    }
                                 }
                             }
                         }
@@ -681,12 +732,46 @@ class AgentLoop(
     } catch (_: SerializationException) { false
     } catch (_: IllegalArgumentException) { false }
 
-    private fun operationKey(call: AgentToolCall): String {
+    private fun previousToolReceipts(initial: List<AgentMessage>): Map<String, RunToolReceipt> {
+        val lastUser = initial.indexOfLast { it.role == AgentRole.User }
+        if (lastUser < 0) return emptyMap()
+        val receipts = mutableMapOf<String, RunToolReceipt>()
+        var pending = emptyMap<String, AgentToolCall>()
+        for (message in initial.drop(lastUser + 1)) when (message.role) {
+            AgentRole.Assistant -> pending = message.toolCalls.associateBy { it.id }
+            AgentRole.Tool -> for (result in message.toolResults) {
+                val call = pending[result.callId] ?: continue
+                if (defaultEffect(call.name) == AgentToolEffect.ReadOnly) continue
+                val receipt = when {
+                    !result.error -> RunToolReceipt(call.name, failed = false)
+                    result.content.startsWith("{\"error\":\"interrupted\"") -> RunToolReceipt(call.name)
+                    else -> continue
+                }
+                receipts[operationKey(call, replay = true)] = receipt
+            }
+            else -> Unit
+        }
+        return receipts
+    }
+
+    private fun resumedResult(call: AgentToolCall, receipt: RunToolReceipt): AgentToolResult = when (receipt.failed) {
+        null -> stopped(call, "outcome_unknown").copy(summary = "Outcome unknown · ${call.name}")
+        true -> stopped(call, "already_attempted").copy(summary = "Already attempted · ${call.name}")
+        false -> AgentToolResult(call.id, call.name,
+            """{"status":"already_done","note":"This action already completed before the interruption. Rivet did not repeat it."}""",
+            summary = "Already done · ${call.name}")
+    }
+
+    private fun operationKey(call: AgentToolCall, replay: Boolean = false): String {
         if (!jsonNestingWithinLimit(call.arguments, 32)) {
             throw ProviderError.InvalidResponse("tool arguments too deeply nested")
         }
         val canonical = try {
-            canonicalArguments(Json.parseToJsonElement(call.arguments))
+            val args = Json.parseToJsonElement(call.arguments)
+            val effectArgs = if (replay && args is JsonObject) {
+                JsonObject(args - setOf("ask_user", "expected_sha256", "timeout_ms"))
+            } else args
+            canonicalArguments(effectArgs)
         } catch (_: IllegalArgumentException) { call.arguments }
         val digest = MessageDigest.getInstance("SHA-256")
             .digest(canonical.toByteArray(Charsets.UTF_8))

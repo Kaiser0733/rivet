@@ -178,7 +178,7 @@ class PreparedAgentTool(
     )
 }
 
-private fun defaultEffect(name: String): AgentToolEffect = when (name) {
+internal fun defaultEffect(name: String): AgentToolEffect = when (name) {
     "write_file", "apply_patch", "create_file", "create_directory" -> AgentToolEffect.WorkspaceMutation
     "rename_path", "move_path", "delete_path" -> AgentToolEffect.DestructiveWorkspaceMutation
     "phone_shot" -> AgentToolEffect.ReadOnly
@@ -187,5 +187,6 @@ private fun defaultEffect(name: String): AgentToolEffect = when (name) {
     "start_preview" -> AgentToolEffect.Preview
     "spawn_process", "stop_process" -> AgentToolEffect.PersistentProcess
     "open_app", "open_url", "open_file", "compose_intent" -> AgentToolEffect.BrowserAction
+    "spawn_subagent" -> AgentToolEffect.Delegation
     else -> AgentToolEffect.ReadOnly
 }
