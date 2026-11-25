@@ -52,7 +52,7 @@ class ManualCompactTest(unittest.TestCase):
         self.assertIn('"Cannot compact while a reply is running."', body)
         self.assertIn('"Nothing to compact yet."', body)
         self.assertIn('"Rivet could not shorten this session\'s context. The conversation was kept."', body)
-        self.assertIn("if (compacted == activeMessages)", body)
+        self.assertIn("if (compacted == owner.activeMessages)", body)
 
     def test_the_view_model_behaviour_has_jit_tests(self):
         test = (TEST / "chat/ChatViewModelTest.kt").read_text()
