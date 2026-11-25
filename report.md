@@ -7,7 +7,7 @@ Nothing merged, tagged, released, or pushed to `main`. Another session's
 
 Phase 1 is `flaw-sweep-inventory.md`: 55 mechanisms with file:line, trigger,
 original protection, real dsh evidence, and one verdict. Counts: **34 COPY**,
-**11 DELETE**, **10 PROTECTS**. The session-blocking tier was fixed first; the
+**11 DELETE**, **10 PROTECTS**. The headline session-blocking tier was fixed first; the
 deferred rows are listed with their verdict in that file, not half-fixed.
 
 ## 1. Loop and failure guards — commit `c902cd94`

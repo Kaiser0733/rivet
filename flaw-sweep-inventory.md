@@ -90,7 +90,7 @@ named).
 
 Verdict counts (55 mechanism rows): **COPY 34**, **DELETE 11**, **PROTECTS 10**.
 
-Session-blocking tier fixed in this run: #1-7 (all loop, failure and checkpoint
+Headline session-blocking tier fixed in this run: #1-7 (all loop, failure and checkpoint
 stops), #16-22 (the pending-changes banner, command/terminal/process/sync
 preconditions and the file-tool `requireSafCurrent` gate), #26-28 (process,
 thermal and foreground-service errors no longer end the turn). #23 (partial-create
