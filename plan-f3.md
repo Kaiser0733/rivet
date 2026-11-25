@@ -1,0 +1,14 @@
+# Rivet F3 plan
+
+Base `6f9f78ad` on `origin/batch/surface-fix`. Hunt 1 was recovered from the adjacent `rivet-work` checkout and hunt 2 from `origin/docs/flaw-hunt-2`. Source lines below refer to the base.
+
+| Fix | Root cause | Change | JiTTest |
+| --- | --- | --- | --- |
+| 1. Worker liveness | `SubagentSupervisor.kt:311–379,539–543,624–633` restores ownerless running records and has no idle deadline. | Recover ownerless workers as failed before showing their rows. Bound silent execution and publish a failed result if a job exits without a terminal record. | Recover a killed worker and complete the coordinator hold. Exercise a silent provider under virtual time. |
+| 2. Resume | `RunJournal.kt:32–50,254–268`, `AgentLoop.kt:521` and `CodingSessions.kt:849–887` preserve summaries and synthetic interruption results without a replay identity. | Journal the start and completion of side-effecting calls. On resume, surface the earlier result or its unknown outcome and suppress replay. | Pause after writing, reload the journal, request the same write with a new call ID, and inspect the transcript and file. |
+| 3. Approvals | `AgentApprovalGate.kt:23–39` awaits forever. `PersistentProcessService.kt:150–201` sends command approvals back to the app. | Expire requests with a distinct tool result. Present the current request from the app entry point and validate the displayed token at resolution. | Let a request expire through the loop, then verify the result, continued execution and rejection of a late grant. |
+| 4. Command lifetime | `terminal-emulator/src/main/jni/command.c:63–82` forks a shell with no owner-death handling. `ManagedProcesses.kt:53–57` keeps live state in memory. | Bind Rivet-owned command trees to the app with the native launcher and cover owner death and descendants. Check startup cleanup requirements against the available containment path. | Kill the command owner during a long-running command and check the surviving process tree. |
+| 5. Spend | `SpendGuard.kt:35–41,60–61,79–82` and `SpendStore.kt:16–21` leave fresh installs uncapped and treat unknown USD cost as zero for cap checks. | Enable USD and token defaults, preserve explicit settings, warn for unpriced models and enforce token fallback. | Check fresh preferences and drive an unpriced response through the ledger to a token stop. |
+| 6. Worker shell scope | `FileScopeRegistry.kt:100–135` sees explicit file arguments only. `RuntimeController.kt:166` runs shell commands under app-wide filesystem access. | Apply a kernel-enforced worker filesystem write policy to the native launcher, deny launch if the runtime cannot enforce it and retain coordinator scope. | Run the same forbidden write through a worker and the coordinator and check both the scope result and the filesystem. |
+
+Keep implementation commits scoped by fix. Run each regression against its parent, document any new surfaces or platform limits, review the full diff and push `flaw-run`.

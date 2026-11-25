@@ -128,6 +128,8 @@ internal class WorkerRunner(
         resuming: Boolean,
         pauseSignal: () -> RunPauseReason?,
         stoppedByUser: () -> Boolean,
+        onActivity: () -> Unit = {},
+        idleFailure: () -> String? = { null },
         onUpdate: suspend (WorkerRecord) -> Unit,
     ): WorkerRecord {
         var currentWorker = initialWorker
@@ -231,6 +233,7 @@ internal class WorkerRunner(
         }
 
         suspend fun publishUpdate(transform: (WorkerRecord) -> WorkerRecord) {
+            onActivity()
             currentWorker = transform(currentWorker)
             services.workerStore.saveWorker(currentWorker)
             onUpdate(currentWorker)
@@ -252,8 +255,8 @@ internal class WorkerRunner(
                     val request = context.requestFor(messages)
                     val response = client.streamAgent(
                         request = request,
-                        onReasoning = {},
-                        onDelta = onText,
+                        onReasoning = { onActivity() },
+                        onDelta = { delta -> onActivity(); onText(delta) },
                     )
                     try {
                         services.workerStore.recordUsage(
@@ -520,6 +523,11 @@ internal class WorkerRunner(
             return finalizeFromResult(currentWorker, runResult, observedCommands, onUpdate)
         } catch (e: CancellationException) {
             return withContext(NonCancellable) {
+                val failure = idleFailure() ?: "This worker stopped before returning a result."
+                    .takeIf { pauseSignal() == null && !stoppedByUser() }
+                if (failure != null) return@withContext finalizeFailed(
+                    currentWorker, durable, observedCommands, "worker_lost", failure, onUpdate,
+                )
                 finalizeCancelled(
                     worker = currentWorker,
                     messages = durable,

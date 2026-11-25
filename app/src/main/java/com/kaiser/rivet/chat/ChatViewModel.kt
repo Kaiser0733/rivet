@@ -805,6 +805,10 @@ class ChatViewModel private constructor(
             try { journal?.recoverLatest(sessionId) }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         }
+        val recoveredWorkers = if (!_uiState.value.streaming && run?.resumable == true) {
+            try { workerStore.recoverWorkersForRun(run.id) }
+            catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+        } else null
         if (_uiState.value.currentSessionId != sessionId || runJournal !== journal) return
         projectGoal = goalRead.getOrNull()
         sessionGoal = storedSessionGoal
@@ -813,6 +817,7 @@ class ChatViewModel private constructor(
         if (!_uiState.value.streaming) {
             currentRun = run
             runResumeContext = run?.resumable == true
+            if (recoveredWorkers != null) _subagents.value = recoveredWorkers
         }
         val visibleRun = currentSessionRun()
         val recovery = visibleRun?.recoveryMessage()
