@@ -36,6 +36,7 @@ internal object AgentToolError {
         "empty" to "The memory fact was empty. Write one durable sentence.",
         "too_long" to "The memory fact is too long. Keep one fact under 500 characters.",
         "reserved_goal" to "goal.md belongs to the /goal command. Use /goal to change it; do not edit the goal file with file tools.",
+        "reserved_memory" to "Project memory belongs to the user. Use the remember tool; file tools cannot edit .rivet/memory.md directly.",
         "approval_unavailable" to "Rivet could not safely request confirmation for this operation, so it stopped.",
         "process_limit" to "Rivet already has the maximum number of active project operations. Stop one in Tools and retry.",
         "output_unavailable" to "Cached command output expired or does not exist. Re-run the command with grep, tail, or max_lines.",

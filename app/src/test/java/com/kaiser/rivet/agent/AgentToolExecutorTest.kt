@@ -431,6 +431,28 @@ class AgentToolExecutorTest {
     }
 
     @Test
+    fun directMemoryFileWritesAreRefused() = runTest {
+        val executor = AgentToolExecutor(FakeWorkspace())
+        val prepared = executor.prepare(AgentToolCall("memory", "write_file",
+            """{"path":".rivet/memory.md","content":"poison","expected_sha256":"${"a".repeat(64)}"}"""))
+        val result = prepared.execute()
+        assertTrue(result.error)
+        assertTrue("reserved_memory" in result.content)
+    }
+
+    @Test
+    fun memoryApprovalShowsTheAddedLine() = runTest {
+        val files = FakeWorkspace(text = "# Project memory\n\n- old\n")
+        val executor = AgentToolExecutor(files,
+            rememberMemory = { fact -> MemoryFormat.append(files.text, fact) })
+        val prepared = executor.prepare(AgentToolCall("memory", "remember",
+            """{"fact":"The user prefers tabs."}"""))
+        val detail = prepared.approval?.detail.orEmpty()
+        assertTrue(detail.contains("+ - The user prefers tabs."))
+        assertTrue(!detail.contains("- - old"))
+    }
+
+    @Test
     fun genericGoalWritesAreRefused() = runTest {
         val executor = AgentToolExecutor(FakeWorkspace())
         val prepared = executor.prepare(AgentToolCall("goal", "write_file",

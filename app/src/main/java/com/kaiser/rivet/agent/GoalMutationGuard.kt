@@ -6,6 +6,7 @@ package com.kaiser.rivet.agent
  */
 internal object GoalMutationGuard {
     const val GOAL_PATH = ".rivet/goal.md"
+    const val MEMORY_PATH = MemoryFormat.PATH
     private const val RIVET_DIR = ".rivet"
 
     private val MUTATION_TOOLS = setOf(
@@ -38,6 +39,40 @@ internal object GoalMutationGuard {
         path: String?,
         newName: String? = null,
         destination: String? = null,
+    ): Boolean = isReservedGoalMutation(toolName, path, newName, destination) ||
+        isReservedMemoryMutation(toolName, path, newName, destination)
+
+    fun isReservedMemoryMutation(
+        toolName: String,
+        path: String?,
+        newName: String? = null,
+        destination: String? = null,
+    ): Boolean {
+        if (toolName !in MUTATION_TOOLS) return false
+        val normPath = normalize(path)
+        val normNewName = normalize(newName)
+        val normDest = normalize(destination)
+        if (normPath == MEMORY_PATH || normNewName == MEMORY_PATH || normDest == MEMORY_PATH) {
+            return true
+        }
+        if (toolName == "rename_path" && normPath != null && normNewName != null) {
+            val parent = if ('/' in normPath) normPath.substringBeforeLast('/') else ""
+            val renamedTarget = if (parent.isEmpty()) normNewName else "$parent/$normNewName"
+            if (renamedTarget == MEMORY_PATH) return true
+        }
+        if (toolName == "move_path" && normPath != null && normDest != null) {
+            val baseName = normPath.substringAfterLast('/')
+            val movedTarget = if (normDest.isEmpty()) baseName else "$normDest/$baseName"
+            if (movedTarget == MEMORY_PATH) return true
+        }
+        return false
+    }
+
+    internal fun isReservedGoalMutation(
+        toolName: String,
+        path: String?,
+        newName: String?,
+        destination: String?,
     ): Boolean {
         if (toolName !in MUTATION_TOOLS) return false
         val normPath = normalize(path)

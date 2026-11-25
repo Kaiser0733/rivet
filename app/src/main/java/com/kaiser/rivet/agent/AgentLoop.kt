@@ -120,7 +120,8 @@ class AgentLoop(
                 if (memoryProposals.any { it.asksUser }) {
                     stage(AgentToolLifecycleStage.AwaitingApproval)
                     val approval = requireNotNull(first.approval).copy(
-                        detail = facts.joinToString("\n") { "• $it" },
+                        detail = requireNotNull(first.approval).detail +
+                            facts.joinToString("\n") { "\n• $it" },
                     )
                     if (!requestApproval(approval)) {
                         stage(AgentToolLifecycleStage.Denied)
