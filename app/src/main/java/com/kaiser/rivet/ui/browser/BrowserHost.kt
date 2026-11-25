@@ -8,6 +8,7 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.remember
+import androidx.compose.runtime.rememberUpdatedState
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.viewinterop.AndroidView
 import com.kaiser.rivet.browser.BrowserSession
@@ -30,17 +31,19 @@ fun BrowserHost(
     val state by session.state.collectAsState()
     if (!state.rendererVisible || state.teardownRequested) return
     val held = remember { HeldWebView() }
+    val pageInteraction by rememberUpdatedState(onPageInteraction)
     AndroidView(
         factory = { context ->
             val frame = FrameLayout(context)
             val web = WebView(context)
             held.view = web
+            web.isFocusableInTouchMode = true
             web.setOnTouchListener { _, event ->
-                if (event.actionMasked == MotionEvent.ACTION_DOWN) onPageInteraction()
+                if (event.actionMasked == MotionEvent.ACTION_DOWN) {
+                    pageInteraction()
+                    if (!web.hasFocus()) web.requestFocus()
+                }
                 false
-            }
-            web.setOnFocusChangeListener { _, hasFocus ->
-                if (hasFocus) onPageInteraction()
             }
             frame.addView(web, FrameLayout.LayoutParams(
                 ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.MATCH_PARENT))

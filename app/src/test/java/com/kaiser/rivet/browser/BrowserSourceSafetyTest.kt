@@ -101,7 +101,7 @@ class BrowserSourceSafetyTest {
         assertTrue(screen.contains("KeyboardActions(onGo = { onSubmit() })"))
         assertTrue(screen.contains("onSubmit = submitUrl"))
         // Page interaction (the host's touch callback) clears the URL field's focus.
-        assertTrue(screen.contains("hostContent(Modifier.fillMaxSize(), clearUrlFocus)"))
+        assertTrue(screen.contains("if (isUrlFocused) focusManager.clearFocus()"))
         assertTrue(screen.contains("LaunchedEffect(state.visible)"))
         assertTrue(screen.contains("if (!state.visible)"))
         assertFalse(screen.contains("UrlFieldSelection.Controller"))
@@ -114,7 +114,7 @@ class BrowserSourceSafetyTest {
             File("app/src/main/java/com/kaiser/rivet/ui/browser/BrowserHost.kt")).first { it.isFile }.readText()
         assertTrue(host.contains("setOnTouchListener"))
         assertTrue(host.contains("MotionEvent.ACTION_DOWN"))
-        assertTrue(host.contains("onPageInteraction()"))
+        assertTrue(host.contains("pageInteraction()"))
         assertFalse(host.contains("setDriving"))
     }
 

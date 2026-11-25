@@ -11,6 +11,7 @@ import androidx.compose.foundation.Image
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.layout.heightIn
+import androidx.compose.foundation.layout.imePadding
 import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.text.BasicTextField
@@ -151,7 +152,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
 
     Column(modifier.fillMaxSize()
         .dismissOnEscape(state.visible) { if (pageOptions) pageOptions = false else onClose() }.then(
-        if (state.visible) Modifier.background(MaterialTheme.colorScheme.surface).navigationBarsPadding()
+        if (state.visible) Modifier.background(MaterialTheme.colorScheme.surface).navigationBarsPadding().imePadding()
         else Modifier)) {
         if (state.visible && !pageOptions) {
             Column(Modifier.fillMaxWidth().statusBarsPadding()) {
@@ -274,7 +275,9 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
             }
         }
         Box(Modifier.weight(1f).fillMaxWidth().clipToBounds()) {
-            hostContent(Modifier.fillMaxSize(), clearUrlFocus)
+            hostContent(Modifier.fillMaxSize()) {
+                if (isUrlFocused) focusManager.clearFocus()
+            }
             if (state.visible && !pageOptions) {
                 if (state.readerMode) {
                     ReaderPane(state.readerText, state.title, Modifier.fillMaxSize()) { url ->

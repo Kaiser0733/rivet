@@ -2,6 +2,9 @@ package com.kaiser.rivet.browser
 
 import android.app.Application
 import androidx.compose.foundation.layout.Box
+import androidx.compose.runtime.CompositionLocalProvider
+import androidx.compose.ui.platform.LocalSoftwareKeyboardController
+import androidx.compose.ui.platform.SoftwareKeyboardController
 import androidx.compose.ui.semantics.SemanticsProperties
 import androidx.compose.ui.test.click
 import androidx.compose.ui.test.hasSetTextAction
@@ -11,6 +14,7 @@ import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.text.TextRange
 import com.kaiser.rivet.ui.browser.BrowserScreen
 import java.util.concurrent.atomic.AtomicReference
+import java.util.concurrent.atomic.AtomicInteger
 import kotlinx.coroutines.flow.MutableStateFlow
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertTrue
@@ -52,16 +56,20 @@ class BrowserUrlFieldUiTest {
     private fun showWithInteraction(
         session: BrowserSession,
         onPageInteraction: AtomicReference<(() -> Unit)?>,
+        keyboard: SoftwareKeyboardController? = null,
     ) {
         compose.setContent {
-            BrowserScreen(
-                session = session,
-                onClose = {},
-                hostContent = { modifier, interaction ->
-                    onPageInteraction.set(interaction)
-                    Box(modifier)
-                },
-            )
+            val controller = keyboard ?: LocalSoftwareKeyboardController.current
+            CompositionLocalProvider(LocalSoftwareKeyboardController provides controller) {
+                BrowserScreen(
+                    session = session,
+                    onClose = {},
+                    hostContent = { modifier, interaction ->
+                        onPageInteraction.set(interaction)
+                        Box(modifier)
+                    },
+                )
+            }
         }
         compose.waitForIdle()
     }
@@ -105,6 +113,23 @@ class BrowserUrlFieldUiTest {
         compose.waitForIdle()
         tapUrl()
         assertEquals(TextRange(0, url.length), selection())
+    }
+
+    @Test fun pageTouchesLeaveKeyboardControlToTheWebView() {
+        val interaction = AtomicReference<(() -> Unit)?>(null)
+        val hides = AtomicInteger()
+        val keyboard = object : SoftwareKeyboardController {
+            override fun show() = Unit
+            override fun hide() { hides.incrementAndGet() }
+        }
+        showWithInteraction(sessionAt("https://example.org/"), interaction, keyboard)
+
+        tapUrl()
+        val hidesBeforePageTouch = hides.get()
+        compose.runOnIdle { interaction.get()!!.invoke() }
+        compose.waitForIdle()
+        compose.runOnIdle { interaction.get()!!.invoke() }
+        assertEquals(hidesBeforePageTouch, hides.get())
     }
 
     @Test fun secondTapWhileFocusedCollapsesToACaret() {
