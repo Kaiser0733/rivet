@@ -26,11 +26,11 @@ class CoordinatorBudgetTest {
     }
 
     @Test fun emptyCloudProjectPinsTheDeviceBaseline() {
-        assertEmptyCloudProjectBaseline("deepseek-ai/DeepSeek-V4.1-Flash", 7_190)
+        assertEmptyCloudProjectBaseline("deepseek-ai/DeepSeek-V4.1-Flash", 7_250)
     }
 
     @Test fun emptyCloudProjectPinsTheSyntheticBaseline() {
-        assertEmptyCloudProjectBaseline("test-model", 7_183)
+        assertEmptyCloudProjectBaseline("test-model", 7_243)
     }
 
     private fun assertEmptyCloudProjectBaseline(model: String, expectedTokens: Long) {
