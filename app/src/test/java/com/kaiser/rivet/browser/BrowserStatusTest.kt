@@ -27,6 +27,17 @@ class BrowserStatusTest {
     @Before fun setUp() { Dispatchers.setMain(UnconfinedTestDispatcher()) }
     @After fun tearDown() { Dispatchers.resetMain() }
 
+    @Test fun openingAnEmptyBrowserStartsAtGoogle() {
+        val app: Application = RuntimeEnvironment.getApplication()
+        val session = BrowserSession(app, models = null)
+        try {
+            session.userOpen()
+            assertEquals("https://www.google.com/", session.currentUrl())
+        } finally {
+            session.endSession()
+        }
+    }
+
     @Test fun closedBrowserIsReportedWithoutThrowing() = runBlocking {
         val app: Application = RuntimeEnvironment.getApplication()
         val session = BrowserSession(app, models = null)

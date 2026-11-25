@@ -393,7 +393,8 @@ class BrowserSession(
     }
 
     /** Human open: always the full-screen visual browser, never the reader face. */
-    fun userOpen() = userOpen(activeUrl.ifBlank { _state.value.url })
+    fun userOpen() = userOpen(activeUrl.ifBlank { _state.value.url }
+        .takeUnless { it.isBlank() || it == "about:blank" } ?: BrowserUrlPolicy.START_PAGE)
 
     private fun userOpen(target: String) {
         idleJob?.cancel(); idleJob = null

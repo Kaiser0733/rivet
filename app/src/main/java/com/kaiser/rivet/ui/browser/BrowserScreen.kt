@@ -101,6 +101,7 @@ import com.kaiser.rivet.R
 import com.kaiser.rivet.browser.BrowserDriving
 import com.kaiser.rivet.browser.BrowserFailure
 import com.kaiser.rivet.browser.BrowserSession
+import com.kaiser.rivet.browser.BrowserUrlPolicy
 import com.kaiser.rivet.browser.ReaderBlock
 import com.kaiser.rivet.browser.ReaderBlockKind
 import com.kaiser.rivet.browser.ReaderBlocks
@@ -140,7 +141,7 @@ fun BrowserScreen(session: BrowserSession, onClose: () -> Unit,
         clearUrlFocus()
         if (address.text.isNotBlank()) scope.launch {
             try {
-                session.openVisual(address.text, userInitiated = true)
+                session.openVisual(BrowserUrlPolicy.addressBarTarget(address.text), userInitiated = true)
             } catch (error: BrowserFailure) {
                 session.showError(error)
             }
@@ -343,8 +344,8 @@ private fun BrowserToolbar(
                 singleLine = true,
                 textStyle = MaterialTheme.typography.bodyMedium.copy(color = MaterialTheme.colorScheme.onSurface),
                 cursorBrush = SolidColor(MaterialTheme.colorScheme.primary),
-                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go, keyboardType = KeyboardType.Uri,
-                    capitalization = KeyboardCapitalization.None),
+                keyboardOptions = KeyboardOptions(imeAction = ImeAction.Go, keyboardType = KeyboardType.Text,
+                    capitalization = KeyboardCapitalization.None, autoCorrectEnabled = false),
                 keyboardActions = KeyboardActions(onGo = { onSubmit() }),
                 decorationBox = { field ->
                     Box(Modifier.fillMaxWidth().heightIn(min = 46.dp), contentAlignment = Alignment.CenterStart) {
