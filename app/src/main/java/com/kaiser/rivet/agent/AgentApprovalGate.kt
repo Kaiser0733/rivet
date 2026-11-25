@@ -5,7 +5,9 @@ import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 
-class AgentApprovalGate {
+class AgentApprovalGate(
+    private val identify: (AgentApprovalRequest) -> AgentApprovalRequest = { it },
+) {
     private data class Pending(
         val owner: Any?,
         val request: AgentApprovalRequest,
@@ -24,7 +26,7 @@ class AgentApprovalGate {
         val decision = CompletableDeferred<Boolean>()
         synchronized(lock) {
             check(nextToken < Long.MAX_VALUE) { "Approval token space exhausted." }
-            val identified = request.copy(approvalToken = ++nextToken)
+            val identified = identify(request).copy(approvalToken = ++nextToken)
             queue.addLast(Pending(owner, identified, decision))
             mutablePending.value = queue.firstOrNull()?.request
         }
@@ -49,11 +51,15 @@ class AgentApprovalGate {
         return head.decision.complete(approved)
     }
 
-    fun cancel(owner: Any) {
+    fun cancel(owner: Any) = cancelMatching { it.owner == owner }
+
+    fun cancelSession(sessionId: String?) = cancelMatching { it.request.sessionId == sessionId }
+
+    private fun cancelMatching(matches: (Pending) -> Boolean) {
         val removed = synchronized(lock) {
-            val matching = queue.filter { it.owner == owner }
+            val matching = queue.filter(matches)
             if (matching.isEmpty()) return
-            queue.removeAll { it.owner == owner }
+            queue.removeAll(matches)
             mutablePending.value = queue.firstOrNull()?.request
             matching
         }

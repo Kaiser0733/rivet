@@ -17,7 +17,6 @@ import com.kaiser.rivet.starter.StarterInstall
 import com.kaiser.rivet.starter.StarterInstallFailure
 import com.kaiser.rivet.starter.StarterOption
 import com.kaiser.rivet.starter.starterSha256
-import com.kaiser.rivet.agent.AgentApprovalGate
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.AgentLoop
 import com.kaiser.rivet.agent.AgentMessage
@@ -30,8 +29,6 @@ import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentToolEffect
 import com.kaiser.rivet.agent.AgentToolLifecycle
-import com.kaiser.rivet.agent.AgentRunControl
-import com.kaiser.rivet.agent.NotificationApprovals
 import com.kaiser.rivet.agent.GoalCommand
 import com.kaiser.rivet.agent.GoalDocument
 import com.kaiser.rivet.agent.GoalMemoryContext
@@ -253,6 +250,8 @@ data class ChatUiState(
     val runCheckpoints: List<RunCheckpointInfo> = emptyList(),
     val runCheckpointNotice: String? = null,
     val batteryAsk: Boolean = false,
+    val backgroundApproval: AgentApprovalRequest? = null,
+    val conversationActivity: Map<String, ConversationActivity> = emptyMap(),
 )
 
 enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn }
@@ -271,19 +270,24 @@ class ChatViewModel private constructor(
     private val workspaceSelection: WorkspaceSelection,
     private val clientFactory: (ProviderConfig, String) -> com.kaiser.rivet.provider.ProviderClient,
     private val workerStore: WorkerSessionStore,
+    internal val runRegistry: SessionRunRegistry,
 ) : AndroidViewModel(app) {
-    constructor(app: Application) : this(
-        app, CodingSessions(app), StoredProviderRuntimeSource(app), WorkspaceSelection(app),
-        ::providerClient, WorkerSessionStore(app),
+    constructor(app: Application) : this(app, SessionRunRegistry.forApplication(app))
+
+    private constructor(app: Application, registry: SessionRunRegistry) : this(
+        app, registry.sessions, StoredProviderRuntimeSource(app), WorkspaceSelection(app),
+        ::providerClient, WorkerSessionStore(app), registry,
     )
 
     internal constructor(
         app: Application, sessionPersistence: AgentSessionPersistence, providerSource: ProviderRuntimeSource,
         clientFactory: (ProviderConfig, String) -> com.kaiser.rivet.provider.ProviderClient,
         workerStore: WorkerSessionStore = WorkerSessionStore(app),
-    ) : this(app, sessionPersistence, providerSource, WorkspaceSelection(app), clientFactory, workerStore)
+        runRegistry: SessionRunRegistry = SessionRunRegistry(app),
+    ) : this(app, sessionPersistence, providerSource, WorkspaceSelection(app), clientFactory, workerStore, runRegistry)
 
-    private val approvals = AgentApprovalGate()
+    private val approvals get() = runRegistry.approvals
+    private val visibility = Any()
     private val autonomyStore = AutonomyStore(app)
     val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
     val browser: BrowserSession = BrowserRuntime.forApp(app, com.kaiser.rivet.local.LocalRuntime.models())
@@ -465,7 +469,7 @@ class ChatViewModel private constructor(
     }
     // A synchronous read can happen before the projection collector resumes.
     val uiState: StateFlow<ChatUiState> = object : StateFlow<ChatUiState> by _uiState.asStateFlow() {
-        override val value: ChatUiState get() = selectedState.visibleValue
+        override val value: ChatUiState get() = runRegistry.project(selectedState.visibleValue)
         override val replayCache: List<ChatUiState> get() = listOf(value)
     }
 
@@ -560,8 +564,8 @@ class ChatViewModel private constructor(
     }
 
     @Volatile private var titleRenameRevision = 0L
-    private var activeRun: SessionRun? = null
-    private var liveSession: SessionRun? = null
+    private val activeRun get() = runRegistry.active.value
+    private val liveSession get() = runRegistry.lastRun
     private var generation = 0L
     private var sessionLoadJob: Job? = null
     private val runtimeController = RuntimeController(app, workspaceSelection, managedProcesses) {
@@ -687,7 +691,22 @@ class ChatViewModel private constructor(
             selectedRun.collectLatest { run ->
                 coroutineScope {
                     launch { run.workers.collect { _subagents.value = it } }
-                    run.projection.collect { _uiState.value = it }
+                    combine(run.projection, runRegistry.active, runRegistry.unseen, approvals.pending) { state, _, _, _ ->
+                        runRegistry.project(state)
+                    }.collect { _uiState.value = it }
+                }
+            }
+        }
+        viewModelScope.launch {
+            runRegistry.history.collect { history ->
+                if (history != null && selectedState.value.ready) showHistory(history)
+            }
+        }
+        viewModelScope.launch {
+            runRegistry.active.collect { owner ->
+                if (owner == null) {
+                    val state = selectedState.value
+                    if (state.ready) browser.bindProject(state.currentSessionWorkspaceId ?: state.projectIdentity ?: "unbound")
                 }
             }
         }
@@ -718,7 +737,8 @@ class ChatViewModel private constructor(
         viewModelScope.launch {
             val ticket = generation
             val (restored, history) = try {
-                sessionStore.load() to sessions?.list().orEmpty()
+                val restored = sessions?.loadSelected(liveSession?.value?.currentSessionId) ?: sessionStore.load()
+                restored to sessions?.list().orEmpty()
             } catch (_: AgentSessionLimitException) {
                 if (ticket == generation) {
                     selectedState.update { it.copy(ready = true, error = CONTEXT_LIMIT_ERROR) }
@@ -735,24 +755,34 @@ class ChatViewModel private constructor(
                 try {
                     val usage = restored.id?.let { sessions?.usage(it) }
                     val restoredDurations = restored.id?.let { sessions?.turnDurations(it) }.orEmpty()
-                    activeMessages = restored.messages
-                    activeSummary = restored.summary
+                    val cached = liveSession?.takeIf { restored.id != null && it.value.currentSessionId == restored.id }
+                    val owner = cached ?: selectedState
+                    if (cached == null) {
+                        owner.activeMessages = restored.messages
+                        owner.activeSummary = restored.summary
+                    }
                     val visible = restored.id?.let { sessions?.recent(it) } ?: restored.messages
                     val interruptedTurn = restored.interrupted &&
                         (visible.isNotEmpty() || restored.messages.isNotEmpty())
-                    selectedState.update { state ->
+                    owner.update { state ->
                         state.copy(
-                            messages = visible,
+                            messages = if (cached == null) visible else state.messages,
                             ready = true,
                             sessions = history,
                             currentSessionId = restored.id,
                             currentSessionTitle = restored.title,
                             currentSessionWorkspaceId = restored.workspaceId,
-                            usage = usage,
-                            turnDurationsMs = restoredDurations,
-                            interruptedTurn = interruptedTurn,
+                            usage = if (cached == null) usage else state.usage,
+                            projectName = selectedState.value.projectName,
+                            projectIdentity = selectedState.value.projectIdentity,
+                            projectLoading = selectedState.value.projectLoading,
+                            projectError = selectedState.value.projectError,
+                            turnDurationsMs = if (cached == null) restoredDurations else state.turnDurationsMs,
+                            interruptedTurn = if (cached == null) interruptedTurn else state.interruptedTurn,
                         )
                     }
+                    attachRun(owner)
+                    if (cached != null) return@launch
                     val restoredWorkspace = workspaceSelection.restore()?.first
                     if (ticket == generation) refreshGoalMemory(restoredWorkspace, restored.id)
                     // A turn that finished before the process died leaves its checkpoint on
@@ -779,19 +809,11 @@ class ChatViewModel private constructor(
                 }
             }
         }
-        NotificationApprovals.gate = approvals
-        viewModelScope.launch {
-            approvals.pending.collect { pending ->
-                managedProcesses.updateApproval(pending)
-                activeRun?.update { it.copy(pendingApproval = pending) }
-            }
-        }
-        viewModelScope.launch {
-            AgentRunControl.pauses.collect { reason -> activeRun?.let { pauseRun(it, reason) } }
-        }
-        viewModelScope.launch {
-            AgentRunControl.raises.collect { raiseBudgetCapForThisRun() }
-        }
+    }
+
+    private fun attachRun(owner: SessionRun) {
+        runRegistry.show(visibility, owner.value.currentSessionId)
+        selectedRun.value = owner
     }
 
     private suspend fun loadProject() {
@@ -804,7 +826,7 @@ class ChatViewModel private constructor(
                     catch (_: Exception) { "Selected project" }
                 selectedState.update { it.copy(projectName = name, projectIdentity = workspace.tree.toString(),
                     projectLoading = false, projectError = null) }
-                browser.bindProject(workspace.tree.toString())
+                if (activeRun == null) browser.bindProject(workspace.tree.toString())
                 refreshGoalMemory(workspace, selectedState.value.currentSessionId)
                 val pending = try { runtimeController.commandBlocker() in SYNC_RECOVERY_CODES }
                     catch (e: CancellationException) { throw e }
@@ -814,7 +836,7 @@ class ChatViewModel private constructor(
             } else {
                 selectedState.update { it.copy(projectName = null, projectIdentity = null,
                     projectLoading = false) }
-                browser.bindProject(selectedState.value.currentSessionWorkspaceId ?: "unbound")
+                if (activeRun == null) browser.bindProject(selectedState.value.currentSessionWorkspaceId ?: "unbound")
             }
         } catch (e: CancellationException) { throw e
         } catch (_: Exception) {
@@ -938,6 +960,7 @@ class ChatViewModel private constructor(
                         selectedState.workers.value = emptyList()
                         closeWorker()
                         val history = store.list()
+                        runRegistry.forget(current.currentSessionId)
                         selectedState.update { it.copy(messages = emptyList(), messageReasoning = emptyMap(),
                             sessions = history,
                             currentSessionId = selected.id, currentSessionTitle = selected.title,
@@ -945,6 +968,7 @@ class ChatViewModel private constructor(
                             turnDurationsMs = emptyMap(),
                             lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
                             interruptedTurn = false, run = null, runRecovery = null) }
+                        attachRun(selectedState)
                     }
                 }
                 refreshGoalMemory(workspace, selectedState.value.currentSessionId)
@@ -1589,7 +1613,7 @@ class ChatViewModel private constructor(
         checkpointGate.startRun(workspaceId, next.id, title, resuming = resumed != null)
         // Save on the first completed step, not at start: a run that never gets a
         // step must not create project files or a checkpoint-sized journal.
-        managedProcesses.updateRunStatus(next.title, "Getting ready…", next.startedAt)
+        managedProcesses.updateRunStatus(sessionDisplayName, "Getting ready…", next.startedAt)
         update { it.copy(run = next, runRecovery = null) }
         return next
     }
@@ -1601,7 +1625,7 @@ class ChatViewModel private constructor(
             catch (_: IllegalStateException) { return }
         currentRun = next
         try { runJournal?.save(next) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-        managedProcesses.updateRunStatus(next.title, summary.take(180), next.startedAt)
+        managedProcesses.updateRunStatus(sessionDisplayName, summary.take(180), next.startedAt)
         update { it.copy(run = next) }
     }
 
@@ -1679,11 +1703,13 @@ class ChatViewModel private constructor(
     }
 
     /** One tap raises the cap for this run only, then resumes the budget pause. */
-    fun raiseBudgetCapForThisRun() {
+    fun raiseBudgetCapForThisRun() = selectedState.raiseOwnedBudgetCap()
+
+    private fun SessionRun.raiseOwnedBudgetCap() {
         if (!spendLedger.raiseCapForCurrentRun()) return
         PersistentProcessService.cancelBudgetPause(getApplication<Application>())
-        selectedState.update { it.copy(budgetPaused = false, notice = "Cap raised for this run.") }
-        retryInterruptedTurn()
+        update { it.copy(budgetPaused = false, notice = "Cap raised for this run.") }
+        retryOwnedTurn(null)
     }
 
     private suspend fun SessionRun.refreshRunCheckpoints() {
@@ -1897,19 +1923,17 @@ class ChatViewModel private constructor(
     private fun SessionRun.launchRun(body: suspend CoroutineScope.() -> Unit) {
         userCancelled = false
         pauseRequested = false
-        activeRun = this
-        liveSession = this
+        pauseAction = { reason -> pauseRun(this, reason) }
+        raiseBudgetAction = { raiseOwnedBudgetCap() }
         reserveTurn(true)
-        job = viewModelScope.launch(start = CoroutineStart.LAZY) {
+        runRegistry.begin(this)
+        job = runRegistry.scope.launch(start = CoroutineStart.LAZY) {
             try {
                 body(this)
             } finally {
                 if (activeRun === this@launchRun) {
-                    activeRun = null
+                    runRegistry.finish(this@launchRun)
                     reserveTurn(false)
-                    if (selectedState !== this@launchRun) {
-                        selectedState.value.currentSessionWorkspaceId?.let { browser.bindProject(it) }
-                    }
                 }
             }
         }
@@ -1920,6 +1944,11 @@ class ChatViewModel private constructor(
         sessionId?.let { sessions?.load(it) } ?: sessionStore.load()
 
     private fun publishHistory(history: List<CodingSessionHeader>) {
+        runRegistry.history.value = history
+        showHistory(history)
+    }
+
+    private fun showHistory(history: List<CodingSessionHeader>) {
         selectedState.update { state ->
             state.copy(sessions = history,
                 currentSessionTitle = history.firstOrNull { it.id == state.currentSessionId }?.title
@@ -1959,7 +1988,8 @@ class ChatViewModel private constructor(
                 SubagentPoolState()
             }
             _subagentPool.value = runPool
-            turnToken = runtimeController.startTurn { stopRun(owner) }
+            turnToken = runtimeController.startTurn(owner.sessionDisplayName,
+                onStop = { stopRun(owner) }, onPause = { pauseRun(owner, it) })
             // A failed result write can leave a committed mutation without durable
             // outcome evidence. Recover it before a new user event can bury the call.
             if (activeMessages.lastOrNull()?.let {
@@ -2656,14 +2686,13 @@ class ChatViewModel private constructor(
                             completed
                         }
                         changed.onAwait {
-                            approvals.cancel()
+                            approvals.cancelSession(sessionId)
                             running.cancelAndJoin()
                             AgentRunResult(durable.toList(), AgentStopReason.WorkspaceChanged, 0, 0)
                         }
                     }
                 }
                 if (activeRun === owner) {
-                    releaseTurn()
                     finish(result, durable, snapshot.config)
                     if (!starterOpening && titleEligible && result.stopReason == AgentStopReason.Completed &&
                         owner.value.error == null) {
@@ -2768,7 +2797,7 @@ class ChatViewModel private constructor(
             } finally {
                 browser.endAgentRun()
                 browserLease.clear()
-                approvals.cancel()
+                approvals.cancelSession(sessionId)
                 withContext(NonCancellable) {
                     activeSupervisor?.joinAll()
                     supervisorCollector?.cancel()
@@ -2837,9 +2866,9 @@ class ChatViewModel private constructor(
                                 currentRun = paused
                                 runResumeContext = true
                                 if (pauseReason == RunPauseReason.Budget) {
-                                    PersistentProcessService.showBudgetPause(getApplication<Application>(), paused.title)
+                                    PersistentProcessService.showBudgetPause(getApplication<Application>(), sessionDisplayName)
                                 } else if (pauseReason == RunPauseReason.NetworkLost) {
-                                    PersistentProcessService.showNetworkPause(getApplication<Application>(), paused.title)
+                                    PersistentProcessService.showNetworkPause(getApplication<Application>(), sessionDisplayName)
                                 }
                                 owner.checkpointGate.finishRunCheckpoint(live.workspaceId)
                                 try { runJournal?.save(paused) } catch (_: Exception) { }
@@ -2872,7 +2901,7 @@ class ChatViewModel private constructor(
     private fun generateTitle(sessionId: String, turnId: String, firstUser: String, answer: String) {
         val store = sessions ?: return
         val renameRevision = titleRenameRevision
-        viewModelScope.launch(kotlinx.coroutines.Dispatchers.IO) {
+        runRegistry.scope.launch(kotlinx.coroutines.Dispatchers.IO) {
             try {
                 val snapshot = providerSource.load() as? ProviderRuntimeResult.Ready ?: return@launch
                 // The coding request's reasoning and context never enter this call.
@@ -2898,7 +2927,8 @@ class ChatViewModel private constructor(
                     val history = store.list()
                     val current = selectedState.value.currentSessionId
                     val usage = current?.let { store.usage(it) }
-                    selectedState.update { state ->
+                    runRegistry.history.value = history
+                selectedState.update { state ->
                         val unchanged = renameRevision == titleRenameRevision
                         state.copy(sessions = if (unchanged) history else state.sessions,
                             currentSessionTitle = if (unchanged) history.firstOrNull {
@@ -3215,7 +3245,8 @@ class ChatViewModel private constructor(
     }
 
     fun stopForApproval(approvalToken: Long) {
-        if (approvals.pending.value?.approvalToken == approvalToken) activeRun?.let(::stopRun)
+        val request = approvals.pending.value?.takeIf { it.approvalToken == approvalToken } ?: return
+        activeRun?.takeIf { it.value.currentSessionId == request.sessionId }?.let(::stopRun)
     }
 
     fun cancel() = stopRun(selectedState)
@@ -3224,7 +3255,7 @@ class ChatViewModel private constructor(
         if (activeRun !== owner) return
         browser.dismissChatPreview()
         owner.userCancelled = true
-        approvals.cancel()
+        approvals.cancelSession(owner.value.currentSessionId)
         owner.job?.cancel()
     }
 
@@ -3236,7 +3267,7 @@ class ChatViewModel private constructor(
         owner.pauseRequested = true
         owner.pauseReason = reason
         owner.activeSupervisor?.pauseAll(reason)
-        approvals.cancel()
+        approvals.cancelSession(owner.value.currentSessionId)
         owner.job?.cancel()
     }
 
@@ -3423,7 +3454,7 @@ class ChatViewModel private constructor(
                     sessionStore.clear()
                     sessionStore.load()
                 }
-                if (liveSession === owner) liveSession = null
+                runRegistry.forget(sessionId)
                 activeMessages = selected.messages
                 activeSummary = selected.summary
                 val usage = selected.id?.let { sessions?.usage(it) }
@@ -3458,7 +3489,7 @@ class ChatViewModel private constructor(
 
     fun deleteSession(id: String) {
         if (id == activeRun?.value?.currentSessionId) return
-        if (id == liveSession?.value?.currentSessionId) liveSession = null
+        runRegistry.forget(id)
         changeSession { store -> store.delete(id, liveSession?.value?.currentSessionId) }
         viewModelScope.launch {
             try {
@@ -3540,7 +3571,7 @@ class ChatViewModel private constructor(
                     projectLoading = project.projectLoading, projectError = project.projectError,
                     spendCaps = project.spendCaps, userPricePerMillionUsd = project.userPricePerMillionUsd,
                 ) }
-                selectedRun.value = next
+                attachRun(next)
                 if (activeRun == null) selected.workspaceId?.let { browser.bindProject(it) }
                 if (cached == null) {
                     val workspace = try { workspaceSelection.restore()?.first }
@@ -3560,7 +3591,7 @@ class ChatViewModel private constructor(
 
     override fun onCleared() {
         try { connectivity?.unregisterNetworkCallback(networkCallback) } catch (_: Exception) { }
-        if (NotificationApprovals.gate === approvals) NotificationApprovals.gate = null
+        runRegistry.detach(visibility)
         terminalSession.close()
         super.onCleared()
     }

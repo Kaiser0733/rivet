@@ -58,6 +58,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
 import com.kaiser.rivet.chat.ChatViewModel
+import com.kaiser.rivet.chat.ConversationActivity
 import com.kaiser.rivet.ui.workspaceFolderPath
 import com.kaiser.rivet.ui.RivetLayout
 
@@ -198,6 +199,14 @@ internal fun RivetSidebar(
                     Text(session.title.replace("New session", "New conversation"), Modifier.weight(1f),
                         style = MaterialTheme.typography.bodyMedium,
                         maxLines = 1, overflow = TextOverflow.Ellipsis)
+                    val activity = when (state.conversationActivity[session.id]) {
+                        ConversationActivity.Running -> "Running"
+                        ConversationActivity.NeedsApproval -> "Needs approval"
+                        ConversationActivity.FinishedUnseen -> "Finished"
+                        null -> null
+                    }
+                    if (activity != null) Text(activity, style = MaterialTheme.typography.labelSmall,
+                        color = MaterialTheme.colorScheme.primary)
                     Text(relativeRecency(session.updatedAt), style = MaterialTheme.typography.labelSmall,
                         color = MaterialTheme.colorScheme.onSurfaceVariant)
                 }
@@ -238,7 +247,7 @@ internal fun RivetSidebar(
         }
         Row(Modifier.fillMaxWidth().padding(vertical = 10.dp),
             horizontalArrangement = Arrangement.SpaceBetween, verticalAlignment = Alignment.CenterVertically) {
-            Button(onClick = { viewModel.newSession(); onNavigate() }, enabled = actionsEnabled,
+            Button(onClick = { viewModel.newSession(); onNavigate() }, enabled = openEnabled,
                 shape = MaterialTheme.shapes.small) {
                 Text("New chat")
             }

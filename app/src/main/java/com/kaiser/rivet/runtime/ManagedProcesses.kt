@@ -5,6 +5,7 @@ import android.content.Intent
 import android.os.Build
 import com.kaiser.rivet.RivetApplication
 import com.kaiser.rivet.agent.AgentApprovalRequest
+import com.kaiser.rivet.agent.RunPauseReason
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Job
@@ -30,6 +31,7 @@ internal data class ForegroundServiceState(
     val approvalTitle: String? = null,
     val approvalToken: Long? = null,
     val approvalDangerous: Boolean = false,
+    val activeTurnToken: String? = null,
 ) {
     val hasActiveWork: Boolean get() = activeTurns > 0 || activePreviews > 0 || activeBackgrounds > 0
 }
@@ -66,7 +68,8 @@ class ManagedProcesses {
     @Volatile private var activeLimit = MAX_ACTIVE_PROCESSES
 
     private val entries = linkedMapOf<String, Entry>()
-    private val activeTurns = linkedMapOf<String, () -> Unit>()
+    private data class TurnControl(val title: String?, val stop: () -> Unit, val pause: (RunPauseReason) -> Unit)
+    private val activeTurns = linkedMapOf<String, TurnControl>()
     private var serviceStarted = false
     private var serviceWaiter: CompletableDeferred<Boolean>? = null
     private var runTitle: String? = null
@@ -354,7 +357,7 @@ class ManagedProcesses {
                 entry.info = entry.info.copy(status = ManagedProcessStatus.Stopping)
                 Triple(id, entry.stop, entry.persistent)
             }
-            val turns = activeTurns.values.toList()
+            val turns = activeTurns.values.map { it.stop }
             activeTurns.clear()
             publishLocked()
             activeEntries to turns
@@ -383,10 +386,15 @@ class ManagedProcesses {
         }
     }
 
-    fun startTurn(context: Context? = null, stop: () -> Unit = {}): String {
+    fun startTurn(context: Context? = null, stop: () -> Unit = {}): String =
+        startTurn(context, null, stop, {})
+
+    fun startTurn(context: Context?, title: String?, stop: () -> Unit,
+                  pause: (RunPauseReason) -> Unit): String {
         val (id, shouldStartService) = synchronized(lock) {
             val id = UUID.randomUUID().toString()
-            activeTurns[id] = stop
+            activeTurns[id] = TurnControl(title?.take(160), stop, pause)
+            if (title != null) runTitle = title.take(160)
             // Start the clock as soon as the turn exists. updateRunStatus normally
             // supplies the run's own timestamp a moment later, but a notification
             // must never lose elapsed time if that update is delayed or skipped.
@@ -409,6 +417,16 @@ class ManagedProcesses {
             }
         }
         return id
+    }
+
+    fun stopTurn(id: String) {
+        val control = synchronized(lock) { activeTurns[id] }
+        control?.stop?.invoke()
+    }
+
+    fun pauseTurn(id: String, reason: RunPauseReason) {
+        val control = synchronized(lock) { activeTurns[id] }
+        control?.pause?.invoke(reason)
     }
 
     fun finishTurn(id: String) = synchronized(lock) {
@@ -539,13 +557,14 @@ class ManagedProcesses {
         mutableProcesses.value = entries.values.map { it.info }.sortedByDescending { it.startedAtMillis }
         mutableForegroundState.value = ForegroundServiceState(
             activeTurns = activeTurns.size,
+            activeTurnToken = activeTurns.keys.lastOrNull(),
             activePreviews = entries.values.count {
                 it.info.kind == ManagedProcessKind.Preview && it.info.status in ACTIVE
             },
             activeBackgrounds = entries.values.count {
                 it.info.kind == ManagedProcessKind.Background && it.info.status in ACTIVE
             },
-            runTitle = runTitle,
+            runTitle = runTitle ?: activeTurns.values.lastOrNull()?.title,
             runAction = runAction,
             runStartedAt = runStartedAt,
             approvalTitle = approvalTitle,

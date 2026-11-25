@@ -336,6 +336,18 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     onNewChat = chatViewModel::newSession,
                 )
 
+                state.backgroundApproval?.let { approval ->
+                    Row(Modifier.fillMaxWidth().padding(horizontal = 16.dp),
+                        verticalAlignment = Alignment.CenterVertically) {
+                        Text(displaySafeText("${approval.sessionTitle ?: "Another conversation"} needs approval."),
+                            modifier = Modifier.weight(1f),
+                            style = MaterialTheme.typography.bodyMedium)
+                        approval.sessionId?.let { id ->
+                            TextButton(onClick = { chatViewModel.resumeSession(id) }) { Text("Open conversation") }
+                        }
+                    }
+                }
+
                 val setupNotice = when {
                     state.projectLoading -> "Opening your project…"
                     projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE
@@ -1635,6 +1647,7 @@ internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> 
         title = { Text(displaySafeText(approvalTitle(request)),
             style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
         text = { Column(Modifier.verticalScroll(rememberScrollState()), verticalArrangement = Arrangement.spacedBy(8.dp)) {
+            request.sessionTitle?.let { Text(displaySafeText("In $it"), style = MaterialTheme.typography.bodyMedium) }
             Text(displaySafeText(request.detail),
                 style = MaterialTheme.typography.bodyMedium.copy(fontFamily =
                     if (command) FontFamily.Monospace else FontFamily.Default))

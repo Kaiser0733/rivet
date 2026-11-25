@@ -101,6 +101,8 @@ data class AgentApprovalRequest(
     val requester: String? = null,
     /** True when this mutation is inside the project tree and a recent turn checkpoint can restore it. */
     val undoable: Boolean = false,
+    val sessionId: String? = null,
+    val sessionTitle: String? = null,
 )
 
 /** Execution effects drive integrity work independently from human confirmation. */

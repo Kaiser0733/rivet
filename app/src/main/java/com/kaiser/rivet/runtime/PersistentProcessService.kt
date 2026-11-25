@@ -42,8 +42,13 @@ class PersistentProcessService : Service() {
                 stopIfIdle()
                 return START_NOT_STICKY
             }
+            ACTION_STOP_TURN -> {
+                intent?.getStringExtra(EXTRA_TURN_TOKEN)?.let(processes::stopTurn)
+                stopIfIdle()
+                return START_NOT_STICKY
+            }
             ACTION_PAUSE -> {
-                AgentRunControl.requestPause()
+                intent?.getStringExtra(EXTRA_TURN_TOKEN)?.let { processes.pauseTurn(it, RunPauseReason.User) }
                 stopIfIdle()
                 return START_NOT_STICKY
             }
@@ -144,8 +149,15 @@ class PersistentProcessService : Service() {
                     !turnActive && (state.activePreviews > 0 || state.activeBackgrounds > 0))
                 .addFlags(Intent.FLAG_ACTIVITY_CLEAR_TOP or Intent.FLAG_ACTIVITY_SINGLE_TOP),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
+        fun turnIntent(action: String) = Intent(this, PersistentProcessService::class.java)
+            .setAction(action).apply {
+                state.activeTurnToken?.let { token ->
+                    data = android.net.Uri.fromParts("rivet-turn", token, null)
+                    putExtra(EXTRA_TURN_TOKEN, token)
+                }
+            }
         val stop = PendingIntent.getService(this, REQUEST_STOP,
-            Intent(this, PersistentProcessService::class.java).setAction(ACTION_STOP_ALL),
+            turnIntent(if (turnActive) ACTION_STOP_TURN else ACTION_STOP_ALL),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val statusText = when {
             turnActive && state.approvalToken != null && state.approvalDangerous ->
@@ -164,7 +176,7 @@ class PersistentProcessService : Service() {
             state.activePreviews > 0 -> "${state.activePreviews} local previews are running"
             else -> "${state.activeBackgrounds} background processes are running"
         }
-        val stopLabel = if (turnActive && state.activePreviews == 0 && state.activeBackgrounds == 0) "Stop" else "Stop all"
+        val stopLabel = if (turnActive) "Stop" else "Stop all"
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_processes)
             .setContentTitle(state.runTitle?.takeIf { turnActive }?.let { "Rivet · $it" } ?: "Rivet")
@@ -195,7 +207,7 @@ class PersistentProcessService : Service() {
                 decision(REQUEST_DENY, ACTION_DENY, "Deny", approved = false)
             } else {
                 val pause = PendingIntent.getService(this, REQUEST_PAUSE,
-                    Intent(this, PersistentProcessService::class.java).setAction(ACTION_PAUSE),
+                    turnIntent(ACTION_PAUSE),
                     PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                 builder.addAction(android.R.drawable.ic_media_pause, "Pause", pause)
             }
@@ -268,10 +280,12 @@ class PersistentProcessService : Service() {
         private const val REQUEST_PAUSE = 113
         private const val REQUEST_APPROVE = 114
         private const val REQUEST_DENY = 115
+        private const val EXTRA_TURN_TOKEN = "turn_token"
         private const val EXTRA_APPROVAL_TOKEN = "approval_token"
         internal const val TURN_NOTIFICATION_TEXT = "Rivet is working — tap to return"
         internal const val ACTION_START = "com.kaiser.rivet.action.START_PROCESSES"
         internal const val ACTION_STOP_ALL = "com.kaiser.rivet.action.STOP_ALL_PROCESSES"
+        internal const val ACTION_STOP_TURN = "com.kaiser.rivet.action.STOP_TURN"
         internal const val ACTION_PAUSE = "com.kaiser.rivet.action.PAUSE_RUN"
         internal const val ACTION_APPROVE = "com.kaiser.rivet.action.APPROVE_STEP"
         internal const val ACTION_DENY = "com.kaiser.rivet.action.DENY_STEP"
