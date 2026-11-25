@@ -9,6 +9,8 @@ import kotlinx.coroutines.cancel
 import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.runTest
@@ -19,6 +21,37 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentLoopTest {
+    @Test fun cancelledCommandSyncStopsBeforeTheNextModelRequest() = runTest {
+        val call = AgentToolCall("command", "run_command", """{"command":"printf ok"}""")
+        var requests = 0
+        var syncStarted = false
+        val cancellation = kotlinx.coroutines.CancellationException("Stop during mirror sync")
+        val loop = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = listOf(call)) else AgentResponse(text = "Continued")
+            },
+            prepareTool = {
+                PreparedAgentTool(call, AgentApprovalRequest(call, "Run", "printf ok")) {
+                    val sync = com.kaiser.rivet.runtime.syncAfterCommand {
+                        syncStarted = true
+                        throw cancellation
+                    }
+                    AgentToolResult(call.id, call.name, sync.state.name)
+                }
+            },
+            requestApproval = { true },
+        )
+        try {
+            loop.run(listOf(AgentMessage.user("Run a command")), emptyList())
+            assertTrue("The command fixture must reach mirror sync", syncStarted)
+            throw AssertionError("The turn returned after its mirror sync was cancelled")
+        } catch (found: kotlinx.coroutines.CancellationException) {
+            org.junit.Assert.assertSame(cancellation, found)
+        }
+        assertTrue(syncStarted)
+        assertEquals(1, requests)
+    }
+
     @Test fun downloadOverwriteKeepsExistingPathDestructiveApproval() = runTest {
         for (created in listOf(true, false)) {
             val download = AgentToolCall("download", "download_file", "{}")
@@ -1818,6 +1851,7 @@ class AgentLoopTest {
         assertEquals(null, recorded[2].second)
 
         val cancelRecorded = mutableListOf<Pair<String, AgentToolResult?>>()
+        var cleanupCancellable = false
         val started = CompletableDeferred<Unit>()
         val cancelling = async {
             AgentLoop(
@@ -1836,12 +1870,16 @@ class AgentLoopTest {
                 },
                 requestApproval = { true },
                 beforeMutation = { null },
-                afterMutation = { call, result -> cancelRecorded += call.id to result },
+                afterMutation = { call, result ->
+                    cleanupCancellable = !currentCoroutineContext().isActive
+                    cancelRecorded += call.id to result
+                },
             ).run(listOf(AgentMessage.user("Cancel me")), emptyList())
         }
         started.await()
         cancelling.cancelAndJoin()
         assertEquals(listOf("wc" to null), cancelRecorded)
+        assertTrue(cleanupCancellable)
     }
 
     @Test

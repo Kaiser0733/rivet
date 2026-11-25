@@ -205,6 +205,15 @@ internal class CommandProcess {
                 if (overSessionCap(pid, members)) tooManyChildren.set(true)
                 for (member in members) ProcTree.kill(member)
             }
+            val unregister = coroutineContext[TurnRunContext]?.registerProcess {
+                if (!exited.isCompleted) {
+                    rememberCurrentTree()
+                    CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+                    CommandNative.signalLeader(pid, OsConstants.SIGKILL)
+                    endSession()
+                }
+                sweepStrays()
+            }
             val treeWatch = launch(Dispatchers.IO) {
                 watchCommandTree(
                     root = pid,
@@ -256,6 +265,7 @@ internal class CommandProcess {
                 }
                 throw e
             } finally {
+                unregister?.invoke()
                 treeWatch.cancel()
                 outputPublisher?.cancel()
                 CommandNative.signalGroup(pid, OsConstants.SIGKILL)

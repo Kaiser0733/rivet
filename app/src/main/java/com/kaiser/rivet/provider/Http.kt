@@ -24,6 +24,7 @@ import kotlin.coroutines.resumeWithException
 // One client, one connection pool for the whole app; per-call timeouts are
 // derived with quick().
 internal val http: OkHttpClient = OkHttpClient.Builder()
+    .callTimeout(10, TimeUnit.MINUTES)
     .connectTimeout(15, TimeUnit.SECONDS)
     .readTimeout(300, TimeUnit.SECONDS) // SSE streams idle between deltas
     .writeTimeout(30, TimeUnit.SECONDS)

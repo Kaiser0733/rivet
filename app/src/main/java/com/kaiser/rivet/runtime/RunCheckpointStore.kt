@@ -11,7 +11,10 @@ import java.nio.file.StandardCopyOption
 import java.nio.file.attribute.BasicFileAttributes
 import java.security.MessageDigest
 import java.util.UUID
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -37,6 +40,7 @@ data class RunCheckpointInfo(
     val before: Map<String, CheckpointEntry>,
     val after: Map<String, CheckpointEntry>? = null,
     val delta: List<String> = emptyList(),
+    val desynced: Boolean = false,
 )
 
 data class RunCheckpointRestore(
@@ -64,10 +68,11 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
         withContext(Dispatchers.IO) {
             val id = UUID.randomUUID().toString()
             val folder = File(directory, id)
-            if (!folder.mkdirs()) throw CheckpointFailure("storage")
             val before = scan(worktree)
+            if (!folder.mkdirs()) throw CheckpointFailure("storage")
             val gitRef = if (isGit(worktree)) {
                 try { GitCheckpoint.commit(worktree, ref(runId, sequence), "Rivet checkpoint $runId/$sequence") }
+                catch (e: CancellationException) { throw e }
                 catch (_: Exception) { null }
             } else null
             val deltaPaths = if (gitRef == null) {
@@ -108,9 +113,14 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
     suspend fun history(limit: Int = 100): List<RunCheckpointInfo> = withContext(Dispatchers.IO) {
         directory.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith('.') }
             .mapNotNull { try { read(it) } catch (_: Exception) { null } }
-            .filter { it.after != null }
+            .filter { !it.desynced && it.after != null }
             .sortedByDescending { it.createdAt }
             .take(limit.coerceIn(1, 500))
+    }
+
+    suspend fun markDesynced(id: String) = withContext(Dispatchers.IO) {
+        val folder = folder(id)
+        write(folder, read(folder).copy(desynced = true))
     }
 
     suspend fun latestForRun(runId: String): RunCheckpointInfo? = withContext(Dispatchers.IO) {
@@ -120,7 +130,7 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
     suspend fun forRun(runId: String): List<RunCheckpointInfo> = withContext(Dispatchers.IO) {
         directory.listFiles().orEmpty().filter { it.isDirectory && !it.name.startsWith('.') }
             .mapNotNull { try { read(it) } catch (_: Exception) { null } }
-            .filter { it.after != null && it.runId == runId }
+            .filter { !it.desynced && it.after != null && it.runId == runId }
             .sortedBy { it.sequence }
     }
 
@@ -154,7 +164,7 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
      */
     suspend fun stageRestoreRun(records: List<RunCheckpointInfo>, worktree: File): RunCheckpointRestore =
         withContext(Dispatchers.IO) {
-            val ordered = records.filter { it.after != null }.sortedBy { it.sequence }
+            val ordered = records.filter { !it.desynced && it.after != null }.sortedBy { it.sequence }
             if (ordered.isEmpty()) throw CheckpointFailure("undo_unavailable")
             if (ordered.size == 1) {
                 val single = ordered.single()
@@ -180,7 +190,7 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
             }
         }
 
-    private fun stageSnapshotRestore(
+    private suspend fun stageSnapshotRestore(
         stageId: String,
         beforeMap: Map<String, CheckpointEntry>,
         afterMap: Map<String, CheckpointEntry>,
@@ -234,9 +244,11 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
         return if (source.isFile) source.readBytes() else null
     }
 
-    private fun copyBefore(worktree: File, folder: File, before: Map<String, CheckpointEntry>): List<String> {
+    private suspend fun copyBefore(worktree: File, folder: File, before: Map<String, CheckpointEntry>): List<String> {
+        val context = currentCoroutineContext()
         val target = File(folder, "delta")
         before.forEach { (path, entry) ->
+            context.ensureActive()
             if (!entry.directory) {
                 val source = File(worktree, path)
                 val destination = File(target, path)
@@ -315,11 +327,13 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
         }
     }
 
-    private fun scan(root: File): Map<String, CheckpointEntry> {
+    private suspend fun scan(root: File): Map<String, CheckpointEntry> {
+        val context = currentCoroutineContext()
         val entries = linkedMapOf<String, CheckpointEntry>()
         if (!root.isDirectory) return entries
         Files.walkFileTree(root.toPath(), object : SimpleFileVisitor<Path>() {
             override fun preVisitDirectory(dir: Path, attrs: BasicFileAttributes): FileVisitResult {
+                context.ensureActive()
                 val path = relative(root, dir)
                 if (path == ".git" || path == ".rivet/runs" || path == ".rivet/checkpoints" ||
                     (path.isNotEmpty() && ignored(root, path))) return FileVisitResult.SKIP_SUBTREE
@@ -327,6 +341,7 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
                 return FileVisitResult.CONTINUE
             }
             override fun visitFile(file: Path, attrs: BasicFileAttributes): FileVisitResult {
+                context.ensureActive()
                 if (!attrs.isRegularFile || Files.isSymbolicLink(file)) return FileVisitResult.CONTINUE
                 val path = relative(root, file)
                 if (ignored(root, path)) return FileVisitResult.CONTINUE
@@ -334,6 +349,7 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
                 FileInputStream(file.toFile()).use { input ->
                     val buffer = ByteArray(64 * 1024)
                     while (true) {
+                        context.ensureActive()
                         val count = input.read(buffer)
                         if (count < 0) break
                         digest.update(buffer, 0, count)
@@ -402,7 +418,8 @@ class RunCheckpointStore(private val root: File, private val workspace: String,
 }
 
 private object GitCheckpoint {
-    fun commit(worktree: File, ref: String, message: String): String {
+    suspend fun commit(worktree: File, ref: String, message: String): String {
+        val context = currentCoroutineContext()
         val repo = FileRepositoryBuilder().setGitDir(File(worktree, ".git"))
             .setWorkTree(worktree).build()
         repo.use {
@@ -416,6 +433,7 @@ private object GitCheckpoint {
                     walk.addTree(FileTreeIterator(it))
                     walk.isRecursive = false
                     while (walk.next()) {
+                        context.ensureActive()
                         val path = walk.pathString
                         if (path == ".git" || path.startsWith(".git/")) continue
                         val working = walk.getTree(0, FileTreeIterator::class.java)
@@ -438,6 +456,7 @@ private object GitCheckpoint {
                     }
                 }
                 builder.finish()
+                context.ensureActive()
                 val treeId = cache.writeTree(inserter)
                 val who = PersonIdent("Rivet", "rivet@local")
                 val commitId = inserter.insert(CommitBuilder().apply {

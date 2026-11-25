@@ -46,6 +46,8 @@ import com.kaiser.rivet.storage.AgentSessionPersistence
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -2179,6 +2181,52 @@ class ChatViewModelTest {
         assertTrue(fixture.sessions.recent(first).flatMap { it.toolResults }.none {
             it.callId == "create-b" && !it.error
         })
+    }
+
+    @Test fun stopClearsStreamingWhileProviderCleanupIsStillHeld() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val cleanupEntered = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "model-a")
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit): AgentResponse {
+                try {
+                    onDelta("Partial answer")
+                    kotlinx.coroutines.awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) {
+                        cleanupEntered.complete(Unit)
+                        releaseCleanup.await()
+                    }
+                }
+            }
+        }
+        val vm = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }) { _, _ -> provider }
+        await(vm) { it.ready }
+        vm.send("Start a slow request")
+        await(vm) { it.streamingText == "Partial answer" }
+        val run = requireNotNull(vm.runRegistry.active.value)
+        try {
+            vm.cancel()
+            withTimeout(5_000) { cleanupEntered.await() }
+            val stopped = vm.uiState.value
+            assertFalse(stopped.streaming)
+            assertTrue(stopped.streamingText.isEmpty())
+            assertNull(stopped.activity)
+            assertFalse(run.job!!.isCompleted)
+            vm.cancel()
+            assertEquals(stopped, vm.uiState.value)
+        } finally {
+            releaseCleanup.complete(Unit)
+        }
+        withTimeout(5_000) { run.job?.join() }
+        assertTrue(run.job?.isCompleted == true)
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =

@@ -9,12 +9,16 @@ import com.kaiser.rivet.subagent.WorkerDiff
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 
 interface CheckpointBackend {
     suspend fun beginCheckpoint(workspaceId: String, runId: String?, sessionId: String?): String
     suspend fun finishCheckpoint(workspaceId: String, id: String): Boolean
+    suspend fun markCheckpointDesynced(workspaceId: String, id: String) = Unit
+    suspend fun markRunCheckpointDesynced(workspaceId: String, id: String) = Unit
     suspend fun recordCheckpointPost(workspaceId: String, id: String)
     suspend fun checkpointMatchesPost(workspaceId: String, id: String): Boolean
     suspend fun beginRunCheckpoint(
@@ -45,6 +49,12 @@ class RuntimeControllerCheckpointBackend(
 
     override suspend fun finishCheckpoint(workspaceId: String, id: String): Boolean =
         runtime.finishCheckpoint(workspaceId, id)
+
+    override suspend fun markCheckpointDesynced(workspaceId: String, id: String) =
+        runtime.markCheckpointDesynced(workspaceId, id)
+
+    override suspend fun markRunCheckpointDesynced(workspaceId: String, id: String) =
+        runtime.markRunCheckpointDesynced(workspaceId, id)
 
     override suspend fun recordCheckpointPost(workspaceId: String, id: String) =
         runtime.recordCheckpointPost(workspaceId, id)
@@ -190,7 +200,6 @@ class RunCheckpointGate(
         val (ws, id) = writeLease.withLock {
             val current = runCheckpointId ?: return@withLock null to null
             val targetWorkspace = overrideWorkspaceId ?: workspaceId ?: return@withLock null to null
-            runCheckpointId = null
             targetWorkspace to current
         }
         if (id == null || ws == null) return
@@ -200,7 +209,20 @@ class RunCheckpointGate(
             throw e
         } catch (_: Exception) {
         }
+        writeLease.withLock { if (runCheckpointId == id) runCheckpointId = null }
         onBoundaryChanged()
+    }
+
+    suspend fun abandonCheckpoints() {
+        val (ws, turn, run) = writeLease.withLock {
+            Triple(workspaceId, turnCheckpointId, runCheckpointId).also {
+                turnCheckpointId = null
+                runCheckpointId = null
+            }
+        }
+        if (ws == null) return
+        if (turn != null) try { backend.markCheckpointDesynced(ws, turn) } catch (_: Exception) { }
+        if (run != null) try { backend.markRunCheckpointDesynced(ws, run) } catch (_: Exception) { }
     }
 
     /**
@@ -339,6 +361,10 @@ class RunCheckpointGate(
                     backend.recordCheckpointPost(ws, id)
                     needsPostCheck = true
                 } catch (e: CancellationException) {
+                    checkpointBroken = true
+                    withContext(NonCancellable) {
+                        try { backend.markCheckpointDesynced(ws, id) } catch (_: Exception) { }
+                    }
                     throw e
                 } catch (_: Exception) {
                     checkpointBroken = true
@@ -581,6 +607,7 @@ class RunCheckpointGate(
         if (broken) return TurnCheckpointOutcome.Broken
         if (id == null || ws == null) return TurnCheckpointOutcome.None
         val hasChanges = backend.finishCheckpoint(ws, id)
+        writeLease.withLock { if (turnCheckpointId == id) turnCheckpointId = null }
         return TurnCheckpointOutcome.Finished(id, hasChanges)
     }
 

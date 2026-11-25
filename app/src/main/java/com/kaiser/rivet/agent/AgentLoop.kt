@@ -147,7 +147,7 @@ class AgentLoop(
                 } catch (_: Exception) {
                     result = failed(first.call)
                 } finally {
-                    withContext(NonCancellable) { afterMutation(first.call, result) }
+                    afterMutation(first.call, result)
                 }
                 stage(if (result?.error == false) AgentToolLifecycleStage.Completed else AgentToolLifecycleStage.Failed)
                 return AgentStopReason.Completed
@@ -564,9 +564,7 @@ class AgentLoop(
                             failed(call)
                         } finally {
                             if (acquiredMutation) {
-                                withContext(NonCancellable) {
-                                    afterMutation(call, executedResult)
-                                }
+                                afterMutation(call, executedResult)
                             }
                         }
                     }
