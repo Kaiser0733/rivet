@@ -1,215 +1,55 @@
-# Model limits: automatic detection and learning
+# Rivet F3 run integrity
 
-Branch `model-limits-detect`, based on `origin/batch/surface-fix` at
-`0729dabcfb01b052c77ec6d5af3e0a82aab8a9f3`. Implementation HEAD before this
-report: `3fcc4c98`. Nothing was merged, tagged, released, or version-bumped.
+Branch `flaw-run` starts at `6f9f78ad` from `origin/batch/surface-fix`. Hunt 1 D2, D3, D5 and D6 came from the copy of `flaw-hunt-big-tasks.md` in the adjacent Rivet worktree. Hunt 2 sections 3.1, 3.2 and 5.1 came from `flaw-hunt-2-report.md` at `origin/docs/flaw-hunt-2`. The line references below are for the starting commit. Version fields and self-updater files have no diff.
 
-The acceptance target was that a user can add a normal provider and model and
-Rivet fills both the context window and the maximum output itself. The resolver
-now does that for the known providers in the bundled table, for providers that
-report model metadata, and for limits learned from a provider error. The safe
-fallback is 32K, not the old 256K guess.
+## 1. Workers with no live execution
 
-## 1. Resolution order and the default
+`SubagentSupervisor.kt:311–379,539–543,624–633` restored stored Running rows into the new supervisor without restoring their jobs. The coordinator's completion hold could wait ten minutes for an execution that no longer existed. The live launcher also lacked an idle deadline.
 
-Commits `53c1be28`, `6e8fa6f1`, `3fcc4c98`.
+Recovery persists unowned Running workers as Failed and supplies an explanation in the worker result and UI row. The coordinator can collect that terminal result immediately. Live workers renew a five-minute deadline with streamed text, reasoning or worker events. A timeout or unexpected cancellation supplies a failed result. Explicit user stop and supported pause reasons retain their own states.
 
-Files · `provider/ModelLimits.kt`, `provider/ProviderConfig.kt`,
-`agent/ContextBudget.kt`, `agent/ContextBudgetTest.kt`.
+**JiTTests.** `killedWorkerIsFailedAndDoesNotHoldTheResumedCoordinator` and `silentWorkerEndsWithAReasonAndReleasesTheCoordinator`. Parent: the recovery test found Running where it expected Failed. The first test uses a persisted Running record to simulate a killed process. The idle test exercises a cancellable provider using a short deadline. A provider or native callback that ignores cancellation can delay cleanup.
 
-The resolver applies a local hard ceiling, then a manual value, a learned cap,
-provider metadata, the known-model table, an observed usage floor, and finally
-32,768 tokens. A learned cap is scoped to provider id, endpoint and model and
-is ignored after expiry. Manual output wins for planning; the wire value is
-clamped to a provider or learned maximum so the user is not sent a request the
-provider already rejected. Manual context below a local ceiling is allowed;
-above it is clamped with a visible warning.
+## 2. Replay after interruption
 
-The default reserve is proportional: `min(16K, max(2K, window/4))` when the
-window is only assumed. On 32K that gives 24,576 allowed input tokens,
-21,504 compact-at, and 18,432 compact-to. A learned prompt cap is applied after
-the reserve so it is not subtracted twice.
+`AgentLoop.kt:571` executed each tool before it emitted the group result. `RunJournal.kt:32–50,264–268` stored step summaries without operation identities. The retry path in `ChatViewModel.kt:1783` reused the user prompt, and session recovery inserted a synthetic interruption result for unfinished groups.
 
-## 2. Provider metadata and the bundled table
+The project run journal now commits a start receipt and a result receipt for each side-effecting call in app-private storage, with a best-effort project copy. Receipts distinguish a completed action from an action whose effects are unknown. A resumed loop compares the operation and normalized arguments, independent of provider call IDs, and returns a correlated `already_done` or outcome-unknown result without re-executing the action. The journal lists recent receipts in model context. The most recent user turn in the persisted transcript supplies a fallback for older runs and chat-only sessions.
 
-Commits `53c1be28`, `ffc91952`.
+**JiTTests.** `resumedWriteIsReportedAsAlreadyDoneAndNeverOverwritesTheFileAgain` and `receiptSavedBeforeTheToolBatchSurvivesReopening`. The separate receipt crash-window test uses the new journal receipt API. Arbitrary commands can express the same action with different arguments. Rivet compares normalized calls and does not infer that two different commands have the same effects. If an action completes immediately before death and the result receipt was never written, Rivet withholds a matching replay and reports the outcome as unknown. Chat-only sessions use transcript evidence.
 
-Files · `provider/OpenAiCompatibleClient.kt`, `provider/AnthropicClient.kt`,
-`provider/GeminiClient.kt`, `provider/ModelIdNormalizer.kt`,
-`provider/KnownModelLimits.kt`, `app/src/main/resources/model-limits.tsv`.
+## 3. Pending approvals
 
-Anthropic's `max_input_tokens` and `max_tokens`, Gemini's
-`inputTokenLimit`/`outputTokenLimit`, and the OpenAI-compatible spellings
-`context_length`, `context_window`, `contextLength`, `max_context_length`,
-`max_model_len`, `max_completion_tokens`, `maxOutputTokens`,
-`maxCompletionTokens`, and `outputTokenLimit` are parsed. OpenRouter's
-`top_provider` values still win within a listing because they describe the
-specific route. Generic gateways only get a completion cap when the user set
-it or an error taught it; documented first-party clients also send provider
-metadata. The OpenRouter request ceiling is unchanged for unknown routes.
+`AgentApprovalGate.kt:23–39` had an indefinite wait. `PersistentProcessService.kt:150–201` directed dangerous approvals to the app and let other requests be granted from a notification that omitted the full operation detail.
 
-The table is a 5,188-row models.dev snapshot from 2026-11-25. It is loaded from
-resources, not fetched at runtime. `ModelIdNormalizer` strips GGUF quantisation
-for local ids, one owner prefix, a routing suffix after `:`, Fireworks'
-`accounts/fireworks/models/` path, and date stamps. It deliberately leaves
-`-mini`, `-flash`, `-pro`, and `-32k` alone. Ambiguous normalised stems return
-no table answer rather than guessing. `scripts/generate_model_limits.py`
-regenerates the table; models.dev is MIT-licensed and the notice and licence are
-in `THIRD_PARTY_NOTICES.md` and `licenses/models.dev-MIT.txt`.
+Pending approvals stay visible from Rivet's app-wide entry point. The run notification opens the review. The dialog displays the current token's operation and worker, when applicable. Granting checks that the request still owns the token, that the workspace is current and that current destructive-target details match the review. Existing file mutation guards still validate the actual target before execution. Requests expire after two minutes, including time spent in the queue. The loop returns `approval_expired` to the model and withholds the action. The full YOLO policy still bypasses approvals.
 
-## 3. Error learning
+**JiTTests.** `expiredApprovalReachesTheModelAndCannotExecute`, `approvalChecksLiveDetailsBeforeGranting` and `pendingApprovalOpensTheReviewFromTheRunNotification`. The live-grant API and the notification's review action first appear here. The expiry test uses virtual time. Its covered operation is a project shell command.
 
-Commit `6e8fa6f1`.
+## 4. Command ownership
 
-Files · `provider/ModelLimitLearningPolicy.kt`, `provider/Http.kt`,
-`provider/ProviderError.kt`, `agent/AgentLoop.kt`,
-`chat/ChatViewModel.kt`, `chat/ProviderRuntimeSource.kt`,
-`subagent/WorkerRunner.kt`, `storage/ProviderStore.kt`.
+`terminal-emulator/src/main/jni/command.c:63–82` forked a shell without an owner check. `ManagedProcesses.kt:53–57` tracked it in memory. The terminal PTY had a separate native fork, and the Python bootstrap used `ProcessBuilder`.
 
-Numeric context and output limits are parsed from HTTP 400/413/422 bodies and
-structured codes. Byte limits, rate limits, and unrelated 400s are rejected.
-A context observation must be between 512 and 10M, must be below the current
-estimate, and must be plausible against the attempted token count. The first
-observation is provisional for 24 hours; an identical second error confirms it
-for 90 days. Output learning is downward-only. A successful request that
-reports more input tokens than a learned cap clears that cap and records the
-observed floor. Nothing overwrites a manual value.
+Rivet-owned foreground, background, PTY and bootstrap commands now run below a native process monitor. It observes the app PID via the parent relationship and ends the command group when ownership ends. Linux subreaper semantics also let it kill and reap descendants that created another session. Startup checks for old orphaned monitors with PID identity protection where the kernel supports it. The monitor's own check covers devices without that startup mechanism. [Linux subreaper semantics](https://www.man7.org/linux/man-pages/man2/PR_SET_CHILD_SUBREAPER.2const.html)
 
-The same-turn path stores a prompt cap in `ContextPreparation` before the loop
-compacts again. Output learning is persisted after the error and used on the
-next turn; it does not retry generation in the same turn. The editor exposes
-"Reset learned limit" whenever a learning exists and persists the reset
-immediately.
+**JiTTest.** `terminal-emulator/src/test/native/command-owner-death.py`. Parent red after the test killed the owner with SIGKILL and the command tree remained live past three seconds. Branch green under the same Linux host test, including a detached child. Both JNI sources compiled against NDK 27 for ARM64, ARMv7, x86-64 and x86. The host test substitutes the host shell path. Android process-death and PTY behavior still need device verification. The optional Termux integration launches commands under another app's UID and remains outside Rivet's process supervision. The startup sweep identifies monitors from this implementation. It cannot reliably attribute or kill unmarked children left by older versions.
 
-## 4. Local models
+## 5. Spend limits
 
-Commit `fedd6a2a`.
+`SpendGuard.kt:35–41,60–61,79–82` and `SpendStore.kt:16–21` left fresh settings empty. A model with no price entry or user-supplied price could not reach a USD limit.
 
-Files · `local/GgufMetadata.kt`, `local/LocalModelManager.kt`,
-`local/LocalProviderClient.kt`, `local/GgufMetadataTest.kt`,
-`local/LocalLimitMergeTest.kt`.
+Fresh settings now enable **$1 or 500,000 tokens per run** and **$15 or 5,000,000 tokens per month**. Users can edit them in **Settings → Agent → Spend guard**. New explicit opt-outs persist. Legacy preferences with individually saved limits retain those choices. An unpriced cloud model shows a warning beside the chat composer and uses the applicable token limits. An enabled USD limit supplies its default token limit if the corresponding token field is blank. The coordinator and workers check accumulated spend before a subsequent request, and project-run totals are restored on resume after process death.
 
-GGUF v2/v3 metadata is read up to 32 MB. The reader takes the architecture's
-`*.context_length`, falling back to the rope scaling original context, and
-returns null on malformed or truncated input. The effective local context is
-the smaller of the training context and the device budget. Old installs are
-parsed lazily when first needed. New installs get a detected
-`ModelContextLimit` instead of a manual value, and `syncProviders` merges
-manual values, reasoning, headers and learning forward rather than overwriting
-them. A manual lower context is passed to the native load as the requested
-size; it cannot raise the GGUF/device ceiling.
+**JiTTests.** `freshCapsAreOnAndAnExplicitOptOutSurvives` and `unpricedModelWarnsAndAnEnabledUsdCapFallsBackToTokens`. The warning beside the composer is a new surface. These are usage-based pause thresholds. An in-flight response or concurrent in-flight workers can exceed a threshold before usage is known. Phone-only chats do not persist per-run spend across a process death. Provider billing and the separately issued auto-title request are outside this guard. Older preferences that stored no limits have no record distinguishing an explicit all-blank save from an untouched install.
 
-## 5. Editor and meter
+## 6. Worker shell scope
 
-Commit `f1cb6a4b`.
+`FileScopeRegistry.kt:85–135` enforced scope through explicit paths. `WorkerRunner.kt:348–375` and `RuntimeController.kt:166,642` could launch worker commands with Rivet's full filesystem privileges.
 
-Files · `ui/provider/ProviderEditor.kt`, `ui/provider/ProviderEditorState.kt`,
-`ui/provider/ProvidersViewModel.kt`, `ui/chat/ContextMeter.kt`,
-`subagent/SubagentPool.kt`.
+Worker foreground and background shell calls now fail closed with `worker_shell_scope_unavailable` before launch. The worker runner, executor and checkpoint scope gate enforce that rule. Worker file tools continue to enforce the declared scope. The coordinator uses the existing shell path.
 
-The editor shows the resolved source (manual, learned, provider, known model,
-lower bound, default, local) under both fields. Detected output is shown as
-detected but is not described as a sent request cap. Endpoint changes clear
-detected and learned data. Saved providers whose model has no known limit are
-auto-detected when the model list is fetched; a normalised match keeps the
-user's typed model id. The meter says "assumed context window" when the number
-came from the fallback rather than a measurement. Subagent pool entries keep
-the live config's limit instead of overriding it with the snapshot taken when
-the model was ticked.
+**JiTTests.** `workerShellCannotWriteOutsideItsScopeButCoordinatorCan` and `workerCannotRunTheShellThroughACustomTool`. The executor test uses the same shell command and real file for both roles. **Partial.** In-scope worker shell execution is disabled too. The available filesystem policy does not cover all metadata operations, varies by kernel and can depend on inherited descriptors. Providing arbitrary worker shells with enforceable scoped writes requires stronger process isolation than this round allows. [Landlock kernel documentation](https://kernel.org/doc/html/v6.12/userspace-api/landlock.html)
 
-## Tests actually run
+## Verification
 
-- `:app:compileDebugKotlin` — **BUILD SUCCESSFUL** on the final implementation
-  (offline Gradle 8.13, JDK 17).
-- Manual JVM JUnit run of the touched suites — **100 tests, 0 failures**. The
-  classes were `ModelLimitsTest`, `ModelLimitEvidenceTest`,
-  `KnownModelLimitsTest`, `ProviderConfigLimitsTest`,
-  `ModelLimitLearningPolicyTest`, `GgufMetadataTest`, `LocalLimitMergeTest`,
-  `ModelLimitLoopTest`, `ContextBudgetTest`, `ProviderConfigTest`,
-  `HttpErrorTest`, `ProviderErrorClassificationTest`, and
-  `SubagentPoolTest`.
-- Provider wire-shape suites — **77 tests, 0 failures**: `AnthropicClientTest`,
-  `GeminiClientTest`, and `OpenAiCompatibleClientTest`. The runner needs
-  `-Djava.net.preferIPv4Stack=true` for MockWebServer in this sandbox.
-- `AgentLoopTest` — **60 of 66 passed** in the same harness. The 6 failures all
-  fail at `AgentToolExecutor` static initialisation with
-  `NoClassDefFoundError: android/content/pm/PackageManager$NameNotFoundException`;
-  the manual JVM classpath has no Android runtime. The new `ModelLimitLoopTest`
-  covers the overflow/retry and output-observer paths and passed 3/3.
-- Python generator tests — **100 tests, 0 failures** via
-  `python3 -m unittest discover -s scripts -p 'test_*.py'`.
-- `:app:processDebugJavaRes` — **BUILD SUCCESSFUL**; the 211 KB
-  `model-limits.tsv` was present in the processed Java resources.
-
-I could not run the full Gradle unit suite offline: `:app:compileDebugUnitTestKotlin`
-failed to resolve `androidx.compose.ui:ui-test-junit4`, Robolectric,
-MockWebServer, `okhttp-tls`, and `kotlinx-coroutines-test`. That is why the
-suites above were compiled and run directly with the cached production classes.
-No GitHub Actions run has been started from this machine.
-
-The new tests exercise APIs that do not exist on the parent, so the red side is
-a parent compile failure rather than a completed failing test. I did not claim
-a parent test run I could not perform.
-
-## Honest gaps
-
-- No real provider was called. Limit parsing, request shapes, and learning are
-  covered by local tests, not live Anthropic/Gemini/DeepSeek/Mistral/Groq/
-  Together/OpenRouter traffic.
-- No Android device or Robolectric run. The editor layout, the clickable reset,
-  and the GGUF read on a real downloaded model remain device/CI verification.
-- `ContextPreparationTest` is Robolectric-based and did not compile in the
-  manual harness; it is left for CI.
-- Provider input-limit kind is stored (`InputOnly` for Anthropic/Gemini) but
-  planning still treats it as a total window. That is deliberately
-  conservative: it may reserve output space twice rather than send a request
-  that overflows.
-- Output-limit learning is next-turn only; there is no same-turn generation
-  retry after `OutputLimitExceeded`.
-- Output limits carried inside a streamed provider error are not learned; only
-  HTTP/body evidence is.
-- The table is a point-in-time snapshot. A model newer than 2026-11-25 falls
-  back to provider metadata, usage observations, or 32K.
-- The GGUF parser is tested with synthetic v2/v3 headers. A real model whose
-  metadata sits beyond the 32 MB header cap will be treated as having no
-  training ceiling and fall back to the device budget.
-
-## Gate-fix: cheap pruning across a provider switch (Hermes round, 2026-11-25)
-
-CI run `45599253948` on `model-limits-detect` @`e6b0cf3c` failed only
-`ChatViewModelTest > cheapPruningKeepsFullHistoryAndSendsSmallerContext` with a
-`TimeoutCancellationException`. The branch reproduces it locally: the named
-test fails before the fix and passes after it. Base `0729dabc` passes the same
-test in the same harness.
-
-**Root cause.** The test creates its second provider with
-`config.copy(id = "provider-b", model = "model-b")` and no
-`modelContextLimit`. That fixture relied on the old 256K fallback window. The
-first turn deliberately prunes the 22 large tool results but keeps the full
-event history; the second model is unknown, so the intended new behavior
-resolves it to 32K. The preserved transcript is still larger than 32K, so
-`ContextPreparation` correctly raises `ContextCapacityTooSmall`, the turn ends
-with the “This chat is too long…” error, and the test never sees
-`"After switch"`. There is no hang in the resolver, table load, learning path,
-or provider request. The test’s second fixture encoded the old default, not a
-pruning failure.
-
-**Fix.** Commit `e12eb99c` pins the switched provider to an explicit 40K
-`ModelContextLimit`, matching the first provider’s 40K window. This keeps the
-test about pruning across provider switches rather than about the unknown-model
-fallback. No timeout, assertion, or production behavior was changed.
-
-**Tests run.**
-
-- Named test, branch before fix: **fail** (`TimeoutCancellationException`).
-- Named test, branch with `e12eb99c`: **pass**.
-- Full `ChatViewModelTest`: **55/69 passed**. The 14 failures are the same
-  undo/checkpoint/approval timeouts that occur on base `0729dabc` in this
-  manual Robolectric harness; the named test is not among them. CI remains the
-  authoritative full-class run.
-- Model-limit suites: **100/100 passed** (the same list as the main report).
-- Provider wire-shape suites: **77/77 passed**.
-- Python generator suite: **100/100 passed**.
-- `:app:compileDebugKotlin`: **BUILD SUCCESSFUL**.
-
-No merge, PR, tag, release, APK, or version change was made.
+Parent and branch results are recorded above. Full diff reviewed against `6f9f78ad`. No merge, PR, release or APK.
