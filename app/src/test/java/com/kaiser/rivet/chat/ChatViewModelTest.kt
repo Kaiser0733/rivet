@@ -894,8 +894,15 @@ class ChatViewModelTest {
         })
 
         val switchedProvider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "After switch"))))
+        // The switch exercises pruning across providers, not the unknown-model
+        // fallback. Pin the second model's window so the test does not depend on
+        // the 32K default being large enough for the first model's transcript.
+        val switchedConfig = config.copy(
+            id = "provider-b", model = "model-b",
+            modelContextLimit = ModelContextLimit("model-b", config.baseUrl, 40_000),
+        )
         val switched = newChatViewModel(app, sessions,
-            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config.copy(id = "provider-b", model = "model-b"), "key") },
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(switchedConfig, "key") },
             { _, _ -> switchedProvider })
         await(switched) { it.ready }
         switched.send("Follow up")
