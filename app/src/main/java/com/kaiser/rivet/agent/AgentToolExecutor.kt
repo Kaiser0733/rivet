@@ -395,6 +395,7 @@ class AgentToolExecutor(
                     }
                     val cwd = path(args.cwd, root = true)
                     val matchedScripts = matchSkillScripts(args.command, skills, cwd = cwd)
+                        .map { hit -> hit.copy(contentHash = SkillScriptContent.hash(hit, workspace)) }
                     require(args.timeoutMs in 1000..MAX_COMMAND_TIMEOUT_MS)
                     PreparedAgentTool(
                         call,

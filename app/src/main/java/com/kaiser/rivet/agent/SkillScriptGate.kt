@@ -1,10 +1,19 @@
 package com.kaiser.rivet.agent
 
 /** A command that references a bundled file (or the folder) of one installed skill. */
-data class SkillScriptHit(val skill: Skill, val path: String)
+data class SkillScriptHit(
+    val skill: Skill,
+    val path: String,
+    /** SHA-256 of the referenced bytes; null when the script could not be read. */
+    val contentHash: String? = null,
+) {
+    /** A name alone is not an approval: it must carry the exact content identity. */
+    fun approvalKey(): String = contentHash?.let { "${skill.name}:$it" } ?: "${skill.name}:unreadable"
+    fun isApproved(approved: Set<String>): Boolean = contentHash != null && approvalKey() in approved
+}
 
 internal enum class SkillScriptGate {
-    /** No gate: no hit, the skill is already approved, or YOLO removed approvals. */
+    /** No gate: no hit or every matched script's exact content is approved. */
     None,
 
     /** The command would otherwise run silently: insert a first-run approval. */
@@ -41,23 +50,22 @@ internal fun matchSkillScript(
 
 /**
  * The first-run decision for one command covering all matched skills: asks whenever any matched
- * skill has not yet been approved. YOLO disables the gate entirely.
+ * script's exact content has not been approved. YOLO still asks for a new skill script; the
+ * settled YOLO default only removes approvals for ordinary commands.
  */
 internal fun skillScriptGate(
-    mode: AutonomyMode,
     hits: List<SkillScriptHit>,
     approved: Set<String>,
     baseAsks: Boolean,
 ): SkillScriptGate {
-    if (!SkillScriptMatcher.isGateNeeded(mode == AutonomyMode.Yolo, hits.map { it.skill.name }, approved)) {
+    if (!SkillScriptMatcher.isGateNeeded(hits.map { it.approvalKey() }, approved)) {
         return SkillScriptGate.None
     }
     return if (baseAsks) SkillScriptGate.ExistingApproval else SkillScriptGate.InsertApproval
 }
 
 internal fun skillScriptGate(
-    mode: AutonomyMode,
     hit: SkillScriptHit?,
     approved: Set<String>,
     baseAsks: Boolean,
-): SkillScriptGate = skillScriptGate(mode, listOfNotNull(hit), approved, baseAsks)
+): SkillScriptGate = skillScriptGate(listOfNotNull(hit), approved, baseAsks)

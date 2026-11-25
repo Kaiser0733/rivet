@@ -105,8 +105,7 @@ internal object SkillScriptMatcher {
     }
 
     fun isGateNeeded(
-        isYolo: Boolean,
-        matchedNames: List<String>,
+        matchedKeys: List<String>,
         approved: Set<String>,
-    ): Boolean = !isYolo && matchedNames.any { it !in approved }
+    ): Boolean = matchedKeys.any { it !in approved }
 }

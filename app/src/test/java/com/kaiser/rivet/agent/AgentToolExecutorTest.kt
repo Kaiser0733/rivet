@@ -453,6 +453,23 @@ class AgentToolExecutorTest {
     }
 
     @Test
+    fun skillScriptApprovalCarriesItsContentHash() = runTest {
+        val files = FakeWorkspace(text = "echo first\n")
+        val skill = Skill(name = "notes", description = "Use notes.", body = "Body.",
+            source = SkillSource(".rivet/skills/notes", SkillRootKind.ProjectRivet))
+        val catalog = SkillCatalog(listOf(skill), emptyList(), skillCatalogDigest(listOf(skill)))
+        val executor = AgentToolExecutor(files, skills = catalog)
+        val call = AgentToolCall("script", "run_command",
+            """{"command":"sh .rivet/skills/notes/run.sh"}""")
+        val first = executor.prepare(call).skillScripts.single().contentHash
+        assertNotNull(first)
+        files.text = "echo second\n"
+        val second = executor.prepare(call).skillScripts.single().contentHash
+        assertNotNull(second)
+        assertTrue(first != second)
+    }
+
+    @Test
     fun genericGoalWritesAreRefused() = runTest {
         val executor = AgentToolExecutor(FakeWorkspace())
         val prepared = executor.prepare(AgentToolCall("goal", "write_file",

@@ -433,9 +433,9 @@ class AgentLoop(
                     } else {
                         listOfNotNull(prepared.skillScript)
                     }
-                    val unapprovedScripts = allScriptHits.filter { it.skill.name !in scriptApprovals }
+                    val unapprovedScripts = allScriptHits.filter { !it.isApproved(scriptApprovals) }
                     val scriptHit = unapprovedScripts.firstOrNull() ?: allScriptHits.firstOrNull()
-                    val scriptGate = skillScriptGate(mode, allScriptHits, scriptApprovals,
+                    val scriptGate = skillScriptGate(allScriptHits, scriptApprovals,
                         baseAsks = decision == ApprovalDecision.AskUser)
                     val skillInserted = scriptGate == SkillScriptGate.InsertApproval &&
                         prepared.approval != null
@@ -558,9 +558,10 @@ class AgentLoop(
                         if (scriptGate != SkillScriptGate.None) {
                             val toApprove = unapprovedScripts.ifEmpty { listOfNotNull(scriptHit) }
                             toApprove.forEach { hit ->
-                                scriptApprovals += hit.skill.name
+                                val approvalKey = hit.approvalKey()
+                                scriptApprovals += approvalKey
                                 try {
-                                    recordSkillScriptApproval(hit.skill.name)
+                                    recordSkillScriptApproval(approvalKey)
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (_: Exception) {

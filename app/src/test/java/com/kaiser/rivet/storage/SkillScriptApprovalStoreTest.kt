@@ -29,10 +29,10 @@ class SkillScriptApprovalStoreTest {
             PreferenceDataStoreFactory.create(scope = firstScope, produceFile = { file }))
 
         assertTrue(first.approved().isEmpty())
-        first.approve("notes")
-        first.approve("notes")
-        first.approve("release-notes")
-        assertEquals(setOf("notes", "release-notes"), first.approved())
+        first.approve("notes:abc")
+        first.approve("notes:abc")
+        first.approve("release-notes:def")
+        assertEquals(setOf("notes:abc", "release-notes:def"), first.approved())
 
         // Join, not just cancel: the reopened store needs the file released.
         firstScope.coroutineContext[Job]!!.cancelAndJoin()
@@ -40,7 +40,7 @@ class SkillScriptApprovalStoreTest {
         val secondScope = CoroutineScope(SupervisorJob() + Dispatchers.IO)
         val reopened = SkillScriptApprovalStore(app,
             PreferenceDataStoreFactory.create(scope = secondScope, produceFile = { file }))
-        assertEquals(setOf("notes", "release-notes"), reopened.approved())
+        assertEquals(setOf("notes:abc", "release-notes:def"), reopened.approved())
         secondScope.cancel()
     }
 }
