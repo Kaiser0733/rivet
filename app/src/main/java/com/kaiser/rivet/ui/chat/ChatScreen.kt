@@ -139,6 +139,7 @@ import androidx.compose.ui.text.buildAnnotatedString
 import androidx.compose.ui.text.withStyle
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.R
+import com.kaiser.rivet.workspace.ExternalDeleteUndo
 import com.kaiser.rivet.workspace.FilePreviewResult
 import com.kaiser.rivet.subagent.WorkerRecord
 import com.kaiser.rivet.chat.UnsupportedReasoningNotice
@@ -209,7 +210,18 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     var usageLimitDialogVisible by remember { mutableStateOf(false) }
     var usageLimitShownFor by remember { mutableStateOf<String?>(null) }
     var confirmUndo by remember { mutableStateOf(false) }
+    var confirmExternalUndo by remember { mutableStateOf(false) }
     var confirmDiscard by remember { mutableStateOf<String?>(null) }
+    if (confirmExternalUndo) {
+        AlertDialog(onDismissRequest = { confirmExternalUndo = false },
+            title = { Text("Undo the delete?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
+            text = { Text("Rivet will put the deleted file back where it was. If something newer is there now, Undo stops before overwriting it.",
+                style = MaterialTheme.typography.bodyMedium.copy(fontFamily = FontFamily.Default)) },
+            confirmButton = { RivetOutlinedButton(onClick = {
+                confirmExternalUndo = false; chatViewModel.undoExternalDelete()
+            }) { Text("Undo delete") } },
+            dismissButton = { TextButton(onClick = { confirmExternalUndo = false }) { Text("Cancel") } })
+    }
     if (confirmUndo) {
         AlertDialog(onDismissRequest = { confirmUndo = false },
             title = { Text("Undo Rivet's last changes?", style = MaterialTheme.typography.titleMedium.copy(fontFamily = FontFamily.Default)) },
@@ -389,6 +401,12 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     ChangeSummary(state, onUndo = { confirmUndo = true },
                         onDismissUndo = chatViewModel::dismissUndoBar,
                         onOpenPreview = preview::open, missingFiles = preview.missing,
+                        modifier = Modifier.fillMaxWidth())
+                }
+                state.externalUndo?.let { undo ->
+                    ExternalUndoSummary(undo, undoing = state.undoing,
+                        onUndo = { confirmExternalUndo = true },
+                        onDismiss = chatViewModel::dismissExternalUndo,
                         modifier = Modifier.fillMaxWidth())
                 }
                 val modelSelector: (@Composable () -> Unit)? =
@@ -1660,6 +1678,30 @@ internal fun ApprovalDialog(request: AgentApprovalRequest, onApprove: (Long) -> 
                 }
             }
         })
+}
+
+@Composable
+private fun ExternalUndoSummary(undo: ExternalDeleteUndo, undoing: Boolean,
+                                onUndo: () -> Unit, onDismiss: () -> Unit,
+                                modifier: Modifier = Modifier) {
+    Column(modifier.padding(horizontal = 16.dp)) {
+        Row(verticalAlignment = Alignment.CenterVertically) {
+            Text(if (undo.fileCount == 1) "1 file deleted outside the project"
+                else "${undo.fileCount} files deleted outside the project",
+                style = MaterialTheme.typography.bodyMedium,
+                color = MaterialTheme.colorScheme.onSurfaceVariant)
+            Spacer(Modifier.width(8.dp))
+            TextButton(onClick = onUndo, enabled = !undoing) {
+                Text(if (undoing) "Undoing…" else "Undo")
+            }
+            TextButton(onClick = onDismiss, enabled = !undoing) { Text("×") }
+        }
+        undo.paths.firstOrNull()?.let { path ->
+            Text(path, style = MaterialTheme.typography.bodySmall,
+                color = MaterialTheme.colorScheme.onSurfaceVariant,
+                maxLines = 1, overflow = TextOverflow.Ellipsis)
+        }
+    }
 }
 
 @Composable

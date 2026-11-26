@@ -888,6 +888,34 @@ class AgentLoopTest {
         assertFalse(described.detail, described.detail.contains("Deletion is permanent"))
     }
 
+    // Rivet never mirrors repository metadata into the project folder, so Undo has
+    // nothing to put back. The approval has to say that instead of promising Undo.
+    @Test
+    fun deleteApprovalSaysRepositoryMetadataCannotBeUndone() = runBlocking {
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace())
+        val call = AgentToolCall("delete-git", "delete_path", """{"path":".git/index"}""")
+        val approval = requireNotNull(executor.prepare(call)?.approval)
+        val described = executor.describeDestructive(approval)
+
+        assertTrue(described.detail, described.detail.contains("cannot be undone"))
+        assertFalse(described.detail, described.detail.contains("most recent 3"))
+    }
+
+    // Ignored build folders are left out of the snapshot to stay inside the entry
+    // cap, so the Undo promise has to carry that limit.
+    @Test
+    fun deleteApprovalNamesIgnoredFoldersAndSymlinksAsUncovered() = runBlocking {
+        val executor = AgentToolExecutor(AgentToolExecutorTest.FakeWorkspace())
+        val call = AgentToolCall("delete-ignored", "delete_path",
+            """{"path":"node_modules/pkg/index.js"}""")
+        val approval = requireNotNull(executor.prepare(call)?.approval)
+        val described = executor.describeDestructive(approval)
+
+        assertTrue(described.detail, described.detail.contains("ignored build folders"))
+        assertTrue(described.detail, described.detail.contains("symlinks"))
+        assertTrue(described.detail, described.detail.contains("most recent 3"))
+    }
+
     @Test
     fun deletingAgentCreatedDirectoryUsesStrongerApproval() = runTest {
         val workspace = AgentToolExecutorTest.FakeWorkspace()

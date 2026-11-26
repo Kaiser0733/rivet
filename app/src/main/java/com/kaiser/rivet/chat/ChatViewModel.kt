@@ -118,6 +118,8 @@ import com.kaiser.rivet.runtime.PhoneIntents
 import com.kaiser.rivet.runtime.TermuxBridge
 import com.kaiser.rivet.agent.RoutedAgentWorkspace
 import com.kaiser.rivet.workspace.AndroidGrantedFolders
+import com.kaiser.rivet.workspace.ExternalDeleteStore
+import com.kaiser.rivet.workspace.ExternalDeleteUndo
 import com.kaiser.rivet.workspace.GrantPath
 import com.kaiser.rivet.subagent.FileScopeRegistry
 import com.kaiser.rivet.runtime.CheckpointFailure
@@ -223,6 +225,9 @@ data class ChatUiState(
     val lastTurnFiles: List<String> = emptyList(),
     val lastTurnFileCount: Int = 0,
     val undoCheckpointId: String? = null,
+    // A grant delete that Rivet staged in app storage. It has its own row because
+    // it is not part of the project turn checkpoint.
+    val externalUndo: ExternalDeleteUndo? = null,
     val undoing: Boolean = false,
     val notice: String? = null,
     val acceptedMessageCount: Long = 0,
@@ -334,6 +339,12 @@ class ChatViewModel private constructor(
     }
     private val shareLanding = Mutex()
     private val grantedFolders = AndroidGrantedFolders(app)
+    // Grant deletes are copied here before the provider removes them, so Undo does
+    // not depend on a project checkpoint that never sees an external folder.
+    private val externalDeletes = ExternalDeleteStore(
+        java.io.File(app.filesDir, "external-deletes"),
+        { id -> grantedFolders.resolve(id, write = true) },
+    )
     private val _sharedZip = MutableStateFlow<Uri?>(null)
     internal val sharedZip = _sharedZip.asStateFlow()
     private val _sharedContent = MutableStateFlow<Map<String?, SharedDraft>>(emptyMap())
@@ -915,7 +926,7 @@ class ChatViewModel private constructor(
                             currentSessionWorkspaceId = identity, usage = null, contextEstimate = null, contextMeter = null,
                             turnDurationsMs = emptyMap(),
                             lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
-                            interruptedTurn = false, run = null, runRecovery = null) }
+                            externalUndo = null, interruptedTurn = false, run = null, runRecovery = null) }
                     }
                 }
                 refreshGoalMemory(workspace, _uiState.value.currentSessionId)
@@ -1062,6 +1073,7 @@ class ChatViewModel private constructor(
                 error = null, errorAction = null, notice = null,
                 interruptedTurn = false,
                 lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
+                externalUndo = null,
             )
         }
         _subagents.value = emptyList()
@@ -2105,6 +2117,8 @@ class ChatViewModel private constructor(
                     }
                 }
             }
+            val externalTurnId = UUID.randomUUID().toString()
+            val externalUndoTurnStart = System.currentTimeMillis()
             fun createExecutor(loadedSkills: Set<String>, coordinator: Boolean = false): AgentToolExecutor? {
                 val selectedWorkspace = workspace
                 val projectFiles = selectedWorkspace?.let(::SafAgentWorkspace)
@@ -2120,6 +2134,9 @@ class ChatViewModel private constructor(
                     files, downloader = projectDownloader, preparePhoneIntent = phone?.let { it::prepare },
                     prepareTermuxCommand = prepareTermux,
                     preparePhoneShot = prepareCapture,
+                    externalDeletes = externalDeletes,
+                    currentSessionId = { _uiState.value.currentSessionId },
+                    currentTurnId = externalTurnId,
                 )
                 val boundWorkspaceId = workspaceId ?: selectedWorkspace.tree.toString()
                 return AgentToolExecutor(
@@ -2150,6 +2167,9 @@ class ChatViewModel private constructor(
                             VisionCapability.assess(snapshot.config), path)
                     } else null,
                     rememberMemory = { fact -> saveRememberedFacts(selectedWorkspace, listOf(fact)) },
+                    externalDeletes = externalDeletes,
+                    currentSessionId = { _uiState.value.currentSessionId },
+                    currentTurnId = externalTurnId,
                 )
             }
             val executor = createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty(), coordinator = true)
@@ -2313,6 +2333,7 @@ class ChatViewModel private constructor(
                     error = null, errorAction = null, notice = notice, unsupportedReasoning = null,
                     activity = "Working on it…",
                     lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
+                    externalUndo = null,
                     acceptedMessageCount = it.acceptedMessageCount,
                     interruptedTurn = false,
                 )
@@ -2791,6 +2812,11 @@ class ChatViewModel private constructor(
                         if (ticket == generation) _uiState.update {
                             if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
                         }
+                    }
+                    if (ticket == generation) {
+                        try { rehydrateExternalUndo(externalUndoTurnStart) }
+                        catch (e: CancellationException) { throw e }
+                        catch (_: Exception) { }
                     }
                 }
             }
@@ -3301,6 +3327,7 @@ class ChatViewModel private constructor(
     // Undo outlives the process for the session that made it: the checkpoint is on disk,
     // but its bar is shown only when it belongs to this conversation and was not dismissed.
     private suspend fun rehydrateUndo(workspaceId: String?) {
+        rehydrateExternalUndo()
         if (workspaceId == null) return
         val record = try { runtimeController.latestCheckpoint() }
             catch (e: CancellationException) { throw e }
@@ -3316,6 +3343,18 @@ class ChatViewModel private constructor(
                 state.currentSessionId != record.sessionId) state
             else state.copy(lastTurnFiles = row.files, lastTurnFileCount = row.fileCount,
                 undoCheckpointId = row.checkpointId)
+        }
+    }
+
+    // A grant delete has its own store: no project mirror, no checkpoint. It is scoped
+    // to the conversation that made it and survives a restart with the staged copy.
+    private suspend fun rehydrateExternalUndo(since: Long = 0L) {
+        val session = _uiState.value.currentSessionId
+        val undo = try { externalDeletes.latest(session, since) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { null }
+        _uiState.update { state ->
+            if (state.currentSessionId != session) state else state.copy(externalUndo = undo)
         }
     }
 
@@ -3367,6 +3406,38 @@ class ChatViewModel private constructor(
             } catch (e: Exception) {
                 _uiState.update { it.copy(undoing = false,
                     error = undoFailureMessage(e)) }
+            }
+        }
+    }
+
+    fun dismissExternalUndo() {
+        val undo = _uiState.value.externalUndo ?: return
+        _uiState.update { it.copy(externalUndo = null) }
+        viewModelScope.launch {
+            try { externalDeletes.dismiss(undo.id) }
+            catch (e: CancellationException) { throw e }
+            catch (_: Exception) { }
+        }
+    }
+
+    fun undoExternalDelete() {
+        val undo = _uiState.value.externalUndo ?: return
+        if (_uiState.value.streaming || _uiState.value.undoing ||
+            _uiState.value.recoveringProjectChanges || activeSupervisor?.hasLiveWorkers() == true) {
+            _uiState.update { it.copy(error = "Cannot undo while a run or subagent is active.") }
+            return
+        }
+        _uiState.update { it.copy(undoing = true, error = null, notice = null) }
+        viewModelScope.launch {
+            try {
+                val restored = externalDeletes.undo(undo.id)
+                _uiState.update { it.copy(undoing = false, externalUndo = null,
+                    notice = if (restored.paths.size == 1) "Deleted item restored."
+                        else "Deleted items restored.") }
+            } catch (e: CancellationException) { throw e
+            } catch (e: Exception) {
+                _uiState.update { it.copy(undoing = false,
+                    error = externalUndoFailureMessage(e)) }
             }
         }
     }

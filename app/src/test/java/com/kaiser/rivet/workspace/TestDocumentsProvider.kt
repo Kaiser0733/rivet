@@ -20,6 +20,8 @@ class TestDocumentsProvider : DocumentsProvider() {
     var rejectReadAfterFirstFor: String? = null
     private val readsByName = mutableMapOf<String, Int>()
     var rejectWriteOnceFor: String? = null
+    var truncateOnVerifyReadOnceFor: String? = null
+    private var truncateArmed = false
     var blockNextRead: CountDownLatch? = null
     var readStarted: CountDownLatch? = null
     var reportMetadata = true
@@ -86,6 +88,14 @@ class TestDocumentsProvider : DocumentsProvider() {
         if (mode != "r" && node.name == rejectWriteOnceFor) {
             rejectWriteOnceFor = null
             throw java.io.FileNotFoundException("write refused")
+        }
+        if (mode != "r" && node.name == truncateOnVerifyReadOnceFor) {
+            truncateArmed = true
+        }
+        if (mode == "r" && node.name == truncateOnVerifyReadOnceFor && truncateArmed) {
+            truncateArmed = false
+            truncateOnVerifyReadOnceFor = null
+            node.bytes.writeBytes(byteArrayOf(0x00))
         }
         if (mode == "r") {
             blockNextRead?.let { blocked ->

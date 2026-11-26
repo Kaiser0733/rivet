@@ -10,6 +10,7 @@ import com.kaiser.rivet.runtime.CheckpointFailure
 import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
+import com.kaiser.rivet.workspace.ExternalDeleteFailure
 
 internal fun undoFailureMessage(error: Throwable?): String = when {
     error is CheckpointFailure && error.code == "undo_desync" ->
@@ -24,6 +25,16 @@ internal fun undoFailureMessage(error: Throwable?): String = when {
     else -> "Rivet couldn't finish Undo. Check the project before trying again."
 }
 
+internal fun externalUndoFailureMessage(error: Throwable?): String = when {
+    error is ExternalDeleteFailure && error.code == "undo_conflict" ->
+        "That file or folder changed after Rivet deleted it, so Undo stopped before overwriting newer work."
+    error is ExternalDeleteFailure && error.code in
+        setOf("grant_missing", "grant_revoked", "grant_read_only", "permission") ->
+        "Rivet no longer has write access to that folder. Allow access again before undoing."
+    error is ExternalDeleteFailure && error.code == "undo_unavailable" ->
+        "Rivet's copy of that delete is no longer available."
+    else -> "Rivet couldn't finish restoring the deleted file. Its copy is still kept in Rivet's storage."
+}
 // Kaiser's ruling on the device, 2026-11-02: the old refusal was incomprehensible to a
 // non-technical user, quoted a number nothing compared against, and told someone who had worked
 // for hours to start over. No numbers, no "budget", no "token", no "context window", and no
