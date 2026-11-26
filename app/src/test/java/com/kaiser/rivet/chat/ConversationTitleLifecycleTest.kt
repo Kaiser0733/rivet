@@ -223,14 +223,18 @@ class ConversationTitleLifecycleTest {
                 calls++
                 when (mode) {
                     0 -> throw ProviderError.InvalidResponse("Incomplete stream")
-                    1 -> AgentResponse()
+                    1 -> throw ProviderError.IncompleteGeneration("empty")
                     else -> if (calls == 1) AgentResponse(toolCalls = listOf(
                         com.kaiser.rivet.agent.AgentToolCall("blocked", "run_command", "{\"command\":\"echo test\"}")))
                     else throw ProviderError.InvalidResponse("Tool turn failed")
                 }
             }
             vm.send("Do it")
-            withTimeout(5000) { vm.uiState.first { !it.streaming && it.acceptedMessageCount == 1L } }
+            // An empty AgentResponse now enters the bounded empty-response retry policy;
+            // that policy is covered by PostToolCompletionTest. This test uses an explicit
+            // non-retryable incomplete generation so its real-time wait observes the failed
+            // turn immediately. It still must never ask for a title.
+            withTimeout(5_000) { vm.uiState.first { !it.streaming && it.acceptedMessageCount == 1L } }
             assertEquals(if (mode == 2) 2 else 1, calls)
             assertEquals("New session", store.load().title)
             assertTrue(vm.uiState.value.error != null)
