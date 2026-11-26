@@ -121,7 +121,7 @@ class AgentToolExecutor(
     private val rememberMemory: (suspend (String) -> MemoryFormat.Append)? = null,
     private val readCommandOutput: (suspend (String, String?) -> CommandOutputCache.CachedOutput?)? = null,
     private val readProcessOutput: (suspend (String, String?, Int?, Int?, String?, Int?) -> ProcessOutputSnapshot?)? = null,
-    private val spawnProcess: (suspend (String, String, Long, Long, String?) -> BackgroundLaunch)? = null,
+    private val spawnProcess: (suspend (String, String, Long, String?) -> BackgroundLaunch)? = null,
     private val worker: Boolean = false,
     private val preparePhoneShot: ((AgentToolCall) -> PreparedAgentTool)? = null,
     private val prepareTermuxCommand: ((AgentToolCall) -> PreparedAgentTool)? = null,
@@ -456,7 +456,6 @@ class AgentToolExecutor(
                     val args = json.decodeFromString<SpawnProcessArgs>(call.arguments)
                     require(args.command.isNotBlank() && '\u0000' !in args.command &&
                         args.command.toByteArray(Charsets.UTF_8).size <= 8192)
-                    require(args.ttlMs in 5_000..1_800_000)
                     require(args.readyWaitMs in 0..10_000)
                     require(args.readyPattern == null || args.readyPattern.length <= 256)
                     val cwd = path(args.cwd, root = true)
@@ -472,13 +471,12 @@ class AgentToolExecutor(
                     ) {
                         execute(call) {
                             val result = spawnProcess?.invoke(
-                                args.command, cwd, args.ttlMs.toLong(),
+                                args.command, cwd,
                                 args.readyWaitMs.toLong(), args.readyPattern,
                             ) ?: throw AgentWorkspaceFailure("runtime_unavailable")
                             success(call, buildJsonObject {
                                 put("process_id", result.processId)
                                 put("status", result.status)
-                                put("ttl_ms", result.ttlMs)
                                 result.exitCode?.let { put("exit_code", it) }
                                 put("stdout", result.stdout)
                                 put("stderr", result.stderr)
@@ -517,8 +515,12 @@ class AgentToolExecutor(
                             put("exit_code", output.exitCode)
                             put("stdout", slice.stdout)
                             put("stderr", slice.stderr)
-                            put("stdout_truncated", slice.stdoutTruncated)
-                            put("stderr_truncated", slice.stderrTruncated)
+                            put("stdout_truncated", output.stdoutStart > 0 || slice.stdoutTruncated)
+                            put("stderr_truncated", output.stderrStart > 0 || slice.stderrTruncated)
+                            put("stdout_earliest_byte", output.stdoutStart)
+                            put("stderr_earliest_byte", output.stderrStart)
+                            output.stdoutEnd?.let { put("stdout_total_bytes", it) }
+                            output.stderrEnd?.let { put("stderr_total_bytes", it) }
                             put("stderr_present", output.stderrPresent || slice.stderrPresent)
                             put("total_lines", slice.totalLines)
                             put("returned_lines", slice.returnedLines)
@@ -1039,7 +1041,7 @@ class AgentToolExecutor(
     @Serializable private data class SpawnProcessArgs(
         val command: String,
         val cwd: String = "",
-        @kotlinx.serialization.SerialName("ttl_ms") val ttlMs: Int = 600_000,
+        @kotlinx.serialization.SerialName("ttl_ms") val legacyTtlMs: Int? = null,
         @kotlinx.serialization.SerialName("ready_wait_ms") val readyWaitMs: Int = 1_000,
         @kotlinx.serialization.SerialName("ready_pattern") val readyPattern: String? = null,
         @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
@@ -1155,7 +1157,6 @@ class AgentToolExecutor(
                     askUser)),
             AgentToolDefinition("spawn_process", "Start a stoppable background command. Use ready_pattern and ready_wait_ms to wait for readiness.",
                 schema(listOf("command"), "command" to string, "cwd" to string,
-                    "ttl_ms" to buildJsonObject { put("type", "integer"); put("minimum", 5000); put("maximum", 1_800_000) },
                     "ready_wait_ms" to buildJsonObject { put("type", "integer"); put("minimum", 0); put("maximum", 10000) },
                     "ready_pattern" to string, askUser)),
             AgentToolDefinition("process_output", "Read background stdout/stderr. offset/tail/grep/max_lines select lines.",

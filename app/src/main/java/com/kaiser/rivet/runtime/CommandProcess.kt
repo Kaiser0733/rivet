@@ -130,9 +130,10 @@ internal suspend fun awaitExitOrTimeout(
 }
 
 internal class CommandProcess {
-    suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long,
+    suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long?,
                     onOutput: ((String, String) -> Unit)? = null,
-                    memoryCapBytes: Long? = null): CommandOutput =
+                    memoryCapBytes: Long? = null,
+                    onChunk: ((Boolean, ByteArray, Int) -> Unit)? = null): CommandOutput =
         coroutineScope {
             // The PSS watchdog compares the true cap. The rlimit only stops a process
             // that allocates faster than the sampler can run, so it gets 3x headroom
@@ -162,8 +163,8 @@ internal class CommandProcess {
             val stderr = BoundedCapture()
             val fullStdout = FullCapture(SPOOL_LIMIT_BYTES)
             val fullStderr = FullCapture(SPOOL_LIMIT_BYTES)
-            val stdoutReader = async(Dispatchers.IO) { collect(stdoutFd, stdout, fullStdout) }
-            val stderrReader = async(Dispatchers.IO) { collect(stderrFd, stderr, fullStderr) }
+            val stdoutReader = async(Dispatchers.IO) { collect(stdoutFd, stdout, fullStdout) { bytes, count -> onChunk?.invoke(false, bytes, count) } }
+            val stderrReader = async(Dispatchers.IO) { collect(stderrFd, stderr, fullStderr) { bytes, count -> onChunk?.invoke(true, bytes, count) } }
             val exited = CompletableDeferred<Int>()
             Thread({
                 try { exited.complete(CommandNative.waitFor(pid)) }
@@ -191,9 +192,8 @@ internal class CommandProcess {
                 )
             }
             try {
-                val outcome = awaitExitOrTimeout(exited, timeoutMs) {
-                    terminate(pid, exited)
-                }
+                val outcome = if (timeoutMs == null) CommandExitOutcome(exited.await(), timedOut = false)
+                    else awaitExitOrTimeout(exited, timeoutMs) { terminate(pid, exited) }
                 val exitCode = outcome.exitCode
                 val timedOut = outcome.timedOut
                 treeWatch.cancel()
@@ -239,6 +239,7 @@ internal class CommandProcess {
         descriptor: ParcelFileDescriptor,
         output: BoundedCapture,
         full: FullCapture,
+        onChunk: (ByteArray, Int) -> Unit,
     ) {
         try {
             ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { input ->
@@ -248,6 +249,7 @@ internal class CommandProcess {
                     if (size < 0) break
                     output.append(buffer, size)
                     full.append(buffer, size)
+                    onChunk(buffer, size)
                 }
             }
         } catch (_: IOException) { /* Closing the descriptor interrupts collection. */ }

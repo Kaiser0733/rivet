@@ -707,9 +707,9 @@ class AgentToolExecutorTest {
         var seen: List<Any?>? = null
         val executor = AgentToolExecutor(
             FakeWorkspace(),
-            spawnProcess = { command, cwd, ttl, wait, pattern ->
-                seen = listOf(command, cwd, ttl, wait, pattern)
-                BackgroundLaunch("process-1", "running", ttl, "ready", "", false, true, null)
+            spawnProcess = { command, cwd, wait, pattern ->
+                seen = listOf(command, cwd, wait, pattern)
+                BackgroundLaunch("process-1", "running", "ready", "", false, true, null)
             },
         )
         val prepared = executor.prepare(AgentToolCall("spawn", "spawn_process",
@@ -719,7 +719,8 @@ class AgentToolExecutorTest {
         val result = prepared.execute()
         assertFalse(result.error)
         assertEquals("process-1", Json.parseToJsonElement(result.content).jsonObject["process_id"]!!.jsonPrimitive.content)
-        assertEquals(listOf<Any?>("npm run dev", "", 120_000L, 1_000L, "ready"), seen)
+        assertEquals(listOf<Any?>("npm run dev", "", 1_000L, "ready"), seen)
+        assertFalse(result.content.contains("ttl_ms"))
     }
 
     @Test fun processOutputRequiresWorkspaceOwnership() = runTest {

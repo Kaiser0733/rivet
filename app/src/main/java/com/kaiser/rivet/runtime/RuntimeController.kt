@@ -50,7 +50,6 @@ data class PreviewLaunch(
 data class BackgroundLaunch(
     val processId: String,
     val status: String,
-    val ttlMs: Long,
     val stdout: String,
     val stderr: String,
     val stderrPresent: Boolean,
@@ -65,13 +64,15 @@ data class ProcessOutputSnapshot(
     val stdout: String,
     val stderr: String,
     val stderrPresent: Boolean,
+    val stdoutStart: Long = 0,
+    val stderrStart: Long = 0,
+    val stdoutEnd: Long? = null,
+    val stderrEnd: Long? = null,
 )
-
 
 /** A project sync is a UI-blocking prerequisite for the terminal; it must never hold
  * the pane forever. On expiry the existing worktree is used and the terminal starts. */
 internal const val WORKSPACE_SYNC_TIMEOUT_MS = 15_000L
-internal const val DEFAULT_BACKGROUND_TTL_MS = 600_000L
 
 private data class BackgroundPlan(
     val identity: String,
@@ -552,7 +553,7 @@ class RuntimeController(
     suspend fun backgroundBlocker(): String? = operations.withLock {
         if (managedProcesses?.canStartBackground() == false) return@withLock "process_limit"
         if (managedProcesses?.canStartCommand() == false) return@withLock "process_limit"
-        commandGate(DEFAULT_BACKGROUND_TTL_MS, governor.readings())?.let { return@withLock it }
+        commandGate(Long.MAX_VALUE, governor.readings())?.let { return@withLock it }
         currentMirror() ?: return@withLock "workspace_unavailable"
         null
     }
@@ -560,15 +561,11 @@ class RuntimeController(
     suspend fun spawnProcess(
         command: String,
         cwd: String,
-        ttlMs: Long,
         readyWaitMs: Long,
         readyPattern: String?,
     ): BackgroundLaunch {
         if (command.isBlank() || '\u0000' in command ||
             command.toByteArray(Charsets.UTF_8).size > 8_192) {
-            throw MirrorFailure("invalid_arguments")
-        }
-        if (ttlMs !in 5_000L..1_800_000L) {
             throw MirrorFailure("invalid_arguments")
         }
         if (readyWaitMs !in 0L..10_000L) throw MirrorFailure("invalid_arguments")
@@ -578,7 +575,7 @@ class RuntimeController(
             val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
             val readings = governor.readings()
             managedProcesses?.setActiveLimit(effectiveSlots(readings.thermalStatus))
-            commandGate(ttlMs, readings)?.let { throw MirrorFailure(it) }
+            commandGate(Long.MAX_VALUE, readings)?.let { throw MirrorFailure(it) }
             if (managedProcesses?.canStartBackground() == false) throw MirrorFailure("process_limit")
             var ready = active.prepare()
             if (ready.dirty) {
@@ -611,11 +608,12 @@ class RuntimeController(
             var outcome: CommandOutput? = null
             try {
                 outcome = CommandProcess().run(
-                    effectiveCommand, directory, environment, ttlMs,
-                    onOutput = { out, err ->
-                        ring.append(out, err)
-                        registry.updateBackgroundOutput(id, ring.snapshot().stdout, ring.snapshot().stderr)
+                    effectiveCommand, directory, environment, timeoutMs = null,
+                    onOutput = { _, _ ->
+                        val output = ring.snapshot()
+                        registry.updateBackgroundOutput(id, output.stdout, output.stderr)
                     },
+                    onChunk = ring::append,
                     memoryCapBytes = governor.memoryCapBytes(),
                 )
             } catch (e: CancellationException) {
@@ -633,13 +631,14 @@ class RuntimeController(
                 while (drainedRings.size > 8) {
                     drainedOrder.poll()?.let(drainedRings::remove)
                 }
+                val output = ring.snapshot()
+                registry.updateBackgroundOutput(id, output.stdout, output.stderr)
                 outcome?.let {
                     if (it.memoryLimit) governor.recordStop("memory limit")
                     else if (it.tooManyChildren) governor.recordStop("too many child processes")
                     registry.finishBackground(
                         id,
-                        if (it.timedOut) ManagedProcessStatus.Stopped
-                        else if (it.exitCode != 0 || it.memoryLimit || it.tooManyChildren) ManagedProcessStatus.Failed
+                        if (it.exitCode != 0 || it.memoryLimit || it.tooManyChildren) ManagedProcessStatus.Failed
                         else ManagedProcessStatus.Completed,
                         it.exitCode,
                     )
@@ -685,7 +684,7 @@ class RuntimeController(
             else -> "running"
         }
         return BackgroundLaunch(
-            id, status, ttlMs,
+            id, status,
             snap.stdout.takeLast(ProcessLogRing.MAX_OUTPUT_CHARS),
             snap.stderr.takeLast(ProcessLogRing.MAX_OUTPUT_CHARS),
             snap.stderrPresent,
@@ -706,6 +705,10 @@ class RuntimeController(
             snap?.stdout ?: info.output,
             snap?.stderr.orEmpty(),
             snap?.stderrPresent ?: false,
+            stdoutStart = snap?.out?.start ?: 0,
+            stderrStart = snap?.err?.start ?: 0,
+            stdoutEnd = snap?.out?.end,
+            stderrEnd = snap?.err?.end,
         )
     }
 

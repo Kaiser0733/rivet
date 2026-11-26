@@ -1,32 +1,58 @@
 package com.kaiser.rivet.runtime
 
-/** Thread-safe bounded tail of one background process's stdout/stderr. */
+/** Thread-safe bounded tails with absolute UTF-8 byte positions. */
 class ProcessLogRing(
-    private val maxStdoutChars: Int = MAX_STDOUT_CHARS,
-    private val maxStderrChars: Int = MAX_STDERR_CHARS,
+    maxStdoutChars: Int = MAX_STDOUT_CHARS,
+    maxStderrChars: Int = MAX_STDERR_CHARS,
 ) {
-    private val stdout = StringBuilder()
-    private val stderr = StringBuilder()
-    var stderrPresent: Boolean = false
-        private set
+    private val stdout = Stream(maxStdoutChars)
+    private val stderr = Stream(maxStderrChars)
 
     @Synchronized
     fun append(out: String, err: String) {
-        if (out.isNotEmpty()) {
-            stdout.append(out)
-            if (stdout.length > maxStdoutChars) stdout.delete(0, stdout.length - maxStdoutChars)
-        }
-        if (err.isNotEmpty()) {
-            stderr.append(err)
-            if (stderr.length > maxStderrChars) stderr.delete(0, stderr.length - maxStderrChars)
-            stderrPresent = true
-        }
+        val outBytes = out.toByteArray()
+        val errBytes = err.toByteArray()
+        stdout.append(outBytes, outBytes.size)
+        stderr.append(errBytes, errBytes.size)
     }
 
     @Synchronized
-    fun snapshot(): Snapshot = Snapshot(stdout.toString(), stderr.toString(), stderrPresent)
+    internal fun append(isStderr: Boolean, bytes: ByteArray, count: Int) {
+        (if (isStderr) stderr else stdout).append(bytes, count)
+    }
 
-    data class Snapshot(val stdout: String, val stderr: String, val stderrPresent: Boolean)
+    @Synchronized
+    fun snapshot(): Snapshot = Snapshot(stdout.snapshot(), stderr.snapshot())
+
+    data class Snapshot(val out: Output, val err: Output) {
+        val stdout get() = out.text
+        val stderr get() = err.text
+        val stderrPresent get() = err.end > 0
+    }
+
+    data class Output(val text: String, val start: Long, val end: Long)
+
+    private class Stream(capacity: Int) {
+        private val buffer = ByteArray(capacity)
+        private var total = 0L
+
+        init { require(capacity > 0) }
+
+        fun append(bytes: ByteArray, count: Int) {
+            for (index in (count - buffer.size).coerceAtLeast(0) until count) {
+                buffer[((total + index) % buffer.size).toInt()] = bytes[index]
+            }
+            total += count
+        }
+
+        fun snapshot(): Output {
+            var start = (total - buffer.size).coerceAtLeast(0)
+            // A byte-budget eviction can land in the middle of a character.
+            while (start < total && buffer[(start % buffer.size).toInt()].toInt() and 0xc0 == 0x80) start++
+            val bytes = ByteArray((total - start).toInt()) { buffer[((start + it) % buffer.size).toInt()] }
+            return Output(bytes.toString(Charsets.UTF_8), start, total)
+        }
+    }
 
     companion object {
         const val MAX_STDOUT_CHARS = 128 * 1024
