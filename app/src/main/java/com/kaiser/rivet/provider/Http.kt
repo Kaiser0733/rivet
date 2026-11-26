@@ -103,7 +103,18 @@ internal fun errorBodyCode(body: String?): String? {
     return values.firstOrNull { value -> value.any(Char::isLetter) } ?: values.firstOrNull()
 }
 
-fun httpError(code: Int, body: String?): ProviderError {
+internal fun parseRetryAfter(value: String, nowMillis: Long = System.currentTimeMillis()): Long? {
+    val header = value.trim()
+    val delay = header.toDoubleOrNull()?.takeIf { it.isFinite() }?.let { (it * 1000).toLong() }
+        ?: runCatching {
+            java.time.ZonedDateTime.parse(header, java.time.format.DateTimeFormatter.RFC_1123_DATE_TIME)
+                .toInstant().toEpochMilli() - nowMillis
+        }.getOrNull()
+    return delay?.takeIf { it > 0 }
+}
+
+fun httpError(code: Int, body: String?, retryAfter: String? = null): ProviderError {
+    val retryAfterMs = retryAfter?.let(::parseRetryAfter)
     val detail = errorBodyText(body)
     val providerCode = errorBodyCode(body)
     val evidence = ModelLimitEvidence.parse(code, body, providerCode)
@@ -123,10 +134,10 @@ fun httpError(code: Int, body: String?): ProviderError {
         // the billing words: Google says "Quota exceeded … per minute" for a limit that
         // clears on its own, and "check your billing" is the wrong advice for it.
         code == 429 && isResourceExhausted(providerCode.orEmpty() + " " + detail.orEmpty()) ->
-            ProviderError.ResourceExhausted()
+            ProviderError.ResourceExhausted(retryAfterMs)
         code == 429 && isUsageLimit(providerCode.orEmpty() + " " + detail.orEmpty()) -> ProviderError.UsageLimit()
-        code == 429 -> ProviderError.RateLimited()
-        code in 500..599 -> ProviderError.Server(code, detail)
+        code == 429 -> ProviderError.RateLimited(retryAfterMs)
+        code in 500..599 -> ProviderError.Server(code, detail, retryAfterMs)
         // Wrong-model bodies arrive as 400 or 404 depending on the service
         // (OpenAI 400 "model 'x' does not exist", others 404 with the id
         // in the message); check the body before assuming endpoint shape.
@@ -309,7 +320,7 @@ internal fun requireEventStream(response: okhttp3.Response) {
     val body = try { response.peekBody(MAX_ERROR_BODY_BYTES.toLong()).string() }
         catch (_: Exception) { "" }
     val detail = errorBodyText(body)
-    throw if (detail != null) httpError(response.code, body)
+    throw if (detail != null) httpError(response.code, body, response.header("Retry-After"))
     else ProviderError.InvalidResponse("not a stream", NOT_A_STREAM)
 }
 
@@ -339,7 +350,7 @@ internal suspend fun OkHttpClient.sse(
             override fun onResponse(call: Call, response: Response) {
                 response.use {
                     try {
-                        if (!it.isSuccessful) throw httpError(it.code, it.errorText())
+                        if (!it.isSuccessful) throw httpError(it.code, it.errorText(), it.header("Retry-After"))
                         requireEventStream(it)
                         val source = it.body?.source() ?: throw ProviderError.InvalidResponse("no body")
                         var completed = false

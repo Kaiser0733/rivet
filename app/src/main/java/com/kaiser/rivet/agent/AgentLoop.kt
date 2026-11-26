@@ -2,9 +2,11 @@ package com.kaiser.rivet.agent
 
 import com.kaiser.rivet.provider.ProviderError
 import com.kaiser.rivet.provider.jsonNestingWithinLimit
+import com.kaiser.rivet.provider.requestRetryDelay
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.currentCoroutineContext
+import kotlinx.coroutines.delay
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.SerializationException
@@ -65,6 +67,7 @@ class AgentLoop(
     private val afterMutation: suspend (AgentToolCall, AgentToolResult?) -> Unit = { _, _ -> },
     private val onContextLimitObserved: suspend (ProviderError.ContextOverflow, Long) -> Unit = { _, _ -> },
     private val onOutputLimitObserved: suspend (ProviderError.OutputLimitExceeded) -> Unit = { },
+    private val onRequestRetry: () -> Unit = {},
     private val beforeCompletion: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
     private val writeMemoryBatch: (suspend (AgentToolCall, List<String>) -> AgentToolResult)? = null,
     private val resumeReceipts: Map<String, RunToolReceipt> = emptyMap(),
@@ -95,7 +98,6 @@ class AgentLoop(
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { /* Presentation telemetry never controls execution. */ }
         }
-        val deniedMutations = mutableSetOf<String>()
         val scriptApprovals = approvedSkillScripts.toMutableSet()
         val createdPaths = mutableSetOf<String>()
         val createdDirectories = mutableSetOf<String>()
@@ -212,8 +214,6 @@ class AgentLoop(
             for (event in events) append(event)
             return null
         }
-        var blankAnswerRetries = 0
-        var requestFinalAnswer = false
         // dsh's agent loop is deliberately unbounded: a turn ends on completion,
         // a workspace change, a real context/storage limit, an empty final answer,
         // cancellation, or a thrown provider error. It never counts iterations.
@@ -244,13 +244,26 @@ class AgentLoop(
                         onText(text)
                     }
                 }
-                val history = if (requestFinalAnswer) {
-                    messages + AgentMessage.user("Give the final answer to the original request using the tool results above.")
-                } else messages.toList()
-                return dsml.finish(requestModel(history, tools, dsml::delta), tools)
+                return dsml.finish(requestModel(messages.toList(), tools, dsml::delta), tools)
+            }
+            suspend fun requestWithRetry(): AgentResponse {
+                var retries = 0
+                while (true) {
+                    try {
+                        return requestOnce().also {
+                            if (it.toolCalls.isEmpty() && it.text.isBlank()) throw ProviderError.EmptyResponse
+                        }
+                    } catch (error: ProviderError) {
+                        val backoff = error.requestRetryDelay(retries++) ?: throw error
+                        streamed.setLength(0)
+                        onRequestRetry()
+                        delay(backoff)
+                        if (!workspaceIsCurrent()) throw WorkspaceChangedDuringRetry()
+                    }
+                }
             }
             val response = try {
-                try { requestOnce() }
+                try { requestWithRetry() }
                 catch (overflow: ProviderError.ContextOverflow) {
                     try {
                         onContextLimitObserved(overflow, ContextBudget.estimateHistoryTokens(messages.toList()))
@@ -273,8 +286,14 @@ class AgentLoop(
                         messages.addAll(reduced)
                     }
                     if (contextFootprint(messages.toList()) >= before) throw overflow
-                    requestOnce()
+                    requestWithRetry()
                 }
+            } catch (_: WorkspaceChangedDuringRetry) {
+                return AgentRunResult(messages, AgentStopReason.WorkspaceChanged, modelIterations, toolCalls,
+                    mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
+            } catch (_: ProviderError.EmptyResponse) {
+                return AgentRunResult(messages, AgentStopReason.EmptyResponse, modelIterations, toolCalls,
+                    mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
             } catch (limit: ProviderError.OutputLimitExceeded) {
                 try { onOutputLimitObserved(limit) } catch (e: CancellationException) { throw e }
                 catch (_: Exception) { }
@@ -342,29 +361,28 @@ class AgentLoop(
                 throw e
             }
             modelIterations++
-            requestFinalAnswer = false
-            if (response.toolCalls.isEmpty() && response.text.isBlank()) {
-                val afterTool = messages.lastOrNull { it.role != AgentRole.Context }?.role == AgentRole.Tool
-                if (afterTool && blankAnswerRetries < MAX_BLANK_ANSWER_RETRIES) {
-                    blankAnswerRetries++
-                    requestFinalAnswer = true
-                    continue
+            val idCounts = response.toolCalls.groupingBy { it.id }.eachCount()
+            val usedIds = idCounts.keys.toMutableSet()
+            val invalid = mutableMapOf<String, String>()
+            val calls = response.toolCalls.mapIndexed { index, call ->
+                val ambiguous = call.id.isBlank() || idCounts.getValue(call.id) > 1
+                val tooDeep = !jsonNestingWithinLimit(call.arguments, 32)
+                if (!ambiguous && !tooDeep) return@mapIndexed call
+                var id = call.id
+                if (ambiguous) {
+                    var suffix = index + 1
+                    do { id = "_rivet_invalid_${suffix++}" } while (!usedIds.add(id))
                 }
-                return AgentRunResult(messages, AgentStopReason.EmptyResponse, modelIterations, toolCalls,
-                    mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
+                invalid[id] = if (ambiguous) "invalid_tool_call_id" else "invalid_arguments"
+                call.copy(id = id, arguments = if (tooDeep) "{}" else call.arguments)
             }
-            val callIds = response.toolCalls.map { it.id }
-            if (callIds.any(String::isBlank) || callIds.toSet().size != callIds.size) {
-                throw ProviderError.InvalidResponse("ambiguous tool call ids")
-            }
-            val operationKeys = response.toolCalls.map(::operationKey)
             val assistant = AgentMessage.assistant(
                 text = response.text,
-                toolCalls = response.toolCalls,
+                toolCalls = calls,
                 transportState = response.transportState,
             )
-            if (response.toolCalls.isNotEmpty()) {
-                val correlatedErrors = AgentMessage.tools(response.toolCalls.map { stopped(it, "workspace_changed") })
+            if (calls.isNotEmpty()) {
+                val correlatedErrors = AgentMessage.tools(calls.map { stopped(it, "workspace_changed") })
                 if (!canPersistToolOutput(messages + assistant + correlatedErrors, 0)) {
                     return AgentRunResult(
                         messages = messages,
@@ -377,7 +395,7 @@ class AgentLoop(
                 }
             }
             append(assistant)
-            if (response.toolCalls.isEmpty()) {
+            if (calls.isEmpty()) {
                 val holdEvents = beforeCompletion(messages.toList())
                 if (holdEvents.isNotEmpty()) {
                     appendContextEvents(holdEvents)?.let { return it }
@@ -395,11 +413,11 @@ class AgentLoop(
             }
             val results = mutableListOf<AgentToolResult>()
             var stopReason: AgentStopReason? = null
-            fun pending(code: String) = response.toolCalls.drop(results.size).map { stopped(it, code) }
+            fun pending(code: String) = calls.drop(results.size).map { stopped(it, code) }
             suspend fun fits(candidate: List<AgentToolResult>, reserve: Int = 0): Boolean =
                 canPersistToolOutput(messages + AgentMessage.tools(candidate), reserve)
             try {
-                for ((callIndex, call) in response.toolCalls.withIndex()) {
+                for (call in calls) {
                     currentCoroutineContext().ensureActive()
                     if (!workspaceIsCurrent()) {
                         results += pending("workspace_changed")
@@ -408,7 +426,12 @@ class AgentLoop(
                     }
                     toolCalls++
                     lifecycle(call, AgentToolLifecycleStage.Queued)
-                    val denialKey = operationKeys[callIndex]
+                    val invalidCode = invalid[call.id]
+                    if (invalidCode != null) {
+                        lifecycle(call, AgentToolLifecycleStage.Blocked)
+                        results += stopped(call, invalidCode)
+                        continue
+                    }
                     val replayKey = operationKey(call, replay = true)
                     val receipt = priorAttempts[replayKey]
                     if (receipt != null) {
@@ -424,12 +447,11 @@ class AgentLoop(
                         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) { failed(call) }
                     }
                     observeRepeat(call)
-                    val previouslyDenied = denialKey in deniedMutations
                     val mode = currentAutonomyMode()
                     val decision = ApprovalPolicy.decide(mode, prepared)
                     if (decision is ApprovalDecision.Blocked) {
                         val rejected = stopped(call, decision.reason)
-                        val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "not_executed") }
+                        val remaining = calls.drop(results.size + 1).map { stopped(it, "not_executed") }
                         if (!fits(results + rejected + remaining)) {
                             results += pending("session_limit")
                             stopReason = AgentStopReason.SessionLimit
@@ -437,7 +459,6 @@ class AgentLoop(
                         }
                         lifecycle(call, AgentToolLifecycleStage.Blocked)
                         results += rejected
-                        results += remaining
                         // A policy refusal is this call's outcome. The model gets it
                         // like any other tool error and decides what to do next.
                         continue
@@ -456,14 +477,14 @@ class AgentLoop(
                         baseAsks = decision == ApprovalDecision.AskUser)
                     val skillInserted = scriptGate == SkillScriptGate.InsertApproval &&
                         prepared.approval != null
-                    val blocked = if (prepared.effect.requiresRuntimeBlocker && !previouslyDenied) {
+                    val blocked = if (prepared.effect.requiresRuntimeBlocker) {
                         try { mutationBlocker(call) }
                         catch (e: CancellationException) { throw e }
                         catch (_: Exception) { "runtime_unavailable" }
                     } else null
                     if (blocked != null) {
                         val rejected = stopped(call, blocked)
-                        val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "not_executed") }
+                        val remaining = calls.drop(results.size + 1).map { stopped(it, "not_executed") }
                         if (!fits(results + rejected + remaining)) {
                             results += pending("session_limit")
                             stopReason = AgentStopReason.SessionLimit
@@ -476,7 +497,7 @@ class AgentLoop(
                     }
                     // Reserve the bounded correlated event before any side effect, whether
                     // or not this autonomy mode asks a person to approve it.
-                    if (prepared.effect != AgentToolEffect.ReadOnly && !previouslyDenied && !fits(
+                    if (prepared.effect != AgentToolEffect.ReadOnly && !fits(
                             results + pending("workspace_changed"),
                             // Result JSON is escaped once more inside session JSON.
                             // 2048 also covers the bounded summary and fixed fields.
@@ -493,7 +514,7 @@ class AgentLoop(
                         val queued = AgentToolResult(call.id, call.name,
                             """{"status":"proposed","note":"This memory write is proposed. The user decides whether to save it. Nothing is saved if the user declines."}""",
                             summary = "Memory proposed")
-                        val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "not_executed") }
+                        val remaining = calls.drop(results.size + 1).map { stopped(it, "not_executed") }
                         if (!fits(results + queued + remaining)) {
                             results += pending("session_limit")
                             stopReason = AgentStopReason.SessionLimit
@@ -529,7 +550,7 @@ class AgentLoop(
                                 "\nApproving lets this skill's scripts run without asking again.",
                         ) else reviewed
                     } else null
-                    val rejection = if (!asking) null else if (previouslyDenied) "denied" else {
+                    val rejection = if (!asking) null else {
                         try {
                             lifecycle(call, AgentToolLifecycleStage.AwaitingApproval)
                             if (requestApproval(requireNotNull(approval))) null else "denied"
@@ -538,7 +559,6 @@ class AgentLoop(
                         }
                     }
                     if (rejection != null) {
-                        if (rejection == "denied") deniedMutations += denialKey
                         lifecycle(call, AgentToolLifecycleStage.Denied)
                         results += stopped(call, rejection)
                         continue
@@ -626,10 +646,9 @@ class AgentLoop(
                     if (prepared.effect.changesWorkspace && mutationBlocker == null && !result.error) {
                         mutationsCompleted++
                     }
-                    val bounded = SecretRedactor.redact(
-                        boundResult(result, prepared.resultContentLimitBytes), secretValues,
-                    )
-                    val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "workspace_changed") }
+                    val redacted = SecretRedactor.redact(result, secretValues)
+                    val bounded = boundResult(redacted, prepared.resultContentLimitBytes)
+                    val remaining = calls.drop(results.size + 1).map { stopped(it, "workspace_changed") }
                     if (prepared.effect == AgentToolEffect.ReadOnly && !fits(results + bounded + remaining)) {
                         results += pending("session_limit")
                         stopReason = AgentStopReason.SessionLimit
@@ -637,7 +656,7 @@ class AgentLoop(
                     }
                     results += bounded
                     if (!bounded.error) recordProvenance(
-                        call, bounded, createdPaths, createdDirectories, movedExistingPaths,
+                        call, redacted, createdPaths, createdDirectories, movedExistingPaths,
                     )
                 }
             } catch (e: CancellationException) {
@@ -666,8 +685,9 @@ class AgentLoop(
         }
     }
 
+    private class WorkspaceChangedDuringRetry : Exception()
+
     companion object {
-        private const val MAX_BLANK_ANSWER_RETRIES = 2
         // dsh-repeat-tool-reminder thresholds. Advisory only.
         private val REPEAT_REMINDER_THRESHOLDS = setOf(3, 5, 8)
         // UTF-8 bytes of structured result content after tool JSON encoding.
@@ -732,7 +752,7 @@ class AgentLoop(
 
     private fun operationKey(call: AgentToolCall, replay: Boolean = false): String {
         if (!jsonNestingWithinLimit(call.arguments, 32)) {
-            throw ProviderError.InvalidResponse("tool arguments too deeply nested")
+            return "${call.name}\ninvalid_arguments"
         }
         val canonical = try {
             val args = Json.parseToJsonElement(call.arguments)
@@ -772,14 +792,29 @@ class AgentLoop(
 
     private fun boundResult(result: AgentToolResult, contentLimit: Int): AgentToolResult {
         val limit = minOf(contentLimit, MAX_TOOL_RESULT_BYTES)
-        if (result.content.toByteArray(Charsets.UTF_8).size > limit) {
-            return result.copy(
-                content = "{\"error\":\"output_limit\",\"scope\":\"result\",\"limit_bytes\":$limit}",
-                error = true,
-                summary = "Limited",
-            )
+        val content = result.content
+        val summary = result.summary.take(256).dropLastWhile { it.isHighSurrogate() }
+        if (content.toByteArray(Charsets.UTF_8).size <= limit) return result.copy(summary = summary)
+        var low = 0
+        var high = minOf(content.length / 2, limit / 2)
+        var retained = "{\"truncated\":true}"
+        while (low <= high) {
+            val size = (low + high) / 2
+            val head = content.take(size).dropLastWhile(Char::isHighSurrogate)
+            val tail = content.takeLast(size).dropWhile(Char::isLowSurrogate)
+            val candidate = JsonObject(mapOf(
+                "truncated" to JsonPrimitive(true),
+                "head" to JsonPrimitive(head),
+                "tail" to JsonPrimitive(tail),
+            )).toString()
+            if (candidate.toByteArray(Charsets.UTF_8).size <= limit) {
+                retained = candidate
+                low = size + 1
+            } else {
+                high = size - 1
+            }
         }
-        return result.copy(summary = result.summary.take(256).dropLastWhile { it.isHighSurrogate() })
+        return result.copy(content = retained, summary = summary)
     }
 
     private fun recordProvenance(

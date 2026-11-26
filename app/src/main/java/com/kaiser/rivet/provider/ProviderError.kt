@@ -1,12 +1,13 @@
 package com.kaiser.rivet.provider
 
 import com.kaiser.rivet.agent.AgentToolCall
+import kotlin.random.Random
 
 sealed class ProviderError(message: String) : Exception(message) {
     class Unauthorized(val detail: String? = null) : ProviderError("unauthorized")
     class Forbidden(val detail: String? = null) : ProviderError("forbidden")
-    class RateLimited : ProviderError("rate limited")
-    class ResourceExhausted : ProviderError("resource exhausted")
+    class RateLimited(val retryAfterMs: Long? = null) : ProviderError("rate limited")
+    class ResourceExhausted(val retryAfterMs: Long? = null) : ProviderError("resource exhausted")
     class UsageLimit : ProviderError("provider usage limit")
     class ContextOverflow(
         val reportedLimitTokens: Int? = null,
@@ -36,7 +37,7 @@ sealed class ProviderError(message: String) : Exception(message) {
             get() = reason in setOf("length", "max_tokens", "MAX_TOKENS", "max_output_tokens")
     }
     class ResponseTooLarge : ProviderError("provider response exceeded Rivet's size limit")
-    class Server(val status: Int, val detail: String? = null) : ProviderError("server error: $status")
+    class Server(val status: Int, val detail: String? = null, val retryAfterMs: Long? = null) : ProviderError("server error: $status")
     object EmptyResponse : ProviderError("empty response")
     class ProviderMessage(val text: String, val statusCode: Int? = null) : ProviderError(text)
 
@@ -74,3 +75,22 @@ sealed class ProviderError(message: String) : Exception(message) {
 // One shape for quoting the provider's own words, so every banner reads the same way.
 private fun said(detail: String?): String =
     if (detail.isNullOrBlank()) "" else " The provider said: \"$detail\""
+
+
+internal fun ProviderError.requestRetryDelay(retries: Int): Long? {
+    if (retries >= 5) return null
+    val retryAfter = when (this) {
+        is ProviderError.RateLimited -> retryAfterMs
+        is ProviderError.ResourceExhausted -> retryAfterMs
+        is ProviderError.Server -> retryAfterMs
+        is ProviderError.Timeout, ProviderError.EmptyResponse -> null
+        is ProviderError.Network -> {
+            if (reason == "permission" || reason == "tls") return null
+            null
+        }
+        else -> return null
+    }
+    if (retryAfter != null && retryAfter > 0) return retryAfter.takeIf { it <= 10_000 }
+    val delay = 500L shl retries
+    return (delay * Random.nextDouble(0.9, 1.1)).toLong().coerceAtMost(10_000)
+}

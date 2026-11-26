@@ -614,7 +614,7 @@ class AgentLoopTest {
         }
     }
 
-    @Test fun deniedMutationIsNotApprovedAgainAfterOverflowCompaction() = runTest {
+    @Test fun deniedMutationGetsItsOwnDecisionAfterOverflowCompaction() = runTest {
         val first = AgentToolCall("delete-1", "delete_path", """{"path":"A.kt"}""")
         val repeated = first.copy(id = "delete-2")
         var requests = 0
@@ -642,57 +642,87 @@ class AgentLoopTest {
             AgentMessage.user("Delete A.kt")), emptyList())
 
         assertEquals(4, requests)
-        assertEquals(1, approvals)
+        assertEquals(2, approvals)
         assertEquals(0, executions)
         assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals("delete-2", result.messages.flatMap { it.toolResults }.last().callId)
     }
 
-    @Test fun duplicateToolIdsCannotReachApprovalOrExecution() = runTest {
-        val calls = listOf(AgentToolCall("same", "delete_path", """{"path":"A.kt"}"""),
-            AgentToolCall("same", "delete_path", """{"path":"B.kt"}"""))
-        var approvals = 0
-        var executions = 0
-        val completed = mutableListOf<AgentMessage>()
+    @Test fun malformedCallsGetCorrelatedErrorsWhileTheValidSiblingRuns() = runTest {
+        val calls = listOf(
+            AgentToolCall("same", "delete_path", """{"path":"A.kt"}"""),
+            AgentToolCall("same", "delete_path", """{"path":"B.kt"}"""),
+            AgentToolCall("", "delete_path", "{}"),
+            AgentToolCall("deep", "delete_path", "[".repeat(10_000) + "0" + "]".repeat(10_000)),
+            AgentToolCall("valid", "read_file", "{}"),
+        )
+        val executed = mutableListOf<String>()
+        var requests = 0
         val loop = AgentLoop(
-            requestModel = { _, _, _ -> AgentResponse(toolCalls = calls) },
-            prepareTool = { call -> PreparedAgentTool(call,
-                AgentApprovalRequest(call, "Delete", "file")) {
-                executions++
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = calls) else AgentResponse(text = "Done")
+            },
+            prepareTool = { call -> PreparedAgentTool(call, null) {
+                executed += call.id
                 AgentToolResult(call.id, call.name, "{}")
             } },
-            requestApproval = { approvals++; true },
+            requestApproval = { error("Invalid calls cannot reach approval") },
         )
-        try {
-            loop.run(listOf(AgentMessage.user("Delete files")), emptyList(), onMessage = { completed += it })
-            error("Expected invalid provider response")
-        } catch (_: ProviderError.InvalidResponse) {
-            assertEquals(0, approvals)
-            assertEquals(0, executions)
-            assertTrue(completed.isEmpty())
-        }
+        val result = loop.run(listOf(AgentMessage.user("Use tools")), emptyList())
+        val assistant = result.messages.first { it.role == AgentRole.Assistant }
+        val results = result.messages.flatMap { it.toolResults }
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(listOf("valid"), executed)
+        assertEquals(assistant.toolCalls.map { it.id }, results.map { it.callId })
+        assertEquals(5, results.map { it.callId }.toSet().size)
+        assertTrue(results.take(3).all { it.error && it.content.contains("invalid_tool_call_id") })
+        assertTrue(results[3].content.contains("invalid_arguments"))
     }
 
-    @Test fun overNestedToolArgumentsStopBeforeMutation() = runTest {
-        val nested = "[".repeat(10_000) + "0" + "]".repeat(10_000)
-        val call = AgentToolCall("deep", "delete_path", nested)
-        var approvals = 0
-        var executions = 0
-        val loop = AgentLoop(
-            requestModel = { _, _, _ -> AgentResponse(toolCalls = listOf(call)) },
-            prepareTool = { PreparedAgentTool(call, AgentApprovalRequest(call, "Delete", "A.kt")) {
-                executions++
-                AgentToolResult(call.id, call.name, "{}")
+    @Test fun policyRefusalDoesNotConsumeTheNextToolResult() = runTest {
+        val refused = AgentToolCall("write", "write_file", "{}")
+        val allowed = AgentToolCall("read", "read_file", "{}")
+        var requests = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = listOf(refused, allowed))
+                else AgentResponse(text = "Done")
+            },
+            prepareTool = { call -> PreparedAgentTool(call, null) {
+                check(call == allowed)
+                AgentToolResult(call.id, call.name, """{"read":true}""")
             } },
-            requestApproval = { approvals++; true },
-        )
-        try {
-            loop.run(listOf(AgentMessage.user("Delete A.kt")), emptyList())
-            error("Expected invalid provider response")
-        } catch (_: ProviderError.InvalidResponse) {
-            assertEquals(0, approvals)
-            assertEquals(0, executions)
-        }
+            requestApproval = { error("No approval prompt was available") },
+        ).run(listOf(AgentMessage.user("Read and write")), emptyList())
+
+        val results = result.messages.flatMap { it.toolResults }
+        assertEquals(listOf("write", "read"), results.map { it.callId })
+        assertTrue(results[0].content.contains("approval_unavailable"))
+        assertFalse(results[1].error)
+    }
+
+    @Test fun oversizedToolResultKeepsBothEndsWithoutChangingTheOutcome() = runTest {
+        val call = AgentToolCall("read", "read_file", "{}")
+        var requests = 0
+        val output = "start" + "😀".repeat(10_000) + "end"
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = listOf(call))
+                else AgentResponse(text = "Done")
+            },
+            prepareTool = { PreparedAgentTool(call, null) {
+                AgentToolResult(call.id, call.name, output, summary = "Read file")
+            } },
+            requestApproval = { error("Read is automatic") },
+        ).run(listOf(AgentMessage.user("Read a file")), emptyList())
+
+        val retained = result.messages.flatMap { it.toolResults }.single()
+        assertFalse(retained.error)
+        assertTrue(retained.content.contains("truncated"))
+        assertTrue(retained.content.contains("start"))
+        assertTrue(retained.content.contains("end"))
+        assertTrue(retained.content.toByteArray().size <= AgentLoop.MAX_TOOL_RESULT_BYTES)
+        assertEquals("Read file", retained.summary)
     }
 
     @Test fun bracketCharactersInsideJsonStringDoNotCountAsNesting() = runTest {

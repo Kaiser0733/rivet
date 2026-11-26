@@ -2423,6 +2423,13 @@ class ChatViewModel private constructor(
                     }
                     response
                 },
+                onRequestRetry = {
+                    streamPreview.setLength(0)
+                    reasoningPreview.setLength(0)
+                    if (ticket == generation) _uiState.update {
+                        it.copy(streamingText = "", streamingReasoning = "")
+                    }
+                },
                 prepareTool = { call ->
                     if (call.name == "delete_path" && !(phone != null && externalFileMutation(call))) {
                         checkpointGate.beginRunBoundary("Before deleting a file")
