@@ -262,3 +262,59 @@ resolution. No new approval, cap, or turn-block was added.
 - Parent-red: all three new tests were also run on a detached `2ad56c1b`
   worktree. `eachProject…` failed the session-identity assertion; both local
   queue tests timed out at the old rejection. The worktree was removed after.
+
+## 8. Gate fix — Python source checks on `4f54befd`
+
+CI run `45788418151` failed 2 of 100 Python checks. Both were **STALE**, not
+production regressions. Fix commit: `faa336ce` (`scripts/test_fix_round.py`,
+`scripts/test_improvements.py`). Full Python suite after the fix: **Ran 100
+tests, OK**. `:app:compileDebugKotlin` also succeeds.
+
+### 8.1 `test_compaction_publishes_start_and_scrolls_to_the_row` — STALE
+
+Failed on:
+
+`finally {\n                        if (activeRun === owner) owner.update { it.copy(compacting = false) }`
+
+The compaction behaviour is intact, but the owner check moved from the single
+`activeRun` property to the registry when two turns became possible. It now
+clears the flag exactly as before, for the run that owns the gap, in
+`ChatViewModel.compactHistory`:
+
+`finally { if (runRegistry.isActive(owner)) owner.update { state -> if (state.compacting) state.copy(compacting = false) else state } }`
+
+`onCompactionStarted = { if (runRegistry.isActive(owner)) owner.update { it.copy(compacting = true) } }`
+is still present. The UI keys and scroll guard asserted by the same test are
+unchanged and still pass. The test now pins the registry-owned finally and the
+flag clear, and fails if either disappears.
+
+### 8.2 `test_empty_draft_is_reusable_and_absent_from_sidebar_recents` — STALE
+
+Failed on:
+
+`reuseEmpty = activeRun == null && selectedState.value.goal == null`
+
+The guard is intact but now asks the registry whether **any** run is active,
+which is the correct parallel-safe form:
+
+`reuseEmpty = !runRegistry.hasActiveRuns() && selectedState.value.goal == null`
+
+Other assertions in the test (`reuseEmpty: Boolean = false`, the
+`NOT EXISTS(... events ...)` query, `hasMessages`, and the sidebar filter) are
+unchanged. The updated assertion is at least as strict: an empty draft is still
+reused only when no turn is active and no goal is set.
+
+### 8.3 Verification
+
+- Full Python suite: `Ran 100 tests ... OK`.
+- `:app:compileDebugKotlin`: **BUILD SUCCESSFUL**.
+- Focused parallel/gap tests: `eachProjectKeepsItsOwnBrowserSession`,
+  `openingAnotherProjectLeavesTheRunningProjectLiveAndWritable`,
+  `conversationSwitchKeepsTheOriginalTurnLiveAndDurable`,
+  `secondLocalTurnQueuesAndCanBeStoppedBeforeItStarts`,
+  `queuedLocalTurnStartsWhenTheRunningOneFinishes`, and
+  `backgroundApprovalIdentifiesItsConversationAndStopsOnlyItsRun` — all pass.
+- `AgentApprovalGateTest` — 8/8 pass.
+- Test-only stability commit `aba7cbda` gives the project-browser tests a
+  15-second project-open window instead of the shared 5-second helper; no
+  production code changed for it.
