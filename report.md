@@ -32,6 +32,9 @@ The buffer is in memory and capped at 8 MiB (`MAX_ROLLBACK_BYTES`). A file
 larger than that is still written without a rollback copy; that limitation is
 listed under honest gaps.
 
+**Files.** `workspace/SafWorkspace.kt`, `workspace/SafWorkspaceTest.kt`,
+`workspace/TestDocumentsProvider.kt` (commit `46b7cf74`).
+
 **JiTTest.** `SafWorkspaceTest.failedVerifyOrMidStreamWriteLeavesOriginalSafFileByteIdentical`.
 The test arms the disposable provider to corrupt the document on the verify
 read and asserts the original bytes are unchanged after
@@ -65,6 +68,9 @@ fallback instead:
   `.git` says "Rivet keeps no copy of repository metadata such as .git, so
   this cannot be undone"; ignored build folders and symlinks are named as
   not covered by the 3-turn Undo copy.
+
+**Files.** `agent/AgentToolExecutor.kt`, `agent/AgentLoopTest.kt` (commit
+`36281642`).
 
 **Why full coverage was not added.** Covering `.git` needs a new
 delete-time snapshot of the SAF tree, not the mirror; covering ignored trees
@@ -121,6 +127,12 @@ true.
   removes the staged copy.
 - Readability is probed without copying twice: `SafWorkspace.canRead` opens
   the document and reads one byte.
+
+**Files.** New `workspace/ExternalDeleteStore.kt`; `workspace/SafWorkspace.kt`
+(`canRead`); `agent/AgentToolExecutor.kt`; `agent/AgentProtocol.kt` (comment);
+`chat/ChatViewModel.kt`; `chat/ProviderRuntimeSource.kt`;
+`ui/chat/ChatScreen.kt`; tests `workspace/ExternalDeleteStoreTest.kt` and
+`chat/UndoFailureMessageTest.kt` (commit `79ea7be7`).
 
 **JiTTest.** `ExternalDeleteStoreTest` (7 tests): byte-identical binary file
 restore; folder restore including an empty nested directory; two deletes in
