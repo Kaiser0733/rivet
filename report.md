@@ -130,10 +130,10 @@ Commit `ac20b46f` (implementation), `45d6025f`/`45ef8a69` (tests).
   turn after switching. On the pre-Build-2 parent that send is refused by
   `canStartRun`’s one-turn-at-a-time guard.
 
-I did not successfully execute either test on a checked-out parent. The branch
-contains the Build 1 commits that the parent batch lacks, so a parent checkout
-needs the same cherry-picked foundation to compile the test class; that
-parent-red run is therefore an **honest gap**, not a claimed green.
+I ran both tests on a detached worktree at `2171d0ae` (the branch tip before
+the Build 2/3 implementation, i.e. the Build 1-adapted parent). Both failed
+with the expected five-second await timeouts. On this branch both pass.
+The worktree was removed afterwards; no base ref was changed.
 
 ## 5. Honest gaps
 
