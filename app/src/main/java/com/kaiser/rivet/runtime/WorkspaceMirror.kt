@@ -252,9 +252,9 @@ class WorkspaceMirror(
                             emptyFile.sha256!!
                         } else {
                             val target = local.getValue(path)
-                            val fingerprint = BinaryFingerprint(requireNotNull(target.size), requireNotNull(target.sha256))
+                            val publishedFingerprint = BinaryFingerprint(requireNotNull(target.size), requireNotNull(target.sha256))
                             try {
-                                if (FileInputStream(file).use { workspace.publishNewFile(relative, it, fingerprint) }) {
+                                if (FileInputStream(file).use { workspace.publishNewFile(relative, it, publishedFingerprint) }) {
                                     continue
                                 }
                             } catch (failure: WorkspaceFailure) {
