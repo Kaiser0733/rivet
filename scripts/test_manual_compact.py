@@ -38,7 +38,7 @@ class ManualCompactTest(unittest.TestCase):
         model = (SRC / "chat/ChatViewModel.kt").read_text()
         body = model.split("fun compactHistory()", 1)[1].split("/** Move a no-project goal", 1)[0]
         self.assertIn("ContextPreparation(sql, sessionId", body)
-        self.assertIn('context.prepare(activeMessages, force = true, reason = "manual")', body)
+        self.assertIn('context.prepare(owner.activeMessages, force = true, reason = "manual")', body)
         self.assertIn("InternalContext.compactionNotice(workspaceId, historyTokens)", body)
         self.assertIn("sql.save(noticed, interrupted = false, expectedSessionId = sessionId)", body)
         self.assertIn("activeSummary = context.summary", body)
@@ -52,7 +52,7 @@ class ManualCompactTest(unittest.TestCase):
         self.assertIn('"Cannot compact while a reply is running."', body)
         self.assertIn('"Nothing to compact yet."', body)
         self.assertIn('"Rivet could not shorten this session\'s context. The conversation was kept."', body)
-        self.assertIn("if (compacted == activeMessages)", body)
+        self.assertIn("if (compacted == owner.activeMessages)", body)
 
     def test_the_view_model_behaviour_has_jit_tests(self):
         test = (TEST / "chat/ChatViewModelTest.kt").read_text()

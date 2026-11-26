@@ -1017,7 +1017,7 @@ class CodingSessionsTest {
         }
     }
 
-    @Test fun compactionCannotApplyToAnotherSelectedSessionWithMatchingMessages() = runBlocking {
+    @Test fun explicitWritesStayWithTheirConversationAfterSelectionChanges() = runBlocking {
         val sessions = CodingSessions(app)
         val first = sessions.load().id!!
         val history = listOf(AgentMessage.user("Same task"), AgentMessage.assistant("Done"))
@@ -1025,15 +1025,20 @@ class CodingSessionsTest {
         val second = sessions.create(null).id!!
         sessions.save(history, interrupted = false)
 
-        try {
-            sessions.compact(history, listOf(history.last()), "wrong task", expectedSessionId = first)
-            throw AssertionError("Expected selected-session guard")
-        } catch (_: IllegalStateException) { Unit }
+        val compacted = sessions.compact(history, listOf(history.last()), "First summary",
+            expectedSessionId = first)
+        val pending = compacted + AgentMessage.user("Follow up")
+        sessions.save(pending, interrupted = false, expectedSessionId = first)
+        sessions.markInterrupted(true, expectedSessionId = first)
 
+        assertEquals(second, sessions.load().id)
         assertEquals(history, sessions.load().messages)
         assertEquals("", sessions.load().summary)
-        assertEquals(history, sessions.select(first).messages)
-        assertEquals(history, sessions.select(second).messages)
+        assertFalse(sessions.load().interrupted)
+        val background = sessions.select(first)
+        assertEquals(pending, background.messages)
+        assertEquals("First summary", background.summary)
+        assertTrue(background.interrupted)
     }
 
     @Test fun staleCompactionFromAnotherStoreCannotDropNewlySavedEvent() = runBlocking {

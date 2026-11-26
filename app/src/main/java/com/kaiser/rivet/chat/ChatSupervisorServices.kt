@@ -89,7 +89,7 @@ internal object ChatSupervisorServices {
         systemInstruction = systemInstruction,
         activityFor = activityFor,
         readAutonomyMode = readAutonomyMode,
-        workspaceIsCurrent = { workspaceSelection.currentIdentity() == workspaceId },
+        workspaceIsCurrent = { true },
         commandBlocker = {
             try {
                 runtime.commandBlocker()

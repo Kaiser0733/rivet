@@ -1,6 +1,9 @@
 package com.kaiser.rivet.chat
 
 import android.app.Application
+import androidx.lifecycle.ViewModel
+import androidx.lifecycle.ViewModelProvider
+import androidx.lifecycle.ViewModelStore
 import androidx.lifecycle.viewModelScope
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.cancelAndJoin
@@ -43,6 +46,8 @@ import com.kaiser.rivet.storage.AgentSessionPersistence
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
@@ -55,6 +60,7 @@ import org.junit.After
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -106,6 +112,7 @@ class ChatViewModelTest {
 
     @After fun cleanup() = runBlocking {
         models.forEach { it.viewModelScope.coroutineContext[Job]?.cancelAndJoin() }
+        models.map { it.runRegistry }.distinct().forEach { it.scope.coroutineContext[Job]?.cancelAndJoin() }
         models.clear()
         Dispatchers.resetMain()
     }
@@ -154,11 +161,131 @@ class ChatViewModelTest {
 
         viewModel.resumeSession(firstId!!)
         val resumed = await(viewModel) { it.currentSessionId == firstId }
-        assertEquals("Another project", resumed.projectName)
+        assertEquals("project", resumed.projectName)
         assertEquals(tree.toString(), resumed.currentSessionWorkspaceId)
-        assertEquals(other.toString(), resumed.projectIdentity)
+        assertEquals(tree.toString(), resumed.projectIdentity)
+        assertEquals(tree.toString(), runtime.currentIdentity())
     }
 
+
+    // Cross-project runs keep their own captured project. Opening B must not release A's
+    // grant, cancel A's turn, or move B's messages into A's transcript.
+    @Test fun openingAnotherProjectLeavesTheRunningProjectLiveAndWritable() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val authority = "com.kaiser.rivet.xproject-chat"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val other = DocumentsContract.buildTreeDocumentUri(authority, "other")
+        documents.nodes["other"] = TestDocumentsProvider.Node("Another project", null, true,
+            java.io.File.createTempFile("xproject-other", ".test", app.cacheDir))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val releaseA = CompletableDeferred<Unit>()
+        val releaseB = CompletableDeferred<Unit>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                val text = request.messages.lastOrNull { it.role == com.kaiser.rivet.agent.AgentRole.User }?.text.orEmpty()
+                if (text.contains("A")) releaseA.await() else releaseB.await()
+                val answer = if (text.contains("A")) "A done" else "B done"
+                onDelta(answer)
+                return AgentResponse(text = answer)
+            }
+        }
+        val viewModel = newChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        awaitProject(viewModel) { it.ready && !it.projectLoading }
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        viewModel.selectProject(tree, flags)
+        val a = awaitProject(viewModel) { it.projectName == "project" && !it.projectLoading }
+        val firstId = a.currentSessionId!!
+        viewModel.send("A")
+        awaitProject(viewModel) { it.streaming }
+
+        viewModel.selectProject(other, flags)
+        val b = awaitProject(viewModel) { it.projectName == "Another project" && !it.projectLoading }
+        assertFalse(firstId == b.currentSessionId)
+        assertEquals(other.toString(), viewModel.browser.projectKey)
+        viewModel.send("B")
+        awaitProject(viewModel) { it.streaming }
+
+        viewModel.resumeSession(firstId)
+        val back = awaitProject(viewModel) { it.currentSessionId == firstId }
+        assertTrue("viewing B must not stop A", back.streaming)
+        assertEquals("project", back.projectName)
+        assertEquals(tree.toString(), back.projectIdentity)
+        assertEquals(tree.toString(), RuntimeController(app).currentIdentity())
+        assertEquals(tree.toString(), viewModel.browser.projectKey)
+        releaseA.complete(Unit)
+        awaitProject(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "A done" }
+
+        viewModel.resumeSession(b.currentSessionId!!)
+        val bStill = awaitProject(viewModel) { it.currentSessionId == b.currentSessionId }
+        assertTrue("A finishing must not stop B", bStill.streaming)
+        assertEquals("Another project", bStill.projectName)
+        assertEquals(other.toString(), bStill.projectIdentity)
+        assertEquals(other.toString(), RuntimeController(app).currentIdentity())
+        assertEquals(other.toString(), viewModel.browser.projectKey)
+        releaseB.complete(Unit)
+        val finished = awaitProject(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "B done" }
+        assertEquals(listOf("B", "B done"), finished.messages.map { it.text })
+    }
+
+    @Test fun eachProjectKeepsItsOwnBrowserSession() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val authority = "com.kaiser.rivet.browser-project"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val other = DocumentsContract.buildTreeDocumentUri(authority, "other")
+        documents.nodes["other"] = TestDocumentsProvider.Node("Another project", null, true,
+            java.io.File.createTempFile("browser-other", ".test", app.cacheDir))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        awaitProject(viewModel) { it.ready && !it.projectLoading }
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        viewModel.selectProject(tree, flags)
+        val first = awaitProject(viewModel) { it.projectName == "project" && !it.projectLoading }
+        val firstBrowser = viewModel.browser
+        assertEquals(tree.toString(), firstBrowser.projectKey)
+
+        viewModel.selectProject(other, flags)
+        val second = awaitProject(viewModel) { it.projectName == "Another project" && !it.projectLoading }
+        assertFalse("each project needs its own browser session", firstBrowser === viewModel.browser)
+        assertEquals("the second project must not move the first project's page",
+            tree.toString(), firstBrowser.projectKey)
+        assertEquals(other.toString(), viewModel.browser.projectKey)
+
+        viewModel.resumeSession(first.currentSessionId!!)
+        awaitProject(viewModel) { it.currentSessionId == first.currentSessionId }
+        assertSame("returning to a project restores its own browser", firstBrowser, viewModel.browser)
+        assertEquals(tree.toString(), firstBrowser.projectKey)
+    }
     @Test fun lostProjectAccessStopsSendWithoutCallingTheProviderOrChangingConversation() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
@@ -466,19 +593,47 @@ class ChatViewModelTest {
     }
 
     @Test fun stopWhilePreparingKeepsTheAcceptedMessageAndStartsNoSecondTurn() = runBlocking {
-        val provider = CompletableDeferred<ProviderRuntimeResult>()
-        val viewModel = newChatViewModel(app, RejectingPersistence(),
-            ProviderRuntimeSource { provider.await() },
+        val providerLoadStarted = CompletableDeferred<Unit>()
+        val persistence = RejectingPersistence()
+        val viewModel = newChatViewModel(app, persistence,
+            ProviderRuntimeSource {
+                providerLoadStarted.complete(Unit)
+                awaitCancellation()
+            },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
         viewModel.send("first")
+        withTimeout(5_000) { providerLoadStarted.await() }
+        val run = requireNotNull(viewModel.runRegistry.active.value)
         assertTrue(viewModel.uiState.value.streaming)
         viewModel.send("second")
         assertEquals("A reply is still in progress.", viewModel.uiState.value.notice)
+        assertEquals(1L, viewModel.uiState.value.acceptedMessageCount)
         viewModel.cancel()
         val stopped = await(viewModel) { !it.streaming && it.notice?.startsWith("Stopped") == true }
+        withTimeout(5_000) { run.job!!.join() }
         assertEquals(1L, stopped.acceptedMessageCount)
         assertEquals(listOf("first"), stopped.messages.map { it.text })
+        assertEquals(stopped.messages, persistence.load().messages)
+    }
+
+    @Test fun legacyStoreWithoutSessionIdPublishesAndPersistsTheCompletedReply() = runBlocking {
+        val store = AgentSessionStore(app)
+        store.clear()
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Done"))))
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val viewModel = newChatViewModel(app, store,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        val loaded = await(viewModel) { it.ready && !it.projectLoading }
+        assertNull(loaded.currentSessionId)
+
+        viewModel.send("Fix it")
+        val completed = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Done" }
+        val expected = listOf(AgentMessage.user("Fix it"), AgentMessage.assistant("Done"))
+        val saved = store.load()
+        assertEquals(expected, completed.messages)
+        assertEquals(expected, saved.messages)
+        assertFalse(saved.interrupted)
     }
 
     @Test fun acceptanceHappensBeforeAProviderLoadThatNeverReturns() = runBlocking {
@@ -1685,21 +1840,14 @@ class ChatViewModelTest {
         val first = sessions.load().id!!
         val other = sessions.create(null).id!!
         sessions.select(first)
-        // The flag only means something on a conversation with an unfinished turn: load() derives
-        // `interrupted` from the transcript (CodingSessions.kt:569-576) and reports false — clearing
-        // the column on the way — for an empty or finished one. Seed the turn the flag is about.
         sessions.save(listOf(AgentMessage.user("Keep working")), interrupted = true)
+        sessions.save(listOf(AgentMessage.user("Other work")), interrupted = true, expectedSessionId = other)
 
-        sessions.markInterrupted(true, first)
-        try {
-            sessions.markInterrupted(false, other)
-            throw AssertionError("a stale pointer must not clear another conversation's flag")
-        } catch (_: IllegalStateException) { /* expected */ }
+        sessions.markInterrupted(false, other)
 
-        assertEquals("the flag was not cleared through the stale pointer", true,
-            sessions.load().interrupted)
-        sessions.select(other)
-        assertEquals("the other conversation was never touched", false, sessions.load().interrupted)
+        assertTrue(sessions.load().interrupted)
+        assertFalse(sessions.load(other).interrupted)
+        assertEquals(first, sessions.load().id)
     }
 
     // The live-status clock is a fact about the turn, not about the row that prints it. The row
@@ -1793,7 +1941,9 @@ class ChatViewModelTest {
         val config: ProviderConfig,
     )
 
-    private suspend fun undoFixture(authority: String, responses: List<AgentResponse>): UndoFixture {
+    private suspend fun undoFixture(
+        authority: String, responses: List<AgentResponse>, keepProvider: Boolean = false,
+    ): UndoFixture {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
@@ -1810,9 +1960,10 @@ class ChatViewModelTest {
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
         val sessions = CodingSessions(app)
+        val sharedProvider = if (keepProvider) QueueProvider(ArrayDeque(responses)) else null
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
-            { _, _ -> QueueProvider(ArrayDeque(responses)) })
+            { _, _ -> sharedProvider ?: QueueProvider(ArrayDeque(responses)) })
         await(viewModel) { it.ready && !it.projectLoading }
         viewModel.selectProject(tree, flags)
         await(viewModel) { it.currentSessionWorkspaceId == tree.toString() && !it.projectLoading }
@@ -1868,9 +2019,7 @@ class ChatViewModelTest {
         assertEquals(fixture.tree.toString(), back.currentSessionWorkspaceId)
     }
 
-    // A queued switch belongs to the other session and must not inherit the first
-    // session's bar, even though both chats are in the same project.
-    @Test fun aQueuedConversationSwitchDoesNotCarryTheUndoBarAcrossSessions() = runBlocking {
+    @Test fun switchingDuringAToolCallKeepsTheResultAndUndoWithTheOriginalConversation() = runBlocking {
         val fixture = undoFixture("com.kaiser.rivet.undo-switch", listOf(
             AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
             AgentResponse(text = "Done"),
@@ -1880,16 +2029,22 @@ class ChatViewModelTest {
         fixture.sessions.select(first)
 
         fixture.viewModel.send("Create A")
-        await(fixture.viewModel) { it.streaming }
-        fixture.viewModel.resumeSession(other)
-        val queued = await(fixture.viewModel) { it.queuedSessionId == other }
-        assertEquals("Rivet will open that conversation when this reply finishes.", queued.notice)
         val approval = await(fixture.viewModel) { it.pendingApproval?.call?.id == "create-a" }
-        fixture.viewModel.approve(approval.pendingApproval!!.approvalToken)
-
-        val switched = await(fixture.viewModel) { !it.streaming && it.currentSessionId == other }
-        assertNull("the other session must not inherit the Undo bar", switched.undoCheckpointId)
+        fixture.viewModel.resumeSession(other)
+        val switched = await(fixture.viewModel) { it.currentSessionId == other }
+        assertFalse(switched.streaming)
+        assertNull(switched.pendingApproval)
+        assertNull(switched.undoCheckpointId)
         assertTrue(switched.lastTurnFiles.isEmpty())
+
+        fixture.viewModel.approve(approval.pendingApproval!!.approvalToken)
+        withTimeout(5_000) {
+            while (fixture.sessions.recent(first).none { it.text == "Done" }) delay(10)
+        }
+        val tool = fixture.sessions.recent(first).flatMap { it.toolResults }.single()
+        assertEquals("create-a", tool.callId)
+        assertTrue(fixture.sessions.recent(other).isEmpty())
+        assertTrue(fixture.viewModel.uiState.value.messages.isEmpty())
 
         fixture.viewModel.resumeSession(first)
         val back = await(fixture.viewModel) { it.currentSessionId == first && it.undoCheckpointId != null }
@@ -1975,10 +2130,7 @@ class ChatViewModelTest {
         await(viewModel) { it.ready && it.currentSessionId == first }
 
         viewModel.send("Keep working")
-        // Wait until the turn's first write is durable before moving the pointer. S1 is about the
-        // reply not following the pointer into another conversation; moving it first makes even a
-        // correct turn refuse its own first write, and the conversation is then empty by design.
-        // Acceptance is synchronous now, so the UI counters say nothing about the write.
+        // The durable user message confirms the turn has started before selection moves.
         withTimeout(5_000) {
             while (sessions.recent(first).none { it.text == "Keep working" }) delay(10)
         }
@@ -1992,12 +2144,13 @@ class ChatViewModelTest {
         assertEquals("the turn keeps writing to the conversation it started in",
             listOf("Keep working"),
             sessions.recent(first).filter { it.role == com.kaiser.rivet.agent.AgentRole.User }.map { it.text })
-        assertTrue("the refused write surfaces as a failure", viewModel.uiState.value.error != null)
+        assertEquals("Done", sessions.recent(first).last().text)
+        assertNull(viewModel.uiState.value.error)
     }
 
     // A conversation picked while a reply is streaming must not fight the running turn
     // for the storage pointer: the choice waits, then opens when the turn is done.
-    @Test fun conversationPickedDuringATurnOpensWhenTheTurnFinishes() = runBlocking {
+    @Test fun conversationSwitchKeepsTheOriginalTurnLiveAndDurable() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val sessions = CodingSessions(app)
@@ -2014,6 +2167,7 @@ class ChatViewModelTest {
                 onReasoning: (String) -> Unit,
                 onDelta: (String) -> Unit,
             ): AgentResponse {
+                onDelta("Working")
                 release.await()
                 onDelta("Done")
                 return AgentResponse(text = "Done")
@@ -2024,24 +2178,270 @@ class ChatViewModelTest {
         await(viewModel) { it.ready && it.currentSessionId == first }
 
         viewModel.send("Keep working")
-        await(viewModel) { it.streaming }
-
+        val live = await(viewModel) { it.streamingText == "Working" }
         viewModel.resumeSession(other)
 
-        val queued = await(viewModel) { it.queuedSessionId != null }
-        assertEquals(first, queued.currentSessionId)
-        assertTrue("the running turn must keep going", queued.streaming)
-        assertEquals(other, queued.queuedSessionId)
-        assertNotNull("the user must see that the switch is waiting", queued.notice)
-        assertEquals(first, sessions.load().id)
+        val switched = await(viewModel) { it.currentSessionId == other }
+        assertFalse(switched.streaming)
+        assertTrue(switched.messages.isEmpty())
+        assertEquals(other, sessions.load().id)
+        viewModel.send("Second turn")
+        val second = await(viewModel) { it.streaming }
+        assertTrue(second.messages.any { it.role == com.kaiser.rivet.agent.AgentRole.User &&
+            it.text == "Second turn" })
+
+        viewModel.resumeSession(first)
+        val back = await(viewModel) { it.currentSessionId == first }
+        assertTrue(back.streaming)
+        assertEquals(live.streamingText, back.streamingText)
+        assertEquals(live.turnStartedAt, back.turnStartedAt)
+        assertEquals(live.messages, back.messages)
+        viewModel.resumeSession(other)
+        await(viewModel) { it.currentSessionId == other }
 
         release.complete(Unit)
-        val switched = await(viewModel) { !it.streaming && it.currentSessionId == other }
-        assertNull(switched.queuedSessionId)
+        withTimeout(5_000) {
+            while (sessions.recent(first).lastOrNull()?.text != "Done") delay(10)
+        }
+        assertTrue(sessions.recent(other).any { it.text == "Second turn" })
+        viewModel.resumeSession(first)
+        val finished = await(viewModel) { !it.streaming && it.currentSessionId == first }
+        assertEquals("Done", finished.messages.lastOrNull()?.text)
+    }
+
+    @Test fun aRunningTurnSurvivesViewModelStoreClearAndReattaches() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val sessionId = sessions.load().id!!
+        val release = CompletableDeferred<Unit>()
+        val source = ProviderRuntimeSource {
+            ProviderRuntimeResult.Ready(
+                ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "model-a"), "key")
+        }
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit): AgentResponse {
+                onDelta("Still working")
+                release.await()
+                return AgentResponse(text = "Finished after recreation")
+            }
+        }
+        val first = newChatViewModel(app, sessions, source) { _, _ -> provider }
+        val store = ViewModelStore()
+        val factory = object : ViewModelProvider.Factory {
+            @Suppress("UNCHECKED_CAST")
+            override fun <T : ViewModel> create(modelClass: Class<T>): T = first as T
+        }
+        assertSame(first, ViewModelProvider(store, factory)[ChatViewModel::class.java])
+        await(first) { it.ready }
+        first.send("Work in the background")
+        await(first) { it.streamingText == "Still working" }
+
+        store.clear()
+
+        val registry = first.runRegistry
+        assertTrue(registry.active.value?.job?.isActive == true)
+        val recreated = ChatViewModel(app, sessions, source, { _, _ -> provider }, runRegistry = registry)
+            .also { models += it }
+        val attached = await(recreated) { it.ready && it.currentSessionId == sessionId }
+        assertTrue(attached.streaming)
+        assertEquals("Still working", attached.streamingText)
+
+        release.complete(Unit)
+        val completed = await(recreated) { !it.streaming }
+        assertEquals("Finished after recreation", completed.messages.last().text)
+        assertEquals("Finished after recreation", sessions.load(sessionId).messages.last().text)
+        assertFalse(sessions.load(sessionId).interrupted)
+    }
+
+    @Test fun backgroundApprovalIdentifiesItsConversationAndStopsOnlyItsRun() = runBlocking {
+        val fixture = undoFixture("com.kaiser.rivet.background-approval", listOf(
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-a", "create_file", """{"path":"A.kt"}"""))),
+            AgentResponse(text = "Done"),
+            AgentResponse(toolCalls = listOf(AgentToolCall("create-b", "create_file", """{"path":"B.kt"}"""))),
+        ), keepProvider = true)
+        val vm = fixture.viewModel
+        val first = vm.uiState.value.currentSessionId!!
+        val other = fixture.sessions.create(fixture.tree.toString()).id!!
+        fixture.sessions.select(first)
+        vm.renameSession(first, "Project A")
+        await(vm) { it.currentSessionTitle == "Project A" }
+
+        vm.send("Create A")
+        await(vm) { it.pendingApproval != null }
+        vm.resumeSession(other)
+        val banner = await(vm) { it.currentSessionId == other && it.backgroundApproval != null }
+        val approval = banner.backgroundApproval!!
+        assertEquals(first, vm.runRegistry.approvals.pending.value?.sessionId)
+        assertEquals("Project A", approval.sessionTitle)
+        assertNull(banner.pendingApproval)
+        assertEquals(ConversationActivity.NeedsApproval, banner.conversationActivity[first])
+        vm.cancel()
+        assertEquals(approval.approvalToken, vm.runRegistry.approvals.pending.value?.approvalToken)
+        vm.approve(approval.approvalToken)
+        val finished = await(vm) { it.conversationActivity[first] == ConversationActivity.FinishedUnseen }
+        assertTrue(finished.messages.isEmpty())
+        assertTrue(fixture.sessions.recent(other).isEmpty())
+
+        vm.resumeSession(first)
+        val returned = await(vm) { it.currentSessionId == first && !it.streaming }
+        assertEquals("Done", returned.messages.last().text)
+        assertNull(returned.conversationActivity[first])
+        vm.send("Create B in this project")
+        await(vm) { it.pendingApproval?.call?.id == "create-b" }
+        vm.resumeSession(other)
+        val second = await(vm) { it.currentSessionId == other && it.backgroundApproval?.call?.id == "create-b" }
+        vm.stopForApproval(second.backgroundApproval!!.approvalToken)
+        await(vm) { it.backgroundApproval == null && it.conversationActivity[first] == ConversationActivity.FinishedUnseen }
+        assertTrue(fixture.sessions.recent(other).isEmpty())
+        assertTrue(fixture.sessions.recent(first).flatMap { it.toolResults }.none {
+            it.callId == "create-b" && !it.error
+        })
+    }
+
+
+    @Test fun secondLocalTurnQueuesAndCanBeStoppedBeforeItStarts() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        val other = sessions.create(null).id!!
+        sessions.select(first)
+        val release = CompletableDeferred<Unit>()
+        var requests = 0
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit): AgentResponse {
+                requests++
+                release.await()
+                return AgentResponse(text = "first done")
+            }
+        }
+        val config = ProviderConfig(id = "local", type = ProviderType.Local, name = "Local",
+            baseUrl = "local://test", model = "local-test")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "") }, { _, _ -> provider })
+        await(viewModel) { it.ready && it.currentSessionId == first }
+        viewModel.send("First local")
+        await(viewModel) { it.streaming && requests >= 1 }
+
+        viewModel.resumeSession(other)
+        await(viewModel) { it.currentSessionId == other }
+        viewModel.send("Second local")
+        val queued = await(viewModel) { it.activity == "Waiting for the local model…" }
+        assertTrue(queued.streaming)
+        assertEquals(1, requests)
+        viewModel.stop()
+        val stopped = await(viewModel) { !it.streaming }
+        assertEquals("Stopped before the queued turn started.", stopped.notice)
+        release.complete(Unit)
+        await(viewModel) { it.currentSessionId == other && !it.streaming }
+        assertEquals("a stopped queued turn must never start", 1, requests)
+        assertTrue(sessions.recent(other).any { it.text == "Second local" })
+        assertFalse(sessions.recent(other).any { it.text == "first done" })
+    }
+
+    @Test fun queuedLocalTurnStartsWhenTheRunningOneFinishes() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        val other = sessions.create(null).id!!
+        sessions.select(first)
+        val releaseFirst = CompletableDeferred<Unit>()
+        var requests = 0
+        val requested = mutableListOf<String>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit): AgentResponse {
+                requests++
+                val last = request.messages.lastOrNull { it.role == com.kaiser.rivet.agent.AgentRole.User }?.text.orEmpty()
+                requested += last
+                if (last.contains("First")) releaseFirst.await()
+                val answer = if (last.contains("First")) "first done" else "second done"
+                onDelta(answer)
+                return AgentResponse(text = answer)
+            }
+        }
+        val config = ProviderConfig(id = "local", type = ProviderType.Local, name = "Local",
+            baseUrl = "local://test", model = "local-test")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "") }, { _, _ -> provider })
+        await(viewModel) { it.ready && it.currentSessionId == first }
+        viewModel.send("First local")
+        await(viewModel) { it.streaming && requests >= 1 }
+
+        viewModel.resumeSession(other)
+        await(viewModel) { it.currentSessionId == other }
+        viewModel.send("Second local")
+        await(viewModel) { it.activity == "Waiting for the local model…" }
+        assertEquals(1, requests)
+
+        releaseFirst.complete(Unit)
+        await(viewModel) { requests >= 2 }
+        val done = await(viewModel) { !it.streaming }
+        assertEquals("second done", done.messages.lastOrNull()?.text)
+        assertEquals("the queued turn starts once", 1, requested.count { it.contains("Second") })
+        assertTrue(requests >= 2)
+    }
+    @Test fun stopClearsStreamingWhileProviderCleanupIsStillHeld() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val cleanupEntered = CompletableDeferred<Unit>()
+        val releaseCleanup = CompletableDeferred<Unit>()
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "model-a")
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit): AgentResponse {
+                try {
+                    onDelta("Partial answer")
+                    kotlinx.coroutines.awaitCancellation()
+                } finally {
+                    withContext(NonCancellable) {
+                        cleanupEntered.complete(Unit)
+                        releaseCleanup.await()
+                    }
+                }
+            }
+        }
+        val vm = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }) { _, _ -> provider }
+        await(vm) { it.ready }
+        vm.send("Start a slow request")
+        await(vm) { it.streamingText == "Partial answer" }
+        val run = requireNotNull(vm.runRegistry.active.value)
+        try {
+            vm.cancel()
+            withTimeout(5_000) { cleanupEntered.await() }
+            val stopped = vm.uiState.value
+            assertFalse(stopped.streaming)
+            assertTrue(stopped.streamingText.isEmpty())
+            assertNull(stopped.activity)
+            assertFalse(run.job!!.isCompleted)
+            vm.cancel()
+            assertEquals(stopped, vm.uiState.value)
+        } finally {
+            releaseCleanup.complete(Unit)
+        }
+        withTimeout(5_000) { run.job?.join() }
+        assertTrue(run.job?.isCompleted == true)
     }
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withTimeout(5_000) { viewModel.uiState.first(predicate) }
+
+    private suspend fun awaitProject(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
+        withTimeout(15_000) { viewModel.uiState.first(predicate) }
 
     private class RejectingPersistence(private val sessionId: String? = null) : AgentSessionPersistence {
         private var messages = emptyList<AgentMessage>()

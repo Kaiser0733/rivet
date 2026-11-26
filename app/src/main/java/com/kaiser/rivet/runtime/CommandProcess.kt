@@ -90,6 +90,8 @@ internal object CommandNative {
     external fun start(command: String, cwd: String, environment: Array<String>,
                        addressSpaceLimitBytes: Long): IntArray
     external fun waitFor(pid: Int): Int
+    external fun signalGroup(pid: Int, signal: Int)
+    external fun signalLeader(pid: Int, signal: Int)
     external fun stop(pid: Int, signal: Int)
     external fun reapStaleMonitors()
     external fun closeFd(fd: Int)
@@ -172,8 +174,39 @@ internal open class CommandProcess {
                     catch (_: Exception) { /* Display failures do not interrupt the command. */ }
                 }
             } }
+            val strays = java.util.concurrent.ConcurrentHashMap<Int, Long>()
             val tooManyChildren = AtomicBoolean(false)
             val memoryLimit = AtomicBoolean(false)
+            fun remember(tree: Set<Int>) {
+                for (child in tree) {
+                    if (strays.containsKey(child)) continue
+                    ProcTree.startTime(child)?.let { strays.putIfAbsent(child, it) }
+                }
+            }
+            fun rememberCurrentTree() {
+                try { remember(descendants(pid, ProcTree.parents())) } catch (_: Exception) { }
+            }
+            fun sweepStrays() {
+                for ((child, started) in strays) {
+                    if (ProcTree.startTime(child) == started) ProcTree.kill(child)
+                }
+            }
+            // The watcher samples every 2 s; a burst that exits before the first sample
+            // is still counted here, and the whole session is ended in one place.
+            fun endSession() {
+                val members = ProcTree.sessionMembers(pid)
+                if (overSessionCap(pid, members)) tooManyChildren.set(true)
+                for (member in members) ProcTree.kill(member)
+            }
+            val unregister = coroutineContext[TurnRunContext]?.registerProcess {
+                if (!exited.isCompleted) {
+                    rememberCurrentTree()
+                    CommandNative.signalGroup(pid, OsConstants.SIGKILL)
+                    CommandNative.signalLeader(pid, OsConstants.SIGKILL)
+                    endSession()
+                }
+                sweepStrays()
+            }
             val treeWatch = launch(Dispatchers.IO) {
                 watchCommandTree(
                     root = pid,
@@ -210,6 +243,7 @@ internal open class CommandProcess {
                 }
                 throw e
             } finally {
+                unregister?.invoke()
                 treeWatch.cancel()
                 outputPublisher?.cancel()
                 if (!exited.isCompleted) CommandNative.stop(pid, OsConstants.SIGKILL)

@@ -183,8 +183,8 @@ class AgentLoop(
                             result?.let { journalTool(key, RunToolReceipt(first.call.name, it.error)) }
                         } catch (e: CancellationException) { throw e }
                         catch (_: Exception) { /* The start marker is still durable. */ }
-                        finally { if (acquiredCheckpoint) afterMutation(first.call, result) }
                     }
+                    if (acquiredCheckpoint) afterMutation(first.call, result)
                 }
                 stage(if (result?.error == false) AgentToolLifecycleStage.Completed else AgentToolLifecycleStage.Failed)
                 return AgentStopReason.Completed
@@ -595,10 +595,9 @@ class AgentLoop(
                                                 // The durable start marker still prevents replay.
                                             }
                                         }
-                                    } finally {
-                                        if (acquiredMutation) afterMutation(call, executedResult)
-                                    }
+                                    } catch (_: Exception) { }
                                 }
+                                if (acquiredMutation) afterMutation(call, executedResult)
                             }
                         }
                     }

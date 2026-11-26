@@ -37,7 +37,10 @@ class FixRoundSurfacesTest(unittest.TestCase):
         self.assertIn("if (followBottom && totalItems > 0 && !userScrolling && !listState.isScrollInProgress)", follow)
         self.assertIn("scrollToConversationBottom(listState, totalItems - 1)", follow)
         self.assertIn("onCompactionStarted = {", model)
-        self.assertIn("finally {\n                        if (ticket == generation) _uiState.update { it.copy(compacting = false) }", model)
+        # Parallel runs moved the owner test to the registry; the compaction flag still
+        # clears in finally for the run that owns the gap, not whichever is selected.
+        self.assertIn("finally {\n                if (runRegistry.isActive(owner)) owner.update { state ->\n"
+                      "                    if (state.compacting) state.copy(compacting = false) else state", model)
 
     def test_meter_and_compaction_use_the_built_request(self):
         model = (UI.parent / "chat/ChatViewModel.kt").read_text()

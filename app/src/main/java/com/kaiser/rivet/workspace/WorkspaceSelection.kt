@@ -87,10 +87,9 @@ class WorkspaceSelection(context: Context) {
                             throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
                         }
                         selected = true
-                        if (previous != null && previous != uri.toString() && !AndroidGrantedFolders(app).owns(previous)) {
-                            try { releaseGrant(Uri.parse(previous), grantFlags(Uri.parse(previous))) }
-                            catch (_: Exception) { /* Releasing an obsolete grant cannot undo the new selection. */ }
-                        }
+                        // Grants are per tree and can coexist. Selecting another project must
+                        // never release a grant a live run still uses; Android drops grants when
+                        // the user clears them or the tree disappears.
                     }
                     candidate
                 } finally {
@@ -117,6 +116,16 @@ class WorkspaceSelection(context: Context) {
 
     private fun releaseGrant(uri: Uri, flags: Int) {
         if (flags != 0) resolver.releasePersistableUriPermission(uri, flags)
+    }
+
+    /** Show an already-granted project as the viewed project without taking or releasing a grant. */
+    suspend fun view(uri: Uri): SafWorkspace = withContext(Dispatchers.IO) {
+        val workspace = SafWorkspace(resolver, uri)
+        workspace.stat(WorkspacePath.ROOT)
+        if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").remove("file").commit()) {
+            throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
+        }
+        workspace
     }
 
     suspend fun rememberLocation(workspace: SafWorkspace, directory: WorkspacePath, file: WorkspacePath? = null) = withContext(Dispatchers.IO) {
