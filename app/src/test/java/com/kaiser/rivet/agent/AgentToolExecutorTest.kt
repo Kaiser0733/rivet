@@ -579,9 +579,7 @@ class AgentToolExecutorTest {
     }
 
     @Test fun processListingDoesNotDependOnWorkspaceSynchronization() = runTest {
-        val executor = AgentToolExecutor(FakeWorkspace(), requireSafCurrent = {
-            throw com.kaiser.rivet.runtime.MirrorFailure("sync_required")
-        })
+        val executor = AgentToolExecutor(FakeWorkspace())
         val result = executor.prepare(AgentToolCall("list", "list_processes", "{}")).execute()
         assertFalse(result.error)
         assertTrue(result.content.contains("processes"))
@@ -662,7 +660,6 @@ class AgentToolExecutorTest {
                 exitCode = 0, stdout = "out", stderr = "warning",
                 stderrPresent = true, sync = "ok",
             ) },
-            requireSafCurrent = {},
         )
         val result = executor.prepare(AgentToolCall("cmd", "run_command",
             """{"command":"echo out"}""")).execute()
@@ -678,7 +675,6 @@ class AgentToolExecutorTest {
                 seen = listOf(command, cwd, ttl, wait, pattern)
                 BackgroundLaunch("process-1", "running", ttl, "ready", "", false, true, null)
             },
-            requireSafCurrent = {},
         )
         val prepared = executor.prepare(AgentToolCall("spawn", "spawn_process",
             """{"command":"npm run dev","ttl_ms":120000,"ready_pattern":"ready"}"""))

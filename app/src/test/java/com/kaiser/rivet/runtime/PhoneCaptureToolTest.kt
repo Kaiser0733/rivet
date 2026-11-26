@@ -33,7 +33,7 @@ class PhoneCaptureToolTest {
         assertEquals(capture.path, result.imagePath)
     }
 
-    @Test fun denialAndDismissalReturnTheCorrelatedOutcomeAndPauseTheLoop() = runBlocking {
+    @Test fun denialAndDismissalReturnTheCorrelatedToolResult() = runBlocking {
         for (code in listOf("phone_shot_denied", "phone_shot_cancelled")) {
             val result = PhoneCaptureTool.prepare(call, { VisionSupport.Supported }) {
                 PhoneCaptureResult(error = code)
@@ -41,7 +41,7 @@ class PhoneCaptureToolTest {
             assertTrue(result.error)
             assertEquals(call.id, result.callId)
             assertNull(result.imagePath)
-            assertEquals(code, AgentToolError.runtimeStopCode(result))
+            assertTrue(result.content.contains(code))
         }
     }
 }

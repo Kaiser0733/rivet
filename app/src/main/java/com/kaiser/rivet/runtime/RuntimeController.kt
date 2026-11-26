@@ -130,21 +130,12 @@ class RuntimeController(
         governor.commandStarted()
         var ready = active.prepare()
         if (ready.dirty) {
-            // The interactive terminal is the user's own hands: its mirror edits
-            // are user changes and must reach SAF before an agent command starts.
-            // A genuine same-path overlap still blocks; non-overlapping external
-            // changes are adopted by sync() so retry makes progress.
-            when (val synced = active.sync().state) {
-                MirrorSync.Conflict -> return@withLock RuntimeCommandResult(
-                    cwd = cwd, sync = "pending", error = "sync_required")
-                MirrorSync.Failed -> return@withLock RuntimeCommandResult(
-                    cwd = cwd, sync = "pending", error = "sync_failed")
-                MirrorSync.Ok, MirrorSync.NoChanges -> Unit
-            }
+            // Push what can be pushed, then run in the private worktree even if a
+            // per-file disagreement remains. The command result names the pending
+            // paths; it is not a reason to refuse every command in the project.
+            try { active.sync() } catch (e: CancellationException) { throw e }
+            catch (_: Exception) { }
             ready = active.prepare()
-        }
-        if (ready.dirty) {
-            return@withLock RuntimeCommandResult(cwd = cwd, sync = "pending", error = "sync_required")
         }
         // First use in this process: build the applet farm before PATH is composed.
         // Without libbusybox.so this is a no-op and the environment is unchanged.
@@ -240,14 +231,17 @@ class RuntimeController(
             withTimeout(WORKSPACE_SYNC_TIMEOUT_MS) {
                 var state = active.prepare()
                 if (state.dirty) {
-                    when (active.sync().state) {
-                        MirrorSync.Conflict -> return@withTimeout null to "sync_required"
-                        MirrorSync.Failed -> return@withTimeout null to "sync_failed"
-                        MirrorSync.Ok, MirrorSync.NoChanges -> Unit
-                    }
+                    try { active.sync() } catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { }
                     state = active.prepare()
                 }
-                if (state.dirty) null to "sync_required" else state to null
+                if (state.dirty) {
+                    // A pending path does not make the last complete worktree
+                    // unusable; open the terminal there instead of a dead end.
+                    val fallback = active.worktree.takeIf { it.isDirectory }
+                    if (fallback == null) null to "sync_failed"
+                    else MirrorReady(fallback, dirty = false) to null
+                } else state to null
             }
         } catch (e: TimeoutCancellationException) {
             // The last complete worktree is still a usable terminal root. Never leave
@@ -301,17 +295,6 @@ class RuntimeController(
 
     /** What the prompt may honestly claim about the shipped toolchain right now. */
     internal fun toolchainAvailability(): ToolchainAvailability = toolchain.availability()
-
-    suspend fun requireSafCurrent() = operations.withLock {
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        if (!active.hasLocalChanges()) return@withLock
-        // A pending copy can be left over from a build that gave up on entries this one
-        // skips (symlinks, special files). Settle it instead of re-presenting the dead
-        // end: only a sync that could not finish blocks work, and it names its path.
-        val settled = active.sync()
-        if (settled.state != MirrorSync.Failed) return@withLock
-        throw MirrorFailure("sync_required", settled.path ?: settled.conflicts.firstOrNull())
-    }
 
     suspend fun gitStatus(): RepositoryStatus = operations.withLock {
         gitInspection().status()
@@ -550,27 +533,12 @@ class RuntimeController(
 
     suspend fun currentIdentity(): String? = selection.currentIdentity()
 
-    suspend fun agentFailureState(): String = operations.withLock {
-        val identity = selection.currentIdentity() ?: return@withLock ":workspace_unavailable"
-        val dirty = try { currentMirror()?.hasLocalChanges() == true }
-            catch (e: CancellationException) { throw e }
-            catch (_: Exception) { false }
-        "$identity:${if (dirty) "sync_required" else "ready"}"
-    }
-
     suspend fun commandBlocker(): String? = operations.withLock {
         if (managedProcesses?.canStartCommand() == false) return@withLock "process_limit"
-        val active = currentMirror() ?: return@withLock "workspace_unavailable"
-        if (!active.hasLocalChanges()) return@withLock null
-        // A command is a write path too. Settle the mirror exactly as runCommand does:
-        // external non-overlapping edits are adopted, local edits are pushed, and only
-        // a same-path disagreement remains a blocker. Returning sync_required before
-        // this pass was what stranded terminal/external writes behind the banner.
-        when (active.sync().state) {
-            MirrorSync.Ok, MirrorSync.NoChanges -> null
-            MirrorSync.Conflict -> "sync_required"
-            MirrorSync.Failed -> "sync_failed"
-        }
+        currentMirror() ?: return@withLock "workspace_unavailable"
+        // A pending mirror file is a warning, not a command gate. runCommand
+        // settles what it can and runs in the current worktree.
+        null
     }
 
     fun clearCommandOutput(workspace: String) = outputCache.clearForWorkspace(workspace)
@@ -585,13 +553,8 @@ class RuntimeController(
         if (managedProcesses?.canStartBackground() == false) return@withLock "process_limit"
         if (managedProcesses?.canStartCommand() == false) return@withLock "process_limit"
         commandGate(DEFAULT_BACKGROUND_TTL_MS, governor.readings())?.let { return@withLock it }
-        val active = currentMirror() ?: return@withLock "workspace_unavailable"
-        if (!active.hasLocalChanges()) return@withLock null
-        when (active.sync().state) {
-            MirrorSync.Ok, MirrorSync.NoChanges -> null
-            MirrorSync.Conflict -> "sync_required"
-            MirrorSync.Failed -> "sync_failed"
-        }
+        currentMirror() ?: return@withLock "workspace_unavailable"
+        null
     }
 
     suspend fun spawnProcess(
@@ -619,14 +582,10 @@ class RuntimeController(
             if (managedProcesses?.canStartBackground() == false) throw MirrorFailure("process_limit")
             var ready = active.prepare()
             if (ready.dirty) {
-                when (active.sync().state) {
-                    MirrorSync.Conflict -> throw MirrorFailure("sync_required")
-                    MirrorSync.Failed -> throw MirrorFailure("sync_failed")
-                    MirrorSync.Ok, MirrorSync.NoChanges -> Unit
-                }
+                try { active.sync() } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { }
                 ready = active.prepare()
             }
-            if (ready.dirty) throw MirrorFailure("sync_required")
             toolchain.ensurePrepared()
             val credentialFile = if (toolchain.gitReady && GitCommandAuth.needsAuth(command)) {
                 withContext(Dispatchers.IO) { gitHub.refresh() }

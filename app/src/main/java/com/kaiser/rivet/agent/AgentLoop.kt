@@ -26,15 +26,10 @@ private fun markedIncomplete(text: String): String =
 enum class AgentStopReason {
     Completed,
     EmptyResponse,
-    RunawayGuard,
     WorkspaceChanged,
     SessionLimit,
-    CheckpointUnavailable,
     ContextUnavailable,
     ContextTooSmall,
-    NoProgress,
-    RuntimeBlocked,
-    CapabilityBlocked,
 }
 
 data class AgentRunResult(
@@ -60,7 +55,6 @@ class AgentLoop(
     private val canPersistToolOutput: suspend (List<AgentMessage>, Int) -> Boolean = { _, _ -> true },
     private val mutationBlocker: suspend (AgentToolCall) -> String? = { null },
     private val beforeMutation: suspend (AgentToolCall) -> String? = { null },
-    private val failureState: suspend () -> String = { "" },
     private val compactContext: suspend (List<AgentMessage>, Boolean) -> List<AgentMessage> = { messages, _ -> messages },
     private val contextFootprint: (List<AgentMessage>) -> Long = { AgentContext.serializedBytes(it).toLong() },
     private val contextUpdates: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
@@ -102,8 +96,21 @@ class AgentLoop(
         val createdPaths = mutableSetOf<String>()
         val createdDirectories = mutableSetOf<String>()
         val movedExistingPaths = mutableSetOf<String>()
-        val deterministicFailures = linkedSetOf<Triple<String, String, String>>()
-        val unchangedReads = linkedMapOf<Triple<String, String, String>, Int>()
+        var lastCallKey: String? = null
+        var consecutiveCalls = 0
+        val repeatReminders = mutableListOf<AgentMessage>()
+        fun observeRepeat(call: AgentToolCall) {
+            val key = operationKey(call)
+            if (key == lastCallKey) {
+                consecutiveCalls++
+            } else {
+                lastCallKey = key
+                consecutiveCalls = 1
+            }
+            if (consecutiveCalls in REPEAT_REMINDER_THRESHOLDS) {
+                repeatReminders += repeatReminder(call, consecutiveCalls).event()
+            }
+        }
         var modelIterations = 0
         var toolCalls = 0
         var mutationsAttempted = 0
@@ -134,11 +141,10 @@ class AgentLoop(
                     stage(AgentToolLifecycleStage.Blocked)
                     return AgentStopReason.WorkspaceChanged
                 }
-                val blocker = beforeMutation(first.call)
-                if (blocker != null) {
-                    stage(AgentToolLifecycleStage.Blocked)
-                    return AgentStopReason.CheckpointUnavailable
-                }
+                // Undo is best-effort. A checkpoint that cannot be prepared leaves
+                // the write without an undo row; it does not turn a durable memory
+                // fact into a failed turn.
+                val acquiredCheckpoint = beforeMutation(first.call) == null
                 mutationsAttempted++
                 stage(AgentToolLifecycleStage.Started)
                 var result: AgentToolResult? = null
@@ -151,7 +157,9 @@ class AgentLoop(
                 } catch (_: Exception) {
                     result = failed(first.call)
                 } finally {
-                    withContext(NonCancellable) { afterMutation(first.call, result) }
+                    if (acquiredCheckpoint) {
+                        withContext(NonCancellable) { afterMutation(first.call, result) }
+                    }
                 }
                 stage(if (result?.error == false) AgentToolLifecycleStage.Completed else AgentToolLifecycleStage.Failed)
                 return AgentStopReason.Completed
@@ -180,7 +188,10 @@ class AgentLoop(
         }
         var blankAnswerRetries = 0
         var requestFinalAnswer = false
-        while (modelIterations < RUNAWAY_MODEL_ITERATIONS) {
+        // dsh's agent loop is deliberately unbounded: a turn ends on completion,
+        // a workspace change, a real context/storage limit, an empty final answer,
+        // cancellation, or a thrown provider error. It never counts iterations.
+        while (true) {
             currentCoroutineContext().ensureActive()
             if (!workspaceIsCurrent()) return AgentRunResult(messages, AgentStopReason.WorkspaceChanged,
                 modelIterations, toolCalls, mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
@@ -356,21 +367,8 @@ class AgentLoop(
                     mutationsCompleted = mutationsCompleted,
                 )
             }
-            if (toolCalls + response.toolCalls.size > RUNAWAY_TOOL_CALLS) {
-                val rejected = AgentMessage.tools(response.toolCalls.map { stopped(it, "runaway_guard") })
-                append(rejected)
-                return AgentRunResult(
-                    messages = messages,
-                    stopReason = AgentStopReason.RunawayGuard,
-                    modelIterations = modelIterations,
-                    toolCalls = toolCalls,
-                    mutationsAttempted = mutationsAttempted,
-                    mutationsCompleted = mutationsCompleted,
-                )
-            }
             val results = mutableListOf<AgentToolResult>()
             var stopReason: AgentStopReason? = null
-            var failureCode: String? = null
             fun pending(code: String) = response.toolCalls.drop(results.size).map { stopped(it, code) }
             suspend fun fits(candidate: List<AgentToolResult>, reserve: Int = 0): Boolean =
                 canPersistToolOutput(messages + AgentMessage.tools(candidate), reserve)
@@ -391,21 +389,9 @@ class AgentLoop(
                         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) { failed(call) }
                     }
                     lifecycle(call, AgentToolLifecycleStage.Queued)
+                    observeRepeat(call)
                     val denialKey = operationKeys[callIndex]
                     val previouslyDenied = denialKey in deniedMutations
-                    val previous = deterministicFailures.firstOrNull {
-                        it.first == denialKey
-                    }
-                    if (previous != null &&
-                        (previous.second == "denied" || previous.third == failureState())) {
-                        lifecycle(call, AgentToolLifecycleStage.Blocked)
-                        results += AgentToolResult(call.id, call.name,
-                            AgentToolError.noProgress(previous.second), true, "Stopped  ${call.name}")
-                        results += pending("no_progress")
-                        stopReason = AgentStopReason.NoProgress
-                        break
-                    }
-                    if (previous != null) deterministicFailures.removeAll { it.first == denialKey }
                     val mode = currentAutonomyMode()
                     val decision = ApprovalPolicy.decide(mode, prepared)
                     if (decision is ApprovalDecision.Blocked) {
@@ -419,11 +405,9 @@ class AgentLoop(
                         lifecycle(call, AgentToolLifecycleStage.Blocked)
                         results += rejected
                         results += remaining
-                        val runtimeStop = AgentToolError.runtimeStopCode(rejected)
-                        stopReason = if (runtimeStop != null) AgentStopReason.RuntimeBlocked
-                            else AgentStopReason.CapabilityBlocked
-                        failureCode = runtimeStop ?: decision.reason
-                        break
+                        // A policy refusal is this call's outcome. The model gets it
+                        // like any other tool error and decides what to do next.
+                        continue
                     }
                     // A bundled skill script needs a person's first yes. When the mode
                     // already asks for this command the existing prompt carries the skill
@@ -454,17 +438,7 @@ class AgentLoop(
                         }
                         lifecycle(call, AgentToolLifecycleStage.Blocked)
                         results += rejected
-                        if (AgentToolError.runtimeStopCode(rejected) != null) {
-                            results += response.toolCalls.drop(results.size).map { stopped(it, "not_executed") }
-                            stopReason = AgentStopReason.RuntimeBlocked
-                            failureCode = blocked
-                            break
-                        }
-                        val deterministic = AgentToolError.deterministicCode(rejected)
-                        if (deterministic != null) {
-                            deterministicFailures += Triple(denialKey, deterministic, failureState())
-                            if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
-                        }
+                        // The blocker refused this call, not the turn.
                         continue
                     }
                     // Reserve the bounded correlated event before any side effect, whether
@@ -526,8 +500,6 @@ class AgentLoop(
                         deniedMutations += denialKey
                         lifecycle(call, AgentToolLifecycleStage.Denied)
                         results += stopped(call, "denied")
-                        deterministicFailures += Triple(denialKey, "denied", "")
-                        if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
                         continue
                     }
                     currentCoroutineContext().ensureActive()
@@ -536,18 +508,16 @@ class AgentLoop(
                         stopReason = AgentStopReason.WorkspaceChanged
                         break
                     }
-                    val mutationBlocker = if (prepared.effect.requiresCheckpoint) {
+                    val checkpointBlocker = if (prepared.effect.requiresCheckpoint) {
                         try { beforeMutation(call) }
                         catch (e: CancellationException) { throw e }
                         catch (_: Exception) { "checkpoint_unavailable" }
                     } else null
-                    if (mutationBlocker == "checkpoint_unavailable") {
-                        lifecycle(call, AgentToolLifecycleStage.Blocked)
-                        results += pending("checkpoint_unavailable")
-                        stopReason = AgentStopReason.CheckpointUnavailable
-                        break
-                    }
-                    val acquiredMutation = prepared.effect.requiresCheckpoint && mutationBlocker == null
+                    // Undo is a convenience layer. If it cannot be prepared, run the
+                    // operation without an undo row instead of refusing the work.
+                    val mutationBlocker = checkpointBlocker?.takeUnless { it == "checkpoint_unavailable" }
+                    val acquiredMutation = prepared.effect.requiresCheckpoint &&
+                        checkpointBlocker == null
                     var executedResult: AgentToolResult? = null
                     val result = if (mutationBlocker != null) {
                         lifecycle(call, AgentToolLifecycleStage.Blocked)
@@ -601,41 +571,9 @@ class AgentLoop(
                         break
                     }
                     results += bounded
-                    val runtimeStop = AgentToolError.runtimeStopCode(bounded)
-                    if (runtimeStop != null) {
-                        results += response.toolCalls.drop(results.size).map { stopped(it, "not_executed") }
-                        stopReason = AgentStopReason.RuntimeBlocked
-                        failureCode = runtimeStop
-                        break
-                    }
-                    val deterministic = AgentToolError.deterministicCode(bounded)
-                    if (deterministic != null) {
-                        deterministicFailures += Triple(denialKey, deterministic, failureState())
-                        if (deterministicFailures.size > 64) deterministicFailures.remove(deterministicFailures.first())
-                    }
                     if (!bounded.error) recordProvenance(
                         call, bounded, createdPaths, createdDirectories, movedExistingPaths,
                     )
-                    if (!bounded.error && prepared.effect.changesWorkspace) {
-                        deterministicFailures.clear()
-                        unchangedReads.clear()
-                    }
-                    if (!bounded.error && response.toolCalls.size == 1 &&
-                        call.name == "read_file" && hasFileFingerprint(bounded.content)) {
-                        val hash = MessageDigest.getInstance("SHA-256")
-                            .digest(bounded.content.toByteArray(Charsets.UTF_8))
-                            .joinToString("") { "%02x".format(it.toInt() and 255) }
-                        val key = Triple(denialKey, hash, "")
-                        unchangedReads.keys.removeAll { it.first == denialKey && it.second != hash }
-                        val count = (unchangedReads[key] ?: 0) + 1
-                        unchangedReads[key] = count
-                        if (unchangedReads.size > 64) unchangedReads.remove(unchangedReads.keys.first())
-                        if (count >= 16) {
-                            results += pending("no_progress")
-                            stopReason = AgentStopReason.NoProgress
-                            break
-                        }
-                    }
                 }
             } catch (e: CancellationException) {
                 results += pending("cancelled")
@@ -646,33 +584,27 @@ class AgentLoop(
             // A SAF mutation can finish inside its non-cancellable commit section.
             // Persist its correlated result even if cancellation arrived at that boundary.
             append(toolMessage)
+            if (repeatReminders.isNotEmpty()) {
+                repeatReminders.forEach { append(it) }
+                repeatReminders.clear()
+            }
             if (stopReason != null) {
                 return AgentRunResult(
                     messages = messages,
                     stopReason = stopReason,
                     modelIterations = modelIterations,
                     toolCalls = toolCalls,
-                    failureCode = failureCode,
                     mutationsAttempted = mutationsAttempted,
                     mutationsCompleted = mutationsCompleted,
                 )
             }
         }
-        return AgentRunResult(
-            messages = messages,
-            stopReason = AgentStopReason.RunawayGuard,
-            modelIterations = modelIterations,
-            toolCalls = toolCalls,
-            mutationsAttempted = mutationsAttempted,
-            mutationsCompleted = mutationsCompleted,
-        )
     }
 
     companion object {
-        // Emergency ceilings for broken model loops, not normal workflow quotas.
         private const val MAX_BLANK_ANSWER_RETRIES = 2
-        const val RUNAWAY_MODEL_ITERATIONS = 200
-        const val RUNAWAY_TOOL_CALLS = 1000
+        // dsh-repeat-tool-reminder thresholds. Advisory only.
+        private val REPEAT_REMINDER_THRESHOLDS = setOf(3, 5, 8)
         // UTF-8 bytes of structured result content after tool JSON encoding.
         const val MAX_TOOL_RESULT_BYTES = 24 * 1024
         const val OUTPUT_LIMIT_CONTENT =
@@ -681,10 +613,27 @@ class AgentLoop(
             "{\"error\":\"output_token_limit\",\"retryable\":true,\"required_action\":\"The tool call was cut off because the response hit the output token limit. Write the change in smaller pieces.\"}"
     }
 
-    private fun hasFileFingerprint(content: String): Boolean = try {
-        Json.parseToJsonElement(content).jsonObject["sha256"]?.jsonPrimitive?.content?.isNotBlank() == true
-    } catch (_: SerializationException) { false
-    } catch (_: IllegalArgumentException) { false }
+    private fun repeatReminder(call: AgentToolCall, count: Int): InternalContext {
+        val content = if (count == REPEAT_REMINDER_THRESHOLDS.first()) {
+            "You are repeating the exact same tool call with identical arguments. " +
+                "Carefully analyze the previous result before calling again: if the task is " +
+                "not complete, try a different approach or different arguments instead of " +
+                "repeating the call."
+        } else {
+            "Repeated tool call detected:\n" +
+                "- tool: ${call.name}\n" +
+                "- consecutive_calls: $count\n" +
+                "- arguments: ${call.arguments.take(500)}\n" +
+                "The repeated calls are not making progress. Inspect the latest result and " +
+                "choose a different action, different arguments, or finish the task if enough " +
+                "evidence has been gathered."
+        }
+        return InternalContext(
+            kind = REPEAT_REMINDER_KIND,
+            content = content,
+            digest = InternalContext.digest(content),
+        )
+    }
 
     private fun operationKey(call: AgentToolCall): String {
         if (!jsonNestingWithinLimit(call.arguments, 32)) {

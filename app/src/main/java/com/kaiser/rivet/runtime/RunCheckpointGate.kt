@@ -233,15 +233,20 @@ class RunCheckpointGate(
                     boundaryRefreshPending = true
                 }
             }
-            if (ws == null || checkpointBroken) {
+            if (checkpointBroken) {
+                // Keep the lease; afterMutation releases it. The mutation proceeds
+                // without an undo row.
+                return null
+            }
+            if (ws == null) {
                 val refresh = boundaryRefreshPending
                 boundaryRefreshPending = false
                 writeLease.unlock()
                 locked = false
                 if (refresh) onBoundaryChanged()
-                return "checkpoint_unavailable"
+                return "workspace_unavailable"
             }
-            val blocker = try {
+            try {
                 val id = turnCheckpointId
                 if (id == null) {
                     turnCheckpointId = backend.beginCheckpoint(ws, rId, sessionId)
@@ -252,21 +257,14 @@ class RunCheckpointGate(
                         needsPostCheck = false
                     }
                 }
-                if (checkpointBroken) "checkpoint_unavailable" else null
             } catch (e: CancellationException) {
                 throw e
-            } catch (e: MirrorFailure) {
-                e.code.takeIf {
-                    it == "sync_required" || it == "workspace_unavailable" || it == "workspace_changed"
-                } ?: "checkpoint_unavailable"
-            }
-            if (blocker != null) {
-                val refresh = boundaryRefreshPending
-                boundaryRefreshPending = false
-                writeLease.unlock()
-                locked = false
-                if (refresh) onBoundaryChanged()
-                return blocker
+            } catch (_: MirrorFailure) {
+                // Undo cannot be prepared from this state. Keep the workspace
+                // mutation available and report the missing Undo at turn end.
+                checkpointBroken = true
+            } catch (_: Exception) {
+                checkpointBroken = true
             }
 
             val currentCheckpointId = turnCheckpointId

@@ -15,28 +15,10 @@ class AgentToolErrorTest {
     private fun requiredAction(json: String): String? =
         Json.parseToJsonElement(json).jsonObject["required_action"]?.jsonPrimitive?.content
 
-    private fun failure(code: String) =
-        AgentToolResult("call", "apply_patch", AgentToolError.content(code), error = true)
-
     @Test fun everyWorkspaceFailureReasonReachesTheModelWithAnExplanation() {
         WorkspaceFailure.Reason.entries.forEach { reason ->
             val code = reason.name.lowercase()
             assertEquals(code, requiredAction(AgentToolError.content(code)), reason.message)
-            assertNotNull(code, requiredAction(AgentToolError.noProgress(code)))
-        }
-    }
-
-    @Test fun uneditableFileCodesAreDeterministicSoTheRunCannotLoop() {
-        listOf("patch", "conflict", "too_large", "missing", "binary", "limit",
-            "duplicate", "not_file", "not_directory", "root", "permission").forEach { code ->
-            assertEquals(code, code, AgentToolError.deterministicCode(failure(code)))
-        }
-    }
-
-    @Test fun codesARetryCanClearAreExplainedButNotDeterministic() {
-        listOf("provider", "write").forEach { code ->
-            assertNotNull(code, requiredAction(AgentToolError.content(code)))
-            assertNull(code, AgentToolError.deterministicCode(failure(code)))
         }
     }
 
@@ -64,8 +46,6 @@ class AgentToolErrorTest {
             "foreground_service_unavailable", "process_unavailable").forEach { code ->
             assertNotNull(code, requiredAction(AgentToolError.content(code)))
         }
-        assertEquals("output_unavailable",
-            AgentToolError.deterministicCode(failure("output_unavailable")))
     }
 
     @Test fun aReadOnlyWorkerWriteIsRefusedWithAScopeMessage() {
@@ -73,8 +53,6 @@ class AgentToolErrorTest {
         assertNotNull(action)
         assertTrue(action!!.contains("read-only"))
         assertTrue(action.contains("without asking"))
-        assertEquals("worker_read_only",
-            AgentToolError.deterministicCode(failure("worker_read_only")))
     }
 
     @Test fun phoneShotFailuresSayWhatActuallyHappened() {

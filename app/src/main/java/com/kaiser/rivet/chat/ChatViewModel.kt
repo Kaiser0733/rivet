@@ -769,11 +769,6 @@ class ChatViewModel private constructor(
                     projectLoading = false, projectError = null) }
                 browser.bindProject(workspace.tree.toString())
                 refreshGoalMemory(workspace, _uiState.value.currentSessionId)
-                val pending = try { runtimeController.commandBlocker() in SYNC_RECOVERY_CODES }
-                    catch (e: CancellationException) { throw e }
-                    catch (_: Exception) { false }
-                if (pending) _uiState.update { it.copy(error = runtimeFailureMessage("sync_required"),
-                    errorAction = ChatErrorAction.RetryProjectChanges) }
             } else {
                 _uiState.update { it.copy(projectName = null, projectIdentity = null,
                     projectLoading = false) }
@@ -2080,7 +2075,6 @@ class ChatViewModel private constructor(
                 return AgentToolExecutor(
                     files,
                     runCommand = runtime::runCommand,
-                    requireSafCurrent = runtime::requireSafCurrent,
                     gitStatus = runtime::gitStatus,
                     gitDiff = runtime::gitDiff,
                     managedProcesses = managedProcesses,
@@ -2463,7 +2457,6 @@ class ChatViewModel private constructor(
                         activeSupervisor?.beforeCompletionHold(workspaceId).orEmpty()
                     } else emptyList()
                 },
-                failureState = runtime::agentFailureState,
                 compactContext = compact@{ candidate, force ->
                     if (recalling && !force) return@compact candidate
                     val compacted = try {
@@ -2656,20 +2649,12 @@ class ChatViewModel private constructor(
                             try { sessions?.clearAutoTitle(sessionId) } catch (_: Exception) { }
                         }
                         persistTurn(durable, interrupted = !userCancelled)
-                        val blocker = try { runtimeController.commandBlocker() }
-                            catch (error: CancellationException) { throw error }
-                            catch (error: MirrorFailure) { error.code }
-                            catch (_: Exception) { null }
-                        val pendingProjectChanges = blocker != null && blocker in SYNC_RECOVERY_CODES
                         releaseTurn()
                         _uiState.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                             pendingApproval = null, activity = null,
                             toolLifecycle = emptyList(), commandRunning = false,
                             interruptedTurn = !userCancelled && durable.isNotEmpty(),
-                            error = if (pendingProjectChanges) "Rivet stopped before it could save the command's project changes." else it.error,
-                            errorAction = if (pendingProjectChanges) ChatErrorAction.RetryProjectChanges else it.errorAction,
                             notice = when {
-                                pendingProjectChanges -> null
                                 spendLedger.budgetPaused -> it.notice
                                 else -> "Stopped. Any saved project changes remain."
                             }) }
@@ -2882,51 +2867,21 @@ class ChatViewModel private constructor(
         val error = when (result.stopReason) {
             AgentStopReason.Completed -> null
             AgentStopReason.EmptyResponse -> ProviderError.EmptyResponse.text()
-            AgentStopReason.RunawayGuard -> "Rivet stopped after reaching its safety limit. Try a smaller request."
-            AgentStopReason.WorkspaceChanged -> "The project changed while Rivet was working, so it stopped. Completed changes remain."
+            AgentStopReason.WorkspaceChanged ->
+                "The project changed while Rivet was working, so it stopped. Completed changes remain."
             AgentStopReason.SessionLimit -> CONTEXT_LIMIT_ERROR
-            AgentStopReason.CheckpointUnavailable -> when {
-                result.mutationsCompleted > 0 ->
-                    "Rivet stopped before another change because safe Undo is unavailable. Earlier project changes may remain."
-                result.mutationsAttempted > 0 ->
-                    "Rivet stopped after an attempted change could not be confirmed. Project changes may remain; safe Undo is unavailable."
-                else -> "Rivet couldn't prepare a safe Undo, so it stopped before changing files."
-            } + CHECKPOINT_LIMITS_HINT
             AgentStopReason.ContextUnavailable -> contextUnavailableMessage()
             AgentStopReason.ContextTooSmall -> contextTooSmallMessage()
-            AgentStopReason.NoProgress -> "Rivet couldn't get past the same problem. Check the last message, then tell it what to try next."
-            AgentStopReason.RuntimeBlocked -> runtimeFailureMessage(result.failureCode)
-            AgentStopReason.CapabilityBlocked -> when (result.failureCode) {
-                "unsupported_system_management" -> "Rivet can't install apps, packages, or other Android system software."
-                else -> "Rivet stopped because this operation isn't available."
-            }
         }
-        val capturePause = when (result.failureCode) {
-            "phone_shot_denied" -> RunPauseReason.ScreenCaptureDeclined
-            "phone_shot_cancelled" -> RunPauseReason.ScreenCaptureCancelled
-            else -> null
-        }
-        if (capturePause != null) {
-            currentSessionRun()?.takeIf { it.phase == RunPhase.Running }?.let { run ->
-                val paused = RunMachine.pause(run, capturePause)
-                currentRun = paused
-                runResumeContext = true
-                checkpointGate.finishRunCheckpoint(run.workspaceId)
-                try { runJournal?.save(paused) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
-                managedProcesses.updateRunStatus(null, null, 0)
-                _uiState.update { it.copy(run = paused) }
-            }
-        } else when (result.stopReason) {
+        when (result.stopReason) {
             AgentStopReason.Completed -> finishRun(RunPhase.Done)
             AgentStopReason.WorkspaceChanged, AgentStopReason.SessionLimit,
-            AgentStopReason.CheckpointUnavailable, AgentStopReason.ContextUnavailable,
-            AgentStopReason.ContextTooSmall, AgentStopReason.NoProgress,
-            AgentStopReason.RuntimeBlocked, AgentStopReason.CapabilityBlocked,
-            AgentStopReason.RunawayGuard, AgentStopReason.EmptyResponse ->
-                finishRun(RunPhase.Failed, result.failureCode ?: error)
+            AgentStopReason.ContextUnavailable, AgentStopReason.ContextTooSmall,
+            AgentStopReason.EmptyResponse ->
+                finishRun(RunPhase.Failed, error)
         }
         val persisted = durable
-        persistTurn(persisted, interrupted = capturePause != null)
+        persistTurn(persisted, interrupted = false)
         activeMessages = persisted
         val progressNote = result.messages.lastOrNull {
             it.role == AgentRole.Assistant && it.text.isNotBlank() && it.toolCalls.isEmpty()
@@ -2940,13 +2895,10 @@ class ChatViewModel private constructor(
         val usage = _uiState.value.currentSessionId?.let { sessions?.usage(it) }
         val visible = _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: persisted
         val errorAction = when {
-            result.failureCode != null && result.failureCode in SYNC_RECOVERY_CODES ->
-                ChatErrorAction.RetryProjectChanges
-            // Nothing else to recover from: offer the way back the turn deserves. A refusal
-            // that says the request cannot fit is not retryable — the same transcript against
-            // the same window stops the same way — and its banner already names the exit.
+            // A refusal that says the request cannot fit is not retryable — the same
+            // transcript against the same window stops the same way.
             error != null && result.stopReason !in setOf(
-                AgentStopReason.CapabilityBlocked, AgentStopReason.ContextUnavailable,
+                AgentStopReason.ContextUnavailable,
                 AgentStopReason.ContextTooSmall, AgentStopReason.SessionLimit,
             ) -> ChatErrorAction.RetryTurn
             else -> null
@@ -2983,9 +2935,9 @@ class ChatViewModel private constructor(
                 currentSessionTitle = if (unchanged && history != null) history.firstOrNull {
                     it.id == state.currentSessionId }?.title ?: state.currentSessionTitle
                 else state.currentSessionTitle,
-                usage = usage, error = if (capturePause == null) error else null,
-                errorAction = if (capturePause == null) errorAction else null, activity = null,
-                interruptedTurn = capturePause != null, runRecovery = if (capturePause != null) error else state.runRecovery)
+                usage = usage, error = error,
+                errorAction = errorAction, activity = null,
+                interruptedTurn = false, runRecovery = state.runRecovery)
         }
 
         val duration = completedDuration
@@ -3527,10 +3479,6 @@ class ChatViewModel private constructor(
         internal const val INTERRUPTED_TURN_PROMPT =
             "This turn was interrupted — Retry?"
         private const val MAX_LIVE_TOOL_EVENTS = 64
-        private val SYNC_RECOVERY_CODES = setOf(
-            "sync_required", "sync_conflict", "sync_failed", "sync_interrupted", "interrupted", "mirror_dirty",
-            "unsafe_entry",
-        )
 
         internal fun activityFor(tool: String): String = when {
             tool == "open_app" -> "Opening an app…"

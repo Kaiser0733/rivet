@@ -217,17 +217,21 @@ class ConversationTitleLifecycleTest {
     }
 
     @Test fun failedIncompleteOrBlockedToolTurnNeverRequestsTitle() = runBlocking {
-        for (response in listOf<AgentResponse?>(null, AgentResponse(), AgentResponse(toolCalls = listOf(
-            com.kaiser.rivet.agent.AgentToolCall("blocked", "run_command", "{\"command\":\"echo test\"}"))))) {
+        for (mode in 0..2) {
             var calls = 0
             val (vm, store) = conversation {
                 calls++
-                if (response == null) throw ProviderError.InvalidResponse("Incomplete stream")
-                response
+                when (mode) {
+                    0 -> throw ProviderError.InvalidResponse("Incomplete stream")
+                    1 -> AgentResponse()
+                    else -> if (calls == 1) AgentResponse(toolCalls = listOf(
+                        com.kaiser.rivet.agent.AgentToolCall("blocked", "run_command", "{\"command\":\"echo test\"}")))
+                    else throw ProviderError.InvalidResponse("Tool turn failed")
+                }
             }
             vm.send("Do it")
             withTimeout(5000) { vm.uiState.first { !it.streaming && it.acceptedMessageCount == 1L } }
-            assertEquals(1, calls)
+            assertEquals(if (mode == 2) 2 else 1, calls)
             assertEquals("New session", store.load().title)
             assertTrue(vm.uiState.value.error != null)
         }
@@ -355,14 +359,13 @@ class ConversationTitleLifecycleTest {
         assertEquals("Fix Login Crash", reloadedVm.uiState.value.sessions.first { it.id == id }.title)
     }
 
-    @Test fun blockedOrFailedFirstTurnStillTitlesSessionWhenRetriedOrContinued() = runBlocking {
+    @Test fun failedFirstTurnStillTitlesSessionWhenRetried() = runBlocking {
         val requests = mutableListOf<AgentRequest>()
         var call = 0
         val (vm, store) = conversation { request ->
             requests += request
             when (++call) {
-                1 -> AgentResponse(toolCalls = listOf(
-                    com.kaiser.rivet.agent.AgentToolCall("blocked", "run_command", "{\"command\":\"echo test\"}")))
+                1 -> throw ProviderError.InvalidResponse("First turn failed")
                 2 -> AgentResponse("Completed without running a command.")
                 else -> AgentResponse("Fix Login Crash")
             }
@@ -380,5 +383,6 @@ class ConversationTitleLifecycleTest {
         assertEquals("Fix Login Crash", store.list().first { it.id == id }.title)
         assertTrue(requests.last().messages.single().text.startsWith("First user message:\nFix the login crash\n"))
     }
+
 
 }
