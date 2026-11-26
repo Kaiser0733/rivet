@@ -137,7 +137,6 @@ import com.kaiser.rivet.storage.CodingSessionHeader
 import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.storage.ContextEstimate
 import com.kaiser.rivet.storage.SessionUsage
-import com.kaiser.rivet.storage.SkillScriptApprovalStore
 import com.kaiser.rivet.storage.ProviderStore
 import com.kaiser.rivet.storage.SecretStore
 import com.kaiser.rivet.storage.SessionGoalStore
@@ -302,7 +301,6 @@ class ChatViewModel private constructor(
     val browserLease = BrowserDrivingLease()
     private val projectDownloader = ProjectDownloader(app.cacheDir)
     private val skillDiscovery = SkillDiscovery(globalSkillsRoot(app.filesDir))
-    private val skillScriptApprovals = SkillScriptApprovalStore(app)
     private val sessions get() = sessionStore as? CodingSessions
 
     private val subagentPoolStore = SubagentPoolStore(app)
@@ -2035,13 +2033,6 @@ class ChatViewModel private constructor(
                 _skillCatalog.value = skills
                 _userSkills.value = skills.skills.filter { it.userInvocable }
             }
-            val approvedSkillScripts = try {
-                skillScriptApprovals.approved()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                emptySet()
-            }
             // A `/name` gesture loads its skill for this turn; everything after the token
             // stays the task. Retries already carry the stripped task text.
             val gesture = if (retryingInterrupted || starterOpening) null else skillGesture(trimmed, skills)
@@ -2187,9 +2178,7 @@ class ChatViewModel private constructor(
                     browserTools = browserTools, browserLease = browserLease, createExecutor = { createExecutor(it) },
                     projectInstructions = project, skills = { skills }, workspace = workspace, runtime = runtime,
                     managedProcesses = managedProcesses, browser = browser, workspaceSelection = workspaceSelection,
-                    approvedSkillScripts = { approvedSkillScripts },
                     secretValues = { secrets.sensitiveValues().toList() },
-                    skillScriptApprovals = skillScriptApprovals,
                     turnSessionId = { turnSessionId }, sessions = { sessions }, recordSpend = ::recordSpend,
                     beforeModelRequest = ::checkSpendBeforeRequest,
                     readAutonomyMode = ::readAutonomyMode,
@@ -2571,8 +2560,6 @@ class ChatViewModel private constructor(
                         baseEvents + subagentEvents
                     }
                 },
-                approvedSkillScripts = approvedSkillScripts,
-                recordSkillScriptApproval = skillScriptApprovals::approve,
             )
             try {
                 browser.beginAgentRun(sessionId)

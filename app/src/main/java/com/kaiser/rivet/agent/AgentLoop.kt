@@ -61,9 +61,7 @@ class AgentLoop(
     private val compactContext: suspend (List<AgentMessage>, Boolean) -> List<AgentMessage> = { messages, _ -> messages },
     private val contextFootprint: (List<AgentMessage>) -> Long = { AgentContext.serializedBytes(it).toLong() },
     private val contextUpdates: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
-    private val approvedSkillScripts: Set<String> = emptySet(),
     private val secretValues: List<String> = emptyList(),
-    private val recordSkillScriptApproval: suspend (String) -> Unit = {},
     private val afterMutation: suspend (AgentToolCall, AgentToolResult?) -> Unit = { _, _ -> },
     private val onContextLimitObserved: suspend (ProviderError.ContextOverflow, Long) -> Unit = { _, _ -> },
     private val onOutputLimitObserved: suspend (ProviderError.OutputLimitExceeded) -> Unit = { },
@@ -98,7 +96,6 @@ class AgentLoop(
             catch (e: CancellationException) { throw e }
             catch (_: Exception) { /* Presentation telemetry never controls execution. */ }
         }
-        val scriptApprovals = approvedSkillScripts.toMutableSet()
         val createdPaths = mutableSetOf<String>()
         val createdDirectories = mutableSetOf<String>()
         val movedExistingPaths = mutableSetOf<String>()
@@ -463,20 +460,6 @@ class AgentLoop(
                         // like any other tool error and decides what to do next.
                         continue
                     }
-                    // A bundled skill script needs a person's first yes. When the mode
-                    // already asks for this command the existing prompt carries the skill
-                    // line; YOLO removes approvals entirely, so the gate is inert there.
-                    val allScriptHits = if (prepared.skillScripts.isNotEmpty()) {
-                        prepared.skillScripts
-                    } else {
-                        listOfNotNull(prepared.skillScript)
-                    }
-                    val unapprovedScripts = allScriptHits.filter { !it.isApproved(scriptApprovals) }
-                    val scriptHit = unapprovedScripts.firstOrNull() ?: allScriptHits.firstOrNull()
-                    val scriptGate = skillScriptGate(allScriptHits, scriptApprovals,
-                        baseAsks = decision == ApprovalDecision.AskUser)
-                    val skillInserted = scriptGate == SkillScriptGate.InsertApproval &&
-                        prepared.approval != null
                     val blocked = if (prepared.effect.requiresRuntimeBlocker) {
                         try { mutationBlocker(call) }
                         catch (e: CancellationException) { throw e }
@@ -508,7 +491,7 @@ class AgentLoop(
                         stopReason = AgentStopReason.SessionLimit
                         break
                     }
-                    val asking = decision == ApprovalDecision.AskUser || skillInserted
+                    val asking = decision == ApprovalDecision.AskUser
                     val memoryFact = prepared.memoryFact
                     if (writeMemoryBatch != null && memoryFact != null) {
                         val queued = AgentToolResult(call.id, call.name,
@@ -538,17 +521,11 @@ class AgentLoop(
                             describeLive -> describeDestructive(request)
                             else -> request
                         }
-                        val describedHits = unapprovedScripts.ifEmpty { listOfNotNull(scriptHit) }
-                        val reviewed = described.copy(reviewAtGrant = {
+                        described.copy(reviewAtGrant = {
                             workspaceIsCurrent() && (!describeLive ||
                                 describeDestructive(request).let { it.title == described.title && it.detail == described.detail })
                         })
-                        if (describedHits.isNotEmpty() && scriptGate != SkillScriptGate.None) reviewed.copy(
-                            detail = described.detail +
-                                "\nBundled skill: ${describedHits.joinToString(", ") { it.skill.name }}" +
-                                "\nScript: ${describedHits.joinToString(", ") { it.path }}" +
-                                "\nApproving lets this skill's scripts run without asking again.",
-                        ) else reviewed
+
                     } else null
                     val rejection = if (!asking) null else {
                         try {
@@ -598,21 +575,6 @@ class AgentLoop(
                                 }
                             }
                             if (prepared.effect.changesWorkspace) mutationsAttempted++
-                            // Record standing grants only after recording that execution may start.
-                            if (scriptGate != SkillScriptGate.None) {
-                                val toApprove = unapprovedScripts.ifEmpty { listOfNotNull(scriptHit) }
-                                toApprove.forEach { hit ->
-                                    val approvalKey = hit.approvalKey()
-                                    scriptApprovals += approvalKey
-                                    try {
-                                        recordSkillScriptApproval(approvalKey)
-                                    } catch (e: CancellationException) {
-                                        throw e
-                                    } catch (_: Exception) {
-                                        // The grant still covers this turn if the store cannot persist it.
-                                    }
-                                }
-                            }
                             lifecycle(call, AgentToolLifecycleStage.Started)
                             prepared.execute().also { executedResult = it }
                         } catch (e: CancellationException) {

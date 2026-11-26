@@ -157,9 +157,6 @@ class PreparedAgentTool(
     val basicAutonomyRisk: BasicAutonomyRisk = BasicAutonomyRisk.Elevated,
     val modelRequestsApproval: Boolean = false,
     val blockedReason: String? = null,
-    /** Set for a command that references an installed skill's bundled files. */
-    val skillScript: SkillScriptHit? = null,
-    val skillScripts: List<SkillScriptHit> = emptyList(),
     val memoryFact: String? = null,
     val execute: suspend () -> AgentToolResult,
 ) {
@@ -172,8 +169,6 @@ class PreparedAgentTool(
         basicAutonomyRisk = basicAutonomyRisk,
         modelRequestsApproval = modelRequestsApproval,
         blockedReason = blockedReason,
-        skillScript = skillScript,
-        skillScripts = skillScripts,
         memoryFact = memoryFact,
         execute = block,
     )

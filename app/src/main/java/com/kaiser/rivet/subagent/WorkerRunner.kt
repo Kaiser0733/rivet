@@ -96,9 +96,7 @@ internal class RunServices(
     val backgroundBlocker: suspend () -> String? = { null },
     val canStartPreview: () -> Boolean = { true },
     val isProjectLockBusy: () -> Boolean = { false },
-    val approvedSkillScripts: () -> Set<String> = { emptySet() },
     val secretValues: () -> List<String> = { emptyList() },
-    val recordSkillScriptApproval: suspend (String) -> Unit = {},
     val recordParentUsage: suspend (turnId: String, config: ProviderConfig, usage: AgentUsage?, request: AgentRequest) -> Unit =
         { _, _, _, _ -> },
     val recordSpend: suspend (config: ProviderConfig, usage: AgentUsage?, estimated: Boolean) -> Unit =
@@ -451,8 +449,6 @@ internal class WorkerRunner(
                     }
                     contextEventsFor(candidate)
                 },
-                approvedSkillScripts = services.approvedSkillScripts(),
-                recordSkillScriptApproval = services.recordSkillScriptApproval,
             )
 
             val runResult = loop.run(

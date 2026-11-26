@@ -434,8 +434,6 @@ class AgentToolExecutor(
                         }
                     }
                     val cwd = path(args.cwd, root = true)
-                    val matchedScripts = matchSkillScripts(args.command, skills, cwd = cwd)
-                        .map { hit -> hit.copy(contentHash = SkillScriptContent.hash(hit, workspace)) }
                     require(args.timeoutMs in 1000..MAX_COMMAND_TIMEOUT_MS)
                     PreparedAgentTool(
                         call,
@@ -446,8 +444,6 @@ class AgentToolExecutor(
                         basicAutonomyRisk = ApprovalPolicy.basicCommandRisk(args.command),
                         modelRequestsApproval = args.askUser,
                         blockedReason = ApprovalPolicy.blockedCommandReason(args.command),
-                        skillScript = matchedScripts.firstOrNull(),
-                        skillScripts = matchedScripts,
                     ) {
                         execute(call) {
                             val result = runCommand?.invoke(args.command, cwd, args.timeoutMs.toLong())

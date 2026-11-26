@@ -477,20 +477,32 @@ class AgentToolExecutorTest {
     }
 
     @Test
-    fun skillScriptApprovalCarriesItsContentHash() = runTest {
-        val files = FakeWorkspace(text = "echo first\n")
+    fun inspectingAnInstalledScriptUsesNormalCommandApproval() = runTest {
+        val files = FakeWorkspace(text = "echo hello")
         val skill = Skill(name = "notes", description = "Use notes.", body = "Body.",
             source = SkillSource(".rivet/skills/notes", SkillRootKind.ProjectRivet))
         val catalog = SkillCatalog(listOf(skill), emptyList(), skillCatalogDigest(listOf(skill)))
-        val executor = AgentToolExecutor(files, skills = catalog)
+        var executed = false
+        val executor = AgentToolExecutor(files, skills = catalog, runCommand = { _, _, _ ->
+            executed = true
+            RuntimeCommandResult(exitCode = 0, stdout = "echo hello", sync = "ok")
+        })
         val call = AgentToolCall("script", "run_command",
-            """{"command":"sh .rivet/skills/notes/run.sh"}""")
-        val first = executor.prepare(call).skillScripts.single().contentHash
-        assertNotNull(first)
-        files.text = "echo second\n"
-        val second = executor.prepare(call).skillScripts.single().contentHash
-        assertNotNull(second)
-        assertTrue(first != second)
+            """{"command":"cat .rivet/skills/notes/run.sh"}""")
+        var requests = 0
+        var approvals = 0
+        val result = AgentLoop(
+            requestModel = { _, _, _ ->
+                if (requests++ == 0) AgentResponse(toolCalls = listOf(call)) else AgentResponse(text = "Done")
+            },
+            prepareTool = executor::prepare,
+            requestApproval = { approvals++; false },
+        ).run(listOf(AgentMessage.user("Inspect")), emptyList(),
+            currentAutonomyMode = { AutonomyMode.BasicYolo })
+
+        assertEquals(0, approvals)
+        assertTrue(executed)
+        assertFalse(result.messages.flatMap { it.toolResults }.single().error)
     }
 
     @Test

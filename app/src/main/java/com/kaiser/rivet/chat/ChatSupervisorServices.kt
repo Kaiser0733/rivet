@@ -22,7 +22,6 @@ import com.kaiser.rivet.browser.BrowserTools
 import com.kaiser.rivet.provider.ProviderClient
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.storage.CodingSessions
-import com.kaiser.rivet.storage.SkillScriptApprovalStore
 import com.kaiser.rivet.subagent.ResultEnvelope
 import com.kaiser.rivet.subagent.RunServices
 import com.kaiser.rivet.subagent.SubagentPoolState
@@ -55,9 +54,7 @@ internal object ChatSupervisorServices {
         managedProcesses: ManagedProcesses,
         browser: BrowserSession,
         workspaceSelection: WorkspaceSelection,
-        approvedSkillScripts: () -> Set<String>,
         secretValues: () -> List<String> = { emptyList() },
-        skillScriptApprovals: SkillScriptApprovalStore,
         turnSessionId: () -> String?,
         sessions: () -> CodingSessions?,
         recordSpend: (ProviderConfig, AgentUsage, Boolean) -> Unit,
@@ -109,9 +106,7 @@ internal object ChatSupervisorServices {
         },
         canStartPreview = { managedProcesses.canStartPreview() },
         isProjectLockBusy = { runtime.isOperationsLocked() },
-        approvedSkillScripts = approvedSkillScripts,
         secretValues = secretValues,
-        recordSkillScriptApproval = { skillScriptApprovals.approve(it) },
         recordParentUsage = { wTurnId, wConfig, wUsage, wReq ->
             turnSessionId()?.let { sId ->
                 sessions()?.recordUsage(
