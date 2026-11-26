@@ -1006,8 +1006,8 @@ class ChatViewModel private constructor(
                     managedProcesses.stopForWorkspace(previousIdentity)
                     runtimeController.clearCommandOutput(previousIdentity)
                 }
+                showBrowser(identity)
                 if (!runRegistry.hasActiveRuns()) {
-                    showBrowser(identity)
                     selectedState.update { it.copy(projectName = name, projectIdentity = identity,
                         projectError = null) }
                 }
@@ -3850,30 +3850,38 @@ class ChatViewModel private constructor(
                     ) }
                 }
                 val project = previous.value
+                val binding = selected.workspaceId
+                val restoreBinding = binding != null && (cached == null || project.projectIdentity != binding)
+                val workspace = try {
+                    when {
+                        restoreBinding -> workspaceSelection.view(Uri.parse(requireNotNull(binding)))
+                        cached == null -> workspaceSelection.restore()?.first
+                        else -> null
+                    }
+                } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null }
+                val projectName = if (restoreBinding) workspace?.let {
+                    try { it.displayName() }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { "Selected project" }
+                } else project.projectName
+                if (ticket != generation) return@launch
+                val projectIdentity = if (restoreBinding) workspace?.tree?.toString() else project.projectIdentity
                 next.update { it.copy(
                     ready = true, sessions = history,
                     currentSessionId = selected.id, currentSessionTitle = selected.title,
-                    currentSessionWorkspaceId = selected.workspaceId,
-                    projectName = project.projectName, projectIdentity = project.projectIdentity,
-                    projectLoading = project.projectLoading, projectError = project.projectError,
+                    currentSessionWorkspaceId = binding,
+                    projectName = projectName, projectIdentity = projectIdentity,
+                    projectLoading = !restoreBinding && project.projectLoading,
+                    projectError = if (restoreBinding) null else project.projectError,
                     spendCaps = project.spendCaps, userPricePerMillionUsd = project.userPricePerMillionUsd,
                 ) }
+                if (projectIdentity != project.projectIdentity) terminalSession.close()
+                showBrowser(binding ?: projectIdentity)
                 attachRun(next)
-                selected.workspaceId?.let { showBrowser(it) }
                 if (cached == null) {
-                    val workspace = try {
-                        selected.workspaceId?.let { workspaceSelection.view(Uri.parse(it)) }
-                            ?: workspaceSelection.restore()?.first
-                    } catch (e: CancellationException) { throw e }
-                    catch (_: Exception) { null }
-                    if (ticket != generation) return@launch
-                    if (workspace != null && selected.workspaceId != null) {
-                        val name = try { workspace.displayName() } catch (_: Exception) { "Selected project" }
-                        next.update { it.copy(projectName = name,
-                            projectIdentity = selected.workspaceId) }
-                    }
                     refreshGoalMemory(workspace, selected.id)
-                    if (ticket == generation) rehydrateUndo(selected.workspaceId)
+                    if (ticket == generation) rehydrateUndo(binding)
                 }
                 if (ticket == generation) onSelected()
             } catch (e: CancellationException) { throw e

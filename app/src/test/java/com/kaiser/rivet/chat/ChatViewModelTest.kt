@@ -164,6 +164,7 @@ class ChatViewModelTest {
         assertEquals("project", resumed.projectName)
         assertEquals(tree.toString(), resumed.currentSessionWorkspaceId)
         assertEquals(tree.toString(), resumed.projectIdentity)
+        assertEquals(tree.toString(), runtime.currentIdentity())
     }
 
 
@@ -218,18 +219,27 @@ class ChatViewModelTest {
         viewModel.selectProject(other, flags)
         val b = awaitProject(viewModel) { it.projectName == "Another project" && !it.projectLoading }
         assertFalse(firstId == b.currentSessionId)
+        assertEquals(other.toString(), viewModel.browser.projectKey)
         viewModel.send("B")
         awaitProject(viewModel) { it.streaming }
 
         viewModel.resumeSession(firstId)
         val back = awaitProject(viewModel) { it.currentSessionId == firstId }
         assertTrue("viewing B must not stop A", back.streaming)
+        assertEquals("project", back.projectName)
+        assertEquals(tree.toString(), back.projectIdentity)
+        assertEquals(tree.toString(), RuntimeController(app).currentIdentity())
+        assertEquals(tree.toString(), viewModel.browser.projectKey)
         releaseA.complete(Unit)
         awaitProject(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "A done" }
 
         viewModel.resumeSession(b.currentSessionId!!)
         val bStill = awaitProject(viewModel) { it.currentSessionId == b.currentSessionId }
         assertTrue("A finishing must not stop B", bStill.streaming)
+        assertEquals("Another project", bStill.projectName)
+        assertEquals(other.toString(), bStill.projectIdentity)
+        assertEquals(other.toString(), RuntimeController(app).currentIdentity())
+        assertEquals(other.toString(), viewModel.browser.projectKey)
         releaseB.complete(Unit)
         val finished = awaitProject(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "B done" }
         assertEquals(listOf("B", "B done"), finished.messages.map { it.text })
