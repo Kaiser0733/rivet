@@ -444,7 +444,7 @@ class ChatViewModelTest {
         }
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
         viewModel.send("hello")
         val failed = await(viewModel) { !it.streaming && it.error != null }
         assertEquals(ChatErrorAction.OpenSettings, failed.errorAction)
@@ -457,7 +457,7 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Failure("No API key stored.") },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
         viewModel.send("Please fix this")
         val failed = await(viewModel) { it.error != null }
         assertEquals(1L, failed.acceptedMessageCount)
@@ -470,7 +470,7 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { provider.await() },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
         viewModel.send("first")
         assertTrue(viewModel.uiState.value.streaming)
         viewModel.send("second")
@@ -486,7 +486,7 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { provider.await() },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("hello")
 
@@ -502,7 +502,7 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Failure("No API key stored.") },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("hello")
         val failed = await(viewModel) { !it.streaming && it.error != null }
@@ -535,7 +535,7 @@ class ChatViewModelTest {
             providerSource = ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             clientFactory = { _, _ -> provider },
         )
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("first")
         val limited = await(viewModel) { !it.streaming && it.error != null }
@@ -562,7 +562,7 @@ class ChatViewModelTest {
             baseUrl = "https://example.invalid/v1", model = "test-model")
         val viewModel = newChatViewModel(app, persistence,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("first")
         val failed = await(viewModel) { !it.streaming && it.error != null }
@@ -710,7 +710,7 @@ class ChatViewModelTest {
             baseUrl = "https://example.invalid/v1", model = "test-model")
         val viewModel = newChatViewModel(app, persistence,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("create")
         val limited = await(viewModel) { !it.streaming && it.error != null }
@@ -754,7 +754,7 @@ class ChatViewModelTest {
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "test-model")
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
         viewModel.send("Continue")
         await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "First continuation" }
         viewModel.send("Continue again")
@@ -797,7 +797,7 @@ class ChatViewModelTest {
             baseUrl = "https://example.invalid/v1", model = "test-model")
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("Create a file in src")
         val waiting = await(viewModel) { it.pendingApproval != null }
@@ -840,7 +840,7 @@ class ChatViewModelTest {
             modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 40_000))
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("Continue " + "u".repeat(50_000))
         val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Complete" }
@@ -905,7 +905,7 @@ class ChatViewModelTest {
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         val goal = "  Continue\n  with the fix.\n"
         viewModel.send(goal)
@@ -933,7 +933,7 @@ class ChatViewModelTest {
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("x".repeat(100_000))
         val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Accepted" }
@@ -964,7 +964,7 @@ class ChatViewModelTest {
             modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 16_000))
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("Continue")
         val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Continued" }
@@ -1007,7 +1007,7 @@ class ChatViewModelTest {
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("Continue")
         assertTrue(withTimeout(5_000) { entered.await() }.system.contains("\"DECISIONS + WHY\""))
@@ -1415,7 +1415,7 @@ class ChatViewModelTest {
             baseUrl = "https://example.invalid/v1", model = "test-model")
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
         org.robolectric.Shadows.shadowOf(app).clearStartedServices()
 
         viewModel.send("Keep working while backgrounded")
@@ -1542,7 +1542,7 @@ class ChatViewModelTest {
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> provider },
         )
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("Explain the fix")
         withTimeout(5_000) { reasoningEmitted.await() }
@@ -1620,7 +1620,7 @@ class ChatViewModelTest {
                 calls++
                 if (calls == 1) {
                     onDelta("Half an answer")
-                    throw ProviderError.Timeout("progress")
+                    throw ProviderError.Unauthorized()
                 }
                 onDelta("done")
                 return AgentResponse(text = "done")
@@ -1771,7 +1771,7 @@ class ChatViewModelTest {
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", "https://example.invalid", "model-a")
         val viewModel = newChatViewModel(app, CodingSessions(app),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         assertTrue(viewModel.undoSurvivesSwitch("session-a", "session-a"))
         assertTrue("the same unbound session keeps its own bar",
@@ -2115,7 +2115,7 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, RejectingPersistence("goal-test"),
             ProviderRuntimeSource { ProviderRuntimeResult.Failure("No provider") },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("/goal Ship the docs this week")
         val withGoal = await(viewModel) { it.goalLine != null }
@@ -2147,7 +2147,7 @@ class ChatViewModelTest {
             val viewModel = newChatViewModel(app, RejectingPersistence(),
                 ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
                 { _, _ -> provider })
-            await(viewModel) { it.ready }
+            await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
             viewModel.send("Write a long answer")
             val paused = await(viewModel) { it.budgetPaused }
@@ -2183,7 +2183,7 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("Long multi-step run")
         withTimeout(5_000) { started.await() }
@@ -2226,7 +2226,7 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, persistence,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("oversized")
         val limited = await(viewModel) { !it.streaming && it.error == ChatViewModel.CONTEXT_LIMIT_ERROR }
@@ -2243,7 +2243,7 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, RejectingPersistence(),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> provider })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("/GoalList show goals")
 
@@ -2262,7 +2262,7 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, RejectingPersistence("goal-test"),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready }
+        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
         viewModel.send("/goal status")
         val first = await(viewModel) { it.commandAckCount == 1L }
