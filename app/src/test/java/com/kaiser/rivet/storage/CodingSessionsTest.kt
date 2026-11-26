@@ -8,6 +8,7 @@ import androidx.datastore.preferences.core.stringPreferencesKey
 import com.kaiser.rivet.agent.StarterBrief
 import com.kaiser.rivet.agent.modelMessages
 import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentToolCall
 import com.kaiser.rivet.agent.AgentToolResult
@@ -507,8 +508,12 @@ class CodingSessionsTest {
         assertTrue(firstLoad.interrupted)
         assertEquals("Keep the earlier objective", firstLoad.summary)
         assertEquals("Keep the earlier objective", secondLoad.summary)
-        assertEquals(nearLimit.dropLast(1), secondLoad.messages)
-        assertEquals(1, sessions.recent(id).last().toolResults.count { it.callId == call.id })
+        assertEquals("summary", secondLoad.messages.first().internalContext?.kind)
+        assertEquals(call.id, secondLoad.messages.last().toolResults.single().callId)
+        assertTrue("the active projection keeps the user turn it can fit",
+            secondLoad.messages.any { it.role == AgentRole.User && it.text.startsWith("x") })
+        assertEquals("the pending call gets exactly one recovered result",
+            1, sessions.recent(id).last().toolResults.count { it.callId == call.id })
         assertEquals(6, sessions.fullEventCount(id))
     }
 
