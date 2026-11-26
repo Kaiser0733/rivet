@@ -286,6 +286,7 @@ class ChatViewModel private constructor(
     ) : this(app, sessionPersistence, providerSource, WorkspaceSelection(app), clientFactory, workerStore)
 
     private val approvals = AgentApprovalGate()
+    private val secrets = SecretStore(app)
     private val autonomyStore = AutonomyStore(app)
     val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
     val browser: BrowserSession = BrowserRuntime.forApp(app, com.kaiser.rivet.local.LocalRuntime.models())
@@ -1273,7 +1274,7 @@ class ChatViewModel private constructor(
                 val context = ContextPreparation(sql, sessionId,
                     clientFactory(snapshot.config, snapshot.apiKey), snapshot.config,
                     UUID.randomUUID().toString(), activeSummary, workspaceId,
-                    useRequestEstimate = true) { messages, _ ->
+                    useRequestEstimate = true, redactions = secrets.sensitiveValues().toList()) { messages, _ ->
                     idleContextRequest(snapshot.config, workspaceId, messages, pinnedArchive)
                 }
                 val compacted = context.prepare(activeMessages, force = true, reason = "manual")
@@ -2121,7 +2122,9 @@ class ChatViewModel private constructor(
                     browserTools = browserTools, browserLease = browserLease, createExecutor = { createExecutor(it) },
                     projectInstructions = project, skills = { skills }, workspace = workspace, runtime = runtime,
                     managedProcesses = managedProcesses, browser = browser, workspaceSelection = workspaceSelection,
-                    approvedSkillScripts = { approvedSkillScripts }, skillScriptApprovals = skillScriptApprovals,
+                    approvedSkillScripts = { approvedSkillScripts },
+                    secretValues = { secrets.sensitiveValues().toList() },
+                    skillScriptApprovals = skillScriptApprovals,
                     turnSessionId = { turnSessionId }, sessions = { sessions }, recordSpend = ::recordSpend,
                     readAutonomyMode = ::readAutonomyMode,
                     systemInstruction = { hasWorkspace, terminal, browserState ->
@@ -2186,6 +2189,7 @@ class ChatViewModel private constructor(
             } else emptyList()
             val context = ContextPreparation(sessions, sessionId, client, snapshot.config,
                 turnId, activeSummary, workspaceId, currentRequest = acceptedUser?.text, useRequestEstimate = true,
+                redactions = secrets.sensitiveValues().toList(),
                 onCompactionStarted = {
                     if (ticket == generation) _uiState.update { it.copy(compacting = true) }
                 }) { messages, _ ->
@@ -2286,6 +2290,7 @@ class ChatViewModel private constructor(
                 }
             }
             val loop = AgentLoop(
+                secretValues = secrets.sensitiveValues().toList(),
                 requestModel = request@{ messages, _, onText ->
                     if (recalling) return@request AgentResponse(text = ArchiveRecall.directAnswer(recallWindows, recallQueries))
                     val request = context.requestFor(messages)

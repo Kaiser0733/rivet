@@ -1,6 +1,7 @@
 package com.kaiser.rivet.chat
 
 import com.kaiser.rivet.agent.ProjectContext
+import com.kaiser.rivet.agent.SecretRedactor
 import com.kaiser.rivet.agent.ArchiveRecall
 import com.kaiser.rivet.agent.AgentContext
 import com.kaiser.rivet.agent.AgentMessage
@@ -51,6 +52,7 @@ internal class ContextPreparation(
     private val currentRequest: String? = null,
     private val onCompactionStarted: () -> Unit = {},
     private val useRequestEstimate: Boolean = false,
+    private val redactions: List<String> = emptyList(),
     private val request: (List<AgentMessage>, String) -> AgentRequest,
 ) {
     var summary: String = initialSummary
@@ -63,7 +65,10 @@ internal class ContextPreparation(
     /** Net prompt cap learned from a provider error during this turn. */
     @Volatile var learnedPromptCap: Int? = null
 
-    fun requestFor(messages: List<AgentMessage>): AgentRequest = request(messages, summary)
+    fun requestFor(messages: List<AgentMessage>): AgentRequest = request(
+        messages.map { SecretRedactor.redact(it, redactions) },
+        SecretRedactor.redact(summary, redactions),
+    )
 
     fun footprint(messages: List<AgentMessage>): Long =
         ContextBudget.estimateRequestTokens(requestFor(messages))

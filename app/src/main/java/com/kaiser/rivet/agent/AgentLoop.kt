@@ -65,6 +65,7 @@ class AgentLoop(
     private val contextFootprint: (List<AgentMessage>) -> Long = { AgentContext.serializedBytes(it).toLong() },
     private val contextUpdates: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
     private val approvedSkillScripts: Set<String> = emptySet(),
+    private val secretValues: List<String> = emptyList(),
     private val recordSkillScriptApproval: suspend (String) -> Unit = {},
     private val afterMutation: suspend (AgentToolCall, AgentToolResult?) -> Unit = { _, _ -> },
     private val onContextLimitObserved: suspend (ProviderError.ContextOverflow, Long) -> Unit = { _, _ -> },
@@ -119,7 +120,8 @@ class AgentLoop(
                 if (memoryProposals.any { it.asksUser }) {
                     stage(AgentToolLifecycleStage.AwaitingApproval)
                     val approval = requireNotNull(first.approval).copy(
-                        detail = facts.joinToString("\n") { "• $it" },
+                        detail = requireNotNull(first.approval).detail +
+                            facts.joinToString("\n") { "\n• $it" },
                     )
                     if (!requestApproval(approval)) {
                         stage(AgentToolLifecycleStage.Denied)
@@ -431,9 +433,9 @@ class AgentLoop(
                     } else {
                         listOfNotNull(prepared.skillScript)
                     }
-                    val unapprovedScripts = allScriptHits.filter { it.skill.name !in scriptApprovals }
+                    val unapprovedScripts = allScriptHits.filter { !it.isApproved(scriptApprovals) }
                     val scriptHit = unapprovedScripts.firstOrNull() ?: allScriptHits.firstOrNull()
-                    val scriptGate = skillScriptGate(mode, allScriptHits, scriptApprovals,
+                    val scriptGate = skillScriptGate(allScriptHits, scriptApprovals,
                         baseAsks = decision == ApprovalDecision.AskUser)
                     val skillInserted = scriptGate == SkillScriptGate.InsertApproval &&
                         prepared.approval != null
@@ -556,9 +558,10 @@ class AgentLoop(
                         if (scriptGate != SkillScriptGate.None) {
                             val toApprove = unapprovedScripts.ifEmpty { listOfNotNull(scriptHit) }
                             toApprove.forEach { hit ->
-                                scriptApprovals += hit.skill.name
+                                val approvalKey = hit.approvalKey()
+                                scriptApprovals += approvalKey
                                 try {
-                                    recordSkillScriptApproval(hit.skill.name)
+                                    recordSkillScriptApproval(approvalKey)
                                 } catch (e: CancellationException) {
                                     throw e
                                 } catch (_: Exception) {
@@ -588,7 +591,9 @@ class AgentLoop(
                     if (prepared.effect.changesWorkspace && mutationBlocker == null && !result.error) {
                         mutationsCompleted++
                     }
-                    val bounded = boundResult(result, prepared.resultContentLimitBytes)
+                    val bounded = SecretRedactor.redact(
+                        boundResult(result, prepared.resultContentLimitBytes), secretValues,
+                    )
                     val remaining = response.toolCalls.drop(results.size + 1).map { stopped(it, "workspace_changed") }
                     if (prepared.effect == AgentToolEffect.ReadOnly && !fits(results + bounded + remaining)) {
                         results += pending("session_limit")
@@ -634,10 +639,10 @@ class AgentLoop(
                 }
             } catch (e: CancellationException) {
                 results += pending("cancelled")
-                append(AgentMessage.tools(results))
+                append(SecretRedactor.redact(AgentMessage.tools(results), secretValues))
                 throw e
             }
-            val toolMessage = AgentMessage.tools(results)
+            val toolMessage = SecretRedactor.redact(AgentMessage.tools(results), secretValues)
             // A SAF mutation can finish inside its non-cancellable commit section.
             // Persist its correlated result even if cancellation arrived at that boundary.
             append(toolMessage)

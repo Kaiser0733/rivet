@@ -15,9 +15,8 @@ import kotlinx.coroutines.flow.map
 private val Context.skillScriptData by preferencesDataStore(name = "skill_script_approvals")
 
 /**
- * Skills whose bundled scripts the user let run without the first-run prompt. Keyed by the
- * skill name, so reinstalling or updating a skill keeps its approval only while the name
- * stays the same; a renamed skill asks again.
+ * Approval keys (`skillName:sha256`) for bundled skill scripts the user let run. Replacing
+ * the script changes its hash and requires a fresh approval.
  */
 class SkillScriptApprovalStore(
     context: Context,
@@ -30,9 +29,9 @@ class SkillScriptApprovalStore(
         .map { preferences -> preferences[approvedKey].orEmpty() }
         .first()
 
-    suspend fun approve(skillName: String) {
+    suspend fun approve(approvalKey: String) {
         dataStore.edit { preferences ->
-            preferences[approvedKey] = preferences[approvedKey].orEmpty() + skillName
+            preferences[approvedKey] = preferences[approvedKey].orEmpty() + approvalKey
         }
     }
 }

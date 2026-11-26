@@ -125,6 +125,7 @@ class AgentToolExecutor(
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
         if (reservedGoalMutation(call)) return invalid(call, "reserved_goal")
+        if (reservedMemoryMutation(call)) return invalid(call, "reserved_memory")
         return try {
             when (call.name) {
                 "git_status" -> {
@@ -255,7 +256,15 @@ class AgentToolExecutor(
                     val fact = args.fact.trim()
                     require(fact.isNotEmpty() && fact.length <= MemoryFormat.MAX_FACT_CHARS)
                     val writer = rememberMemory ?: throw AgentWorkspaceFailure("unsupported")
-                    mutation(call, "Update project memory", fact.take(160), fact.length * 2 + 512,
+                    val before = try { workspace.read(MemoryFormat.PATH).text }
+                        catch (e: CancellationException) { throw e }
+                        catch (_: Exception) { "" }
+                    val detail = when (val preview = MemoryFormat.append(before, fact)) {
+                        is MemoryFormat.Append.Saved ->
+                            "Update project memory\n\n" + MemoryFormat.diff(before, preview.markdown)
+                        is MemoryFormat.Append.Refused -> "Update project memory\n\n$fact"
+                    }
+                    mutation(call, "Update project memory", detail, fact.length * 2 + 512,
                         memoryFact = fact) {
                         when (val result = writer(fact)) {
                             is MemoryFormat.Append.Saved -> success(call, buildJsonObject {
@@ -386,6 +395,7 @@ class AgentToolExecutor(
                     }
                     val cwd = path(args.cwd, root = true)
                     val matchedScripts = matchSkillScripts(args.command, skills, cwd = cwd)
+                        .map { hit -> hit.copy(contentHash = SkillScriptContent.hash(hit, workspace)) }
                     require(args.timeoutMs in 1000..MAX_COMMAND_TIMEOUT_MS)
                     PreparedAgentTool(
                         call,
@@ -910,17 +920,26 @@ class AgentToolExecutor(
         val content: String? = null,
         @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
     )
-    private fun reservedGoalMutation(call: AgentToolCall): Boolean {
-        return try {
-            val value = json.parseToJsonElement(call.arguments).jsonObject
-            GoalMutationGuard.isReservedMutation(
-                toolName = call.name,
-                path = value["path"]?.jsonPrimitive?.contentOrNull,
-                newName = value["new_name"]?.jsonPrimitive?.contentOrNull,
-                destination = value["destination"]?.jsonPrimitive?.contentOrNull,
-            )
-        } catch (_: Exception) { false }
+    private fun reservedGoalMutation(call: AgentToolCall): Boolean = reservedMutation(call) { name, path, newName, destination ->
+        GoalMutationGuard.isReservedGoalMutation(name, path, newName, destination)
     }
+
+    private fun reservedMemoryMutation(call: AgentToolCall): Boolean = reservedMutation(call) { name, path, newName, destination ->
+        GoalMutationGuard.isReservedMemoryMutation(name, path, newName, destination)
+    }
+
+    private fun reservedMutation(
+        call: AgentToolCall,
+        check: (String, String?, String?, String?) -> Boolean,
+    ): Boolean = try {
+        val value = json.parseToJsonElement(call.arguments).jsonObject
+        check(
+            call.name,
+            value["path"]?.jsonPrimitive?.contentOrNull,
+            value["new_name"]?.jsonPrimitive?.contentOrNull,
+            value["destination"]?.jsonPrimitive?.contentOrNull,
+        )
+    } catch (_: Exception) { false }
 
     @Serializable private data class SearchArgs(val query: String, val path: String = "")
     @Serializable private data class SkillArgs(val name: String)

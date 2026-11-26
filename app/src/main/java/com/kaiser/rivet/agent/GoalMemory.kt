@@ -195,6 +195,27 @@ object MemoryFormat {
 
     fun lineCount(markdown: String): Int = facts(markdown).size
 
+    /** Exact line diff for the approval dialog; bounded so a huge notebook stays readable. */
+    fun diff(before: String, after: String, maxChars: Int = 2_000): String {
+        if (before == after) return "(no change)"
+        val old = if (before.isEmpty()) emptyList()
+            else before.replace("\r\n", "\n").split('\n')
+        val new = if (after.isEmpty()) emptyList()
+            else after.replace("\r\n", "\n").split('\n')
+        var prefix = 0
+        while (prefix < old.size && prefix < new.size && old[prefix] == new[prefix]) prefix++
+        var suffix = 0
+        while (suffix < old.size - prefix && suffix < new.size - prefix &&
+            old[old.lastIndex - suffix] == new[new.lastIndex - suffix]) suffix++
+        val removed = old.subList(prefix, old.size - suffix)
+        val added = new.subList(prefix, new.size - suffix)
+        val text = buildString {
+            removed.forEach { append("- ").append(it).append('\n') }
+            added.forEach { append("+ ").append(it).append('\n') }
+        }
+        return if (text.length <= maxChars) text else text.take(maxChars) + "\n… diff truncated"
+    }
+
     fun needsGardening(markdown: String): Boolean = lineCount(markdown) >= SOFT_LINES
 
     fun render(facts: List<String>): String = buildString {

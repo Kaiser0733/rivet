@@ -111,4 +111,18 @@ class GoalMemoryTest {
         assertNotNull(parsed)
         assertEquals("2026-10-15", parsed!!.setOn)
     }
+
+    @Test fun diffShowsTheExactAddedMemoryLine() {
+        val before = "# Project memory\n\n- old\n"
+        val after = "# Project memory\n\n- old\n- new\n"
+        val diff = MemoryFormat.diff(before, after)
+        assertTrue(diff.contains("+ - new"))
+        assertFalse(diff.contains("- - old"))
+    }
+
+    @Test fun diffShowsAllLinesForANewNotebook() {
+        val diff = MemoryFormat.diff("", "# Project memory\n\n- first\n")
+        assertTrue(diff.contains("+ # Project memory"))
+        assertTrue(diff.contains("+ - first"))
+    }
 }

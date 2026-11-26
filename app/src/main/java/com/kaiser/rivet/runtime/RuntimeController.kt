@@ -73,6 +73,14 @@ data class ProcessOutputSnapshot(
 internal const val WORKSPACE_SYNC_TIMEOUT_MS = 15_000L
 internal const val DEFAULT_BACKGROUND_TTL_MS = 600_000L
 
+private data class BackgroundPlan(
+    val identity: String,
+    val directory: String,
+    val environment: Array<String>,
+    val command: String,
+    val credentialFile: File?,
+)
+
 data class RunCheckpointRestoreResult(
     val restored: List<String>,
     val conflicts: List<String>,
@@ -141,12 +149,13 @@ class RuntimeController(
         // First use in this process: build the applet farm before PATH is composed.
         // Without libbusybox.so this is a no-op and the environment is unchanged.
         toolchain.ensurePrepared()
-        // Refresh below the model: only the helper spec and file path reach the environment.
-        val credentialFile = if (toolchain.gitReady) {
+        // Auth is resolved for this git command only; no generic shell environment gets it.
+        val credentialFile = if (toolchain.gitReady && GitCommandAuth.needsAuth(command)) {
             withContext(Dispatchers.IO) { gitHub.refresh() }
         } else null
+        val effectiveCommand = GitCommandAuth.authenticated(command, credentialFile)
         val directory = runtimeDirectory(ready.worktree, cwd)
-        val environment = environment(active, directory, credentialFile)
+        val environment = environment(active, directory)
         val processId = managedProcesses?.let { registry ->
             val job = currentCoroutineContext()[Job]
                 ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "runtime_unavailable")
@@ -163,7 +172,7 @@ class RuntimeController(
             if (processId == null && onOutput == null) null else ::publish
         val memoryCap = governor.memoryCapBytes()
         val result = try {
-            CommandProcess().run(command, directory.absolutePath, environment, timeoutMs,
+            CommandProcess().run(effectiveCommand, directory.absolutePath, environment, timeoutMs,
                 onOutput = publisher, memoryCapBytes = memoryCap)
         } catch (e: CancellationException) {
             processId?.let { managedProcesses?.failCommand(it) }
@@ -171,6 +180,10 @@ class RuntimeController(
         } catch (e: Exception) {
             processId?.let { managedProcesses?.failCommand(it) }
             throw e
+        } finally {
+            if (credentialFile != null) {
+                withContext(NonCancellable + Dispatchers.IO) { gitHub.clearCredentialFile() }
+            }
         }
         if (result.memoryLimit) governor.recordStop("memory limit")
         else if (result.tooManyChildren) governor.recordStop("too many child processes")
@@ -250,13 +263,9 @@ class RuntimeController(
         readyCheck.second?.let { errorCode -> return@withLock TerminalLaunch(error = errorCode) }
         val ready = readyCheck.first ?: return@withLock TerminalLaunch(error = "sync_failed")
         toolchain.ensurePrepared()
-        val credentialFile = if (toolchain.gitReady) {
-            withContext(Dispatchers.IO) { gitHub.refresh() }
-        } else null
         val directory = try { runtimeDirectory(ready.worktree, "") }
         catch (_: MirrorFailure) { return@withLock TerminalLaunch(error = "sync_timeout") }
-        val environment = terminalEnvironment(
-            environment(active, directory, credentialFile).toList())
+        val environment = terminalEnvironment(environment(active, directory).toList())
         val identity = mirrorIdentity
             ?: return@withLock TerminalLaunch(error = "workspace_unavailable")
         val shell = if (toolchain.availability().busybox) {
@@ -602,7 +611,7 @@ class RuntimeController(
         if (readyWaitMs !in 0L..10_000L) throw MirrorFailure("invalid_arguments")
         val pattern = readyPattern?.takeIf { it.isNotBlank() }
         if (pattern != null && pattern.length > 256) throw MirrorFailure("invalid_arguments")
-        val launch: Triple<String, String, Pair<String, Array<String>>> = operations.withLock {
+        val launch: BackgroundPlan = operations.withLock {
             val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
             val readings = governor.readings()
             managedProcesses?.setActiveLimit(effectiveSlots(readings.thermalStatus))
@@ -619,17 +628,20 @@ class RuntimeController(
             }
             if (ready.dirty) throw MirrorFailure("sync_required")
             toolchain.ensurePrepared()
-            val credentialFile = if (toolchain.gitReady) {
+            val credentialFile = if (toolchain.gitReady && GitCommandAuth.needsAuth(command)) {
                 withContext(Dispatchers.IO) { gitHub.refresh() }
             } else null
+            val effectiveCommand = GitCommandAuth.authenticated(command, credentialFile)
             val directory = runtimeDirectory(ready.worktree, cwd)
-            val environment = environment(active, directory, credentialFile)
+            val environment = environment(active, directory)
             val identity = mirrorIdentity ?: throw MirrorFailure("workspace_unavailable")
-            Triple(identity, directory.absolutePath, directory.absolutePath to environment)
+            BackgroundPlan(identity, directory.absolutePath, environment, effectiveCommand, credentialFile)
         }
-        val identity = launch.first
-        val directory = launch.second
-        val environment = launch.third.second
+        val identity = launch.identity
+        val directory = launch.directory
+        val environment = launch.environment
+        val effectiveCommand = launch.command
+        val credentialFile = launch.credentialFile
         var job: Job? = null
         val registry = managedProcesses ?: throw MirrorFailure("runtime_unavailable")
         val id = registry.registerBackground(command, identity, projectName()) {
@@ -640,7 +652,7 @@ class RuntimeController(
             var outcome: CommandOutput? = null
             try {
                 outcome = CommandProcess().run(
-                    command, directory, environment, ttlMs,
+                    effectiveCommand, directory, environment, ttlMs,
                     onOutput = { out, err ->
                         ring.append(out, err)
                         registry.updateBackgroundOutput(id, ring.snapshot().stdout, ring.snapshot().stderr)
@@ -653,6 +665,9 @@ class RuntimeController(
             } catch (_: Exception) {
                 registry.finishBackground(id, ManagedProcessStatus.Failed, null)
             } finally {
+                if (credentialFile != null) {
+                    withContext(NonCancellable + Dispatchers.IO) { gitHub.clearCredentialFile() }
+                }
                 backgroundRings.remove(id)
                 drainedRings[id] = ring
                 drainedOrder.add(id)
@@ -841,13 +856,12 @@ class RuntimeController(
         return mirror
     }
 
-    private fun environment(mirror: WorkspaceMirror, cwd: File,
-                            credentialFile: File?): Array<String> {
+    private fun environment(mirror: WorkspaceMirror, cwd: File): Array<String> {
         val home = mirror.home.apply { mkdirs() }
         val temporary = mirror.temporary.apply { mkdirs() }
         if (!home.isDirectory || !temporary.isDirectory) throw MirrorFailure("storage")
         return toolchain.commandEnvironment(
-            baseEnvironment(home, toolchain.path(), temporary, cwd), credentialFile,
+            baseEnvironment(home, toolchain.path(), temporary, cwd),
         ).toTypedArray()
     }
 

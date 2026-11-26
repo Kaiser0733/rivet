@@ -52,22 +52,19 @@ class SkillScriptMatchTest {
         assertEquals(listOf("alpha", "beta"), hits.map { it.name })
         assertTrue(
             SkillScriptMatcher.isGateNeeded(
-                isYolo = false,
-                matchedNames = hits.map { it.name },
-                approved = setOf("alpha"),
+                matchedKeys = hits.map { "key-${it.name}" },
+                approved = setOf("key-alpha"),
             ),
         )
         assertFalse(
             SkillScriptMatcher.isGateNeeded(
-                isYolo = false,
-                matchedNames = hits.map { it.name },
-                approved = setOf("alpha", "beta"),
+                matchedKeys = hits.map { "key-${it.name}" },
+                approved = setOf("key-alpha", "key-beta"),
             ),
         )
-        assertFalse(
+        assertTrue(
             SkillScriptMatcher.isGateNeeded(
-                isYolo = true,
-                matchedNames = hits.map { it.name },
+                matchedKeys = hits.map { "key-${it.name}" },
                 approved = emptySet(),
             ),
         )

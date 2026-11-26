@@ -56,6 +56,7 @@ internal object ChatSupervisorServices {
         browser: BrowserSession,
         workspaceSelection: WorkspaceSelection,
         approvedSkillScripts: () -> Set<String>,
+        secretValues: () -> List<String> = { emptyList() },
         skillScriptApprovals: SkillScriptApprovalStore,
         turnSessionId: () -> String?,
         sessions: () -> CodingSessions?,
@@ -109,6 +110,7 @@ internal object ChatSupervisorServices {
         failureState = { runtime.agentFailureState() },
         isProjectLockBusy = { runtime.isOperationsLocked() },
         approvedSkillScripts = approvedSkillScripts,
+        secretValues = secretValues,
         recordSkillScriptApproval = { skillScriptApprovals.approve(it) },
         recordParentUsage = { wTurnId, wConfig, wUsage, wReq ->
             turnSessionId()?.let { sId ->

@@ -33,16 +33,22 @@ class GitHubTokenStoreTest {
             restrictedMode = mode
         }
 
-    @Test fun connectWritesTheCredentialLineAndOwnerOnlyMode() {
+    @Test fun connectLeavesNoCredentialFileAndARefreshWritesTheOwnerOnlyLine() {
         val vault = FakeVault()
         val file = File(temp.root, "toolchain/git-credentials")
+        val store = store(vault, file)
 
-        assertTrue(store(vault, file).connect(token))
-
+        assertTrue(store.connect(token))
         assertEquals(token, vault.token)
+        assertFalse(file.exists())
+
+        assertEquals(file, store.refresh())
         assertEquals("https://x-access-token:$token@github.com\n", file.readText())
         assertEquals(file, restrictedFile)
         assertEquals(0b110_000_000, restrictedMode)
+
+        store.clearCredentialFile()
+        assertFalse(file.exists())
     }
 
     @Test fun connectRejectsTokensThatCouldBreakTheCredentialLine() {
@@ -61,6 +67,7 @@ class GitHubTokenStoreTest {
         val file = File(temp.root, "git-credentials")
         val store = store(vault, file)
         assertTrue(store.connect(token))
+        store.refresh()
         assertTrue(file.isFile)
 
         store.disconnect()
@@ -91,19 +98,23 @@ class GitHubTokenStoreTest {
         assertFalse(file.readText().contains(token))
     }
 
-    @Test fun environmentGetsTheHelperAndPathButNeverTheToken() {
+    @Test fun theSharedShellEnvironmentNeverNamesTheCredentialFileOrToken() {
         val vault = FakeVault()
         val file = File(temp.root, "git-credentials")
         val store = store(vault, file)
         assertTrue(store.connect(token))
+        assertTrue(store.refresh() != null)
         val base = listOf("HOME=/h", "PATH=/p", "TMPDIR=/tmp", "PWD=/w",
             "LANG=C.UTF-8", "TERM=xterm-256color")
 
         val env = com.kaiser.rivet.runtime.gitEnvironment(base,
-            File("/zone/exec"), File("/zone/templates"), store.refresh())
+            File("/zone/exec"), File("/zone/templates"), null)
 
-        assertTrue("GIT_CONFIG_VALUE_0=store --file=${file.absolutePath}" in env)
+        assertFalse(env.joinToString("\n").contains(file.absolutePath))
         assertFalse(env.joinToString("\n").contains(token))
-        assertFalse(env.joinToString("\n").contains("ghp_"))
+        val joined = env.joinToString("\n")
+        assertFalse(joined.contains("GIT_CONFIG_COUNT="))
+        assertFalse(joined.contains("GIT_CONFIG_KEY_"))
+        assertFalse(joined.contains("GIT_CONFIG_VALUE_"))
     }
 }

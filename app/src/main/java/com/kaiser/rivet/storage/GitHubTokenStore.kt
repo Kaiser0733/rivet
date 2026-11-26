@@ -15,9 +15,9 @@ internal interface GitHubTokenVault {
 }
 
 /**
- * Keeps git's store helper pointed at an app-private credential file. The token leaves the
- * Keystore only to be written there; it never enters an environment value, a command, the
- * model context, or a log. Disconnect clears the vault and the file together.
+ * Writes a short-lived, app-private helper file only while a git network command runs. The
+ * token itself never enters an environment value, a command line, the model context, or a log.
+ * Connect and disconnect both leave no credential file behind.
  */
 class GitHubTokenStore internal constructor(
     private val vault: GitHubTokenVault,
@@ -41,7 +41,11 @@ class GitHubTokenStore internal constructor(
             // Never leave a saved token that the runtime cannot actually use.
             vault.clear()
             false
-        } else true
+        } else {
+            // Validate the helper file, then leave no credential material on disk.
+            wipe()
+            true
+        }
     }
 
     fun disconnect() = synchronized(lock) {
@@ -54,6 +58,9 @@ class GitHubTokenStore internal constructor(
 
     /** Returns the credential file for this command, or null when no usable token exists. */
     fun refresh(): File? = synchronized(lock) { refreshLocked() }
+
+    /** Removes the short-lived helper file after the git command has ended. */
+    fun clearCredentialFile() = synchronized(lock) { wipe() }
 
     private fun refreshLocked(): File? {
         val token = vault.read()

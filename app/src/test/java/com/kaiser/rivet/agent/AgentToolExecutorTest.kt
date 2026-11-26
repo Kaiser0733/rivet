@@ -431,6 +431,45 @@ class AgentToolExecutorTest {
     }
 
     @Test
+    fun directMemoryFileWritesAreRefused() = runTest {
+        val executor = AgentToolExecutor(FakeWorkspace())
+        val prepared = executor.prepare(AgentToolCall("memory", "write_file",
+            """{"path":".rivet/memory.md","content":"poison","expected_sha256":"${"a".repeat(64)}"}"""))
+        val result = prepared.execute()
+        assertTrue(result.error)
+        assertTrue("reserved_memory" in result.content)
+    }
+
+    @Test
+    fun memoryApprovalShowsTheAddedLine() = runTest {
+        val files = FakeWorkspace(text = "# Project memory\n\n- old\n")
+        val executor = AgentToolExecutor(files,
+            rememberMemory = { fact -> MemoryFormat.append(files.text, fact) })
+        val prepared = executor.prepare(AgentToolCall("memory", "remember",
+            """{"fact":"The user prefers tabs."}"""))
+        val detail = prepared.approval?.detail.orEmpty()
+        assertTrue(detail.contains("+ - The user prefers tabs."))
+        assertTrue(!detail.contains("- - old"))
+    }
+
+    @Test
+    fun skillScriptApprovalCarriesItsContentHash() = runTest {
+        val files = FakeWorkspace(text = "echo first\n")
+        val skill = Skill(name = "notes", description = "Use notes.", body = "Body.",
+            source = SkillSource(".rivet/skills/notes", SkillRootKind.ProjectRivet))
+        val catalog = SkillCatalog(listOf(skill), emptyList(), skillCatalogDigest(listOf(skill)))
+        val executor = AgentToolExecutor(files, skills = catalog)
+        val call = AgentToolCall("script", "run_command",
+            """{"command":"sh .rivet/skills/notes/run.sh"}""")
+        val first = executor.prepare(call).skillScripts.single().contentHash
+        assertNotNull(first)
+        files.text = "echo second\n"
+        val second = executor.prepare(call).skillScripts.single().contentHash
+        assertNotNull(second)
+        assertTrue(first != second)
+    }
+
+    @Test
     fun genericGoalWritesAreRefused() = runTest {
         val executor = AgentToolExecutor(FakeWorkspace())
         val prepared = executor.prepare(AgentToolCall("goal", "write_file",

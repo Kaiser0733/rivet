@@ -492,7 +492,7 @@ private fun GitHubDetail(
                 !gitAvailable ->
                     "Git is not available in this build, so GitHub pushes cannot run here."
                 connected ->
-                    "Connected. Pushes to github.com use the token kept in Android Keystore."
+                    "Connected. Agent-run git pushes use the token kept in Android Keystore."
                 else ->
                     "Not connected. Public clones and local Git work normally. Connect a token to push to GitHub."
             },

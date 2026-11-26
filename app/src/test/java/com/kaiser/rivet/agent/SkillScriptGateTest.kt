@@ -17,7 +17,9 @@ class SkillScriptGateTest {
     private fun catalog(vararg skills: Skill): SkillCatalog =
         SkillCatalog(skills.toList(), emptyList(), skillCatalogDigest(skills.toList()))
 
-    private fun hit(skill: Skill = skill()) = SkillScriptHit(skill, "${skill.source!!.baseDir}/scripts/run.sh")
+    private fun hit(skill: Skill = skill()) = SkillScriptHit(
+        skill, "${skill.source!!.baseDir}/scripts/run.sh", contentHash = "hash-${skill.name}",
+    )
 
     // ------------------------------------------------------------ matcher
 
@@ -100,27 +102,27 @@ class SkillScriptGateTest {
 
     @Test fun unapprovedSkillInASilentModeInsertsAnApproval() {
         assertEquals(SkillScriptGate.InsertApproval,
-            skillScriptGate(AutonomyMode.BasicYolo, hit(), emptySet(), baseAsks = false))
+            skillScriptGate(hit(), emptySet(), baseAsks = false))
     }
 
     @Test fun approvedSkillNeedsNoGate() {
         assertEquals(SkillScriptGate.None,
-            skillScriptGate(AutonomyMode.BasicYolo, hit(), setOf("notes"), baseAsks = false))
+            skillScriptGate(hit(), setOf("notes:hash-notes"), baseAsks = false))
     }
 
     @Test fun aModeThatAlreadyAsksIsNotDoubled() {
         assertEquals(SkillScriptGate.ExistingApproval,
-            skillScriptGate(AutonomyMode.Ask, hit(), emptySet(), baseAsks = true))
+            skillScriptGate(hit(), emptySet(), baseAsks = true))
     }
 
-    @Test fun yoloDisablesTheGate() {
-        assertEquals(SkillScriptGate.None,
-            skillScriptGate(AutonomyMode.Yolo, hit(), emptySet(), baseAsks = false))
+    @Test fun yoloDoesNotDisableTheSkillContentGate() {
+        assertEquals(SkillScriptGate.InsertApproval,
+            skillScriptGate(hit(), emptySet(), baseAsks = false))
     }
 
     @Test fun noHitNeedsNoGate() {
         assertEquals(SkillScriptGate.None,
-            skillScriptGate(AutonomyMode.BasicYolo, null, emptySet(), baseAsks = false))
+            skillScriptGate(null, emptySet(), baseAsks = false))
     }
 
     // ------------------------------------------------------------ loop wiring
@@ -176,7 +178,7 @@ class SkillScriptGateTest {
         val detail = run.approvals.single().detail
         assertTrue(detail.contains("Bundled skill: notes"))
         assertTrue(detail.contains("Approving lets this skill's scripts run without asking again."))
-        assertEquals(listOf("notes"), run.recorded)
+        assertEquals(listOf("notes:hash-notes"), run.recorded)
         assertEquals(2, run.executed)
     }
 
@@ -185,7 +187,7 @@ class SkillScriptGateTest {
 
         assertEquals(1, run.approvals.size)
         assertTrue(run.approvals.single().detail.contains("Bundled skill: notes"))
-        assertEquals(listOf("notes"), run.recorded)
+        assertEquals(listOf("notes:hash-notes"), run.recorded)
         assertEquals(1, run.executed)
     }
 
@@ -198,18 +200,18 @@ class SkillScriptGateTest {
     }
 
     @Test fun approvedSkillRunsWithoutTheSkillLine() = runTest {
-        val run = runGated(AutonomyMode.Ask, listOf(hit()), approved = setOf("notes"))
+        val run = runGated(AutonomyMode.Ask, listOf(hit()), approved = setOf("notes:hash-notes"))
 
         assertEquals(1, run.approvals.size)
         assertTrue(!run.approvals.single().detail.contains("Bundled skill:"))
         assertTrue(run.recorded.isEmpty())
     }
 
-    @Test fun yoloNeverAsksAndNeverRecords() = runTest {
+    @Test fun yoloStillAsksForANewSkillScriptAndRecordsItsContentKey() = runTest {
         val run = runGated(AutonomyMode.Yolo, listOf(hit()))
 
-        assertTrue(run.approvals.isEmpty())
-        assertTrue(run.recorded.isEmpty())
+        assertEquals(1, run.approvals.size)
+        assertEquals(listOf("notes:hash-notes"), run.recorded)
         assertEquals(1, run.executed)
     }
 
@@ -250,9 +252,9 @@ class SkillScriptGateTest {
             currentAutonomyMode = { mode })
 
         assertEquals(AgentStopReason.Completed, result.stopReason)
-        assertEquals(1, approvals)
+        assertEquals(2, approvals)
         assertEquals(2, executions)
-        assertEquals(listOf("alpha"), recorded)
+        assertEquals(listOf("alpha:hash-alpha", "beta:hash-beta"), recorded)
     }
 
     @Test fun yoloToAskMidRunRearmsTheSkillGatePrompt() = runTest {
@@ -289,8 +291,8 @@ class SkillScriptGateTest {
             currentAutonomyMode = { mode })
 
         assertEquals(AgentStopReason.Completed, result.stopReason)
-        assertEquals(1, approvals)
+        assertEquals(2, approvals)
         assertEquals(2, executions)
-        assertEquals(listOf("beta"), recorded)
+        assertEquals(listOf("alpha:hash-alpha", "beta:hash-beta"), recorded)
     }
 }
