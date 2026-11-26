@@ -6,7 +6,10 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlin.coroutines.AbstractCoroutineContextElement
 import kotlin.coroutines.CoroutineContext
 
-internal class TurnRunContext(private val sessionId: String?) : AbstractCoroutineContextElement(Key) {
+internal class TurnRunContext(
+    private val sessionId: String?,
+    val workspaceId: String? = null,
+) : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<TurnRunContext>
 
     private val lock = Any()

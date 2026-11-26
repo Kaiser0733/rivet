@@ -18,6 +18,7 @@ internal class SessionRunRegistry(app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val sessions = CodingSessions(app)
     val active = MutableStateFlow<SessionRun?>(null)
+    val activeRuns = MutableStateFlow<Map<String, SessionRun>>(emptyMap())
     val unseen = MutableStateFlow<Set<String>>(emptySet())
     val history = MutableStateFlow<List<CodingSessionHeader>?>(null)
     var lastRun: SessionRun? = null
@@ -33,7 +34,11 @@ internal class SessionRunRegistry(app: Application) {
         scope.launch {
             approvals.pending.collect { pending ->
                 processes.updateApproval(pending)
-                active.value?.update { it.copy(pendingApproval = pending) }
+                activeRuns.value.values.forEach { owner ->
+                    if (owner.value.currentSessionId == pending?.sessionId) {
+                        owner.update { it.copy(pendingApproval = pending) }
+                    }
+                }
             }
         }
         scope.launch {
@@ -45,20 +50,25 @@ internal class SessionRunRegistry(app: Application) {
     }
 
     fun begin(owner: SessionRun) {
-        check(active.value == null)
+        val id = owner.value.currentSessionId ?: return
         lastRun = owner
+        activeRuns.value = activeRuns.value + (id to owner)
         active.value = owner
     }
 
     fun finish(owner: SessionRun) {
-        if (active.value !== owner) return
+        val id = owner.value.currentSessionId
+        if (id != null) activeRuns.value = activeRuns.value - id
         owner.pauseAction = null
         owner.checkpoints = null
         if (!owner.value.budgetPaused) owner.raiseBudgetAction = null
-        val id = owner.value.currentSessionId
         if (id != null && id !in visible.values) unseen.value += id
-        active.value = null
+        if (active.value === owner) active.value = activeRuns.value.values.lastOrNull()
     }
+
+    fun isActive(owner: SessionRun): Boolean = activeRuns.value.values.any { it === owner }
+    fun hasActiveRuns(): Boolean = activeRuns.value.isNotEmpty()
+    fun activeCount(): Int = activeRuns.value.size
 
     fun show(view: Any, sessionId: String?) {
         visible[view] = sessionId
@@ -70,7 +80,7 @@ internal class SessionRunRegistry(app: Application) {
     }
 
     fun forget(id: String?) {
-        if (lastRun?.value?.currentSessionId == id && lastRun !== active.value) lastRun = null
+        if (lastRun?.value?.currentSessionId == id && !isActive(lastRun!!)) lastRun = null
         if (id != null) unseen.value -= id
     }
 
@@ -78,8 +88,10 @@ internal class SessionRunRegistry(app: Application) {
         val pending = approvals.pending.value
         val selectedApproval = pending?.takeIf { it.sessionId == state.currentSessionId }
         val rows = unseen.value.associateWith { ConversationActivity.FinishedUnseen }.toMutableMap()
-        active.value?.value?.currentSessionId?.let {
-            rows[it] = if (pending?.sessionId == it) ConversationActivity.NeedsApproval else ConversationActivity.Running
+        for (owner in activeRuns.value.values) {
+            val id = owner.value.currentSessionId ?: continue
+            rows[id] = if (pending?.sessionId == id) ConversationActivity.NeedsApproval
+                else ConversationActivity.Running
         }
         return state.copy(
             pendingApproval = selectedApproval,

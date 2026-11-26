@@ -1,6 +1,7 @@
 package com.kaiser.rivet.runtime
 
 import android.content.Context
+import android.net.Uri
 import com.kaiser.rivet.storage.GitHubTokenStore
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.workspace.SafWorkspace
@@ -105,6 +106,7 @@ class RuntimeController(
     private val operations = Mutex()
     private var mirrorIdentity: String? = null
     private var mirror: WorkspaceMirror? = null
+    private val mirrors = mutableMapOf<String, WorkspaceMirror>()
 
     internal fun isOperationsLocked(): Boolean = operations.isLocked
 
@@ -119,7 +121,7 @@ class RuntimeController(
      */
     suspend fun runCommand(command: String, cwd: String, timeoutMs: Long,
                            onOutput: ((String, String) -> Unit)?): RuntimeCommandResult = operations.withLock {
-        val active = currentMirror() ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "workspace_unavailable")
+        val active = activeMirror() ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "workspace_unavailable")
         // Plan §5 rules 11/12: fresh readings gate every start, so a SERIOUS throttle
         // lifts on the first command after the phone cools.
         val readings = governor.readings()
@@ -303,32 +305,28 @@ class RuntimeController(
 
     suspend fun beginCheckpoint(workspaceId: String, runId: String? = null,
                                 sessionId: String? = null): String = operations.withLock {
-        if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val active = mirrorFor(workspaceId) ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
         runPhase("checkpoint") { checkpoints(workspaceId).begin(ready.worktree, runId, sessionId) }
     }
 
     suspend fun finishCheckpoint(workspaceId: String, id: String): Boolean = operations.withLock {
-        if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val active = mirrorFor(workspaceId) ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
         runPhase("checkpoint") { checkpoints(workspaceId).finish(id, ready.worktree) }
     }
 
     suspend fun recordCheckpointPost(workspaceId: String, id: String) = operations.withLock {
-        if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val active = mirrorFor(workspaceId) ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
         runPhase("checkpoint") { checkpoints(workspaceId).recordPost(id, ready.worktree) }
     }
 
     suspend fun checkpointMatchesPost(workspaceId: String, id: String): Boolean = operations.withLock {
-        if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        val active = mirrorFor(workspaceId) ?: throw MirrorFailure("workspace_unavailable")
         val ready = active.prepare()
         if (ready.dirty) throw MirrorFailure("sync_required")
         checkpoints(workspaceId).matchesPost(id, ready.worktree)
@@ -341,7 +339,7 @@ class RuntimeController(
     ): Map<String, CheckpointEntry>? {
         val store = checkpoints(workspaceId)
         if (scanLive) {
-            val worktree = currentMirror()?.worktree?.takeIf { it.isDirectory }
+            val worktree = mirrorFor(workspaceId)?.worktree?.takeIf { it.isDirectory }
             if (worktree != null) {
                 try {
                     return store.scanManifest(worktree)
@@ -360,14 +358,13 @@ class RuntimeController(
         relativePath: String,
         maxBytes: Int = 1024 * 1024,
     ): ByteArray? = withContext(Dispatchers.IO) {
-        if (selection.currentIdentity() != workspaceId) return@withContext null
         val parsed = try {
             WorkspacePath.parse(relativePath)
         } catch (_: WorkspaceFailure) {
             return@withContext null
         }
         if (parsed.isRoot) return@withContext null
-        val root = currentMirror()?.worktree?.takeIf { it.isDirectory } ?: return@withContext null
+        val root = mirrorFor(workspaceId)?.worktree?.takeIf { it.isDirectory } ?: return@withContext null
         val rootCanonical = try {
             root.canonicalFile
         } catch (_: Exception) {
@@ -392,8 +389,7 @@ class RuntimeController(
     suspend fun beginRunCheckpoint(workspaceId: String, runId: String, sequence: Int,
                                    summary: String, allowDirty: Boolean = false): String? =
         operations.withLock {
-            if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
-            val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+            val active = mirrorFor(workspaceId) ?: throw MirrorFailure("workspace_unavailable")
             val ready = active.prepare()
             if (ready.dirty && !allowDirty) throw MirrorFailure("sync_required")
             runPhase("checkpoint") { runCheckpoints(workspaceId).begin(ready.worktree, runId, sequence, summary) }
@@ -401,8 +397,7 @@ class RuntimeController(
 
     suspend fun finishRunCheckpoint(workspaceId: String, id: String) {
         operations.withLock {
-            if (selection.currentIdentity() != workspaceId) return@withLock
-            val active = currentMirror() ?: return@withLock
+            val active = mirrorFor(workspaceId) ?: return@withLock
             // A completed run is expected to leave local edits; that is the checkpoint's
             // reason to exist. prepare() still gives the canonical worktree path.
             val ready = active.prepare()
@@ -797,20 +792,27 @@ class RuntimeController(
     }
 
     suspend fun retryPendingChanges(expectedWorkspace: String): MirrorSyncResult? = operations.withLock {
-        if (selection.currentIdentity() != expectedWorkspace) return@withLock null
-        currentMirror()?.sync()
+        mirrorFor(expectedWorkspace)?.sync()
     }
 
     suspend fun discardPendingChanges(expectedWorkspace: String): MirrorReady = operations.withLock {
-        if (selection.currentIdentity() != expectedWorkspace) throw MirrorFailure("workspace_changed")
-        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        if (mirrorIdentity != expectedWorkspace || selection.currentIdentity() != expectedWorkspace) {
-            throw MirrorFailure("workspace_changed")
-        }
+        val active = mirrorFor(expectedWorkspace) ?: throw MirrorFailure("workspace_unavailable")
         active.discardPendingChanges()
     }
 
     suspend fun awaitIdentityChange(identity: String) = selection.awaitIdentityChange(identity)
+
+    private suspend fun mirrorFor(identity: String): WorkspaceMirror? {
+        mirrors[identity]?.let { return it }
+        val workspace = try { SafWorkspace(app.contentResolver, Uri.parse(identity)) }
+        catch (_: Exception) { return null }
+        return WorkspaceMirror(app, workspace) { true }.also { mirrors[identity] = it }
+    }
+
+    private suspend fun activeMirror(): WorkspaceMirror? {
+        val identity = currentCoroutineContext()[TurnRunContext]?.workspaceId
+        return if (identity != null) mirrorFor(identity) else currentMirror()
+    }
 
     private suspend fun currentMirror(): WorkspaceMirror? {
         val selected = selection.restore()?.first ?: return null

@@ -107,16 +107,19 @@ class RunCheckpointGate(
     private val backend: CheckpointBackend,
     val scopeRegistry: FileScopeRegistry = FileScopeRegistry(),
     private val onBoundaryChanged: suspend () -> Unit = {},
+    private val writeLease: Mutex = Mutex(),
 ) {
     constructor(
         runtime: RuntimeController,
+        writeLease: Mutex = Mutex(),
         onBoundaryChanged: suspend () -> Unit = {},
-    ) : this(RuntimeControllerCheckpointBackend(runtime), FileScopeRegistry(), onBoundaryChanged)
+    ) : this(RuntimeControllerCheckpointBackend(runtime), FileScopeRegistry(), onBoundaryChanged, writeLease)
 
     constructor(
         backend: CheckpointBackend,
+        writeLease: Mutex = Mutex(),
         onBoundaryChanged: suspend () -> Unit,
-    ) : this(backend, FileScopeRegistry(), onBoundaryChanged)
+    ) : this(backend, FileScopeRegistry(), onBoundaryChanged, writeLease)
 
     private class AttributedFileState(
         val existedBefore: Boolean,
@@ -133,7 +136,7 @@ class RunCheckpointGate(
         val outOfScopeChanges = linkedSetOf<String>()
     }
 
-    private val writeLease = Mutex()
+    // Construction shares this lease across runs in the same project.
     private val attributionLock = Any()
     private val writerStates = linkedMapOf<String, WriterState>()
     private var activePreManifest: Map<String, CheckpointEntry>? = null

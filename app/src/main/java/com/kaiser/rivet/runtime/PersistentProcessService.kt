@@ -146,7 +146,7 @@ class PersistentProcessService : Service() {
                 }
             }
         val stop = PendingIntent.getService(this, REQUEST_STOP,
-            turnIntent(if (turnActive) ACTION_STOP_TURN else ACTION_STOP_ALL),
+            turnIntent(if (state.activeTurns == 1) ACTION_STOP_TURN else ACTION_STOP_ALL),
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
         val statusText = when {
             turnActive && state.approvalToken != null && state.approvalDangerous ->
@@ -154,6 +154,7 @@ class PersistentProcessService : Service() {
             turnActive && state.approvalToken != null ->
                 state.approvalTitle?.takeIf { it.isNotBlank() }?.let { "Approval needed: $it" }
                     ?: "Approval needed in Rivet."
+            state.activeTurns > 1 -> "${state.activeTurns} turns running — tap to return"
             turnActive -> state.runAction?.takeIf { it.isNotBlank() }
                 ?: TURN_NOTIFICATION_TEXT
             state.activePreviews == 1 && state.activeBackgrounds == 0 -> "1 local preview is running"
@@ -165,7 +166,7 @@ class PersistentProcessService : Service() {
             state.activePreviews > 0 -> "${state.activePreviews} local previews are running"
             else -> "${state.activeBackgrounds} background processes are running"
         }
-        val stopLabel = if (turnActive) "Stop" else "Stop all"
+        val stopLabel = if (turnActive && state.activeTurns == 1) "Stop" else "Stop all"
         val builder = Notification.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_processes)
             .setContentTitle(state.runTitle?.takeIf { turnActive }?.let { "Rivet · $it" } ?: "Rivet")
