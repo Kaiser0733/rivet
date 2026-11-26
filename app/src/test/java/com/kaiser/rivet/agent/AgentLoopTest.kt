@@ -372,7 +372,7 @@ class AgentLoopTest {
         assertEquals(2, requests)
         assertTrue(result.messages.flatMap { it.toolResults }.single().content.contains("workspace_unavailable"))
     }
-    @Test fun providerResourceExhaustionIsSurfacedWithoutRetry() = runTest {
+    @Test fun providerResourceExhaustionRetriesThenSurfaces() = runTest {
         var requests = 0
         val loop = AgentLoop(
             requestModel = { _, _, _ -> requests++; throw ProviderError.ResourceExhausted() },
@@ -383,7 +383,7 @@ class AgentLoopTest {
             loop.run(listOf(AgentMessage.user("Continue")), emptyList())
             error("Expected provider failure")
         } catch (_: ProviderError.ResourceExhausted) {
-            assertEquals(1, requests)
+            assertEquals("five retries, then the provider error reaches the turn", 6, requests)
         }
     }
 
@@ -1072,7 +1072,7 @@ class AgentLoopTest {
     }
 
     @Test
-    fun identicalDeniedMutationIsNotPromptedAgain() = runTest {
+    fun eachDeniedMutationIsDecidedOnItsOwn() = runTest {
         val call = AgentToolCall(
             "first",
             "delete_path",
@@ -1107,14 +1107,14 @@ class AgentLoopTest {
 
         val result = loop.run(listOf(AgentMessage.user("Remove the old file")), emptyList())
 
-        assertEquals(1, approvals)
+        assertEquals("each call gets its own decision", 2, approvals)
         assertEquals(0, executions)
         assertEquals(2, result.messages.flatMap { it.toolResults }.count { it.error })
         assertEquals(AgentStopReason.Completed, result.stopReason)
         assertTrue(result.messages.flatMap { it.toolResults }.last().content.contains("denied"))
     }
 
-    @Test fun reorderedMutationArgumentsDoNotReopenDeniedApproval() = runTest {
+    @Test fun reorderedMutationArgumentsAreDecidedAgain() = runTest {
         val first = AgentToolCall("one", "move_path", """{"path":"A.kt","destination":"B.kt"}""")
         val second = AgentToolCall("two", "move_path", """{"destination":"B.kt","path":"A.kt"}""")
         val responses = ArrayDeque(listOf(AgentResponse(toolCalls = listOf(first)),
@@ -1130,7 +1130,7 @@ class AgentLoopTest {
             requestApproval = { approvals++; false },
         ).run(listOf(AgentMessage.user("Move A.kt")), emptyList())
 
-        assertEquals(1, approvals)
+        assertEquals("reordered arguments still need their own decision", 2, approvals)
         assertEquals(0, executions)
         assertEquals(AgentStopReason.Completed, result.stopReason)
         assertEquals("two", result.messages.flatMap { it.toolResults }.last().callId)
@@ -1449,8 +1449,10 @@ class AgentLoopTest {
         val limited = result.messages.flatMap { it.toolResults }.first()
 
         assertEquals("giant", limited.callId)
-        assertTrue(limited.error)
-        assertEquals(AgentLoop.OUTPUT_LIMIT_CONTENT, limited.content)
+        assertFalse("the tool's successful status survives the size truncation", limited.error)
+        assertTrue(limited.content.contains("\"truncated\":true"))
+        assertTrue(limited.content.contains("\"head\""))
+        assertTrue(limited.content.contains("\"tail\""))
         assertTrue(limited.content.toByteArray(Charsets.UTF_8).size <= 24 * 1024)
         assertEquals("Recovered", result.messages.last().text)
         assertEquals("{}", result.messages.flatMap { it.toolResults }.last().content)
