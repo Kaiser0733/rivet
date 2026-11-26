@@ -1,215 +1,169 @@
-# Model limits: automatic detection and learning
+# Parallel sessions — Builds 2 and 3
 
-Branch `model-limits-detect`, based on `origin/batch/surface-fix` at
-`0729dabcfb01b052c77ec6d5af3e0a82aab8a9f3`. Implementation HEAD before this
-report: `3fcc4c98`. Nothing was merged, tagged, released, or version-bumped.
+Branch `parallel-builds-23`, based on `batch/surface-fix` at `eb6f4f78`.
+Implementation HEAD `45ef8a69`. Nothing was merged, tagged, released, or
+version-bumped; no APK was built.
 
-The acceptance target was that a user can add a normal provider and model and
-Rivet fills both the context window and the maximum output itself. The resolver
-now does that for the known providers in the bundled table, for providers that
-report model metadata, and for limits learned from a provider error. The safe
-fallback is 32K, not the old 256K guess.
+## 1. The brief’s Build 1 premise did not hold in this tree
 
-## 1. Resolution order and the default
+`parallel-build-1` is not an ancestor of `batch/surface-fix`. Its base is
+`0729dabc`; `batch/surface-fix` was 44 commits ahead at `eb6f4f78`, and
+`parallel-build-1` was 11 commits ahead of its own base. Build 1 had therefore
+not been merged when this branch was made.
 
-Commits `53c1be28`, `6e8fa6f1`, `3fcc4c98`.
+I did not merge or rebase. I cherry-picked the Build 1 code and test commits
+onto the branch and resolved the overlap with the flaw-family code already in
+the batch:
 
-Files · `provider/ModelLimits.kt`, `provider/ProviderConfig.kt`,
-`agent/ContextBudget.kt`, `agent/ContextBudgetTest.kt`.
+- `ed57f32c` explicit conversation storage target and `SessionRun` extraction
+- `1f8a21cc` switching conversations while a turn keeps running
+- `91b5f10e` application-scoped runs, approvals, and registry
+- `cc8d8a88` immediate stop and cancellable checkpoint cleanup
+- Build 1 source-check and stopped-send test commits
+- `2171d0ae` adaptation commit: kept the current batch’s live secret redaction,
+  run journal/tool receipts, spend guard, content-hash approvals, checkpoint
+  error handling, and the merged command/native surface. The Build 1
+  `NotificationApprovals` direct-notification path was not restored because the
+  flaw-family batch deliberately removed it; the registry updates the
+  foreground-service approval state and the notification still opens the app.
 
-The resolver applies a local hard ceiling, then a manual value, a learned cap,
-provider metadata, the known-model table, an observed usage floor, and finally
-32,768 tokens. A learned cap is scoped to provider id, endpoint and model and
-is ignored after expiry. Manual output wins for planning; the wire value is
-clamped to a provider or learned maximum so the user is not sent a request the
-provider already rejected. Manual context below a local ceiling is allowed;
-above it is clamped with a visible warning.
+This is the main deviation from the brief. Without it Build 2 would have had no
+per-session run, storage, or stop foundation to build on.
 
-The default reserve is proportional: `min(16K, max(2K, window/4))` when the
-window is only assumed. On 32K that gives 24,576 allowed input tokens,
-21,504 compact-at, and 18,432 compact-to. A learned prompt cap is applied after
-the reserve so it is not subtracted twice.
+## 2. Build 2 — two turns in one project
 
-## 2. Provider metadata and the bundled table
+Commit `ac20b46f` (implementation), `45d6025f` (tests).
 
-Commits `53c1be28`, `ffc91952`.
+- `SessionRunRegistry` now keeps a map of active runs instead of a single
+  `active` slot. `begin`, `finish`, `isActive`, `hasActiveRuns`, activity rows,
+  and the selected/last-run pointer are all per session. Starting B no longer
+  replaces or finishes A.
+- `ChatViewModel.canStartRun` allows a second cloud turn, caps the project at
+  two active turns, and refuses a second local-model turn with a plain
+  “Waiting for the local model” notice. The local-model admission remains
+  conservative rather than a full queue.
+- `liveSession` and `changeSession` resolve the cached `SessionRun` by the
+  selected session id, not only `lastRun`. This is what lets a switched-away
+  running conversation come back with its stream, transcript, stop control, and
+  undo row intact.
+- `launchRun` always completes its own registry entry and foreground-service
+  reservation in `finally`; it no longer cleans up only when it is the one
+  `active` run.
+- `RunCheckpointGate` accepts a shared mutation lease. The view model passes one
+  lease to every run in the project, so two same-project mutating batches
+  serialize instead of each gate carrying its own mutex.
+- `PersistentProcessService` reports “N turns running” and offers “Stop all”
+  when more than one turn is active, while a single turn keeps the existing
+  “Stop” action. In-app `stop()` still stops only the selected run, and
+  `stopForApproval` finds the run by the approval’s session id.
+- `openProject` and `changeSession` create a fresh `SessionRun` for the new
+  conversation instead of mutating the currently attached run, so opening B
+  cannot overwrite A’s in-memory state.
 
-Files · `provider/OpenAiCompatibleClient.kt`, `provider/AnthropicClient.kt`,
-`provider/GeminiClient.kt`, `provider/ModelIdNormalizer.kt`,
-`provider/KnownModelLimits.kt`, `app/src/main/resources/model-limits.tsv`.
+## 3. Build 3 — parallel sessions across projects
 
-Anthropic's `max_input_tokens` and `max_tokens`, Gemini's
-`inputTokenLimit`/`outputTokenLimit`, and the OpenAI-compatible spellings
-`context_length`, `context_window`, `contextLength`, `max_context_length`,
-`max_model_len`, `max_completion_tokens`, `maxOutputTokens`,
-`maxCompletionTokens`, and `outputTokenLimit` are parsed. OpenRouter's
-`top_provider` values still win within a listing because they describe the
-specific route. Generic gateways only get a completion cap when the user set
-it or an error taught it; documented first-party clients also send provider
-metadata. The OpenRouter request ceiling is unchanged for unknown routes.
+Commit `ac20b46f` (implementation), `45d6025f`/`45ef8a69` (tests).
 
-The table is a 5,188-row models.dev snapshot from 2026-11-25. It is loaded from
-resources, not fetched at runtime. `ModelIdNormalizer` strips GGUF quantisation
-for local ids, one owner prefix, a routing suffix after `:`, Fireworks'
-`accounts/fireworks/models/` path, and date stamps. It deliberately leaves
-`-mini`, `-flash`, `-pro`, and `-32k` alone. Ambiguous normalised stems return
-no table answer rather than guessing. `scripts/generate_model_limits.py`
-regenerates the table; models.dev is MIT-licensed and the notice and licence are
-in `THIRD_PARTY_NOTICES.md` and `licenses/models.dev-MIT.txt`.
+- `WorkspaceSelection.select` no longer releases the previous project’s
+  persisted URI grant. Grants are per tree and must outlive the view change;
+  the old release was the direct SAF failure for a background project.
+- `WorkspaceSelection.view(uri)` was added for showing an already-granted
+  session project without taking a new grant or releasing another one.
+  `changeSession` uses it, and now refreshes goal/memory from the selected
+  session’s project rather than the global pointer. The project name and
+  identity follow the selected session.
+- `ChatViewModel.startTurn` captures the workspace from
+  `currentSessionWorkspaceId`, not from `workspaceSelection.restore()` at
+  coroutine start. A’s turn can no longer pick up B because B was opened while
+  A was waiting to start.
+- `TurnRunContext` carries the turn’s workspace id. `RuntimeController` keeps a
+  mirror per workspace id and `activeMirror()` selects the turn’s mirror;
+  checkpoint begin/finish/post/manifest, run checkpoints, pending-change
+  retry/discard, and command execution use the requested workspace instead of
+  the currently viewed one. `WorkspaceMirror` instances allow their own
+  project’s operations; viewing another project is no longer treated as an
+  access loss.
+- `openProject` is allowed while another project’s turn is running. It does not
+  stop the previous project’s processes when that project still has an active
+  run, and it only rebinds the browser when no run is active.
+- `workspaceIsCurrent` is no longer a global-selection equality check in the
+  coordinator or supervisor. The captured SAF handle is the authority; a
+  project that loses its grant still fails naturally at the workspace call.
+- The turn-level `awaitIdentityChange` cancellation race was removed. Looking
+  at another project no longer cancels the turn.
 
-## 3. Error learning
+## 4. Tests
 
-Commit `6e8fa6f1`.
+### Ran
 
-Files · `provider/ModelLimitLearningPolicy.kt`, `provider/Http.kt`,
-`provider/ProviderError.kt`, `agent/AgentLoop.kt`,
-`chat/ChatViewModel.kt`, `chat/ProviderRuntimeSource.kt`,
-`subagent/WorkerRunner.kt`, `storage/ProviderStore.kt`.
+- `:app:compileDebugKotlin` — **BUILD SUCCESSFUL**.
+- `RunCheckpointGateTest` — `OK (5 tests)`.
+- `ChatViewModelTest` — 71 run, **15 failures**; all failures are in the
+  existing 5-second-timeout group, not assertion failures:
+  `streamingPreviewIsTransient…`, `sessionLimitKeepsLastGoodState…`,
+  `aRejectedEffortOffers…`, `unexpectedPersistenceFailure…`,
+  `mutationAtSessionLimit…`, `stopWhilePreparing…`,
+  `unavailableCommandReturns…`, `retryAfterAPartialAnswer…`,
+  `acceptanceHappensBeforeAProviderLoad…`, `oversizedPromptLimit…`,
+  `laterCheckpointPostFailure…`, `turnRunsUnderForegroundService…`,
+  `anEffortRefusedInsideTheStream…`, `nestedInstructions…`, and
+  `streamingReasoningAccumulates…`.
+- Individually re-run and **passing** after the final implementation compile:
+  `openingAnotherProjectLeavesTheRunningProjectLiveAndWritable`,
+  `conversationSwitchKeepsTheOriginalTurnLiveAndDurable`,
+  `theUndoBarBelongsToTheSessionThatMadeTheChange`,
+  `backgroundApprovalIdentifiesItsConversationAndStopsOnlyItsRun`,
+  `dismissingTheUndoBarHidesItAcrossSwitchAndRestartWithoutUndoing`, and
+  `cancellingSummaryPreservesPriorActiveContextAndCanonicalHistory`.
+- `projectSelectionStartsBoundConversationAndHistoryKeepsItsProject` passes
+  after adjusting its old expectation that resuming a session kept the other
+  project’s name; the row now reports the session’s own project.
 
-Numeric context and output limits are parsed from HTTP 400/413/422 bodies and
-structured codes. Byte limits, rate limits, and unrelated 400s are rejected.
-A context observation must be between 512 and 10M, must be below the current
-estimate, and must be plausible against the attempted token count. The first
-observation is provisional for 24 hours; an identical second error confirms it
-for 90 days. Output learning is downward-only. A successful request that
-reports more input tokens than a learned cap clears that cap and records the
-observed floor. Nothing overwrites a manual value.
+### JiTTests
 
-The same-turn path stores a prompt cap in `ContextPreparation` before the loop
-compacts again. Output learning is persisted after the error and used on the
-next turn; it does not retry generation in the same turn. The editor exposes
-"Reset learned limit" whenever a learning exists and persists the reset
-immediately.
+- `openingAnotherProjectLeavesTheRunningProjectLiveAndWritable` starts A,
+  opens B, starts B, returns to A, finishes A, then finishes B. On the
+  pre-Build-3 parent, opening B is blocked by `openProject` while a run is
+  active and the turn is bound to the global project; the test cannot reach the
+  two-live-turn state.
+- `conversationSwitchKeepsTheOriginalTurnLiveAndDurable` now sends the second
+  turn after switching. On the pre-Build-2 parent that send is refused by
+  `canStartRun`’s one-turn-at-a-time guard.
 
-## 4. Local models
+I did not successfully execute either test on a checked-out parent. The branch
+contains the Build 1 commits that the parent batch lacks, so a parent checkout
+needs the same cherry-picked foundation to compile the test class; that
+parent-red run is therefore an **honest gap**, not a claimed green.
 
-Commit `fedd6a2a`.
+## 5. Honest gaps
 
-Files · `local/GgufMetadata.kt`, `local/LocalModelManager.kt`,
-`local/LocalProviderClient.kt`, `local/GgufMetadataTest.kt`,
-`local/LocalLimitMergeTest.kt`.
+- Build 2 is not a complete two-turn product. Approvals are queued in one
+  broker but the in-app dialog shows one selected approval; the other is
+  represented as a background approval and is not presented side by side.
+  The local-model second turn is rejected with a notice, not queued, and the
+  admission check races until each run has loaded its provider snapshot.
+- Browser state, phone capture, the interactive terminal, and the toolchain
+  remain app-global. This branch does not make them per-project. A background
+  project’s browser action can still move the single page, and the terminal
+  still belongs to the viewed project.
+- `WorkspaceSelection` remains the single “viewed project” preference. The
+  branch separates grant lifetime and runtime mirrors, but does not introduce
+  the `ProjectCatalog`/`CurrentProjectView`/`ProjectRuntime` model from
+  `parallel-sessions-xproject.md`.
+- Previews and background processes are not restarted or migrated on a project
+  view change; only the destructive stop for a project with no active run was
+  removed.
+- The Build 1 source-check tests were cherry-picked, but the full merged
+  title/ChatVM suite was not rerun after the final Build 2/3 commit. The 15
+  timeout failures above are the real result of the focused ChatViewModel
+  class; CI remains the final gate.
+- `AgentLoopTest` could not be compiled by the manual harness because that
+  source file depends on `AgentToolExecutorTest` helpers outside the harness’s
+  file list; it was not run here.
 
-GGUF v2/v3 metadata is read up to 32 MB. The reader takes the architecture's
-`*.context_length`, falling back to the rope scaling original context, and
-returns null on malformed or truncated input. The effective local context is
-the smaller of the training context and the device budget. Old installs are
-parsed lazily when first needed. New installs get a detected
-`ModelContextLimit` instead of a manual value, and `syncProviders` merges
-manual values, reasoning, headers and learning forward rather than overwriting
-them. A manual lower context is passed to the native load as the requested
-size; it cannot raise the GGUF/device ceiling.
+## 6. Operational notes
 
-## 5. Editor and meter
-
-Commit `f1cb6a4b`.
-
-Files · `ui/provider/ProviderEditor.kt`, `ui/provider/ProviderEditorState.kt`,
-`ui/provider/ProvidersViewModel.kt`, `ui/chat/ContextMeter.kt`,
-`subagent/SubagentPool.kt`.
-
-The editor shows the resolved source (manual, learned, provider, known model,
-lower bound, default, local) under both fields. Detected output is shown as
-detected but is not described as a sent request cap. Endpoint changes clear
-detected and learned data. Saved providers whose model has no known limit are
-auto-detected when the model list is fetched; a normalised match keeps the
-user's typed model id. The meter says "assumed context window" when the number
-came from the fallback rather than a measurement. Subagent pool entries keep
-the live config's limit instead of overriding it with the snapshot taken when
-the model was ticked.
-
-## Tests actually run
-
-- `:app:compileDebugKotlin` — **BUILD SUCCESSFUL** on the final implementation
-  (offline Gradle 8.13, JDK 17).
-- Manual JVM JUnit run of the touched suites — **100 tests, 0 failures**. The
-  classes were `ModelLimitsTest`, `ModelLimitEvidenceTest`,
-  `KnownModelLimitsTest`, `ProviderConfigLimitsTest`,
-  `ModelLimitLearningPolicyTest`, `GgufMetadataTest`, `LocalLimitMergeTest`,
-  `ModelLimitLoopTest`, `ContextBudgetTest`, `ProviderConfigTest`,
-  `HttpErrorTest`, `ProviderErrorClassificationTest`, and
-  `SubagentPoolTest`.
-- Provider wire-shape suites — **77 tests, 0 failures**: `AnthropicClientTest`,
-  `GeminiClientTest`, and `OpenAiCompatibleClientTest`. The runner needs
-  `-Djava.net.preferIPv4Stack=true` for MockWebServer in this sandbox.
-- `AgentLoopTest` — **60 of 66 passed** in the same harness. The 6 failures all
-  fail at `AgentToolExecutor` static initialisation with
-  `NoClassDefFoundError: android/content/pm/PackageManager$NameNotFoundException`;
-  the manual JVM classpath has no Android runtime. The new `ModelLimitLoopTest`
-  covers the overflow/retry and output-observer paths and passed 3/3.
-- Python generator tests — **100 tests, 0 failures** via
-  `python3 -m unittest discover -s scripts -p 'test_*.py'`.
-- `:app:processDebugJavaRes` — **BUILD SUCCESSFUL**; the 211 KB
-  `model-limits.tsv` was present in the processed Java resources.
-
-I could not run the full Gradle unit suite offline: `:app:compileDebugUnitTestKotlin`
-failed to resolve `androidx.compose.ui:ui-test-junit4`, Robolectric,
-MockWebServer, `okhttp-tls`, and `kotlinx-coroutines-test`. That is why the
-suites above were compiled and run directly with the cached production classes.
-No GitHub Actions run has been started from this machine.
-
-The new tests exercise APIs that do not exist on the parent, so the red side is
-a parent compile failure rather than a completed failing test. I did not claim
-a parent test run I could not perform.
-
-## Honest gaps
-
-- No real provider was called. Limit parsing, request shapes, and learning are
-  covered by local tests, not live Anthropic/Gemini/DeepSeek/Mistral/Groq/
-  Together/OpenRouter traffic.
-- No Android device or Robolectric run. The editor layout, the clickable reset,
-  and the GGUF read on a real downloaded model remain device/CI verification.
-- `ContextPreparationTest` is Robolectric-based and did not compile in the
-  manual harness; it is left for CI.
-- Provider input-limit kind is stored (`InputOnly` for Anthropic/Gemini) but
-  planning still treats it as a total window. That is deliberately
-  conservative: it may reserve output space twice rather than send a request
-  that overflows.
-- Output-limit learning is next-turn only; there is no same-turn generation
-  retry after `OutputLimitExceeded`.
-- Output limits carried inside a streamed provider error are not learned; only
-  HTTP/body evidence is.
-- The table is a point-in-time snapshot. A model newer than 2026-11-25 falls
-  back to provider metadata, usage observations, or 32K.
-- The GGUF parser is tested with synthetic v2/v3 headers. A real model whose
-  metadata sits beyond the 32 MB header cap will be treated as having no
-  training ceiling and fall back to the device budget.
-
-## Gate-fix: cheap pruning across a provider switch (Hermes round, 2026-11-25)
-
-CI run `45599253948` on `model-limits-detect` @`e6b0cf3c` failed only
-`ChatViewModelTest > cheapPruningKeepsFullHistoryAndSendsSmallerContext` with a
-`TimeoutCancellationException`. The branch reproduces it locally: the named
-test fails before the fix and passes after it. Base `0729dabc` passes the same
-test in the same harness.
-
-**Root cause.** The test creates its second provider with
-`config.copy(id = "provider-b", model = "model-b")` and no
-`modelContextLimit`. That fixture relied on the old 256K fallback window. The
-first turn deliberately prunes the 22 large tool results but keeps the full
-event history; the second model is unknown, so the intended new behavior
-resolves it to 32K. The preserved transcript is still larger than 32K, so
-`ContextPreparation` correctly raises `ContextCapacityTooSmall`, the turn ends
-with the “This chat is too long…” error, and the test never sees
-`"After switch"`. There is no hang in the resolver, table load, learning path,
-or provider request. The test’s second fixture encoded the old default, not a
-pruning failure.
-
-**Fix.** Commit `e12eb99c` pins the switched provider to an explicit 40K
-`ModelContextLimit`, matching the first provider’s 40K window. This keeps the
-test about pruning across provider switches rather than about the unknown-model
-fallback. No timeout, assertion, or production behavior was changed.
-
-**Tests run.**
-
-- Named test, branch before fix: **fail** (`TimeoutCancellationException`).
-- Named test, branch with `e12eb99c`: **pass**.
-- Full `ChatViewModelTest`: **55/69 passed**. The 14 failures are the same
-  undo/checkpoint/approval timeouts that occur on base `0729dabc` in this
-  manual Robolectric harness; the named test is not among them. CI remains the
-  authoritative full-class run.
-- Model-limit suites: **100/100 passed** (the same list as the main report).
-- Provider wire-shape suites: **77/77 passed**.
-- Python generator suite: **100/100 passed**.
-- `:app:compileDebugKotlin`: **BUILD SUCCESSFUL**.
-
-No merge, PR, tag, release, APK, or version change was made.
+- Base was not rebased or chased after branch creation.
+- No merge, PR, tag, release, APK, versionName, versionCode, or self-updater
+  change was made.
+- Files were added by name. Untracked scratch harness files were left alone.
