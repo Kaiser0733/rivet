@@ -1004,13 +1004,24 @@ class ChatViewModel private constructor(
         text: String,
         onFeedback: () -> Unit = {},
         onAutonomyChange: (AutonomyMode) -> Unit = {},
-    ) {
+    ): Boolean {
         val trimmed = text.trim()
         val sessionId = _uiState.value.currentSessionId
         val attachments = _composerAttachments.value[sessionId].orEmpty()
-        if ((trimmed.isEmpty() && attachments.isEmpty()) || sessionId in _composerImports.value ||
-            _uiState.value.streaming || !_uiState.value.ready ||
-            _uiState.value.recoveringProjectChanges) return
+        if (trimmed.isEmpty() && attachments.isEmpty()) return false
+        val state = _uiState.value
+        val unavailable = when {
+            sessionId in _composerImports.value -> "Wait for the attachments to finish importing."
+            state.streaming -> "A reply is still in progress."
+            state.recoveringProjectChanges || state.projectLoading || state.undoing ->
+                "Wait for the project to finish updating."
+            !state.ready -> "The conversation is still loading."
+            else -> null
+        }
+        if (unavailable != null) {
+            _uiState.update { it.copy(notice = unavailable) }
+            return false
+        }
         val command = SlashCommands.builtIn(trimmed)
         if (command != null) {
             when (command) {
@@ -1021,7 +1032,7 @@ class ChatViewModel private constructor(
                 BuiltInSlash.BasicYolo -> onAutonomyChange(AutonomyMode.BasicYolo)
             }
             if (command != BuiltInSlash.Goal) _uiState.update { it.copy(commandAckCount = it.commandAckCount + 1) }
-            return
+            return true
         }
         val unknownCommand = SlashCommands.unknownLeading(trimmed, _userSkills.value)
         if (unknownCommand != null) {
@@ -1030,7 +1041,7 @@ class ChatViewModel private constructor(
                 error = null,
                 commandAckCount = it.commandAckCount + 1,
             ) }
-            return
+            return true
         }
         // Acceptance is the tap: the bubble appears and the composer clears before the
         // transcript load, SAF stat, provider snapshot or persistence can block. Prep uses
@@ -1076,6 +1087,7 @@ class ChatViewModel private constructor(
         }
         _subagents.value = emptyList()
         startTurn(accepted.text.trim(), retryingInterrupted = false, acceptedUser = accepted)
+        return true
     }
 
     private suspend fun appendCommandReply(sessionId: String?, command: String, reply: String) {

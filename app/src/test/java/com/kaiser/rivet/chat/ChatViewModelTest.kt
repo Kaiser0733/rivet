@@ -474,6 +474,7 @@ class ChatViewModelTest {
         viewModel.send("first")
         assertTrue(viewModel.uiState.value.streaming)
         viewModel.send("second")
+        assertEquals("A reply is still in progress.", viewModel.uiState.value.notice)
         viewModel.cancel()
         val stopped = await(viewModel) { !it.streaming && it.notice?.startsWith("Stopped") == true }
         assertEquals(1L, stopped.acceptedMessageCount)

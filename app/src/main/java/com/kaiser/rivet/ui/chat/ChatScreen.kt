@@ -1851,7 +1851,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      onOpenProjects: () -> Unit,
                      selector: (@Composable () -> Unit)? = null,
                      contextReading: ContextMeterReading? = null,
-                     onSend: (String) -> Unit,
+                     onSend: (String) -> Boolean,
                      onCancel: () -> Unit, modifier: Modifier = Modifier) {
     // A draft belongs to the conversation it was typed in: switching away keeps it there and
     // never leaves text in the composer that would be sent to a different conversation. The
@@ -1906,7 +1906,7 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
         if (text != null) {
             pendingText = latest
             submittedAt = ackCount
-            onSend(text)
+            if (!onSend(text)) pendingText = null
         }
     }
     // The "/" picker only appears while the first token is still being typed; picking a
