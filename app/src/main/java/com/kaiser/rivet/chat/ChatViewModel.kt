@@ -814,8 +814,14 @@ class ChatViewModel private constructor(
             catch (e: CancellationException) { throw e } catch (_: Exception) { "" }
         if (_uiState.value.currentSessionId != sessionId || runJournal !== journal) return
         val run = if (_uiState.value.streaming) currentSessionRun() else {
-            try { journal?.recoverLatest(sessionId) }
-            catch (e: CancellationException) { throw e } catch (_: Exception) { null }
+            try {
+                val lastPrompt = activeMessages.lastOrNull { it.role == AgentRole.User }?.text
+                journal?.recoverLatest(sessionId, lastPrompt)
+            } catch (e: CancellationException) { throw e }
+            catch (_: Exception) {
+                _uiState.update { it.copy(notice = "Rivet couldn't read the saved run state.") }
+                null
+            }
         }
         val recoveredWorkers = if (!_uiState.value.streaming && run?.resumable == true) {
             try { workerStore.recoverWorkersForRun(run.id) }
@@ -1548,16 +1554,23 @@ class ChatViewModel private constructor(
         return updates
     }
 
-    private suspend fun startRun(workspaceId: String, title: String,
+    private suspend fun startRun(workspaceId: String, title: String, originalPrompt: String,
                                  sessionId: String?, resuming: Boolean): RunRecord? {
         if (sessionId == null || _uiState.value.currentSessionId != sessionId) return null
         val journal = runJournal ?: projectState?.let { workspaceRunJournal(workspaceId, it) } ?: return null
         runJournal = journal
-        val previous = if (resuming) currentSessionRun()?.takeIf { it.workspaceId == workspaceId } else null
+        val priorRun = currentSessionRun()?.takeIf { it.workspaceId == workspaceId }
+        val previous = priorRun.takeIf { resuming }
+        if (!resuming && priorRun?.resumable == true) {
+            journal.save(RunMachine.finish(priorRun, RunPhase.Stopped, "A new user turn started."))
+            ChatSupervisorServices.dismissInterruptedWorkers(workerStore, priorRun.id)
+        }
         val resumed = previous?.takeIf { it.phase == RunPhase.Paused }
         val next = if (resumed != null) RunMachine.resume(resumed)
         else RunMachine.start(RunMachine.begin(UUID.randomUUID().toString(), workspaceId, title, sessionId = sessionId))
-            .copy(toolReceipts = previous?.toolReceipts.orEmpty())
+            .copy(toolReceipts = previous?.toolReceipts.orEmpty(),
+                promptDigest = InternalContext.digest(originalPrompt.trim()))
+        journal.save(next, mirrorToProject = false)
         currentRun = next
         runResumeContext = previous != null
         if (resumed != null) PersistentProcessService.cancelBudgetPause(getApplication<Application>())
@@ -1577,9 +1590,6 @@ class ChatViewModel private constructor(
             _uiState.update { it.copy(runSpendUsd = totals.first, spendLabel = SpendGuard.liveLabel(totals.first)) }
         }
         spendRunId = next.id
-        // Keep the spend counter addressable after a process death, including runs
-        // that have used the provider but haven't made a project mutation.
-        journal.save(next, mirrorToProject = false)
         checkpointGate.startRun(workspaceId, next.id, title, resuming = resumed != null)
         managedProcesses.updateRunStatus(next.title, "Getting ready…", next.startedAt)
         _uiState.update { it.copy(run = next, runRecovery = null) }
@@ -1603,7 +1613,7 @@ class ChatViewModel private constructor(
         val next = try { RunMachine.step(run, summary) }
             catch (_: IllegalStateException) { return }
         currentRun = next
-        try { runJournal?.save(next) } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        saveRunProgress(next)
         managedProcesses.updateRunStatus(next.title, summary.take(180), next.startedAt)
         _uiState.update { it.copy(run = next) }
     }
@@ -1616,12 +1626,24 @@ class ChatViewModel private constructor(
         currentRun = next
         runResumeContext = false
         checkpointGate.finishRunCheckpoint(next.workspaceId)
-        try {
-            runJournal?.save(next, mirrorToProject = next.lastCompletedStep > 0 || next.toolReceipts.isNotEmpty())
-            if (phase == RunPhase.Done || phase == RunPhase.Stopped) spendStore.clearRunTotals(next.id)
-        } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        if (saveRunProgress(next, mirrorToProject = next.lastCompletedStep > 0 || next.toolReceipts.isNotEmpty()) &&
+            (phase == RunPhase.Done || phase == RunPhase.Stopped)) {
+            spendStore.clearRunTotals(next.id)
+        }
         managedProcesses.updateRunStatus(null, null, 0)
         _uiState.update { it.copy(run = next) }
+    }
+
+    private suspend fun saveRunProgress(run: RunRecord, mirrorToProject: Boolean = true): Boolean {
+        return try {
+            checkNotNull(runJournal).save(run, mirrorToProject)
+            true
+        } catch (e: CancellationException) {
+            throw e
+        } catch (_: Exception) {
+            _uiState.update { it.copy(notice = "Rivet couldn't save the latest run state. Recovery may be incomplete.") }
+            false
+        }
     }
 
     private fun recordSpend(config: ProviderConfig, usage: AgentUsage, estimated: Boolean) {
@@ -2039,7 +2061,7 @@ class ChatViewModel private constructor(
             val gesture = if (retryingInterrupted || starterOpening) null else skillGesture(trimmed, skills)
             val prompt = gesture?.task ?: trimmed
             if (workspaceId != null) {
-                startRun(workspaceId, prompt, current.currentSessionId, retryingInterrupted)
+                startRun(workspaceId, prompt, trimmed, current.currentSessionId, retryingInterrupted)
             } else if (!retryingInterrupted) {
                 spendRunId = null
                 spendLedger.resetRun(spendStore.month())
@@ -2852,7 +2874,7 @@ class ChatViewModel private constructor(
                                     PersistentProcessService.showNetworkPause(getApplication<Application>(), paused.title)
                                 }
                                 checkpointGate.finishRunCheckpoint(live.workspaceId)
-                                try { runJournal?.save(paused) } catch (_: Exception) { }
+                                saveRunProgress(paused)
                                 try { sessionStore.markInterrupted(true) } catch (_: Exception) { }
                                 managedProcesses.updateRunStatus(null, null, 0)
                                 _uiState.update {

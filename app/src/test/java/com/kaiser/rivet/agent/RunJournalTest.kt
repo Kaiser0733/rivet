@@ -119,6 +119,20 @@ class RunJournalTest {
         assertTrue(RunContext.updates(emptyList(), "ws", resumed.ownedBy("chat-a")).isNotEmpty())
     }
 
+    @Test fun recoveryCanFindTheInterruptedTurnThatOwnsTheTranscriptTail() = runBlocking {
+        val journal = RunJournal(DirectoryRunStorage(temp.root))
+        val live = RunMachine.start(RunMachine.begin("paused", "ws", "Continue the audit",
+            now = 1, sessionId = "chat"), now = 2)
+        journal.save(RunMachine.pause(live, RunPauseReason.User, now = 3))
+        val later = RunMachine.start(RunMachine.begin("other", "ws", "Different turn",
+            now = 4, sessionId = "chat"), now = 5)
+        journal.save(RunMachine.finish(later, RunPhase.Failed, now = 6))
+
+        assertEquals(listOf("other", "paused"), journal.records("chat").map { it.id })
+        assertEquals("paused", journal.recoverLatest("chat", "Continue the audit")?.id)
+        assertEquals(RunPhase.Failed, journal.recoverLatest("chat", "Different turn")?.phase)
+    }
+
     @Test fun legacyRunWithoutSessionIdStaysHidden() = runBlocking {
         val storage = DirectoryRunStorage(temp.root)
         storage.write("${RunJournal.ROOT}/legacy/run.json",

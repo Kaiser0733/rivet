@@ -57,6 +57,7 @@ data class RunRecord(
     val failure: String? = null,
     val sessionId: String? = null,
     val toolReceipts: Map<String, RunToolReceipt> = emptyMap(),
+    val promptDigest: String? = null,
 ) {
     val interrupted: Boolean
         get() = phase == RunPhase.Running || (phase == RunPhase.Paused && pause == RunPauseReason.Interrupted)
@@ -171,7 +172,7 @@ class DirectoryRunStorage(private val root: File) : RunStorage {
 
     override suspend fun read(relative: String): String? = withContext(Dispatchers.IO) {
         val file = try { resolveSafe(relative) } catch (_: IllegalArgumentException) { return@withContext null }
-        try { if (file.isFile) file.readText() else null } catch (_: Exception) { null }
+        if (file.isFile) file.readText() else null
     }
 
     override suspend fun write(relative: String, text: String) = withContext(Dispatchers.IO) {
@@ -180,7 +181,7 @@ class DirectoryRunStorage(private val root: File) : RunStorage {
         if (parent != null && !parent.isDirectory && !parent.mkdirs() && !parent.isDirectory) {
             throw java.io.IOException("Failed to create run storage directory")
         }
-        val tmp = File(file.parentFile, ".${file.name}.tmp")
+        val tmp = File.createTempFile(".${file.name}-", ".tmp", file.parentFile)
         try {
             FileOutputStream(tmp).use { output ->
                 output.write(text.toByteArray(Charsets.UTF_8))
@@ -233,24 +234,30 @@ class RunJournal(private val storage: RunStorage, private val projectCopy: RunSt
         try { json.decodeFromString(RunRecord.serializer(), it) } catch (_: Exception) { null }
     }
 
-    suspend fun latest(sessionId: String?): RunRecord? {
-        if (sessionId == null) return null
+    suspend fun records(sessionId: String?): List<RunRecord> {
+        if (sessionId == null) return emptyList()
         val ids = (storage.directories(ROOT) + readProject { it.directories(ROOT) }.orEmpty()).distinct()
-        return ids.mapNotNull { id ->
-            load(id).ownedBy(sessionId)
-        }.maxByOrNull { it.updatedAt }
+        return ids.mapNotNull { id -> load(id).ownedBy(sessionId) }
+            .sortedWith(compareByDescending<RunRecord> { it.startedAt }.thenByDescending { it.updatedAt })
     }
+
+    suspend fun latest(sessionId: String?): RunRecord? = records(sessionId).firstOrNull()
 
     private suspend fun <T> readProject(read: suspend (RunStorage) -> T): T? = try {
         projectCopy?.let { read(it) }
     } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
 
     /** Recover a live run from a previous process without pretending it finished. */
-    suspend fun recoverLatest(sessionId: String?): RunRecord? {
-        val latest = latest(sessionId) ?: return null
-        if (latest.phase in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped)) return latest
-        val recovered = RunMachine.recover(latest)
-        save(recovered)
+    suspend fun recoverLatest(sessionId: String?, lastPrompt: String? = null): RunRecord? {
+        val records = records(sessionId)
+        val latest = records.firstOrNull() ?: return null
+        val prompt = lastPrompt?.trim().orEmpty()
+        val digest = prompt.takeIf(String::isNotEmpty)?.let(InternalContext::digest)
+        val candidate = if (digest == null) latest else records.firstOrNull {
+            it.promptDigest?.let { saved -> saved == digest } ?: (it.title == prompt.take(160))
+        } ?: return latest.takeUnless { it.resumable || it.interrupted }
+        val recovered = RunMachine.recover(candidate)
+        if (recovered != candidate) save(recovered)
         return recovered
     }
 
