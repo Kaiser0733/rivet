@@ -12,10 +12,9 @@ internal object SlashCommands {
     private val formatting = Regex("[\\p{Cf}]")
 
     fun normalize(input: String): String {
-        val text = input.trim().trimStart { formatting.matches(it.toString()) }
-        val slashes = text.takeWhile { it == '/' || it == '／' }.length
-        if (slashes == 0) return text
-        val body = text.drop(slashes).trimStart()
+        val text = input.trimEnd().trimStart { it.isWhitespace() || it.category == CharCategory.FORMAT }
+        if (!text.startsWith('/') && !text.startsWith('／')) return text
+        val body = text.trimStart { it == '/' || it == '／' || it.category == CharCategory.FORMAT }.trimStart()
         val token = body.takeWhile { !it.isWhitespace() }
         return "/" + token.replace(formatting, "") + body.drop(token.length)
     }

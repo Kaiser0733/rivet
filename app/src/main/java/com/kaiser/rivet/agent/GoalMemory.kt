@@ -30,10 +30,7 @@ data class GoalDocument(
     val sessionId: String? = null,
     val progress: List<GoalProgress> = emptyList(),
 ) {
-    fun statusLine(): String {
-        val last = progress.lastOrNull()?.text?.take(160) ?: "no progress yet"
-        return "Goal: ${text.take(200)} · ${state.wire} · set $setOn · $last"
-    }
+    fun statusLine(): String = "Goal: ${text.take(200)} · ${state.wire} · set $setOn"
 
     fun calmLine(): String {
         val last = progress.lastOrNull()?.text?.take(140) ?: "no progress yet"
