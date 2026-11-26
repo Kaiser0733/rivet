@@ -140,12 +140,10 @@ The worktree was removed afterwards; no base ref was changed.
 - Build 2 is not a complete two-turn product. Approvals are queued in one
   broker but the in-app dialog shows one selected approval; the other is
   represented as a background approval and is not presented side by side.
-  The local-model second turn is rejected with a notice, not queued, and the
-  admission check races until each run has loaded its provider snapshot.
-- Browser state, phone capture, the interactive terminal, and the toolchain
-  remain app-global. This branch does not make them per-project. A background
-  project’s browser action can still move the single page, and the terminal
-  still belongs to the viewed project.
+  (The queue itself was rechecked and is not dropped; see §7.)
+- Browser state was app-global before the review fix; §7 now gives each
+  project its own `BrowserSession` and page state. Phone capture, the
+  interactive terminal, and the toolchain remain app-global.
 - `WorkspaceSelection` remains the single “viewed project” preference. The
   branch separates grant lifetime and runtime mirrors, but does not introduce
   the `ProjectCatalog`/`CurrentProjectView`/`ProjectRuntime` model from
@@ -155,8 +153,8 @@ The worktree was removed afterwards; no base ref was changed.
   removed.
 - The Build 1 source-check tests were cherry-picked, but the full merged
   title/ChatVM suite was not rerun after the final Build 2/3 commit. The 15
-  timeout failures above are the real result of the focused ChatViewModel
-  class; CI remains the final gate.
+  timeout failures above were the real result of the focused ChatViewModel
+  class before the gap fixes; CI remains the final gate.
 - `AgentLoopTest` could not be compiled by the manual harness because that
   source file depends on `AgentToolExecutorTest` helpers outside the harness’s
   file list; it was not run here.
@@ -167,3 +165,96 @@ The worktree was removed afterwards; no base ref was changed.
 - No merge, PR, tag, release, APK, versionName, versionCode, or self-updater
   change was made.
 - Files were added by name. Untracked scratch harness files were left alone.
+
+## 7. Gap fixes after Kaiser’s review
+
+Reviewed parent: `2ad56c1b` (the previous branch tip). Gap-fix commits:
+`eeabde8a` (implementation) and `52bc21f5` (tests), with this report commit
+after them.
+
+### Fix 1 — browser state is per project
+
+`BrowserRuntime.forProject(app, models, identity)` now caches one
+`BrowserSession` per project identity. Each session keeps its own URL, tabs,
+reader state, console, and project snapshot store; `bindProject` already
+persisted and restored the per-project tab state. The view model’s `browser`
+getter now returns the viewed project’s session, and `showBrowser(identity)`
+binds the viewed session without touching another project’s session.
+
+A turn no longer uses the view model’s global browser object. At turn start it
+resolves `runBrowser = browserFor(workspaceId)`, binds that project, and builds
+`BrowserTools(runBrowser)` for the whole turn. `beginAgentRun`, preview starter,
+custom-tab handoff, `endAgentRun`, and chat-preview dismissal all use that
+run browser. Selecting project B changes only the viewed session; A’s
+captured `runBrowser` and its page stay intact. Switching back restores A’s
+session, and its persisted snapshot is where it left off.
+
+Test: `eachProjectKeepsItsOwnBrowserSession`. It asserts distinct session
+objects for two projects, that inserting B leaves A’s `projectKey` untouched,
+and that returning to A returns the same session. On `2ad56c1b` it fails at
+“each project needs its own browser session”; on this branch it passes.
+
+Remaining browser limit (honest): a background project has no attached
+WebView renderer, so its text/read/find/open-text actions work on its own
+state, while renderer-dependent visual actions may report
+`browser_renderer_unavailable` until that project is viewed and gets the
+renderer. That is safer than hijacking the viewed page, but it is not full
+visual browsing in the background.
+
+### Fix 2 — second local turn queues
+
+`SessionRun` now records whether its provider has been resolved
+(`providerKnown`). When a local turn is active, starting another turn first
+resolves that turn’s provider. A local turn is put in `queuedLocalTurns` and
+its session is marked queued in `SessionRunRegistry`; a cloud turn continues to
+start immediately (subject to the existing two-cloud-turn cap).
+
+A queued turn has `streaming = true`, activity “Waiting for the local model…”,
+is visible as a running conversation row, accepts its user message durably, and
+keeps the same `SessionRun` when the user switches away and back. `stop()` on a
+queued turn removes it from the queue and marks it stopped; it never starts.
+`launchRun` drains the queue when a local turn finishes or stops, starting the
+next local turn automatically.
+
+Tests:
+- `secondLocalTurnQueuesAndCanBeStoppedBeforeItStarts` — queues B, verifies
+  “Waiting for the local model…”, stops it, releases A, and verifies B never
+  reaches the provider while its message is preserved.
+- `queuedLocalTurnStartsWhenTheRunningOneFinishes` — queues B, finishes A,
+  verifies B starts once and returns “second done”.
+
+Both fail on `2ad56c1b` with timeouts at the pre-fix rejection path and pass on
+this branch. The queue is in-memory only; a process death loses a queued turn,
+which is not claimed as durable.
+
+### Check only — approvals under parallel runs
+
+No approval change was needed. The broker is a FIFO queue:
+`AgentApprovalGate.await` adds a `Pending` and publishes the head;
+its `finally` removes only that waiter and promotes the next; `resolve` only
+accepts the current head and returns false for an old token. Thus a second
+run’s approval waits, remains in `mutablePending`, and is promoted after the
+first resolves. `SessionRunRegistry` observes `approvals.pending` and updates
+the owning session; `project()` exposes the selected one as `pendingApproval`
+and another as `backgroundApproval`.
+
+Evidence run: `AgentApprovalGateTest` — `OK (8 tests)`, including
+`concurrentApprovalsResolveInFifoOrder` and
+`cancelOwnerDropsOnlyThatOwnersPendingApproval`; and
+`backgroundApprovalIdentifiesItsConversationAndStopsOnlyItsRun` on this branch.
+Verdict: approvals queue correctly; never dropped or stranded by the first
+resolution. No new approval, cap, or turn-block was added.
+
+### Verification after the gap fixes
+
+- `:app:compileDebugKotlin` — **BUILD SUCCESSFUL**.
+- `eachProjectKeepsItsOwnBrowserSession` — pass.
+- `secondLocalTurnQueuesAndCanBeStoppedBeforeItStarts` — pass.
+- `queuedLocalTurnStartsWhenTheRunningOneFinishes` — pass.
+- `openingAnotherProjectLeavesTheRunningProjectLiveAndWritable` — pass.
+- `conversationSwitchKeepsTheOriginalTurnLiveAndDurable` — pass.
+- `backgroundApprovalIdentifiesItsConversationAndStopsOnlyItsRun` — pass.
+- `AgentApprovalGateTest` — 8/8 pass.
+- Parent-red: all three new tests were also run on a detached `2ad56c1b`
+  worktree. `eachProject…` failed the session-identity assertion; both local
+  queue tests timed out at the old rejection. The worktree was removed after.
