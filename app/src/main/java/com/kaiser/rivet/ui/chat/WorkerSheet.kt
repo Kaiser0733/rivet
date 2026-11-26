@@ -19,13 +19,11 @@ import androidx.compose.material3.CircularProgressIndicator
 import androidx.compose.material3.HorizontalDivider
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
-import androidx.compose.material3.AssistChip
+import androidx.compose.material3.FilterChip
 import androidx.compose.material3.TextButton
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.semantics.selected
-import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
@@ -60,9 +58,9 @@ internal fun WorkerScreen(
             }
             FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
                 workers.forEach { entry ->
-                    AssistChip(
+                    FilterChip(
                         onClick = { onSelect(entry.id) },
-                        modifier = Modifier.semantics { selected = entry.id == worker.id },
+                        selected = entry.id == worker.id,
                         label = {
                             Text(if (entry.id == worker.id) entry.job
                                 else "${entry.job} · ${workerSheetState(entry)}")

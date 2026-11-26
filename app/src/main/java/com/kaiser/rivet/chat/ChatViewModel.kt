@@ -260,6 +260,7 @@ data class ChatUiState(
 enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn }
 
 data class WorkerSheetState(
+    val workerId: String? = null,
     val worker: WorkerRecord? = null,
     val messages: List<AgentMessage> = emptyList(),
     val loading: Boolean = false,
@@ -301,6 +302,7 @@ class ChatViewModel private constructor(
     private val _subagents = MutableStateFlow<List<WorkerRecord>>(emptyList())
     val subagents: StateFlow<List<WorkerRecord>> = _subagents.asStateFlow()
     private val _workerSheet = MutableStateFlow(WorkerSheetState())
+    private var workerSheetLoad: Job? = null
     val workerSheet: StateFlow<WorkerSheetState> = _workerSheet.asStateFlow()
     private var activeSupervisor: SubagentSupervisor? = null
 
@@ -3186,15 +3188,18 @@ class ChatViewModel private constructor(
 
     /** Opening a worker only reads its transcript; the active session is untouched. */
     fun openWorker(workerId: String) {
-        if (_workerSheet.value.worker?.id == workerId && !_workerSheet.value.loading) return
+        if (_workerSheet.value.workerId == workerId && _workerSheet.value.error == null) return
+        workerSheetLoad?.cancel()
         _workerSheet.value = WorkerSheetState(
+            workerId = workerId,
             worker = _subagents.value.firstOrNull { it.id == workerId },
             loading = true,
         )
-        viewModelScope.launch {
+        workerSheetLoad = viewModelScope.launch {
             try {
                 val transcript = workerStore.inspectTranscript(workerId)
                 _workerSheet.value = WorkerSheetState(
+                    workerId = workerId,
                     worker = transcript.worker,
                     messages = transcript.messages,
                 )
@@ -3207,6 +3212,8 @@ class ChatViewModel private constructor(
     }
 
     fun closeWorker() {
+        workerSheetLoad?.cancel()
+        workerSheetLoad = null
         _workerSheet.value = WorkerSheetState()
     }
 

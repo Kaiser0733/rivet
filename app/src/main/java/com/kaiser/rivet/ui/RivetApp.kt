@@ -342,7 +342,7 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
                             RivetDestination.Workers -> {
                                 val workers by chatViewModel.subagents.collectAsState()
                                 val sheet by chatViewModel.workerSheet.collectAsState()
-                                val worker = workers.firstOrNull { it.id == sheet.worker?.id } ?: sheet.worker
+                                val worker = workers.firstOrNull { it.id == sheet.workerId } ?: sheet.worker
                                 if (worker == null) Surface(Modifier.fillMaxSize().statusBarsPadding().navigationBarsPadding()) {
                                     RivetPageHeader("Subagents") {
                                         chatViewModel.closeWorker()
