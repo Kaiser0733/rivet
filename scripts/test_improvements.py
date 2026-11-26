@@ -130,7 +130,9 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("reuseEmpty: Boolean = false", storage)
         self.assertIn("NOT EXISTS(SELECT 1 FROM events WHERE session_id=sessions.id)", storage)
         self.assertIn("copy(hasMessages = cursor.getInt(7) != 0)", storage)
-        self.assertIn("reuseEmpty = activeRun == null && selectedState.value.goal == null",
+        # The empty-draft reuse guard moved from the single active run to the
+        # registry's active-run set when two turns became possible.
+        self.assertIn("reuseEmpty = !runRegistry.hasActiveRuns() && selectedState.value.goal == null",
                       source("chat/ChatViewModel.kt"))
         self.assertIn("session.hasMessages && session.title.contains", source("ui/history/HistoryScreen.kt"))
 
