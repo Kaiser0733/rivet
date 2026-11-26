@@ -5,6 +5,7 @@ import android.webkit.WebView
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.test.resetMain
@@ -24,12 +25,21 @@ import org.robolectric.annotation.Config
 @RunWith(RobolectricTestRunner::class)
 @Config(manifest = Config.NONE, sdk = [28])
 class BrowserEvalSessionTest {
+    private var session: BrowserSession? = null
+
     @Before fun setUp() { Dispatchers.setMain(UnconfinedTestDispatcher()) }
-    @After fun tearDown() { Dispatchers.resetMain() }
+    @After fun tearDown() {
+        runBlocking { session?.awaitPendingWorkForTest() }
+        session = null
+        Dispatchers.resetMain()
+    }
+
+    private fun newSession(app: Application): BrowserSession =
+        BrowserSession(app, models = null).also { session = it }
 
     private fun readySession(url: String = "http://127.0.0.1:45179/"): Pair<BrowserSession, WebView> {
         val app: Application = RuntimeEnvironment.getApplication()
-        val session = BrowserSession(app, models = null)
+        val session = newSession(app)
         val view = WebView(app)
         view.layout(0, 0, 720, 1480)
         session.attach(view)
@@ -69,7 +79,7 @@ class BrowserEvalSessionTest {
 
     @Test fun evalRefusesAnIdentityHandoff() = runTest {
         val app: Application = RuntimeEnvironment.getApplication()
-        val session = BrowserSession(app, models = null)
+        val session = newSession(app)
         session.openText("https://accounts.google.com/signin")
         val failure = runCatching { session.eval("1") }.exceptionOrNull()
         assertTrue(failure is BrowserFailure)

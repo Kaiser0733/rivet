@@ -357,6 +357,21 @@ class BrowserSession(
     var previewStarter: (suspend (String, String) -> String?)? = null
     var customTabOpener: ((String) -> Boolean)? = null
 
+    /**
+     * Test support: stops the transient jobs that attach/onPageFinished start and
+     * waits for them to finish. A test replaces Dispatchers.Main between cases, and
+     * a coroutine still handing back from Dispatchers.Default would read Main while
+     * that replacement is in progress, which kotlinx-coroutines-test rejects.
+     */
+    internal suspend fun awaitPendingWorkForTest() {
+        val pending = listOfNotNull(
+            baselineJob, periodic, postLoadBudgetJob, teardownWatchdog, releaseJob,
+            idleJob, readerSampleJob, paintRecoveryJob, paintWatchdogJob, pendingGoneJob,
+        )
+        pending.forEach { it.cancel() }
+        pending.forEach { it.join() }
+    }
+
     init {
         app.registerComponentCallbacks(this)
         refreshBudget()
