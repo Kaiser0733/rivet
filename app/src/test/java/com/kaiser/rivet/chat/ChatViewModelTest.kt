@@ -161,11 +161,80 @@ class ChatViewModelTest {
 
         viewModel.resumeSession(firstId!!)
         val resumed = await(viewModel) { it.currentSessionId == firstId }
-        assertEquals("Another project", resumed.projectName)
+        assertEquals("project", resumed.projectName)
         assertEquals(tree.toString(), resumed.currentSessionWorkspaceId)
-        assertEquals(other.toString(), resumed.projectIdentity)
+        assertEquals(tree.toString(), resumed.projectIdentity)
     }
 
+
+    // Cross-project runs keep their own captured project. Opening B must not release A's
+    // grant, cancel A's turn, or move B's messages into A's transcript.
+    @Test fun openingAnotherProjectLeavesTheRunningProjectLiveAndWritable() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val authority = "com.kaiser.rivet.xproject-chat"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val other = DocumentsContract.buildTreeDocumentUri(authority, "other")
+        documents.nodes["other"] = TestDocumentsProvider.Node("Another project", null, true,
+            java.io.File.createTempFile("xproject-other", ".test", app.cacheDir))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val releaseA = CompletableDeferred<Unit>()
+        val releaseB = CompletableDeferred<Unit>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(
+                request: AgentRequest,
+                onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit,
+            ): AgentResponse {
+                val text = request.messages.lastOrNull { it.role == com.kaiser.rivet.agent.AgentRole.User }?.text.orEmpty()
+                if (text.contains("A")) releaseA.await() else releaseB.await()
+                val answer = if (text.contains("A")) "A done" else "B done"
+                onDelta(answer)
+                return AgentResponse(text = answer)
+            }
+        }
+        val viewModel = newChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        viewModel.selectProject(tree, flags)
+        val a = await(viewModel) { it.projectName == "project" && !it.projectLoading }
+        val firstId = a.currentSessionId!!
+        viewModel.send("A")
+        await(viewModel) { it.streaming }
+
+        viewModel.selectProject(other, flags)
+        val b = await(viewModel) { it.projectName == "Another project" && !it.projectLoading }
+        assertFalse(firstId == b.currentSessionId)
+        viewModel.send("B")
+        await(viewModel) { it.streaming }
+        assertEquals(2, viewModel.runRegistry.activeCount())
+
+        viewModel.resumeSession(firstId)
+        val back = await(viewModel) { it.currentSessionId == firstId }
+        assertTrue("viewing B must not stop A", back.streaming)
+        releaseA.complete(Unit)
+        await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "A done" }
+
+        viewModel.resumeSession(b.currentSessionId!!)
+        val bStill = await(viewModel) { it.currentSessionId == b.currentSessionId }
+        assertTrue("A finishing must not stop B", bStill.streaming)
+        releaseB.complete(Unit)
+        val finished = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "B done" }
+        assertEquals(listOf("B", "B done"), finished.messages.map { it.text })
+    }
     @Test fun lostProjectAccessStopsSendWithoutCallingTheProviderOrChangingConversation() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
@@ -2042,9 +2111,10 @@ class ChatViewModelTest {
         assertFalse(switched.streaming)
         assertTrue(switched.messages.isEmpty())
         assertEquals(other, sessions.load().id)
-        viewModel.send("Do not queue this")
-        val blocked = await(viewModel) { it.notice?.contains("one turn at a time") == true }
-        assertTrue(blocked.messages.isEmpty())
+        viewModel.send("Second turn")
+        val second = await(viewModel) { it.streaming }
+        assertTrue(second.messages.any { it.role == com.kaiser.rivet.agent.AgentRole.User &&
+            it.text == "Second turn" })
 
         viewModel.resumeSession(first)
         val back = await(viewModel) { it.currentSessionId == first }
@@ -2059,9 +2129,7 @@ class ChatViewModelTest {
         withTimeout(5_000) {
             while (sessions.recent(first).lastOrNull()?.text != "Done") delay(10)
         }
-        assertTrue(sessions.recent(other).isEmpty())
-        assertEquals(other, viewModel.uiState.value.currentSessionId)
-        assertTrue(viewModel.uiState.value.messages.isEmpty())
+        assertTrue(sessions.recent(other).any { it.text == "Second turn" })
         viewModel.resumeSession(first)
         val finished = await(viewModel) { !it.streaming && it.currentSessionId == first }
         assertEquals("Done", finished.messages.lastOrNull()?.text)
