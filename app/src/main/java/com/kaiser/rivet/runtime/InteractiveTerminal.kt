@@ -118,6 +118,8 @@ internal class InteractiveTerminalSession(
     private var starting = false
     private var finished = false
     private var generation = 0L
+    // A restore notice has to survive the async start that replaces the session state.
+    private var restartNotice: String? = null
     private var columns = 80
     private var rows = 24
     private var cellWidthPx = 1
@@ -270,8 +272,10 @@ internal class InteractiveTerminalSession(
                 if (!finished) closeInternal(markEnded = true)
                 return@launch
             }
+            val restoredNotice = restartNotice
+            restartNotice = null
             mutableState.update { it.copy(running = true, starting = false, ended = false,
-                error = null, notice = launch.notice, pid = created.pid) }
+                error = null, notice = restoredNotice ?: launch.notice, pid = created.pid) }
             // The shell may already have exited between the state update and this line.
             if (!finished && created.pid > 0) {
                 watcherJob = scope.launch { watchTree(ticket, created, launch) }
@@ -344,7 +348,8 @@ internal class InteractiveTerminalSession(
 
     fun close() = closeInternal(markEnded = true)
 
-    fun restart() {
+    fun restart(notice: String? = null) {
+        restartNotice = notice
         closeInternal(markEnded = false)
         finished = false
         requested = true
@@ -359,8 +364,9 @@ internal class InteractiveTerminalSession(
      */
     fun recoverAfterRestore(): Boolean {
         if (!requested && engine == null) return false
-        restart()
-        mutableState.update { it.copy(notice = com.kaiser.rivet.agent.CompactionNotice.RESTORE_TEXT) }
+        val notice = com.kaiser.rivet.agent.CompactionNotice.RESTORE_TEXT
+        restart(notice)
+        mutableState.update { it.copy(notice = notice) }
         return true
     }
 
