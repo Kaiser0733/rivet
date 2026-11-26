@@ -25,12 +25,15 @@ class CoordinatorBudgetTest {
         assertTrue(tools.size >= 45)
     }
 
+    // `run_command` gained byte_offset/output_stream for cached-output byte paging
+    // (row 32). The serialized schema adds 26 estimated tokens to the empty
+    // coordinator request; the baseline stays pinned so future prompt growth is deliberate.
     @Test fun emptyCloudProjectPinsTheDeviceBaseline() {
-        assertEmptyCloudProjectBaseline("deepseek-ai/DeepSeek-V4.1-Flash", 7_250)
+        assertEmptyCloudProjectBaseline("deepseek-ai/DeepSeek-V4.1-Flash", 7_276)
     }
 
     @Test fun emptyCloudProjectPinsTheSyntheticBaseline() {
-        assertEmptyCloudProjectBaseline("test-model", 7_243)
+        assertEmptyCloudProjectBaseline("test-model", 7_269)
     }
 
     private fun assertEmptyCloudProjectBaseline(model: String, expectedTokens: Long) {
