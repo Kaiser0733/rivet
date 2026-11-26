@@ -6,7 +6,11 @@ import androidx.compose.foundation.lazy.LazyListState
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.SemanticsProperties
+import androidx.compose.ui.test.SemanticsMatcher
 import androidx.compose.ui.test.hasScrollToIndexAction
+import androidx.compose.ui.test.hasText
 import androidx.compose.ui.test.junit4.createComposeRule
 import androidx.compose.ui.test.onNodeWithText
 import androidx.compose.ui.test.performClick
@@ -47,8 +51,18 @@ class TranscriptScrollTest {
         }
 
         compose.runOnIdle { assertFalse(list.canScrollForward) }
-        compose.runOnIdle { list.dispatchRawDelta(-12f) }
-        compose.onNodeWithText("Jump to latest").performClick()
+        compose.onNode(hasScrollToIndexAction()).performTouchInput {
+            down(center)
+            repeat(3) {
+                advanceEventTime(250)
+                moveBy(Offset(0f, visibleSize.height / 30f))
+            }
+            advanceEventTime(600)
+            up()
+        }
+        compose.runOnIdle { assertTrue(list.canScrollForward) }
+        compose.onNode(hasText("Jump to latest") and SemanticsMatcher.expectValue(SemanticsProperties.Role, Role.Button))
+            .performClick()
         compose.runOnIdle { assertFalse(list.canScrollForward) }
         compose.onNodeWithText("Jump to latest").assertDoesNotExist()
     }

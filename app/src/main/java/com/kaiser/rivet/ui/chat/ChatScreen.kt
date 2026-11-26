@@ -111,6 +111,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
@@ -818,7 +819,8 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         }
                     }
                 },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 8.dp),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 8.dp)
+                    .semantics { role = Role.Button },
                 shape = MaterialTheme.shapes.extraLarge,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
             ) {
