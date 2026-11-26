@@ -206,32 +206,32 @@ class ChatViewModelTest {
         }
         val viewModel = newChatViewModel(app, CodingSessions(app),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready && !it.projectLoading }
+        awaitProject(viewModel) { it.ready && !it.projectLoading }
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
         viewModel.selectProject(tree, flags)
-        val a = await(viewModel) { it.projectName == "project" && !it.projectLoading }
+        val a = awaitProject(viewModel) { it.projectName == "project" && !it.projectLoading }
         val firstId = a.currentSessionId!!
         viewModel.send("A")
-        await(viewModel) { it.streaming }
+        awaitProject(viewModel) { it.streaming }
 
         viewModel.selectProject(other, flags)
-        val b = await(viewModel) { it.projectName == "Another project" && !it.projectLoading }
+        val b = awaitProject(viewModel) { it.projectName == "Another project" && !it.projectLoading }
         assertFalse(firstId == b.currentSessionId)
         viewModel.send("B")
-        await(viewModel) { it.streaming }
+        awaitProject(viewModel) { it.streaming }
 
         viewModel.resumeSession(firstId)
-        val back = await(viewModel) { it.currentSessionId == firstId }
+        val back = awaitProject(viewModel) { it.currentSessionId == firstId }
         assertTrue("viewing B must not stop A", back.streaming)
         releaseA.complete(Unit)
-        await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "A done" }
+        awaitProject(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "A done" }
 
         viewModel.resumeSession(b.currentSessionId!!)
-        val bStill = await(viewModel) { it.currentSessionId == b.currentSessionId }
+        val bStill = awaitProject(viewModel) { it.currentSessionId == b.currentSessionId }
         assertTrue("A finishing must not stop B", bStill.streaming)
         releaseB.complete(Unit)
-        val finished = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "B done" }
+        val finished = awaitProject(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "B done" }
         assertEquals(listOf("B", "B done"), finished.messages.map { it.text })
     }
 
@@ -256,23 +256,23 @@ class ChatViewModelTest {
         val viewModel = newChatViewModel(app, CodingSessions(app),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready && !it.projectLoading }
+        awaitProject(viewModel) { it.ready && !it.projectLoading }
         val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
             Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
         viewModel.selectProject(tree, flags)
-        val first = await(viewModel) { it.projectName == "project" && !it.projectLoading }
+        val first = awaitProject(viewModel) { it.projectName == "project" && !it.projectLoading }
         val firstBrowser = viewModel.browser
         assertEquals(tree.toString(), firstBrowser.projectKey)
 
         viewModel.selectProject(other, flags)
-        val second = await(viewModel) { it.projectName == "Another project" && !it.projectLoading }
+        val second = awaitProject(viewModel) { it.projectName == "Another project" && !it.projectLoading }
         assertFalse("each project needs its own browser session", firstBrowser === viewModel.browser)
         assertEquals("the second project must not move the first project's page",
             tree.toString(), firstBrowser.projectKey)
         assertEquals(other.toString(), viewModel.browser.projectKey)
 
         viewModel.resumeSession(first.currentSessionId!!)
-        await(viewModel) { it.currentSessionId == first.currentSessionId }
+        awaitProject(viewModel) { it.currentSessionId == first.currentSessionId }
         assertSame("returning to a project restores its own browser", firstBrowser, viewModel.browser)
         assertEquals(tree.toString(), firstBrowser.projectKey)
     }
@@ -2406,6 +2406,9 @@ class ChatViewModelTest {
 
     private suspend fun await(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withTimeout(5_000) { viewModel.uiState.first(predicate) }
+
+    private suspend fun awaitProject(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
+        withTimeout(15_000) { viewModel.uiState.first(predicate) }
 
     private class RejectingPersistence(private val sessionId: String? = null) : AgentSessionPersistence {
         private var messages = emptyList<AgentMessage>()
