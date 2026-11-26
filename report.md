@@ -61,6 +61,44 @@ The JiTTest moves the real Compose transcript a small distance from the bottom, 
 
 ## Verification
 
+### Gate re-run 45744527879
+
+CI failed two browser tests that this branch does not modify:
+`BrowserEvalSessionTest.evalReturnsBoundedSuccessAndOrigin` and
+`BrowserKeyModalTest.browserKeyStillSucceedsWithoutAModal`.
+
+Both files, and the browser production code they exercise, are byte-identical
+at the branch point `6f9f78ad` and at `dd0cf165`:
+
+    git diff 6f9f78ad..dd0cf165 -- app/src/main/java/com/kaiser/rivet/browser \
+                                     app/src/test/java/com/kaiser/rivet/browser
+
+is empty. The six tests in the two classes pass on the parent checkout and on
+the branch. The CI failure is therefore parent-red, not branch-broke.
+
+### Browser teardown race
+
+The failure is in `@After`, not in either test body: kotlinx-coroutines-test
+reports that `Dispatchers.Main` is used concurrently with `resetMain()`.
+`BrowserSession.onPageFinished` starts the post-load budget job, which jumps
+to `Dispatchers.Default` and then hands back to `Dispatchers.Main`. When the
+test ends before that handoff, the handoff can read Main while the next
+`resetMain()`/`setMain()` writes it.
+
+`BrowserSession.awaitPendingWorkForTest()` now cancels and joins the session's
+transient renderer jobs. Both test classes wait for it before resetting the
+test dispatcher. This is a test-support seam; no production behaviour changes.
+
+### Local results
+
+- `BrowserEvalSessionTest` and `BrowserKeyModalTest`: 6 tests green on
+  `6f9f78ad` and on `dd0cf165` with the fix.
+- Full `:app:testDebugUnitTest`: 1904 tests, 1903 pass. The only failure is
+  `WorkspaceMirrorTest.materializesTextBinaryNestedUnicodeAndEmptyFiles`,
+  which also fails on `6f9f78ad` in this container; the CI gate did not
+  report it.
+- `python3 -m unittest discover -s scripts -p 'test_*.py'`: 100 tests OK.
+
 ## Honest gaps
 
 - No handset was attached. The Samsung callback from another Android package, live starter-provider output, Android capture consent and notification, SAF behavior on that device, and visual rendering on its screen still need a device pass.
