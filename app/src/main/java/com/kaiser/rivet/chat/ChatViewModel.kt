@@ -2286,7 +2286,12 @@ class ChatViewModel private constructor(
             }
             val loop = AgentLoop(
                 requestModel = request@{ messages, _, onText ->
-                    if (recalling) return@request AgentResponse(text = ArchiveRecall.directAnswer(recallWindows, recallQueries))
+                    if (recalling) {
+                        val quote = ArchiveRecall.directAnswer(recallWindows, recallQueries)
+                        val goal = _uiState.value.goal.ownedBy(sessionId)
+                            ?.takeIf { ArchiveRecall.asksForGoal(prompt) }?.statusLine()
+                        return@request AgentResponse(text = listOfNotNull(quote, goal).joinToString("\n\n"))
+                    }
                     val request = context.requestFor(messages)
                     lastSystem = request.system
                     val response = client.streamAgent(

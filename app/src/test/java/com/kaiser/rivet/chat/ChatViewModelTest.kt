@@ -1138,7 +1138,7 @@ class ChatViewModelTest {
                 AgentMessage.assistant("Part $index " + "x".repeat(1_300)))
         }
         sessions.save(history, interrupted = false)
-        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "{}"))))
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "{}"), AgentResponse(text = "number"))))
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
             modelContextLimit = ModelContextLimit("small", endpoint, 8192))
@@ -1163,6 +1163,12 @@ class ChatViewModelTest {
         assertTrue(status.messages.last().internalContext!!.content.contains("Goal: ship the snake game"))
         assertEquals(status.messages, CodingSessions(app).recent(id))
         assertEquals(saved, CodingSessions(app).load())
+
+        viewModel.send("What was the pinned number and what is my current goal?")
+        val recalled = await(viewModel) { !it.streaming && it.acceptedMessageCount == 1L }
+        val answer = recalled.messages.last().text
+        assertTrue(answer.contains(pinned))
+        assertTrue(answer.contains("Goal: ship the snake game"))
     }
 
     @Test fun manualCompactionOnAFreshSessionIsAPlainNoOp() = runBlocking {
