@@ -2140,9 +2140,12 @@ class ChatViewModel private constructor(
                 activeProviderIsLocal = SpendStore.isLocal(it.config.baseUrl)
                 activeProviderIsLocal
             } ?: true
-            if (local) enqueueLocalTurn(owner, trimmed, retryingInterrupted, acceptedUser,
-                starterOpening, notice)
-            else owner.startTurnNow(trimmed, retryingInterrupted, acceptedUser, starterOpening, notice)
+            if (owner.userCancelled || !owner.value.streaming) return@launch
+            if (local && runRegistry.activeRuns.value.values.any { !it.currentCloud }) {
+                enqueueLocalTurn(owner, trimmed, retryingInterrupted, acceptedUser, starterOpening, notice)
+            } else {
+                owner.startTurnNow(trimmed, retryingInterrupted, acceptedUser, starterOpening, notice)
+            }
         }
     }
 
@@ -3468,7 +3471,15 @@ class ChatViewModel private constructor(
 
     private fun stopRun(owner: SessionRun) {
         if (stopQueuedTurn(owner)) return
-        if (!runRegistry.isActive(owner) || owner.userCancelled) return
+        if (!runRegistry.isActive(owner)) {
+            if (owner.value.streaming) {
+                owner.userCancelled = true
+                owner.update { it.copy(streaming = false, activity = null,
+                    notice = "Stopped before the turn started.") }
+            }
+            return
+        }
+        if (owner.userCancelled) return
         owner.userCancelled = true
         owner.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
             activity = null, pendingApproval = null, toolLifecycle = emptyList(), commandRunning = false,
