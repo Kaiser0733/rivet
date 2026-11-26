@@ -101,6 +101,7 @@ internal class SessionRun(initial: ChatUiState = ChatUiState()) {
     var activeSupervisor: SubagentSupervisor? = null
     var lastPruneSeen: Int = 0
     var currentCloud: Boolean = true
+    var providerKnown: Boolean = false
     var pendingRollback: String? = null
     var job: Job? = null
     var runtimeContext: TurnRunContext? = null

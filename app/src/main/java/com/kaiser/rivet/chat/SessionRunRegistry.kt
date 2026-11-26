@@ -20,6 +20,7 @@ internal class SessionRunRegistry(app: Application) {
     val active = MutableStateFlow<SessionRun?>(null)
     val activeRuns = MutableStateFlow<Map<String, SessionRun>>(emptyMap())
     val unseen = MutableStateFlow<Set<String>>(emptySet())
+    val queued = MutableStateFlow<Set<String>>(emptySet())
     val history = MutableStateFlow<List<CodingSessionHeader>?>(null)
     var lastRun: SessionRun? = null
         private set
@@ -61,6 +62,7 @@ internal class SessionRunRegistry(app: Application) {
         if (id != null) activeRuns.value = activeRuns.value - id
         owner.pauseAction = null
         owner.checkpoints = null
+        clearQueued(id)
         if (!owner.value.budgetPaused) owner.raiseBudgetAction = null
         if (id != null && id !in visible.values) unseen.value += id
         if (active.value === owner) active.value = activeRuns.value.values.lastOrNull()
@@ -69,6 +71,13 @@ internal class SessionRunRegistry(app: Application) {
     fun isActive(owner: SessionRun): Boolean = activeRuns.value.values.any { it === owner }
     fun hasActiveRuns(): Boolean = activeRuns.value.isNotEmpty()
     fun activeCount(): Int = activeRuns.value.size
+    fun isQueued(sessionId: String?): Boolean = sessionId != null && sessionId in queued.value
+    fun markQueued(sessionId: String?) {
+        if (sessionId != null) queued.value = queued.value + sessionId
+    }
+    fun clearQueued(sessionId: String?) {
+        if (sessionId != null) queued.value = queued.value - sessionId
+    }
 
     fun show(view: Any, sessionId: String?) {
         visible[view] = sessionId
@@ -93,6 +102,7 @@ internal class SessionRunRegistry(app: Application) {
             rows[id] = if (pending?.sessionId == id) ConversationActivity.NeedsApproval
                 else ConversationActivity.Running
         }
+        for (id in queued.value) rows[id] = ConversationActivity.Running
         return state.copy(
             pendingApproval = selectedApproval,
             backgroundApproval = pending?.takeUnless { it === selectedApproval },

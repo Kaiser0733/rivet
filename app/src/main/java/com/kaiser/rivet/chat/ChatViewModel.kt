@@ -307,9 +307,36 @@ class ChatViewModel private constructor(
     val pendingApproval = approvals.pending
     private val autonomyStore = AutonomyStore(app)
     val managedProcesses: ManagedProcesses = ManagedProcesses.forApplication(app)
-    val browser: BrowserSession = BrowserRuntime.forApp(app, com.kaiser.rivet.local.LocalRuntime.models())
-    private val browserTools = BrowserTools(browser)
+    private var viewedBrowser: BrowserSession =
+        BrowserRuntime.forApp(app, com.kaiser.rivet.local.LocalRuntime.models())
+    val browser: BrowserSession get() = viewedBrowser
     val browserLease = BrowserDrivingLease()
+
+    private fun browserFor(identity: String?): BrowserSession =
+        BrowserRuntime.forProject(getApplication(), com.kaiser.rivet.local.LocalRuntime.models(),
+            identity ?: "unbound")
+
+    private fun showBrowser(identity: String?) {
+        val next = browserFor(identity)
+        if (next !== viewedBrowser) viewedBrowser = next
+        next.bookmarkWriter = bookmark@{ title, url ->
+            val ws = browserFor(identity).projectKey.takeIf { it != "unbound" }
+                ?: return@bookmark null
+            val directory = ".rivet/browser-links"
+            val path = BrowserBookmarkPath.file(title)
+            runCatching {
+                val restored = com.kaiser.rivet.agent.SafAgentWorkspace(
+                    com.kaiser.rivet.workspace.SafWorkspace(
+                        getApplication<Application>().contentResolver, android.net.Uri.parse(ws)))
+                runCatching { restored.createDirectory(directory) }
+                val created = restored.createFile(path)
+                val hash = created.sha256 ?: restored.read(created.path).sha256
+                restored.write(created.path, BrowserBookmarkPath.contents(title, url), hash)
+                created.path
+            }.getOrNull()
+        }
+        next.bindProject(identity ?: "unbound")
+    }
     private val projectDownloader = ProjectDownloader(app.cacheDir)
     private val skillDiscovery = SkillDiscovery(globalSkillsRoot(app.filesDir))
     private val skillScriptApprovals = SkillScriptApprovalStore(app)
@@ -324,22 +351,6 @@ class ChatViewModel private constructor(
     private var activeSupervisor: SubagentSupervisor?
         get() = selectedState.activeSupervisor
         set(value) { selectedState.activeSupervisor = value }
-
-    init {
-        browser.bookmarkWriter = bookmark@{ title, url ->
-            val restored = workspaceSelection.restore() ?: return@bookmark null
-            val ws = com.kaiser.rivet.agent.SafAgentWorkspace(restored.first)
-            val dir = ".rivet/browser-links"
-            val path = BrowserBookmarkPath.file(title)
-            runCatching {
-                runCatching { ws.createDirectory(dir) }
-                val created = ws.createFile(path)
-                val hash = created.sha256 ?: ws.read(created.path).sha256
-                ws.write(created.path, BrowserBookmarkPath.contents(title, url), hash)
-                created.path
-            }.getOrNull()
-        }
-    }
 
     private val selectedRun = MutableStateFlow(SessionRun())
     private val selectedState get() = selectedRun.value
@@ -587,6 +598,17 @@ class ChatViewModel private constructor(
     }
 
     @Volatile private var titleRenameRevision = 0L
+    private data class QueuedLocalTurn(
+        val owner: SessionRun,
+        val prompt: String,
+        val retryingInterrupted: Boolean,
+        val acceptedUser: AgentMessage?,
+        val starterOpening: Boolean,
+        val notice: String?,
+    )
+
+    private val queuedLocalTurns = ArrayDeque<QueuedLocalTurn>()
+    private var activeProviderIsLocal = false
     private val activeRun get() = runRegistry.active.value
     private val liveSession get() =
         runRegistry.activeRuns.value[selectedState.value.currentSessionId] ?: runRegistry.lastRun
@@ -739,7 +761,7 @@ class ChatViewModel private constructor(
             runRegistry.active.collect { owner ->
                 if (owner == null) {
                     val state = selectedState.value
-                    if (state.ready) browser.bindProject(state.currentSessionWorkspaceId ?: state.projectIdentity ?: "unbound")
+                    if (state.ready) showBrowser(state.currentSessionWorkspaceId ?: state.projectIdentity)
                 }
             }
         }
@@ -859,12 +881,12 @@ class ChatViewModel private constructor(
                     catch (_: Exception) { "Selected project" }
                 selectedState.update { it.copy(projectName = name, projectIdentity = workspace.tree.toString(),
                     projectLoading = false, projectError = null) }
-                if (!runRegistry.hasActiveRuns()) browser.bindProject(workspace.tree.toString())
+                showBrowser(workspace.tree.toString())
                 refreshGoalMemory(workspace, selectedState.value.currentSessionId)
             } else {
                 selectedState.update { it.copy(projectName = null, projectIdentity = null,
                     projectLoading = false) }
-                if (!runRegistry.hasActiveRuns()) browser.bindProject(selectedState.value.currentSessionWorkspaceId ?: "unbound")
+                showBrowser(selectedState.value.currentSessionWorkspaceId)
             }
         } catch (e: CancellationException) { throw e
         } catch (_: Exception) {
@@ -985,7 +1007,7 @@ class ChatViewModel private constructor(
                     runtimeController.clearCommandOutput(previousIdentity)
                 }
                 if (!runRegistry.hasActiveRuns()) {
-                    browser.bindProject(identity)
+                    showBrowser(identity)
                     selectedState.update { it.copy(projectName = name, projectIdentity = identity,
                         projectError = null) }
                 }
@@ -2004,15 +2026,57 @@ class ChatViewModel private constructor(
         selectedState.startTurn(brief.content, retryingInterrupted = false, starterOpening = true)
     }
 
+    private fun localTurnWaiting(owner: SessionRun): Boolean {
+        if (runRegistry.isActive(owner) || runRegistry.isQueued(owner.value.currentSessionId)) return false
+        val localActive = runRegistry.activeRuns.value.values.firstOrNull { !it.currentCloud } ?: return false
+        if (localActive === owner) return false
+        return !owner.currentCloud || activeProviderIsLocal
+    }
+
+    private fun enqueueLocalTurn(owner: SessionRun, prompt: String, retryingInterrupted: Boolean,
+                                 acceptedUser: AgentMessage?, starterOpening: Boolean, notice: String?) {
+        val sessionId = owner.value.currentSessionId
+        owner.currentCloud = false
+        owner.providerKnown = true
+        queuedLocalTurns.removeAll { it.owner === owner }
+        queuedLocalTurns.addLast(QueuedLocalTurn(owner, prompt, retryingInterrupted, acceptedUser, starterOpening, notice))
+        runRegistry.markQueued(sessionId)
+        owner.update { it.copy(streaming = true, activity = "Waiting for the local model…",
+            streamingText = "", streamingReasoning = "", toolLifecycle = emptyList(),
+            commandRunning = false, error = null, errorAction = null, notice = notice,
+            interruptedTurn = false) }
+        viewModelScope.launch {
+            try {
+                val durable = if (acceptedUser != null && owner.activeMessages.lastOrNull() != acceptedUser) {
+                    (owner.activeMessages + acceptedUser).also { owner.activeMessages = it }
+                } else owner.activeMessages
+                if (acceptedUser != null) owner.persistTurn(durable, interrupted = true)
+            } catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
+    }
+
+    private fun stopQueuedTurn(owner: SessionRun): Boolean {
+        val entry = queuedLocalTurns.firstOrNull { it.owner === owner } ?: return false
+        queuedLocalTurns.remove(entry)
+        runRegistry.clearQueued(owner.value.currentSessionId)
+        owner.update { it.copy(streaming = false, activity = null,
+            notice = "Stopped before the queued turn started.") }
+        return true
+    }
+
+    private fun drainLocalQueue() {
+        if (runRegistry.activeRuns.value.values.any { !it.currentCloud }) return
+        val next = queuedLocalTurns.removeFirstOrNull() ?: return
+        runRegistry.clearQueued(next.owner.value.currentSessionId)
+        next.owner.startTurn(next.prompt, next.retryingInterrupted, next.acceptedUser,
+            next.starterOpening, next.notice)
+    }
+
     private fun canStartRun(owner: SessionRun): Boolean {
         if (runRegistry.isActive(owner)) return true
         val active = runRegistry.activeRuns.value.values
         if (active.size >= 2) {
             owner.update { it.copy(notice = "Two turns are already running. Wait for one to finish.") }
-            return false
-        }
-        if (owner.currentCloud.not() && active.any { !it.currentCloud }) {
-            owner.update { it.copy(notice = "Waiting for the local model.") }
             return false
         }
         return true
@@ -2035,6 +2099,7 @@ class ChatViewModel private constructor(
                 runtimeContext = null
                 runRegistry.finish(this@launchRun)
                 reserveTurn(false)
+                drainLocalQueue()
             }
         }
         job?.start()
@@ -2057,6 +2122,31 @@ class ChatViewModel private constructor(
     }
 
     private fun SessionRun.startTurn(trimmed: String, retryingInterrupted: Boolean,
+                         acceptedUser: AgentMessage? = null, starterOpening: Boolean = false,
+                         notice: String? = null) {
+        if (runRegistry.isActive(this) || runRegistry.isQueued(value.currentSessionId)) return
+        val localActive = runRegistry.activeRuns.value.values.any { !it.currentCloud || !it.providerKnown }
+        if (!localActive) {
+            startTurnNow(trimmed, retryingInterrupted, acceptedUser, starterOpening, notice)
+            return
+        }
+        // The model can be changed while a local turn runs. Resolve this turn's provider
+        // before deciding whether it needs the local slot, so a cloud turn still starts.
+        val owner = this
+        viewModelScope.launch {
+            val loaded = try { providerSource.load() } catch (e: CancellationException) { throw e }
+                catch (_: Exception) { null }
+            val local = (loaded as? ProviderRuntimeResult.Ready)?.let {
+                activeProviderIsLocal = SpendStore.isLocal(it.config.baseUrl)
+                activeProviderIsLocal
+            } ?: true
+            if (local) enqueueLocalTurn(owner, trimmed, retryingInterrupted, acceptedUser,
+                starterOpening, notice)
+            else owner.startTurnNow(trimmed, retryingInterrupted, acceptedUser, starterOpening, notice)
+        }
+    }
+
+    private fun SessionRun.startTurnNow(trimmed: String, retryingInterrupted: Boolean,
                          acceptedUser: AgentMessage? = null, starterOpening: Boolean = false,
                          notice: String? = null) {
         val owner = this
@@ -2121,6 +2211,7 @@ class ChatViewModel private constructor(
                 return@launchRun
             }
             currentCloud = !SpendStore.isLocal(snapshot.config.baseUrl)
+            providerKnown = true
             // A turn is bound to its own conversation's project, not to whichever project
             // the user happens to be viewing when the coroutine actually starts.
             val workspace = try {
@@ -2144,7 +2235,9 @@ class ChatViewModel private constructor(
                     workspaceAccessFailed = true
                 }
             }
-            browser.bindProject(workspaceId ?: owner.value.currentSessionWorkspaceId ?: "unbound")
+            val runBrowser = browserFor(workspaceId ?: owner.value.currentSessionWorkspaceId)
+            runBrowser.bindProject(workspaceId ?: owner.value.currentSessionWorkspaceId ?: "unbound")
+            val browserTools = BrowserTools(runBrowser)
             if (!starterOpening && workspaceId != null && snapshot.config.type == ProviderType.Local) {
                 val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
                 val block = local?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)
@@ -2239,7 +2332,7 @@ class ChatViewModel private constructor(
             val phone = if (snapshot.config.type == ProviderType.Local) null else PhoneIntents(
                 app = getApplication<Application>(),
                 resolveFile = { rawPath -> resolvePhoneFile(rawPath, workspace) },
-                customTabOpener = { url -> browser.customTabOpener?.invoke(url) == true },
+                customTabOpener = { url -> runBrowser.customTabOpener?.invoke(url) == true },
             )
             val grantTrees = if (phone == null) emptyMap() else grantedFolders.list().associate { it.id to it.treeUri }
             val termux = phone?.let { TermuxBridge(getApplication<Application>()) }
@@ -2340,7 +2433,8 @@ class ChatViewModel private constructor(
                     parentSessionId = owner.value.currentSessionId, workerStore = workerStore,
                     providerSource = providerSource, clientFactory = clientFactory, approvals = approvals,
                     checkpointGate = owner.checkpointGate, coordinatorConfig = { snapshot.config },
-                    browserTools = browserTools, browserLease = browserLease, createExecutor = { createExecutor(it) },
+                    browserTools = browserTools, browserLease = browserLease,
+                    createExecutor = { createExecutor(it) },
                     projectInstructions = project, skills = { skills }, workspace = workspace, runtime = runtime,
                     managedProcesses = managedProcesses, browser = browser, workspaceSelection = workspaceSelection,
                     approvedSkillScripts = { approvedSkillScripts },
@@ -2373,7 +2467,7 @@ class ChatViewModel private constructor(
                 activeSupervisor = null
                 subagentTools = null
             }
-            browser.previewStarter = { root, entry ->
+            runBrowser.previewStarter = { root, entry ->
                 val selected = workspace
                     ?: throw com.kaiser.rivet.agent.AgentWorkspaceFailure("workspace_unavailable")
                 val identity = workspaceId ?: selected.tree.toString()
@@ -2747,7 +2841,7 @@ class ChatViewModel private constructor(
                 recordSkillScriptApproval = skillScriptApprovals::approve,
             )
             try {
-                browser.beginAgentRun(sessionId)
+                runBrowser.beginAgentRun(sessionId)
                 val runLoop: suspend () -> AgentRunResult = {
                     loop.run(
                         initial = durable,
@@ -2931,7 +3025,7 @@ class ChatViewModel private constructor(
                     "Rivet couldn't finish this request. Completed project changes remain safe.",
                     ChatErrorAction.RetryTurn)
             } finally {
-                browser.endAgentRun()
+                runBrowser.endAgentRun()
                 browserLease.clear()
                 approvals.cancelSession(sessionId)
                 withContext(NonCancellable) {
@@ -3340,7 +3434,11 @@ class ChatViewModel private constructor(
                 )
             }
         return when (val result = loaded) {
-            is ProviderRuntimeResult.Ready -> result
+            is ProviderRuntimeResult.Ready -> {
+                activeProviderIsLocal = SpendStore.isLocal(result.config.baseUrl)
+                providerKnown = true
+                result
+            }
             is ProviderRuntimeResult.Failure -> failBeforeStart(result.message, interruptedTurn)
         }
     }
@@ -3369,13 +3467,14 @@ class ChatViewModel private constructor(
     fun cancel() = stop()
 
     private fun stopRun(owner: SessionRun) {
+        if (stopQueuedTurn(owner)) return
         if (!runRegistry.isActive(owner) || owner.userCancelled) return
         owner.userCancelled = true
         owner.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
             activity = null, pendingApproval = null, toolLifecycle = emptyList(), commandRunning = false,
             notice = "Stopped. Any completed changes remain in the project.") }
         owner.reserveTurn(false)
-        browser.dismissChatPreview()
+        browserFor(owner.value.currentSessionWorkspaceId).dismissChatPreview()
         owner.runtimeContext?.let { run -> runRegistry.scope.launch(Dispatchers.IO) { run.stopProcesses() } }
         approvals.cancelSession(owner.value.currentSessionId)
         owner.job?.cancel()
@@ -3385,7 +3484,7 @@ class ChatViewModel private constructor(
 
     private fun pauseRun(owner: SessionRun, reason: RunPauseReason) {
         if (!runRegistry.isActive(owner) || !owner.value.streaming) return
-        browser.dismissChatPreview()
+        browserFor(owner.value.currentSessionWorkspaceId).dismissChatPreview()
         owner.pauseRequested = true
         owner.pauseReason = reason
         owner.activeSupervisor?.pauseAll(reason)
@@ -3655,7 +3754,7 @@ class ChatViewModel private constructor(
     }
 
     fun deleteSession(id: String) {
-        if (runRegistry.activeRuns.value.containsKey(id)) return
+        if (runRegistry.activeRuns.value.containsKey(id) || runRegistry.isQueued(id)) return
         runRegistry.forget(id)
         changeSession { store -> store.delete(id, liveSession?.value?.currentSessionId) }
         viewModelScope.launch {
@@ -3714,6 +3813,7 @@ class ChatViewModel private constructor(
                 if (ticket != generation) return@launch
                 val previous = selectedState
                 val cached = runRegistry.activeRuns.value[selected.id]
+                    ?: queuedLocalTurns.firstOrNull { it.owner.value.currentSessionId == selected.id }?.owner
                     ?: runRegistry.lastRun?.takeIf { it.value.currentSessionId == selected.id }
                 val next = cached ?: if (previous.value.currentSessionId == selected.id) previous else SessionRun()
                 if (cached == null) {
@@ -3740,7 +3840,7 @@ class ChatViewModel private constructor(
                     spendCaps = project.spendCaps, userPricePerMillionUsd = project.userPricePerMillionUsd,
                 ) }
                 attachRun(next)
-                if (!runRegistry.hasActiveRuns()) selected.workspaceId?.let { browser.bindProject(it) }
+                selected.workspaceId?.let { showBrowser(it) }
                 if (cached == null) {
                     val workspace = try {
                         selected.workspaceId?.let { workspaceSelection.view(Uri.parse(it)) }
