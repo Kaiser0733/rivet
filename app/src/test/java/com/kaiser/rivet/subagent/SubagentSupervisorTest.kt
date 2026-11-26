@@ -160,7 +160,7 @@ class SubagentSupervisorTest {
         assertEquals(RunPhase.Failed, failed.state)
         assertTrue(failed.error.orEmpty().contains("before this worker returned a result"))
         assertEquals(failed.state, store.loadWorker(failed.id)?.state)
-        val results = withTimeout(1_000) { supervisor.beforeCompletionHold("test-workspace") }
+        val results = withTimeout(1_000) { supervisor.awaitIdleResults("test-workspace") }
         assertTrue(results.single().internalContext?.content.orEmpty().contains("worker_lost"))
     }
 
@@ -174,7 +174,7 @@ class SubagentSupervisorTest {
         val spawn = supervisor.validateSpawn("""{"job":"build","brief":"build it"}""") as SpawnValidation.Valid
         supervisor.executeSpawn(spawn.brief, spawn.entry, spawn.skill)
 
-        val results = withTimeout(4_000) { supervisor.beforeCompletionHold("test-workspace") }
+        val results = withTimeout(4_000) { supervisor.awaitIdleResults("test-workspace") }
 
         assertEquals(RunPhase.Failed, supervisor.state.value.single().state)
         assertTrue(results.single().internalContext?.content.orEmpty().contains("no activity for 1 seconds"))
@@ -254,7 +254,7 @@ class SubagentSupervisorTest {
     }
 
     @Test
-    fun executeSpawnAdmitsFirstTwoAndQueuesThirdUntilSlotFrees() = runBlocking {
+    fun executeSpawnRefusesCapacityUntilTheCallerRetries() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()
         val gate1 = CompletableDeferred<Unit>()
@@ -286,31 +286,31 @@ class SubagentSupervisorTest {
 
         assertFalse(r1.error)
         assertFalse(r2.error)
-        assertFalse(r3.error)
+        assertTrue(r3.error)
 
         assertEquals("running", json.parseToJsonElement(r1.json).jsonObject["state"]?.jsonPrimitive?.content)
         assertEquals("running", json.parseToJsonElement(r2.json).jsonObject["state"]?.jsonPrimitive?.content)
-        assertEquals("waiting", json.parseToJsonElement(r3.json).jsonObject["state"]?.jsonPrimitive?.content)
-        val worker3Id = json.parseToJsonElement(r3.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
+        assertEquals("activation_limit_reached", json.parseToJsonElement(r3.json)
+            .jsonObject["error"]?.jsonPrimitive?.content)
+        assertEquals(2, supervisor.state.value.size)
+        assertEquals(2, store.workersForRun("test-run").size)
 
-        // Complete worker 1 -> worker 3 automatically promotes to running
+        val firstId = json.parseToJsonElement(r1.json).jsonObject["worker_id"]!!.jsonPrimitive.content
         gate1.complete(Unit)
-
         withTimeout(3_000) {
-            supervisor.state.first { list ->
-                val w3 = list.firstOrNull { it.id == worker3Id }
-                w3?.state == RunPhase.Running
-            }
+            supervisor.state.first { records -> records.any { it.id == firstId && it.isTerminal } }
         }
+        val retried = supervisor.executeSpawn(v3.brief, v3.entry, v3.skill)
+        assertFalse(retried.error)
+        assertEquals("running", json.parseToJsonElement(retried.json).jsonObject["state"]?.jsonPrimitive?.content)
 
-        // Clean up remaining gates
         gate2.complete(Unit)
         gate3.complete(Unit)
         supervisor.joinAll()
     }
 
     @Test
-    fun overlappingWriteScopesQueueEvenWithFreeSlot() = runBlocking {
+    fun overlappingWriteScopesAreRefusedEvenWithFreeSlot() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()
         val gate1 = CompletableDeferred<Unit>()
@@ -339,22 +339,12 @@ class SubagentSupervisorTest {
 
         assertEquals("running", json.parseToJsonElement(r1.json).jsonObject["state"]?.jsonPrimitive?.content)
         val p2 = json.parseToJsonElement(r2.json).jsonObject
-        assertEquals("waiting", p2["state"]?.jsonPrimitive?.content)
-        assertEquals("same files as auth refactor", p2["reason"]?.jsonPrimitive?.content)
+        assertTrue(r2.error)
+        assertEquals("activation_limit_reached", p2["error"]?.jsonPrimitive?.content)
+        assertTrue(p2["required_action"]!!.jsonPrimitive.content.contains("same files"))
+        assertEquals(1, supervisor.state.value.size)
 
-        val worker2Id = p2["worker_id"]?.jsonPrimitive?.content!!
-
-        // Release worker 1
         gate1.complete(Unit)
-
-        // Worker 2 promotes
-        withTimeout(3_000) {
-            supervisor.state.first { list ->
-                val w2 = list.firstOrNull { it.id == worker2Id }
-                w2?.state == RunPhase.Running
-            }
-        }
-
         gate2.complete(Unit)
         supervisor.joinAll()
     }
@@ -389,12 +379,10 @@ class SubagentSupervisorTest {
     }
 
     @Test
-    fun userStopRunningAndQueuedWorker() = runBlocking {
+    fun userStopRunningWorker() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()
         val gate1 = CompletableDeferred<Unit>()
-        val gate2 = CompletableDeferred<Unit>()
-        val gate3 = CompletableDeferred<Unit>()
 
         val services = testServices(
             workerStore = store,
@@ -404,20 +392,10 @@ class SubagentSupervisorTest {
         val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
 
         val v1 = supervisor.validateSpawn("{\"job\": \"job 1\", \"brief\": \"do 1\", \"model\": \"m1\"}") as SpawnValidation.Valid
-        val v2 = supervisor.validateSpawn("{\"job\": \"job 2\", \"brief\": \"do 2\", \"model\": \"m1\"}") as SpawnValidation.Valid
-        val v3 = supervisor.validateSpawn("{\"job\": \"job 3\", \"brief\": \"do 3\", \"model\": \"m1\"}") as SpawnValidation.Valid
 
         val r1 = supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
-        val r2 = supervisor.executeSpawn(v2.brief, v2.entry, v2.skill)
-        val r3 = supervisor.executeSpawn(v3.brief, v3.entry, v3.skill)
 
         val id1 = json.parseToJsonElement(r1.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
-        val id3 = json.parseToJsonElement(r3.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
-
-        // Stop queued worker 3
-        supervisor.stop(id3)
-        val w3 = supervisor.state.value.first { it.id == id3 }
-        assertEquals(RunPhase.Stopped, w3.state)
 
         // Stop running worker 1
         supervisor.stop(id1)
@@ -433,7 +411,7 @@ class SubagentSupervisorTest {
     }
 
     @Test
-    fun beforeCompletionHoldAwaitsAndDeliversResultsOnce() = runBlocking {
+    fun idleWaitDeliversWorkerResultsOnce() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()
         val services = testServices(store, listOf(config))
@@ -443,13 +421,13 @@ class SubagentSupervisorTest {
         val r1 = supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
         val id1 = json.parseToJsonElement(r1.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
 
-        val events1 = supervisor.beforeCompletionHold("test-workspace")
+        val events1 = supervisor.awaitIdleResults("test-workspace")
         assertEquals(1, events1.size)
         assertEquals(SubagentContext.RESULT_KIND, events1.first().internalContext?.kind)
         assertTrue(events1.first().internalContext?.content?.contains(id1) == true)
 
         // Second hold call has no new undelivered results
-        val events2 = supervisor.beforeCompletionHold("test-workspace")
+        val events2 = supervisor.awaitIdleResults("test-workspace")
         assertTrue(events2.isEmpty())
     }
 
@@ -587,7 +565,7 @@ class SubagentSupervisorTest {
     }
 
     @Test
-    fun pauseAllHaltsDrainQueueAndMovesQueuedWorkersToPaused() = runBlocking {
+    fun pauseKeepsAdmittedWorkersWithoutAddingABacklog() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()
         val gate1 = CompletableDeferred<Unit>()
@@ -620,12 +598,11 @@ class SubagentSupervisorTest {
 
         supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
         supervisor.executeSpawn(v2.brief, v2.entry, v2.skill)
-        supervisor.executeSpawn(v3.brief, v3.entry, v3.skill)
+        assertTrue(supervisor.executeSpawn(v3.brief, v3.entry, v3.skill).error)
 
         withTimeout(3_000) {
             supervisor.state.first { list ->
-                list.count { it.state == RunPhase.Running } == 2 &&
-                    list.count { it.state == RunPhase.Queued } == 1
+                list.size == 2 && list.all { it.state == RunPhase.Running }
             }
         }
 
@@ -633,11 +610,10 @@ class SubagentSupervisorTest {
 
         withTimeout(3_000) {
             supervisor.state.first { list ->
-                list.size == 3 && list.all { it.state == RunPhase.Paused }
+                list.size == 2 && list.all { it.state == RunPhase.Paused }
             }
         }
 
-        // Cancelled workers ran drainQueue() in finally: queued worker must NOT have started while paused.
         assertEquals(2, clientCount)
 
         gate1.complete(Unit)
@@ -651,87 +627,9 @@ class SubagentSupervisorTest {
         supervisor.joinAll()
 
         withTimeout(3_000) {
-            supervisor.state.first { list -> list.size == 3 && list.all { it.state == RunPhase.Done } }
+            supervisor.state.first { list -> list.size == 2 && list.all { it.state == RunPhase.Done } }
         }
         Unit
-    }
-
-    @Test
-    fun drainQueueMarksRefusedQueuedWorkerAsFailedAndRemovesFromQueue() = runBlocking {
-        val cloud = cloudConfig("c1")
-        val local = localConfig("l1")
-        val store = WorkerSessionStore.inMemory()
-        val gate1 = CompletableDeferred<Unit>()
-        val gate2 = CompletableDeferred<Unit>()
-        val gate4 = CompletableDeferred<Unit>()
-        var cloudClients = 0
-
-        val services = testServices(
-            workerStore = store,
-            configs = listOf(cloud, local),
-            coordinatorConfig = cloud,
-            clientFactory = { cfg, _ ->
-                if (cfg.id == "l1") {
-                    ControllableClient(gate4)
-                } else {
-                    if (cloudClients++ == 0) ControllableClient(gate1) else ControllableClient(gate2)
-                }
-            },
-        )
-        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
-
-        val v1 = supervisor.validateSpawn(
-            """{"job":"cloud 1","brief":"work a","model":"m1","write_scope":["src/a"]}"""
-        ) as SpawnValidation.Valid
-        val v2 = supervisor.validateSpawn(
-            """{"job":"cloud 2","brief":"work b","model":"m1"}"""
-        ) as SpawnValidation.Valid
-        val v3 = supervisor.validateSpawn(
-            """{"job":"queued local","brief":"work local on a","model":"m2","write_scope":["src/a"]}"""
-        ) as SpawnValidation.Valid
-
-        supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
-        supervisor.executeSpawn(v2.brief, v2.entry, v2.skill)
-        val r3 = supervisor.executeSpawn(v3.brief, v3.entry, v3.skill)
-        val id3 = json.parseToJsonElement(r3.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
-
-        withTimeout(3_000) {
-            supervisor.state.first { list ->
-                list.firstOrNull { it.id == id3 }?.state == RunPhase.Queued
-            }
-        }
-
-        // Free cloud 2's slot while cloud 1 still holds src/a, then occupy the single local slot with v4.
-        gate2.complete(Unit)
-        withTimeout(3_000) {
-            supervisor.state.first { list -> list.count { it.state == RunPhase.Running } == 1 }
-        }
-
-        val v4 = supervisor.validateSpawn(
-            """{"job":"local blocker","brief":"work local on b","model":"m2","write_scope":["src/b"]}"""
-        ) as SpawnValidation.Valid
-        supervisor.executeSpawn(v4.brief, v4.entry, v4.skill)
-
-        withTimeout(3_000) {
-            supervisor.state.first { list -> list.count { it.state == RunPhase.Running } == 2 }
-        }
-
-        // Complete cloud 1: drainQueue() checks v3 (local) while v4 (local) is running -> Admission.Refuse.
-        gate1.complete(Unit)
-
-        withTimeout(3_000) {
-            supervisor.state.first { list ->
-                list.firstOrNull { it.id == id3 }?.state == RunPhase.Failed
-            }
-        }
-
-        gate4.complete(Unit)
-        supervisor.joinAll()
-
-        assertFalse(supervisor.hasLiveWorkers())
-        val refused = store.loadWorker(id3)
-        assertEquals(RunPhase.Failed, refused?.state)
-        assertNotNull(refused?.envelope)
     }
 
     @Test
@@ -816,8 +714,7 @@ class SubagentSupervisorTest {
         barrierArmed.set(true)
         val d2 = async(Dispatchers.Default) { supervisor.executeSpawn(v2.brief, v2.entry, v2.skill) }
         val d3 = async(Dispatchers.Default) { supervisor.executeSpawn(v3.brief, v3.entry, v3.skill) }
-        d2.await()
-        d3.await()
+        assertEquals(1, listOf(d2.await(), d3.await()).count { it.error })
         withTimeout(3_000) { twoActive.await() }
         barrierArmed.set(false)
 
@@ -827,7 +724,7 @@ class SubagentSupervisorTest {
         supervisor.joinAll()
 
         withTimeout(3_000) {
-            supervisor.state.first { list -> list.size == 3 && list.all { it.state == RunPhase.Done } }
+            supervisor.state.first { list -> list.size == 2 && list.all { it.state == RunPhase.Done } }
         }
         assertEquals(SubagentScheduler.MAX_RUNNING, maxConcurrent.get())
     }

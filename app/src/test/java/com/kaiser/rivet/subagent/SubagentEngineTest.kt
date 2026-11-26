@@ -215,58 +215,6 @@ class SubagentEngineTest {
     }
 
     @Test
-    fun scopeQueueBehaviour_promotionAndSerialization() = runBlocking {
-        val config = cloudConfig("c1")
-        val store = WorkerSessionStore.inMemory()
-        val gate1 = CompletableDeferred<Unit>()
-        val gate2 = CompletableDeferred<Unit>()
-        var clientIndex = 0
-
-        val services = testServices(
-            workerStore = store,
-            configs = listOf(config),
-            clientFactory = { _, _ ->
-                clientIndex++
-                if (clientIndex == 1) ControllableClient(gate1) else ControllableClient(gate2)
-            },
-        )
-        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()))
-
-        val v1 = supervisor.validateSpawn(
-            "{\"job\": \"module core\", \"brief\": \"core work\", \"model\": \"m1\", \"write_scope\": [\"src/core\"]}"
-        ) as SpawnValidation.Valid
-        val v2 = supervisor.validateSpawn(
-            "{\"job\": \"file edit\", \"brief\": \"edit file\", \"model\": \"m1\", \"write_scope\": [\"src/core/item.kt\"]}"
-        ) as SpawnValidation.Valid
-
-        val r1 = supervisor.executeSpawn(v1.brief, v1.entry, v1.skill)
-        val r2 = supervisor.executeSpawn(v2.brief, v2.entry, v2.skill)
-
-        val id1 = json.parseToJsonElement(r1.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
-        val id2 = json.parseToJsonElement(r2.json).jsonObject["worker_id"]?.jsonPrimitive?.content!!
-
-        val p2 = json.parseToJsonElement(r2.json).jsonObject
-        assertEquals("waiting", p2["state"]?.jsonPrimitive?.content)
-        assertEquals("same files as module core", p2["reason"]?.jsonPrimitive?.content)
-
-        // When worker 1 finishes, worker 2 must be promoted to running
-        gate1.complete(Unit)
-
-        withTimeout(3_000) {
-            supervisor.state.first { list ->
-                val w2 = list.firstOrNull { it.id == id2 }
-                w2?.state == RunPhase.Running
-            }
-        }
-
-        gate2.complete(Unit)
-        supervisor.joinAll()
-
-        val w2Done = store.loadWorker(id2)
-        assertEquals(RunPhase.Done, w2Done?.state)
-    }
-
-    @Test
     fun completionHold_holdsTurnUntilWorkerCompletes() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()
@@ -288,7 +236,7 @@ class SubagentEngineTest {
         // Launch hold in background; release gate after a slight delay
         gate.complete(Unit)
 
-        val events = supervisor.beforeCompletionHold("test-workspace")
+        val events = supervisor.awaitIdleResults("test-workspace")
         assertEquals(1, events.size)
         assertEquals(SubagentContext.RESULT_KIND, events[0].internalContext?.kind)
         assertTrue(events[0].internalContext?.content?.contains(id1) == true)

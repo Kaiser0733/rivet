@@ -2188,7 +2188,7 @@ class ChatViewModel private constructor(
                     activityFor = ::activityFor,
                     poolState = { _subagentPool.value },
                 )
-                val scopeJob = SupervisorJob(coroutineContext[Job])
+                val scopeJob = SupervisorJob(viewModelScope.coroutineContext[Job])
                 val (supervisor, tools, collectorJob) = ChatSupervisorServices.initSupervisor(
                     services = supervisorServices,
                     parentScope = CoroutineScope(coroutineContext + scopeJob),
@@ -2514,11 +2514,6 @@ class ChatViewModel private constructor(
                         snapshot.config, snapshot.config.model, error,
                     )?.let { persistLearning(it.learning) }
                 },
-                beforeCompletion = {
-                    if (workspaceId != null) {
-                        activeSupervisor?.beforeCompletionHold(workspaceId).orEmpty()
-                    } else emptyList()
-                },
                 compactContext = compact@{ candidate, force ->
                     if (recalling && !force) return@compact candidate
                     val compacted = try {
@@ -2647,8 +2642,20 @@ class ChatViewModel private constructor(
                         },
                     )
                 }
+                suspend fun runUntilIdle(): AgentRunResult {
+                    val supervisor = activeSupervisor ?: return runLoop()
+                    while (true) {
+                        val result = runLoop()
+                        if (result.stopReason != AgentStopReason.Completed || workspaceId == null) return result
+                        val events = supervisor.awaitIdleResults(workspaceId)
+                        if (events.isEmpty()) return result
+                        persistTurn(durable + events, interrupted = true)
+                        durable += events
+                        activeMessages = durable.toList()
+                    }
+                }
                 val result = if (workspaceId == null) runLoop() else coroutineScope {
-                    val running = async { runLoop() }
+                    val running = async { runUntilIdle() }
                     val changed = async { workspaceSelection.awaitIdentityChange(workspaceId) }
                     select {
                         running.onAwait { completed ->
@@ -2763,9 +2770,11 @@ class ChatViewModel private constructor(
                 browserLease.clear()
                 approvals.cancel()
                 withContext(NonCancellable) {
-                    activeSupervisor?.joinAll()
+                    val supervisor = activeSupervisor
+                    supervisor?.cancel()
                     supervisorCollector?.cancel()
                     supervisorScopeJob?.cancel()
+                    kotlinx.coroutines.withTimeoutOrNull(3_000L) { supervisor?.joinAll() }
                     activeSupervisor = null
                     try {
                         when (val outcome = checkpointGate.finishTurnCheckpoint()) {

@@ -1965,44 +1965,6 @@ class AgentLoopTest {
         assertEquals(listOf("wc" to null), cancelRecorded)
     }
 
-    @Test
-    fun beforeCompletionExtendsLoopWithContextEvents() = runTest {
-        var requests = 0
-        var holds = 0
-        val event = InternalContext(
-            kind = "rollback",
-            workspaceId = "tree",
-            content = "Worker finished: A.kt",
-            digest = InternalContext.digest("Worker finished: A.kt"),
-        ).event()
-        val result = AgentLoop(
-            requestModel = { _, _, _ ->
-                requests++
-                if (requests == 1) AgentResponse(text = "Premature answer")
-                else AgentResponse(text = "Verified final answer")
-            },
-            prepareTool = { error("unused") },
-            requestApproval = { true },
-            beforeCompletion = { messages ->
-                when (holds++) {
-                    0 -> {
-                        assertEquals("Premature answer", messages.last().text)
-                        listOf(event)
-                    }
-                    else -> {
-                        assertEquals("Verified final answer", messages.last().text)
-                        emptyList()
-                    }
-                }
-            },
-        ).run(listOf(AgentMessage.user("Go")), emptyList())
-
-        assertEquals(AgentStopReason.Completed, result.stopReason)
-        assertEquals(2, result.modelIterations)
-        assertTrue(result.messages.contains(event))
-        assertEquals("Verified final answer", result.messages.last().text)
-    }
-
     @Test fun repeatedIdenticalFailureGetsAdviceAndTurnContinues() = runTest {
         val call = AgentToolCall("edit", "write_file", """{"path":"Main.kt"}""")
         var requests = 0

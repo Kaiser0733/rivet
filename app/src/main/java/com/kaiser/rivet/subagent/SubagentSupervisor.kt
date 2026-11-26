@@ -201,72 +201,24 @@ internal class SubagentSupervisor(
                         error = true,
                     )
                 }
-                is Admission.Queue -> {
-                    val pausedReason = currentPauseReason
-                    val worker = WorkerRecord(
-                        id = workerId,
-                        runId = services.runId,
-                        parentSessionId = services.parentSessionId,
-                        workspaceId = services.workspaceId,
-                        job = brief.job,
-                        brief = brief.brief,
-                        skill = skill?.name ?: brief.skill,
-                        configId = entry.config.id,
-                        model = entry.entry.model,
-                        modelLabel = entry.label,
-                        writeScope = brief.writeScope,
-                        state = if (pausedReason != null) RunPhase.Paused else RunPhase.Queued,
-                        waitingReason = if (pausedReason != null) null else admission.detail,
-                        pauseReason = pausedReason,
-                        interrupted = pausedReason != null,
-                        retryOf = brief.retryOf,
-                        createdAt = System.currentTimeMillis(),
-                    )
-                    updateWorker(worker)
-                    services.workerStore.saveWorker(worker)
-                    if (pausedReason == null) {
-                        queue += QueuedWorker(worker, brief, entry, skill)
-                    }
-                    SpawnExecutionResult(
-                        json = buildJsonObject {
-                            put("worker_id", workerId)
-                            put("state", if (pausedReason != null) "paused" else "waiting")
-                            put("model_label", entry.label)
-                            put("reason", admission.detail)
-                        }.toString(),
-                        error = false,
-                    )
-                }
+                is Admission.Queue -> SpawnExecutionResult(
+                    json = buildJsonObject {
+                        put("error", "activation_limit_reached")
+                        put("retryable", true)
+                        put("required_action", "${admission.detail}. Wait for a worker to finish or continue with the current workers.")
+                    }.toString(),
+                    error = true,
+                )
                 is Admission.Start -> {
                     val pausedReason = currentPauseReason
                     if (pausedReason != null) {
-                        val pausedWorker = WorkerRecord(
-                            id = workerId,
-                            runId = services.runId,
-                            parentSessionId = services.parentSessionId,
-                            workspaceId = services.workspaceId,
-                            job = brief.job,
-                            brief = brief.brief,
-                            skill = skill?.name ?: brief.skill,
-                            configId = entry.config.id,
-                            model = entry.entry.model,
-                            modelLabel = entry.label,
-                            writeScope = brief.writeScope,
-                            state = RunPhase.Paused,
-                            pauseReason = pausedReason,
-                            interrupted = true,
-                            retryOf = brief.retryOf,
-                            createdAt = System.currentTimeMillis(),
-                        )
-                        updateWorker(pausedWorker)
-                        services.workerStore.saveWorker(pausedWorker)
                         return@withLock SpawnExecutionResult(
                             json = buildJsonObject {
-                                put("worker_id", workerId)
-                                put("state", "paused")
-                                put("model_label", entry.label)
+                                put("error", "spawn_interrupted")
+                                put("retryable", true)
+                                put("required_action", "The run paused before the worker started.")
                             }.toString(),
-                            error = false,
+                            error = true,
                         )
                     }
                     val worker = WorkerRecord(
@@ -569,11 +521,13 @@ internal class SubagentSupervisor(
         return results
     }
 
-    suspend fun beforeCompletionHold(workspaceId: String): List<AgentMessage> {
-        if (hasLiveWorkers()) {
-            awaitTerminal(workerIds = emptyList(), timeoutMs = 600_000L)
-        }
+    suspend fun awaitIdleResults(workspaceId: String): List<AgentMessage> {
+        if (hasLiveWorkers()) awaitTerminal(workerIds = emptyList(), timeoutMs = 600_000L)
         return drainUndeliveredResults(workspaceId)
+    }
+
+    fun cancel() {
+        activeJobs.values.forEach { it.cancel() }
     }
 
     suspend fun stop(workerId: String) {

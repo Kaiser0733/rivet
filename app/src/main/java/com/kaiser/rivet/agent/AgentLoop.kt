@@ -66,7 +66,6 @@ class AgentLoop(
     private val onContextLimitObserved: suspend (ProviderError.ContextOverflow, Long) -> Unit = { _, _ -> },
     private val onOutputLimitObserved: suspend (ProviderError.OutputLimitExceeded) -> Unit = { },
     private val onRequestRetry: () -> Unit = {},
-    private val beforeCompletion: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
     private val writeMemoryBatch: (suspend (AgentToolCall, List<String>) -> AgentToolResult)? = null,
     private val resumeReceipts: Map<String, RunToolReceipt> = emptyMap(),
     private val journalTool: suspend (String, RunToolReceipt) -> Unit = { _, _ -> },
@@ -393,11 +392,6 @@ class AgentLoop(
             }
             append(assistant)
             if (calls.isEmpty()) {
-                val holdEvents = beforeCompletion(messages.toList())
-                if (holdEvents.isNotEmpty()) {
-                    appendContextEvents(holdEvents)?.let { return it }
-                    continue
-                }
                 val reason = finishMemoryProposals()
                 return AgentRunResult(
                     messages = messages,
