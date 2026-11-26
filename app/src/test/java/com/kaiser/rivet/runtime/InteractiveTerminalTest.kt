@@ -54,8 +54,8 @@ class InteractiveTerminalTest {
                                        terminate: suspend () -> Unit): String? = null
         },
         cwd: () -> String? = { null },
-        killDescendants: (Int) -> Unit = {},
         onSync: suspend (String) -> MirrorSyncResult? = { null },
+        killDescendants: (Int) -> Unit = {},
     ): Harness {
         val engines = mutableListOf<FakeEngine>()
         val closed = mutableListOf<String>()

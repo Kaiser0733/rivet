@@ -8,7 +8,6 @@ import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.ReasoningLevel
-import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.workspace.WorkspacePath
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
@@ -73,7 +72,7 @@ class WorkerSessionStoreTest {
     }
 
     @Test
-    fun enforces512KiBProjectionCapAndCompactsViaContextStore() = runBlocking {
+    fun compactsAndAcceptsAnActiveProjectionOver512KiB() = runBlocking {
         val store = WorkerSessionStore.inMemory()
         store.saveWorker(sampleWorker())
 
@@ -97,12 +96,9 @@ class WorkerSessionStoreTest {
         // Full event history still holds all 4 original events.
         assertEquals(4, store.fullEventCount("w-1"))
 
-        // Exceeding 512 KiB in active messages throws AgentSessionLimitException.
         val huge = AgentMessage.user("x".repeat(520 * 1024))
-        val threw = runCatching {
-            store.saveMessages("w-1", compacted + huge, interrupted = false)
-        }.exceptionOrNull()
-        assertTrue(threw is AgentSessionLimitException)
+        store.saveMessages("w-1", compacted + huge, interrupted = false)
+        assertEquals(huge, store.loadTranscript("w-1").messages.last())
     }
 
     @Test

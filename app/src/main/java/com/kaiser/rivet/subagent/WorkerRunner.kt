@@ -404,9 +404,6 @@ internal class WorkerRunner(
                 },
                 describeDestructive = { req -> executor?.describeDestructive(req) ?: req },
                 workspaceIsCurrent = services.workspaceIsCurrent,
-                canPersistToolOutput = { candidate, reserve ->
-                    services.workerStore.canSaveWithReserve(currentWorker.id, candidate, reserve)
-                },
                 mutationBlocker = { call ->
                     when (call.name) {
                         "run_command" -> services.commandBlocker()

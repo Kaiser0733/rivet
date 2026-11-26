@@ -99,7 +99,6 @@ internal class CodingSessions(
     private val lock = Mutex()
     private val json = Json { ignoreUnknownKeys = true }
     private var initialized = false
-    @Volatile private var summaryBytes = 0
 
     override suspend fun load(): AgentSession = onDatabase { db ->
         val id = activeId(db)
@@ -107,11 +106,10 @@ internal class CodingSessions(
         trimCompactedHistory(db, id)
         validateProjection(db, id)
         val summary = summary(db, id)
-        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
         val active = activeMessages(db, id)
         val interrupted = hasPendingToolCall(active.lastOrNull()) ||
             (header.interrupted && hasUnfinishedTurn(active))
-        val messages = recoverInterrupted(db, id, interrupted, active, summaryBytes)
+        val messages = recoverInterrupted(db, id, interrupted, active)
         AgentSession(messages, interrupted, header.id, header.title, header.workspaceId, summary)
     }
 
@@ -149,10 +147,6 @@ internal class CodingSessions(
                     "Pending tool call requires its correlated results"
                 }
             }
-            // Only the active model transcript has a size limit; complete event history does not.
-            if (!AgentSessionCodec.fits(messages, summary(db, id).toByteArray(Charsets.UTF_8).size)) {
-                throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
-            }
             if (retractEmpty) {
                 db.delete("active_events", "id=?", arrayOf(tail.first().first.toString()))
                 db.execSQL("DELETE FROM events WHERE id=(SELECT MAX(id) FROM events WHERE session_id=?)", arrayOf(id))
@@ -186,8 +180,7 @@ internal class CodingSessions(
         trimCompactedHistory(db, id)
     }
 
-    override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean =
-        AgentSessionCodec.fits(messages, reservedEncodedBytes + summaryBytes)
+    override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean = true
 
     override suspend fun markInterrupted(interrupted: Boolean) =
         markInterrupted(interrupted, expectedSessionId = null)
@@ -227,7 +220,6 @@ internal class CodingSessions(
                 arrayOf(System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        summaryBytes = 0
     }
 
     /**
@@ -295,7 +287,6 @@ internal class CodingSessions(
             ).use { cursor -> if (cursor.moveToFirst()) cursor.getString(0) else null }
             if (empty != null) {
                 setActive(db, empty)
-                summaryBytes = 0
                 return@onDatabase AgentSession(emptyList(), id = empty, title = title, workspaceId = workspaceId)
             }
         }
@@ -316,7 +307,6 @@ internal class CodingSessions(
             setActive(db, id)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        summaryBytes = 0
         AgentSession(messages = listOfNotNull(starterBrief), id = id, title = title, workspaceId = workspaceId)
     }
 
@@ -335,7 +325,6 @@ internal class CodingSessions(
         require(title.isNotBlank())
         require(summary.toByteArray(Charsets.UTF_8).size <= MAX_SUMMARY_BYTES)
         require(active.isEmpty() || AgentContext.validGroups(active))
-        require(AgentSessionCodec.fits(active, summary.toByteArray(Charsets.UTF_8).size))
         val id = UUID.randomUUID().toString()
         val cleanTitle = title.trim().take(80)
         db.beginTransaction()
@@ -368,10 +357,8 @@ internal class CodingSessions(
         val active = activeMessages(db, id)
         val interrupted = hasPendingToolCall(active.lastOrNull()) ||
             (selected.interrupted && hasUnfinishedTurn(active))
-        val messages = recoverInterrupted(db, id, interrupted, active,
-            summary.toByteArray(Charsets.UTF_8).size)
+        val messages = recoverInterrupted(db, id, interrupted, active)
         setActive(db, id)
-        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
         AgentSession(messages, interrupted, id, selected.title, selected.workspaceId, summary)
     }
 
@@ -448,11 +435,10 @@ internal class CodingSessions(
         val selected = header(db, active)
         validateProjection(db, active)
         val summary = summary(db, active)
-        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
         val currentMessages = activeMessages(db, active)
         val interrupted = hasPendingToolCall(currentMessages.lastOrNull()) ||
             (selected.interrupted && hasUnfinishedTurn(currentMessages))
-        val messages = recoverInterrupted(db, active, interrupted, currentMessages, summaryBytes)
+        val messages = recoverInterrupted(db, active, interrupted, currentMessages)
         AgentSession(messages, interrupted, active, selected.title, selected.workspaceId, summary)
     }
 
@@ -596,9 +582,6 @@ internal class CodingSessions(
         require(validProjection(expected, retained))
         val projected = ProjectContext.projection(expected, retained, summary, header(db, activeId(db)).workspaceId)
         require(AgentContext.validGroups(projected))
-        if (!AgentSessionCodec.fits(projected, summary.toByteArray(Charsets.UTF_8).size)) {
-            throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
-        }
         val activeHash = hashMessages(projected)
         val summaryHash = hash(summary)
         db.beginTransaction()
@@ -631,7 +614,6 @@ internal class CodingSessions(
                 summary.toByteArray(Charsets.UTF_8).size)
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        summaryBytes = summary.toByteArray(Charsets.UTF_8).size
         projected
     }
 
@@ -862,44 +844,29 @@ internal class CodingSessions(
         InterruptedTurnRecovery.hasUnfinishedTurn(messages)
 
     private fun recoverInterrupted(db: SQLiteDatabase, id: String, interrupted: Boolean,
-                                   active: List<AgentMessage>, summaryBytes: Int): List<AgentMessage> {
+                                   active: List<AgentMessage>): List<AgentMessage> {
         if (!interrupted) {
             db.execSQL("UPDATE sessions SET interrupted=0 WHERE id=? AND interrupted!=0", arrayOf(id))
             return active
         }
-        val plan = InterruptedTurnRecovery.plan(active, summaryBytes) ?: run {
+        val result = InterruptedTurnRecovery.pendingResult(active) ?: run {
             db.execSQL("UPDATE sessions SET interrupted=1 WHERE id=? AND interrupted!=1", arrayOf(id))
             return active
         }
-        val result = plan.pendingToolResult
-        val fits = plan.fitsInActive
         val payload = json.encodeToString(AgentMessage.serializer(), result)
         db.beginTransaction()
         try {
-            val through = db.insertOrThrow("events", null, ContentValues().apply {
+            db.insertOrThrow("events", null, ContentValues().apply {
                 put("session_id", id); put("payload", payload)
             })
-            if (fits) db.insertOrThrow("active_events", null, ContentValues().apply {
+            db.insertOrThrow("active_events", null, ContentValues().apply {
                 put("session_id", id); put("payload", payload)
-            }) else {
-                db.execSQL("DELETE FROM active_events WHERE id=(SELECT MAX(id) FROM active_events WHERE session_id=?)",
-                    arrayOf(id))
-                val retained = plan.activeAfterRecovery
-                val currentSummary = summary(db, id)
-                db.insertOrThrow("compactions", null, ContentValues().apply {
-                    put("session_id", id); put("through_event_id", through)
-                    put("summary", currentSummary); put("before_count", active.size + 1)
-                    put("after_count", retained.size); put("created_at", System.currentTimeMillis())
-                    put("prefix_hash", canonicalPrefixHash(db, id, through))
-                    put("active_hash", hashMessages(retained))
-                    put("summary_hash", hash(currentSummary))
-                })
-            }
+            })
             db.execSQL("UPDATE sessions SET interrupted=1, active_generation=active_generation+1, updated_at=? WHERE id=?",
                 arrayOf(System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        return plan.activeAfterRecovery
+        return active + result
     }
 
     private fun summary(db: SQLiteDatabase, id: String): String =
@@ -1125,7 +1092,6 @@ internal class CodingSessions(
             })
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
-        summaryBytes = 0
     }
 
     private fun canonicalProjectState(db: SQLiteDatabase, id: String): List<AgentMessage> {
@@ -1219,12 +1185,6 @@ internal class CodingSessions(
 internal object InterruptedTurnRecovery {
     private val json = Json { ignoreUnknownKeys = true }
 
-    data class RecoveryPlan(
-        val pendingToolResult: AgentMessage,
-        val fitsInActive: Boolean,
-        val activeAfterRecovery: List<AgentMessage>,
-    )
-
     fun hasPendingToolCall(last: AgentMessage?): Boolean =
         last?.role == AgentRole.Assistant && last.toolCalls.isNotEmpty()
 
@@ -1234,9 +1194,9 @@ internal object InterruptedTurnRecovery {
         return last.role != AgentRole.Assistant || last.toolCalls.isNotEmpty() || last.text.isBlank()
     }
 
-    fun plan(active: List<AgentMessage>, summaryBytes: Int): RecoveryPlan? {
+    fun pendingResult(active: List<AgentMessage>): AgentMessage? {
         val pending = active.lastOrNull()?.takeIf(::hasPendingToolCall) ?: return null
-        val result = AgentMessage.tools(pending.toolCalls.map { call ->
+        return AgentMessage.tools(pending.toolCalls.map { call ->
             AgentToolResult(
                 call.id,
                 call.name,
@@ -1245,13 +1205,6 @@ internal object InterruptedTurnRecovery {
                 "Interrupted  ${call.name}".take(256),
             )
         })
-        val fits = AgentSessionCodec.fits(active + result, summaryBytes)
-        val nextActive = if (fits) active + result else active.dropLast(1)
-        return RecoveryPlan(
-            pendingToolResult = result,
-            fitsInActive = fits,
-            activeAfterRecovery = nextActive,
-        )
     }
 
     fun validProjection(expected: List<AgentMessage>, retained: List<AgentMessage>): Boolean {

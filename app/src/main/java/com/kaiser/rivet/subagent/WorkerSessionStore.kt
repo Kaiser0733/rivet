@@ -20,8 +20,6 @@ import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.provider.ReasoningLevel
 import com.kaiser.rivet.provider.contextInputTokens
-import com.kaiser.rivet.storage.AgentSessionCodec
-import com.kaiser.rivet.storage.AgentSessionLimitException
 import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.storage.ContextAttempt
 import com.kaiser.rivet.storage.ContextEstimate
@@ -30,7 +28,6 @@ import com.kaiser.rivet.storage.InterruptedTurnRecovery
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
 import java.security.MessageDigest
-import java.util.concurrent.ConcurrentHashMap
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
@@ -133,28 +130,22 @@ internal class WorkerSessionStore internal constructor(
     constructor(context: Context) : this(SqliteWorkerStoreBackend(context.applicationContext))
 
     private val lock = Mutex()
-    private val summaryBytesByWorker = ConcurrentHashMap<String, Int>()
 
     suspend fun saveWorker(worker: WorkerRecord): Unit = withContext(Dispatchers.IO) {
         lock.withLock {
-            summaryBytesByWorker[worker.id] = worker.summary.toByteArray(Charsets.UTF_8).size
             backend.upsertWorker(worker)
         }
     }
 
     suspend fun loadWorker(workerId: String): WorkerRecord? = withContext(Dispatchers.IO) {
         lock.withLock {
-            backend.getWorker(workerId)?.also {
-                summaryBytesByWorker[workerId] = it.summary.toByteArray(Charsets.UTF_8).size
-            }
+            backend.getWorker(workerId)
         }
     }
 
     suspend fun workersForRun(runId: String): List<WorkerRecord> = withContext(Dispatchers.IO) {
         lock.withLock {
-            backend.listWorkersForRun(runId).also { list ->
-                list.forEach { summaryBytesByWorker[it.id] = it.summary.toByteArray(Charsets.UTF_8).size }
-            }
+            backend.listWorkersForRun(runId)
         }
     }
 
@@ -166,7 +157,6 @@ internal class WorkerSessionStore internal constructor(
                         worker.lostExecution("Rivet closed before this worker returned a result.")
                             .also(backend::upsertWorker)
                     } else worker
-                    summaryBytesByWorker[recovered.id] = recovered.summary.toByteArray(Charsets.UTF_8).size
                     recovered
                 }
             }
@@ -174,9 +164,7 @@ internal class WorkerSessionStore internal constructor(
 
     suspend fun workersForSession(sessionId: String): List<WorkerRecord> = withContext(Dispatchers.IO) {
         lock.withLock {
-            backend.listWorkersForSession(sessionId).also { list ->
-                list.forEach { summaryBytesByWorker[it.id] = it.summary.toByteArray(Charsets.UTF_8).size }
-            }
+            backend.listWorkersForSession(sessionId)
         }
     }
 
@@ -201,12 +189,10 @@ internal class WorkerSessionStore internal constructor(
         lock.withLock {
             val worker = backend.getWorker(workerId)
                 ?: throw IllegalArgumentException("Unknown worker '$workerId'")
-            val summaryBytes = worker.summary.toByteArray(Charsets.UTF_8).size
-            summaryBytesByWorker[workerId] = summaryBytes
             val active = backend.getActiveMessages(workerId)
             val interrupted = InterruptedTurnRecovery.hasPendingToolCall(active.lastOrNull()) ||
                 (worker.interrupted && InterruptedTurnRecovery.hasUnfinishedTurn(active))
-            val messages = recoverInterruptedLocked(worker, interrupted, active, summaryBytes)
+            val messages = recoverInterruptedLocked(worker, interrupted, active)
             val updatedWorker = backend.getWorker(workerId) ?: worker
             val events = backend.getAllEvents(workerId)
             WorkerTranscript(
@@ -248,11 +234,6 @@ internal class WorkerSessionStore internal constructor(
                     "Pending tool call requires its correlated results"
                 }
             }
-            val summaryBytes = worker.summary.toByteArray(Charsets.UTF_8).size
-            summaryBytesByWorker[workerId] = summaryBytes
-            if (!AgentSessionCodec.fits(messages, summaryBytes)) {
-                throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
-            }
             val effectiveInterrupted = interrupted || InterruptedTurnRecovery.hasPendingToolCall(messages.lastOrNull())
             backend.appendMessages(
                 workerId = workerId,
@@ -262,15 +243,6 @@ internal class WorkerSessionStore internal constructor(
                 now = System.currentTimeMillis(),
             )
         }
-    }
-
-    fun canSaveWithReserve(
-        workerId: String,
-        messages: List<AgentMessage>,
-        reservedEncodedBytes: Int,
-    ): Boolean {
-        val summaryBytes = summaryBytesByWorker[workerId] ?: 0
-        return AgentSessionCodec.fits(messages, reservedEncodedBytes + summaryBytes)
     }
 
     suspend fun markInterrupted(workerId: String, interrupted: Boolean): Unit = withContext(Dispatchers.IO) {
@@ -317,7 +289,6 @@ internal class WorkerSessionStore internal constructor(
     suspend fun deleteForSession(sessionId: String): Unit = withContext(Dispatchers.IO) {
         lock.withLock {
             val workers = backend.listWorkersForSession(sessionId)
-            workers.forEach { summaryBytesByWorker.remove(it.id) }
             backend.deleteForSession(sessionId)
         }
     }
@@ -355,9 +326,6 @@ internal class WorkerSessionStore internal constructor(
             val projected = ProjectContext.projection(expected, retained, summary, worker.workspaceId)
             require(AgentContext.validGroups(projected))
             val summaryBytes = summary.toByteArray(Charsets.UTF_8).size
-            if (!AgentSessionCodec.fits(projected, summaryBytes)) {
-                throw AgentSessionLimitException(AgentSessionCodec.MAX_SERIALIZED_BYTES + 1)
-            }
             val currentActive = backend.getActiveMessages(workerId)
             if (currentActive != expected) {
                 throw IllegalStateException("Active context changed")
@@ -374,7 +342,6 @@ internal class WorkerSessionStore internal constructor(
                 summaryBytes = summaryBytes,
                 now = System.currentTimeMillis(),
             )
-            summaryBytesByWorker[workerId] = summaryBytes
             projected
         }
     }
@@ -446,7 +413,6 @@ internal class WorkerSessionStore internal constructor(
         worker: WorkerRecord,
         interrupted: Boolean,
         active: List<AgentMessage>,
-        summaryBytes: Int,
     ): List<AgentMessage> {
         if (!interrupted) {
             if (worker.interrupted) {
@@ -454,7 +420,7 @@ internal class WorkerSessionStore internal constructor(
             }
             return active
         }
-        val plan = InterruptedTurnRecovery.plan(active, summaryBytes) ?: run {
+        val result = InterruptedTurnRecovery.pendingResult(active) ?: run {
             if (!worker.interrupted) {
                 backend.setInterrupted(worker.id, true, System.currentTimeMillis())
             }
@@ -462,12 +428,10 @@ internal class WorkerSessionStore internal constructor(
         }
         backend.applyInterruptedRecovery(
             workerId = worker.id,
-            plan = plan,
-            summary = worker.summary,
-            beforeCount = active.size + 1,
+            result = result,
             now = System.currentTimeMillis(),
         )
-        return plan.activeAfterRecovery
+        return active + result
     }
 
     companion object {
@@ -496,9 +460,7 @@ internal interface WorkerStoreBackend {
     fun setInterrupted(workerId: String, interrupted: Boolean, now: Long)
     fun applyInterruptedRecovery(
         workerId: String,
-        plan: InterruptedTurnRecovery.RecoveryPlan,
-        summary: String,
-        beforeCount: Int,
+        result: AgentMessage,
         now: Long,
     )
     fun recordCompaction(
@@ -675,20 +637,13 @@ internal class InMemoryWorkerStoreBackend : WorkerStoreBackend {
 
     override fun applyInterruptedRecovery(
         workerId: String,
-        plan: InterruptedTurnRecovery.RecoveryPlan,
-        summary: String,
-        beforeCount: Int,
+        result: AgentMessage,
         now: Long,
     ) {
         val evList = events.getOrPut(workerId) { mutableListOf() }
         val actList = active.getOrPut(workerId) { mutableListOf() }
-        evList.add(plan.pendingToolResult)
-        if (plan.fitsInActive) {
-            actList.add(plan.pendingToolResult)
-        } else {
-            if (actList.isNotEmpty()) actList.removeAt(actList.lastIndex)
-            compactions.getOrPut(workerId) { mutableListOf() }.add(summary)
-        }
+        evList.add(result)
+        actList.add(result)
         generations[workerId] = (generations[workerId] ?: 0) + 1
         workers[workerId]?.let { current ->
             workers[workerId] = current.copy(interrupted = true, updatedAt = now)
@@ -970,38 +925,21 @@ private class SqliteWorkerStoreBackend(context: Context) : WorkerStoreBackend {
 
     override fun applyInterruptedRecovery(
         workerId: String,
-        plan: InterruptedTurnRecovery.RecoveryPlan,
-        summary: String,
-        beforeCount: Int,
+        result: AgentMessage,
         now: Long,
     ) {
         val db = helper.writableDatabase
-        val payload = WorkerStoreCodec.encodeMessage(plan.pendingToolResult)
+        val payload = WorkerStoreCodec.encodeMessage(result)
         db.beginTransaction()
         try {
-            val through = db.insertOrThrow("worker_events", null, ContentValues().apply {
+            db.insertOrThrow("worker_events", null, ContentValues().apply {
                 put("worker_id", workerId)
                 put("payload", payload)
             })
-            if (plan.fitsInActive) {
-                db.insertOrThrow("worker_active", null, ContentValues().apply {
-                    put("worker_id", workerId)
-                    put("payload", payload)
-                })
-            } else {
-                db.execSQL(
-                    "DELETE FROM worker_active WHERE id=(SELECT MAX(id) FROM worker_active WHERE worker_id=?)",
-                    arrayOf(workerId),
-                )
-                db.insertOrThrow("worker_compactions", null, ContentValues().apply {
-                    put("worker_id", workerId)
-                    put("through_event_id", through)
-                    put("summary", summary)
-                    put("before_count", beforeCount)
-                    put("after_count", plan.activeAfterRecovery.size)
-                    put("created_at", now)
-                })
-            }
+            db.insertOrThrow("worker_active", null, ContentValues().apply {
+                put("worker_id", workerId)
+                put("payload", payload)
+            })
             db.execSQL(
                 "UPDATE workers SET interrupted=1, active_generation=active_generation+1, updated_at=? WHERE id=?",
                 arrayOf(now, workerId),

@@ -625,6 +625,22 @@ class CodingSessionsTest {
         assertEquals(good, sessions.load().id)
     }
 
+    @Test fun longSqliteProjectionKeepsTheCorrelatedReceiptOnRecovery() = runBlocking {
+        val sessions = CodingSessions(app)
+        val history = List(28) { AgentMessage.user("x".repeat(20_000)) }
+        val call = AgentToolCall("pending", "write_file", "{}")
+        val pending = history + AgentMessage.assistant("", listOf(call))
+
+        assertTrue(sessions.canSaveWithReserve(pending, 0))
+        sessions.save(pending, interrupted = true)
+
+        val reopened = CodingSessions(app).load()
+        assertEquals(pending, reopened.messages.dropLast(1))
+        val receipt = reopened.messages.last().toolResults.single()
+        assertEquals(call.id, receipt.callId)
+        assertTrue(receipt.error)
+    }
+
     @Test fun failedMigrationLeavesOriginalAndCanRetry() = runBlocking {
         val oversized = "[\"" + "x".repeat(AgentSessionCodec.MAX_SERIALIZED_BYTES) + "\"]"
         app.chatData.edit { it[stringPreferencesKey("agent_messages")] = oversized }

@@ -15,8 +15,7 @@ class AgentSessionLimitException(val actualBytes: Int) : Exception(
 )
 
 internal object AgentSessionCodec {
-    // Bounds the legacy DataStore value and SQLite's active projection,
-    // not the full SQLite event history.
+    // Bounds the legacy DataStore value and gives SQLite compaction a byte-pressure target.
     const val MAX_SERIALIZED_BYTES = 512 * 1024
 
     private val json = Json { ignoreUnknownKeys = true }
