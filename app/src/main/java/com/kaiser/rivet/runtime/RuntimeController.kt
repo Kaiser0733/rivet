@@ -796,7 +796,11 @@ class RuntimeController(
     }
 
     suspend fun discardPendingChanges(expectedWorkspace: String): MirrorReady = operations.withLock {
-        val active = mirrorFor(expectedWorkspace) ?: throw MirrorFailure("workspace_unavailable")
+        if (selection.currentIdentity() != expectedWorkspace) throw MirrorFailure("workspace_changed")
+        // Explicit discard follows the viewed tree, including the selection checks
+        // during materialization. A turn's captured mirror can run in the background.
+        val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+        if (mirrorIdentity != expectedWorkspace) throw MirrorFailure("workspace_changed")
         active.discardPendingChanges()
     }
 

@@ -449,6 +449,7 @@ class WorkspaceMirrorTest {
         try { runtime.discardPendingChanges(tree.toString()); fail("Expected mismatch") }
         catch (error: MirrorFailure) { assertEquals("workspace_changed", error.code) }
         assertEquals("pending", File(mirror.worktree, "file.txt").readText())
+        assertEquals(otherTree.toString(), runtime.currentIdentity())
         runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
             .putString("tree", tree.toString()).commit()
         provider.afterChildQuery = {
@@ -459,6 +460,8 @@ class WorkspaceMirrorTest {
         try { runtime.discardPendingChanges(tree.toString()); fail("Expected change during refresh") }
         catch (error: MirrorFailure) { assertEquals("workspace_changed", error.code) }
         assertEquals("pending", File(mirror.worktree, "file.txt").readText())
+        assertArrayEquals(newer, bytes("file.txt"))
+        assertEquals(otherTree.toString(), runtime.currentIdentity())
         assertEquals("keep this private work", File(otherMirror.worktree, "other-pending.txt").readText())
         runtimeContext.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
             .putString("tree", tree.toString()).commit()
