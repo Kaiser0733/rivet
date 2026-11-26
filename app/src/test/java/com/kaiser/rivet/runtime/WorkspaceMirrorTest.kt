@@ -321,6 +321,7 @@ class WorkspaceMirrorTest {
     }
 
     @Test fun replacementBetweenReceiptCheckAndWriteCannotReceiveMirrorContent() = runBlocking {
+        provider.renameSupported = false
         val mirror = mirror()
         File(mirror.prepare().worktree, "new.txt").writeText("target")
         provider.rejectWriteOnceFor = "new.txt"
