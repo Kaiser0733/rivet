@@ -169,8 +169,9 @@ The worktree was removed afterwards; no base ref was changed.
 ## 7. Gap fixes after Kaiser’s review
 
 Reviewed parent: `2ad56c1b` (the previous branch tip). Gap-fix commits:
-`eeabde8a` (implementation) and `52bc21f5` (tests), with this report commit
-after them.
+`eeabde8a` (implementation), `52bc21f5` (tests), and `de3e031a` (stopping a
+turn during the local-admission preflight also cancels that admission), with
+this report commit after them.
 
 ### Fix 1 — browser state is per project
 
@@ -255,6 +256,9 @@ resolution. No new approval, cap, or turn-block was added.
 - `conversationSwitchKeepsTheOriginalTurnLiveAndDurable` — pass.
 - `backgroundApprovalIdentifiesItsConversationAndStopsOnlyItsRun` — pass.
 - `AgentApprovalGateTest` — 8/8 pass.
+- `openingAnotherProjectLeavesTheRunningProjectLiveAndWritable`,
+  `conversationSwitchKeepsTheOriginalTurnLiveAndDurable`, and
+  `eachProjectKeepsItsOwnBrowserSession` re-run after the final compile — pass.
 - Parent-red: all three new tests were also run on a detached `2ad56c1b`
   worktree. `eachProject…` failed the session-identity assertion; both local
   queue tests timed out at the old rejection. The worktree was removed after.
