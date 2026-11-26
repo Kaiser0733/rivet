@@ -139,7 +139,6 @@ class AgentToolExecutor(
             return invalid(call, FileScopeRegistry.WORKER_SHELL_SCOPE_UNAVAILABLE)
         }
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
-        if (reservedGoalMutation(call)) return invalid(call, "reserved_goal")
         if (reservedMemoryMutation(call)) return invalid(call, "reserved_memory")
         return try {
             when (call.name) {
@@ -987,12 +986,8 @@ class AgentToolExecutor(
         val content: String? = null,
         @kotlinx.serialization.SerialName("ask_user") val askUser: Boolean = false,
     )
-    private fun reservedGoalMutation(call: AgentToolCall): Boolean = reservedMutation(call) { name, path, newName, destination ->
-        GoalMutationGuard.isReservedGoalMutation(name, path, newName, destination)
-    }
-
     private fun reservedMemoryMutation(call: AgentToolCall): Boolean = reservedMutation(call) { name, path, newName, destination ->
-        GoalMutationGuard.isReservedMemoryMutation(name, path, newName, destination)
+        MemoryMutationGuard.isReservedMemoryMutation(name, path, newName, destination)
     }
 
     private fun reservedMutation(

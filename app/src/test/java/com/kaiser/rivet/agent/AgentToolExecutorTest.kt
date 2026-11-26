@@ -505,14 +505,12 @@ class AgentToolExecutorTest {
         assertFalse(result.messages.flatMap { it.toolResults }.single().error)
     }
 
-    @Test
-    fun genericGoalWritesAreRefused() = runTest {
+    @Test fun legacyGoalFileCanBeEditedAsAnOrdinaryFile() = runTest {
         val executor = AgentToolExecutor(FakeWorkspace())
         val prepared = executor.prepare(AgentToolCall("goal", "write_file",
-            """{"path":".rivet/goal.md","content":"done","expected_sha256":"x"}"""))
-        val result = prepared.execute()
-        assertTrue(result.error)
-        assertTrue("reserved_goal" in result.content)
+            """{"path":".rivet/goal.md","content":"done","expected_sha256":"${"a".repeat(64)}"}"""))
+        assertEquals(AgentToolEffect.WorkspaceMutation, prepared.effect)
+        assertFalse(prepared.execute().error)
     }
 
     @Test
@@ -637,7 +635,7 @@ class AgentToolExecutorTest {
     }
 
     @Test
-    fun reservedGoalMutationUsesReadOnlyEffectAndLargeReadOffsetsUseLong() = runTest {
+    fun largeReadOffsetsUseLong() = runTest {
         var observedOffset = -1L
         val largeWorkspace = object : AgentWorkspace by FakeWorkspace() {
             override suspend fun readRegion(path: String, offset: Long, maxBytes: Int): AgentFileRegion {
@@ -647,15 +645,6 @@ class AgentToolExecutorTest {
             }
         }
         val executor = AgentToolExecutor(largeWorkspace)
-        val goalPrepared = executor.prepare(AgentToolCall(
-            "g1",
-            "write_file",
-            """{"path":".rivet/goal.md","content":"x","expected_sha256":"${"a".repeat(64)}"}""",
-        ))
-        assertEquals(AgentToolEffect.ReadOnly, goalPrepared.effect)
-        val goalResult = goalPrepared.execute()
-        assertTrue(goalResult.error && goalResult.content.contains("reserved_goal"))
-
         val largeOffset = 3_000_000_000L
         val readResult = executor.prepare(AgentToolCall(
             "r1",

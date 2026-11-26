@@ -645,7 +645,6 @@ class ChatViewModel private constructor(
     )
     private var lastPruneSeen = 0
     private var currentCloud = true
-    private val projectGoalWatcher = ProjectGoalWatcher()
     private var pendingRollback: String? = null
     private val connectivity = app.getSystemService(ConnectivityManager::class.java)
     private val networkCallback = object : ConnectivityManager.NetworkCallback() {
@@ -800,16 +799,15 @@ class ChatViewModel private constructor(
     }
 
     /**
-     * Read goal, memory and the newest run journal from the selected project. Every call
-     * goes to SAF, so edits to the .rivet goal and memory files outside Rivet are visible immediately.
+     * Read the app-owned goal and recover the selected conversation's project state.
      */
     private suspend fun refreshGoalMemory(workspace: SafWorkspace?, sessionId: String?) {
         val files = workspace?.let(::ProjectStateFiles)
         val journal = workspace?.let { workspaceRunJournal(it.tree.toString(), requireNotNull(files)) }
         projectState = files
         runJournal = journal
-        val goalRead = try { Result.success(files?.loadGoal()?.takeIf { it.state != GoalState.Dropped }) }
-            catch (e: CancellationException) { throw e } catch (e: Exception) { Result.failure(e) }
+        val storedProjectGoal = try { readProjectGoal(workspace?.tree?.toString(), files) }
+            catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         val storedSessionGoal = try { sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped } }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         val memory = try { files?.loadMemory().orEmpty() }
@@ -824,7 +822,7 @@ class ChatViewModel private constructor(
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         } else null
         if (_uiState.value.currentSessionId != sessionId || runJournal !== journal) return
-        projectGoal = goalRead.getOrNull()
+        projectGoal = storedProjectGoal
         sessionGoal = storedSessionGoal
         memoryMarkdown = memory
         val goal = projectGoal.ownedBy(sessionId) ?: sessionGoal.ownedBy(sessionId)
@@ -835,16 +833,12 @@ class ChatViewModel private constructor(
         }
         val visibleRun = currentSessionRun()
         val recovery = visibleRun?.recoveryMessage()
-        val projectMarkdown = projectGoal?.let { GoalDocument.render(it) }
-        val externalGoal = goalRead.isSuccess &&
-            projectGoalWatcher.observe(workspace?.tree?.toString(), projectMarkdown)
         _uiState.update {
             it.copy(goal = goal, goalLine = goal.lineForSession(sessionId),
                 goalAttachOffer = workspace != null && projectGoal == null && sessionGoal != null,
                 memoryMarkdown = memoryMarkdown,
                 memoryLines = MemoryFormat.facts(memoryMarkdown),
                 run = visibleRun,
-                notice = if (externalGoal) "Goal changed outside Rivet; reloaded." else it.notice,
                 runRecovery = recovery,
                 interruptedTurn = it.interruptedTurn || recovery != null)
         }
@@ -1110,11 +1104,12 @@ class ChatViewModel private constructor(
                 projectState = files
                 runJournal = workspace?.let { workspaceRunJournal(it.tree.toString(), requireNotNull(files)) }
                 if (_uiState.value.currentSessionId != sessionId) return@launch
-                val projectStored = files?.loadGoal()?.takeIf { it.state != GoalState.Dropped }
+                val projectId = workspace?.tree?.toString()
+                val projectStored = readProjectGoal(projectId, files)
                 val sessionStored = sessionGoals.load(sessionId)?.takeIf { it.state != GoalState.Dropped }
                 val projectOwned = projectStored.ownedBy(sessionId)
                 val goal = projectOwned ?: sessionStored.ownedBy(sessionId)
-                val goalFiles = files.takeIf { projectStored == null || projectOwned != null }
+                val goalProject = projectId.takeIf { projectStored == null || projectOwned != null }
                 when (command) {
                     is GoalCommand.Set -> {
                         if (command.text.isBlank()) {
@@ -1122,11 +1117,10 @@ class ChatViewModel private constructor(
                             return@launch
                         }
                         val next = GoalDocument.replaceGoal(goal, command.text, sessionId)
-                        if (goalFiles != null) goalFiles.saveGoal(next)
+                        if (goalProject != null) sessionGoals.saveProject(goalProject, next)
                         else sessionGoals.save(sessionId, next)
-                        projectGoal = if (goalFiles != null) next else projectGoal
-                        sessionGoal = if (goalFiles == null) next else sessionGoal
-                        if (goalFiles != null) projectGoalWatcher.remember(workspace?.tree?.toString(), GoalDocument.render(next))
+                        projectGoal = if (goalProject != null) next else projectGoal
+                        sessionGoal = if (goalProject == null) next else sessionGoal
                         _uiState.update {
                             if (it.currentSessionId != sessionId) it
                             else it.copy(goal = next, goalLine = next.lineForSession(sessionId))
@@ -1148,13 +1142,12 @@ class ChatViewModel private constructor(
                         }
                         val next = goal.withState(state, sessionId)
                         if (state == GoalState.Dropped) {
-                            if (goalFiles != null) goalFiles.saveGoal(next) else sessionGoals.save(sessionId, null)
+                            if (goalProject != null) sessionGoals.saveProject(goalProject, next) else sessionGoals.save(sessionId, null)
                         } else {
-                            if (goalFiles != null) goalFiles.saveGoal(next) else sessionGoals.save(sessionId, next)
+                            if (goalProject != null) sessionGoals.saveProject(goalProject, next) else sessionGoals.save(sessionId, next)
                         }
-                        projectGoal = if (goalFiles != null) next.takeIf { state != GoalState.Dropped } else projectGoal
-                        sessionGoal = if (goalFiles == null) next.takeIf { state != GoalState.Dropped } else sessionGoal
-                        if (goalFiles != null) projectGoalWatcher.remember(workspace?.tree?.toString(), renderedGoalOrNull(projectGoal))
+                        projectGoal = if (goalProject != null) next.takeIf { state != GoalState.Dropped } else projectGoal
+                        sessionGoal = if (goalProject == null) next.takeIf { state != GoalState.Dropped } else sessionGoal
                         val shown = if (state == GoalState.Dropped) null else next
                         _uiState.update {
                             if (it.currentSessionId != sessionId) it
@@ -1384,7 +1377,7 @@ class ChatViewModel private constructor(
             try {
                 val workspace = workspaceSelection.restore()?.first ?: return@launch
                 val files = ProjectStateFiles(workspace)
-                val existing = files.loadGoal()?.takeIf { it.state != GoalState.Dropped }
+                val existing = readProjectGoal(workspace.tree.toString(), files)
                 if (existing != null) {
                     _uiState.update { it.copy(goalAttachOffer = false,
                         notice = "This project already has a goal.") }
@@ -1392,11 +1385,10 @@ class ChatViewModel private constructor(
                 }
                 val pending = sessionGoals.load(sessionId) ?: return@launch
                 val attached = pending.withProgress("Attached to this project", sessionId)
-                files.saveGoal(attached)
+                sessionGoals.saveProject(workspace.tree.toString(), attached)
                 sessionGoals.save(sessionId, null)
                 projectState = files
                 projectGoal = attached
-                projectGoalWatcher.remember(workspace.tree.toString(), GoalDocument.render(attached))
                 sessionGoal = null
                 _uiState.update { it.copy(goal = attached, goalLine = attached.lineForSession(it.currentSessionId),
                     goalAttachOffer = false, notice = "Goal attached to this project.") }
@@ -1522,23 +1514,20 @@ class ChatViewModel private constructor(
         val updates = mutableListOf<AgentMessage>()
         try {
             val files = ProjectStateFiles(workspace)
-            val project = files.loadGoal()?.takeIf { it.state != GoalState.Dropped }
+            val project = readProjectGoal(workspaceId, files)
             val sessionId = _uiState.value.currentSessionId
             val session = sessionGoals.load(sessionId).ownedBy(sessionId)
             val goal = project.ownedBy(sessionId) ?: session
             val memory = files.loadMemory()
-            val rendered = renderedGoalOrNull(project)
-            val externalGoal = projectGoalWatcher.observe(workspaceId, rendered)
             projectState = files
             projectGoal = project
             sessionGoal = session
             memoryMarkdown = memory
             _uiState.update {
-                if (it.goal == goal && it.memoryMarkdown == memory && !externalGoal) it
+                if (it.goal == goal && it.memoryMarkdown == memory) it
                 else it.copy(goal = goal, goalLine = goal.lineForSession(it.currentSessionId),
                     memoryMarkdown = memory, memoryLines = MemoryFormat.facts(memory),
-                    goalAttachOffer = project == null && session != null,
-                    notice = if (externalGoal) "Goal changed outside Rivet; reloaded." else it.notice)
+                    goalAttachOffer = project == null && session != null)
             }
             updates += GoalMemoryContext.updates(candidate, workspaceId, goal, memory)
             if (runResumeContext) currentSessionRun()?.takeIf { it.workspaceId == workspaceId }?.let {
@@ -1797,23 +1786,23 @@ class ChatViewModel private constructor(
         }
     }
 
-    private fun renderedGoalOrNull(goal: GoalDocument?): String? =
-        goal?.takeIf { it.state != GoalState.Dropped }?.let { GoalDocument.render(it) }
+    private suspend fun readProjectGoal(workspaceId: String?, files: ProjectStateFiles?): GoalDocument? =
+        sessionGoals.loadProject(workspaceId) { files?.loadLegacyGoal() }
+            ?.takeIf { it.state != GoalState.Dropped }
 
     private suspend fun appendGoalProgress(note: String) {
         val sessionId = _uiState.value.currentSessionId
         val projectId = _uiState.value.projectIdentity
         val files = projectState
-        val stored = try { files?.loadGoal()?.takeIf { it.state != GoalState.Dropped } }
+        val stored = try { readProjectGoal(projectId, files) }
             catch (e: CancellationException) { throw e } catch (_: Exception) { null }
         val ownedProject = stored.ownedBy(sessionId)
         val goal = ownedProject ?: sessionGoal.ownedBy(sessionId) ?: return
         if (goal.state != GoalState.Active || note.isBlank()) return
         val next = goal.withProgress(note, sessionId)
-        if (ownedProject != null && files != null) {
-            files.saveGoal(next)
+        if (ownedProject != null && projectId != null) {
+            sessionGoals.saveProject(projectId, next)
             projectGoal = next
-            projectGoalWatcher.remember(projectId, GoalDocument.render(next))
         } else {
             sessionGoals.save(sessionId, next)
             sessionGoal = next
@@ -3658,7 +3647,7 @@ class ChatViewModel private constructor(
                 "Rivet controls approvals and Undo. Use .rivet-test/ for disposable checks and delete only what you created. " +
                 "Undo keeps the most recent 3 turn checkpoints per project; together they are capped at 500 MB, and each can cover up to 50,000 items. Exclude generated folders with .rivetignore. " +
                 "HOME and TMPDIR are outside the workspace and outside Undo. Keep file edits under 1 MiB. " +
-                "Use /goal and the remember tool as the only writers of .rivet/goal.md and .rivet/memory.md. " +
+                "Goals are managed with /goal. Use the remember tool to update .rivet/memory.md. " +
                 "Record a lasting decision, constraint, or preference with the remember tool. " +
                 "Fix the cause of a runtime block before retrying." +
                 (if (presentAvailable) "\n$PRESENT_DELIVERABLES_RULE" +

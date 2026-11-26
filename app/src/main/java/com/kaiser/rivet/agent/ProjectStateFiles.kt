@@ -6,15 +6,12 @@ import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
 
 /**
- * The two files Rivet owns under `.rivet/`, plus run journals. Every read goes to SAF:
- * external edits are the point, so there is no stale in-memory copy.
+ * Reads project memory, legacy goals, and run journals through SAF.
  */
 class ProjectStateFiles(private val workspace: SafWorkspace) {
-    suspend fun loadGoal(): GoalDocument? = read(GoalDocument.PATH)?.let {
+    suspend fun loadLegacyGoal(): GoalDocument? = read(GoalDocument.PATH)?.let {
         try { GoalDocument.parse(it) } catch (_: Exception) { null }
     }
-
-    suspend fun saveGoal(goal: GoalDocument) = write(GoalDocument.PATH, GoalDocument.render(goal))
 
     suspend fun loadMemory(): String = read(MemoryFormat.PATH).orEmpty()
 

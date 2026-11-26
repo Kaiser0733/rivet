@@ -32,7 +32,6 @@ internal object AgentToolError {
         "garden_first" to "Project memory is at its hard cap. Garden it first: merge related facts and delete stale lines.",
         "empty" to "The memory fact was empty. Write one durable sentence.",
         "too_long" to "The memory fact is too long. Keep one fact under 500 characters.",
-        "reserved_goal" to "goal.md belongs to the /goal command. Use /goal to change it; do not edit the goal file with file tools.",
         "reserved_memory" to "Project memory belongs to the user. Use the remember tool; file tools cannot edit .rivet/memory.md directly.",
         "approval_unavailable" to "Rivet could not safely request confirmation for this operation, so it stopped.",
         "approval_expired" to "The approval expired. Rivet withheld the action.",

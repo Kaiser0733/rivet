@@ -6,6 +6,7 @@ import android.provider.DocumentsContract
 import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.TestDocumentsProvider
 import kotlinx.coroutines.runBlocking
+import com.kaiser.rivet.storage.SessionGoalStore
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
@@ -40,14 +41,18 @@ class ProjectStateFilesTest {
         workspace = SafWorkspace(resolver, tree)
     }
 
-    @Test fun goalAndMemorySurviveANewStoreAndExternalEditsAreSeen() = runBlocking {
+    @Test fun projectGoalMigratesOnceAndMemoryStillUsesTheProjectFile() = runBlocking {
         val files = ProjectStateFiles(workspace)
         val goal = GoalDocument.newGoal("ship login", "s1").withProgress("build green", "s1")
-        files.saveGoal(goal)
+        files.write(GoalDocument.PATH, GoalDocument.render(goal))
+        val owner = SessionGoalStore(RuntimeEnvironment.getApplication())
+        assertEquals(goal, owner.loadProject(tree.toString(), files::loadLegacyGoal))
+        files.write(GoalDocument.PATH, GoalDocument.render(GoalDocument.newGoal("external edit", "s1")))
         files.saveMemory(MemoryFormat.render(listOf("stack: Kotlin", "gotcha: generated/ is off limits")))
 
         val reloaded = ProjectStateFiles(workspace)
-        assertEquals(goal, reloaded.loadGoal())
+        assertEquals(goal, SessionGoalStore(RuntimeEnvironment.getApplication())
+            .loadProject(tree.toString(), reloaded::loadLegacyGoal))
         assertEquals(2, MemoryFormat.lineCount(reloaded.loadMemory()))
 
         // A user editing the file outside Rivet is the next read, not a cached value.
