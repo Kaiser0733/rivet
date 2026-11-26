@@ -136,9 +136,9 @@ internal class TermuxBridge(context: Context) {
             PendingIntent.FLAG_ONE_SHOT or mutable)
         try {
             TermuxResultReceiver.register(action) { outcome ->
-                if (outcome.error != TERMUX_NO_RESULT || fallback == null) returned.complete(outcome.toResult())
+                if (outcome.error != TERMUX_NO_RESULT || fallback == null) returned.complete(outcome.toResult(fallback != null))
             }
-            val command = fallback?.let { TermuxCommand.withFileOutput(args.command, it.absolute) } ?: args.command
+            val command = fallback?.let { TermuxCommand.withFileOutput(args.command, it.absolute, OUTPUT_BYTES) } ?: args.command
             val spec = buildRunCommandIntent(args.command, location.cwd)
             val intent = Intent(spec.action).setClassName(TermuxCommand.PACKAGE, spec.service)
                 .putExtra("com.termux.RUN_COMMAND_PATH", spec.path)
@@ -211,9 +211,10 @@ internal class TermuxBridge(context: Context) {
 
     private data class Location(val cwd: String, val files: OutputFiles? = null)
     private data class Arguments(val command: String, val cwd: String, val timeout: Long)
-    private fun TermuxOutcome.toResult() = TermuxRunResult(
+    private fun TermuxOutcome.toResult(filePreview: Boolean) = TermuxRunResult(
         stdout = stdout, stderr = stderr, exitCode = exitCode, error = error,
-        detail = detail, truncated = truncated,
+        detail = detail, truncated = truncated || filePreview &&
+            (stdout.toByteArray(Charsets.UTF_8).size > OUTPUT_BYTES || stderr.toByteArray(Charsets.UTF_8).size > OUTPUT_BYTES),
     )
 
     private fun failure(call: AgentToolCall, code: String) = toolResult(call, TermuxRunResult(error = code))
