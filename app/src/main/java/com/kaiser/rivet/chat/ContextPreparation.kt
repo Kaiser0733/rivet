@@ -60,7 +60,6 @@ internal class ContextPreparation(
 
     // One turn may call the summariser twice: the plan it made and one retry after the
     // stubs. Beyond that the turn stops paying for summaries that are not converging.
-    private var summaryCalls = 0
 
     /** Net prompt cap learned from a provider error during this turn. */
     @Volatile var learnedPromptCap: Int? = null
@@ -178,7 +177,7 @@ internal class ContextPreparation(
         val inputLimitBytes = minOf(96 * 1024L, budget.allowedInputTokens.toLong() * 2).toInt()
         val summaryLimitBytes = (summaryBudgetTokens * 3).toInt()
         fun plan(limit: Long, summaryTokens: Long): ContextPlan? {
-            if (summaryTokens <= 0 || summaryCalls >= MAX_SUMMARY_CALLS) return null
+            if (summaryTokens <= 0) return null
             return AgentContext.planRequest(basis, messages, keepNewest = !idleManual) { retained ->
                 ContextBudget.estimateRequestTokens(projectedRequest(messages, retained, "{}")) + summaryTokens <= limit
             }
@@ -254,9 +253,7 @@ internal class ContextPreparation(
 
     private suspend fun mergeCheckpoint(previous: TaskCheckpoint, goal: String, removed: List<AgentMessage>,
                                         id: String, inputLimitBytes: Int, summaryLimitBytes: Int): String? {
-        if (summaryCalls >= MAX_SUMMARY_CALLS ||
-            goal.toByteArray(Charsets.UTF_8).size >= summaryLimitBytes
-        ) return null
+        if (goal.toByteArray(Charsets.UTF_8).size >= summaryLimitBytes) return null
         val instruction = "$CHECKPOINT_INSTRUCTION Aim for at most $summaryLimitBytes UTF-8 bytes."
         val emptyRequest = AgentRequest(config.model, listOf(AgentMessage.user("")),
             instruction, config.reasoning, emptyList())
@@ -288,7 +285,6 @@ internal class ContextPreparation(
         if (ContextBudget.estimateRequestTokens(summarization) >= allowed) {
             throw IllegalStateException("context_headroom_unavailable")
         }
-        summaryCalls++
         val response = client.streamAgent(summarization) { delta ->
             streamedBytes += delta.toByteArray(Charsets.UTF_8).size
             if (streamedBytes > TaskState.MAX_BYTES) throw IllegalStateException("context_summary_limit")
@@ -306,7 +302,6 @@ internal class ContextPreparation(
     }
 
     companion object {
-        private const val MAX_SUMMARY_CALLS = 2
         private const val CHECKPOINT_INSTRUCTION =
             "Merge the newly removed events into the previous checkpoint. Return only this JSON template with new items, using one fact per string: " +
                 """{"GOAL":"","DECISIONS + WHY":[],"CONSTRAINTS & PREFERENCES":[],"STATE":[],"OPEN THREADS":[],"EXACT VALUES":[],"ARCHIVE INDEX":[]}""" +

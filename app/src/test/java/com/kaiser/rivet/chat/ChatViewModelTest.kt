@@ -922,12 +922,12 @@ class ChatViewModelTest {
         assertEquals(history.size + 3, sessions.fullEventCount(id))
     }
 
-    @Test fun latestUserMessageThatCannotFitStopsBeforeProviderCall() = runBlocking {
+    @Test fun cloudProviderGetsTheRequestEvenWhenTheLocalEstimateIsOver() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val sessions = CodingSessions(app)
         val id = sessions.load().id!!
-        val provider = QueueProvider(ArrayDeque())
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Accepted"))))
         val endpoint = "https://example.invalid"
         val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
             modelContextLimit = ModelContextLimit("small", endpoint, 16_000))
@@ -936,17 +936,12 @@ class ChatViewModelTest {
         await(viewModel) { it.ready }
 
         viewModel.send("x".repeat(100_000))
-        // The sentence is the copy function's, not a fragment typed into the test: a copy change
-        // used to leave this await waiting for words that no longer exist, and the test timed out
-        // instead of failing on its assertion.
-        val stopped = await(viewModel) {
-            !it.streaming && it.error?.contains(contextTooSmallMessage()) == true
-        }
+        val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Accepted" }
 
-        assertEquals(0, provider.requests.size)
-        assertEquals(1, sessions.fullEventCount(id))
-        assertEquals(100_000, sessions.load().messages.single().text.length)
-        assertNull(stopped.pendingApproval)
+        assertEquals(1, provider.requests.size)
+        assertEquals(2, sessions.fullEventCount(id))
+        assertEquals(100_000, sessions.load().messages.first().text.length)
+        assertNull(complete.error)
     }
 
     @Test fun failedSummaryKeepsFullOriginalHistory() = runBlocking {
@@ -963,7 +958,7 @@ class ChatViewModelTest {
             }
         }
         sessions.save(history, interrupted = false)
-        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = ""))))
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = ""), AgentResponse(text = "Continued"))))
         val config = ProviderConfig(id = "test", type = ProviderType.Gemini, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "model-a",
             modelContextLimit = ModelContextLimit("model-a", "https://example.invalid/v1", 16_000))
@@ -972,17 +967,14 @@ class ChatViewModelTest {
         await(viewModel) { it.ready }
 
         viewModel.send("Continue")
-        // The turn stops with the last-resort copy: it says the chat was too long to read all at
-        // once, not that Rivet never tried. Read from the copy function for the same reason as above.
-        val stopped = await(viewModel) {
-            !it.streaming && it.error?.contains(contextUnavailableMessage()) == true
-        }
+        val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Continued" }
 
-        assertNull(stopped.pendingApproval)
-        assertEquals(67, sessions.fullEventCount(id))
-        assertEquals(history + AgentMessage.user("Continue"), sessions.load().messages)
+        assertNull(complete.error)
+        assertEquals(68, sessions.fullEventCount(id))
+        assertEquals(history + AgentMessage.user("Continue") + AgentMessage.assistant("Continued"),
+            sessions.load().messages)
         assertEquals("", sessions.load().summary)
-        assertEquals(1, provider.requests.size)
+        assertEquals(2, provider.requests.size)
     }
 
     @Test fun cancellingSummaryPreservesPriorActiveContextAndCanonicalHistory() = runBlocking {

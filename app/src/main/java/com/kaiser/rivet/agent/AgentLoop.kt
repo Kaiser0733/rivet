@@ -59,6 +59,7 @@ class AgentLoop(
     private val mutationBlocker: suspend (AgentToolCall) -> String? = { null },
     private val beforeMutation: suspend (AgentToolCall) -> String? = { null },
     private val compactContext: suspend (List<AgentMessage>, Boolean) -> List<AgentMessage> = { messages, _ -> messages },
+    private val strictContextCapacity: Boolean = false,
     private val contextFootprint: (List<AgentMessage>) -> Long = { AgentContext.serializedBytes(it).toLong() },
     private val contextUpdates: suspend (List<AgentMessage>) -> List<AgentMessage> = { emptyList() },
     private val secretValues: List<String> = emptyList(),
@@ -218,16 +219,20 @@ class AgentLoop(
             if (!workspaceIsCurrent()) return AgentRunResult(messages, AgentStopReason.WorkspaceChanged,
                 modelIterations, toolCalls, mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
             appendContextEvents(contextUpdates(messages.toList()))?.let { return it }
-            val active = try { compactContext(messages.toList(), false) }
-                catch (e: CancellationException) { throw e
-                } catch (e: ProviderError) { throw e
-                } catch (_: ContextCapacityTooSmall) {
-                    return AgentRunResult(messages, AgentStopReason.ContextTooSmall, modelIterations, toolCalls,
-                        mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
-                } catch (_: Exception) {
-                    return AgentRunResult(messages, AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
+            val active = try {
+                compactContext(messages.toList(), false)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (e: Exception) {
+                if (strictContextCapacity) {
+                    if (e is ProviderError) throw e
+                    val reason = if (e is ContextCapacityTooSmall) AgentStopReason.ContextTooSmall
+                        else AgentStopReason.ContextUnavailable
+                    return AgentRunResult(messages, reason, modelIterations, toolCalls,
                         mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
                 }
+                messages
+            }
             if (active != messages) {
                 messages.clear()
                 messages.addAll(active)

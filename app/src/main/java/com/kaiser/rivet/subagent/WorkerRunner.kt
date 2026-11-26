@@ -439,6 +439,7 @@ internal class WorkerRunner(
                     }
                     compacted
                 },
+                strictContextCapacity = config.type == ProviderType.Local,
                 contextFootprint = { candidate -> context.footprint(candidate) },
                 contextUpdates = { candidate ->
                     if (services.projectInstructions != null) {

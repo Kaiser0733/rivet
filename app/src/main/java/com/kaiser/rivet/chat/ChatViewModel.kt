@@ -2536,6 +2536,7 @@ class ChatViewModel private constructor(
                         noticed
                     } else compacted
                 },
+                strictContextCapacity = snapshot.config.type == ProviderType.Local,
                 contextFootprint = { candidate -> context.footprint(candidate) },
                 contextUpdates = { candidate ->
                     if (project == null || workspaceId == null) emptyList() else {
@@ -2972,15 +2973,7 @@ class ChatViewModel private constructor(
         val history = sessions?.list()
         val usage = _uiState.value.currentSessionId?.let { sessions?.usage(it) }
         val visible = _uiState.value.currentSessionId?.let { sessions?.recent(it) } ?: persisted
-        val errorAction = when {
-            // A refusal that says the request cannot fit is not retryable — the same
-            // transcript against the same window stops the same way.
-            error != null && result.stopReason !in setOf(
-                AgentStopReason.ContextUnavailable,
-                AgentStopReason.ContextTooSmall, AgentStopReason.SessionLimit,
-            ) -> ChatErrorAction.RetryTurn
-            else -> null
-        }
+        val errorAction = error?.let { ChatErrorAction.RetryTurn }
         val startedWallClock = _uiState.value.turnStartedWallClock
         var completedDuration: Long? = null
         var completedTurnIndex: Int? = null

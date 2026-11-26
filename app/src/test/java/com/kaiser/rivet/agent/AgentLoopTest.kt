@@ -598,20 +598,17 @@ class AgentLoopTest {
         }
     }
 
-    @Test fun summaryProviderFailureSurfacesWithoutSendingMainRequest() = runTest {
+    @Test fun summaryProviderFailureStillSendsTheMainRequest() = runTest {
         var requests = 0
         val loop = AgentLoop(
-            requestModel = { _, _, _ -> requests++; AgentResponse(text = "unreachable") },
+            requestModel = { _, _, _ -> requests++; AgentResponse(text = "Done") },
             prepareTool = { error("No tools") },
             requestApproval = { error("No approval") },
             compactContext = { _, _ -> throw ProviderError.ResourceExhausted() },
         )
-        try {
-            loop.run(listOf(AgentMessage.user("Continue")), emptyList())
-            error("Expected provider resource failure")
-        } catch (_: ProviderError.ResourceExhausted) {
-            assertEquals(0, requests)
-        }
+        val result = loop.run(listOf(AgentMessage.user("Continue")), emptyList())
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(1, requests)
     }
 
     @Test fun deniedMutationGetsItsOwnDecisionAfterOverflowCompaction() = runTest {
@@ -815,16 +812,16 @@ class AgentLoopTest {
         assertEquals(listOf(AgentMessage.user("current"), AgentMessage.assistant("next")), result.messages)
     }
 
-    @Test fun compactionFailureStopsWithoutExecutingTool() = runTest {
+    @Test fun automaticCompactionFailureLeavesTheRequestUsable() = runTest {
         var requests = 0
         val result = AgentLoop(
-            requestModel = { _, _, _ -> requests++; AgentResponse() },
+            requestModel = { _, _, _ -> requests++; AgentResponse(text = "Done") },
             prepareTool = { error("No tools") },
             requestApproval = { error("No approvals") },
             compactContext = { _, _ -> throw IllegalStateException("summary failed") },
         ).run(listOf(AgentMessage.user("continue")), emptyList())
-        assertEquals(AgentStopReason.ContextUnavailable, result.stopReason)
-        assertEquals(0, requests)
+        assertEquals(AgentStopReason.Completed, result.stopReason)
+        assertEquals(1, requests)
     }
 
     @Test

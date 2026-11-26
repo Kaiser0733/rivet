@@ -1,5 +1,7 @@
 package com.kaiser.rivet.agent
 
+import kotlinx.serialization.EncodeDefault
+import kotlinx.serialization.ExperimentalSerializationApi
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -14,11 +16,15 @@ internal data class TaskCheckpoint(
     @SerialName("EXACT VALUES") val exactValues: List<String> = emptyList(),
     @SerialName("USER QUOTES") val userQuotes: List<String> = emptyList(),
     @SerialName("ARCHIVE INDEX") val archiveIndex: List<String> = emptyList(),
+    @OptIn(ExperimentalSerializationApi::class)
+    @EncodeDefault(EncodeDefault.Mode.NEVER)
+    @SerialName("OMITTED") val omitted: Boolean = false,
 ) {
     fun merge(update: TaskCheckpoint, pinnedGoal: String): TaskCheckpoint {
         val threads = safeItems(update.openThreads)
         val resolved = threads.filter { it.startsWith(RESOLVED) }
             .map { it.removePrefix(RESOLVED) }.toSet()
+        val archive = (safeItems(update.archiveIndex).map { it.take(120) } + archiveIndex).distinct()
         return TaskCheckpoint(
             goal = pinnedGoal,
             decisions = mergeItems(decisions, update.decisions),
@@ -28,7 +34,8 @@ internal data class TaskCheckpoint(
                 threads.filterNot { it.startsWith(RESOLVED) }).distinct(),
             exactValues = (exactValues + safeItems(update.exactValues)).distinct(),
             userQuotes = userQuotes,
-            archiveIndex = (safeItems(update.archiveIndex).map { it.take(120) } + archiveIndex).distinct().take(8),
+            archiveIndex = archive.take(8),
+            omitted = omitted || archive.size > 8,
         )
     }
 
@@ -39,11 +46,13 @@ internal data class TaskCheckpoint(
                 else message.text.lineSequence()
             }
             .filter { it.isNotBlank() && it.toByteArray(Charsets.UTF_8).size <= 320 && AgentContext.redact(it) == it }
-        return copy(userQuotes = (lines + userQuotes.asSequence()).distinct().take(8).toList())
+        val quotes = (lines + userQuotes.asSequence()).distinct().take(9).toList()
+        return copy(userQuotes = quotes.take(8), omitted = omitted || quotes.size > 8)
     }
 
     fun fit(maxBytes: Int): TaskCheckpoint? {
-        val withoutState = copy(state = emptyList())
+        if (encode().toByteArray(Charsets.UTF_8).size <= maxBytes) return this
+        val withoutState = copy(state = emptyList(), omitted = true)
         if (withoutState.encode().toByteArray(Charsets.UTF_8).size > maxBytes) {
             var candidate = withoutState
             while (candidate.encode().toByteArray(Charsets.UTF_8).size > maxBytes) {
@@ -56,8 +65,8 @@ internal data class TaskCheckpoint(
             }
             return candidate
         }
-        for (first in state.indices) {
-            val candidate = if (first == 0) this else copy(state = state.drop(first))
+        for (first in 1 until state.size) {
+            val candidate = copy(state = state.drop(first), omitted = true)
             if (candidate.encode().toByteArray(Charsets.UTF_8).size <= maxBytes) return candidate
         }
         return withoutState
@@ -66,6 +75,7 @@ internal data class TaskCheckpoint(
     fun encode(): String = json.encodeToString(serializer(), this)
 
     fun modelText(): String = buildString {
+        if (omitted) append("Some older checkpoint details were omitted.\n\n")
         append("GOAL\n").append(goal).append('\n')
         fun section(heading: String, items: List<String>) {
             append('\n').append(heading).append('\n')
@@ -107,7 +117,8 @@ internal data class TaskCheckpoint(
 
         fun previous(raw: String): TaskCheckpoint {
             parse(raw)?.let { return it }
-            val legacy = TaskState.parse(raw) ?: return TaskCheckpoint(state = safeItems(listOf(raw)))
+            val legacy = TaskState.parse(raw)
+                ?: return TaskCheckpoint(state = safeItems(listOf(raw)), omitted = raw.isNotBlank())
             return TaskCheckpoint(
                 goal = legacy.objective,
                 decisions = legacy.decisions,
