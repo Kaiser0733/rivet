@@ -40,7 +40,8 @@ data class ObservedCommand(
  */
 object ResultEnvelope {
     const val MAX_DIFF_BYTES = WorkerDiff.MAX_BYTES
-    const val MAX_AWAIT_BYTES = 24 * 1024
+    const val MAX_AWAIT_BYTES = 6 * 1024
+    internal const val MAX_PUSH_BYTES = 3 * 1024
     const val MAX_COMMAND_CHARS = 120
 
     fun build(
@@ -108,7 +109,7 @@ object ResultEnvelope {
     /**
      * Assembles the coordinator's `await_subagents` tool result across returned worker
      * envelopes and guarantees the total UTF-8 JSON size is at most [maxTotalBytes]
-     * (24 KB by default). When the combined payload exceeds the cap, per-worker
+     * (6 KiB by default). When the combined payload exceeds the cap, per-worker
      * `verified.diff` fields are truncated proportionally first (setting
      * `verified.truncated = true`) so the JSON structure is never lost.
      */
@@ -213,6 +214,18 @@ object ResultEnvelope {
         }
         return render(emptyList())
     }
+
+    internal fun compactAwaitResult(content: String): String? = runCatching {
+        val parsed = Json.parseToJsonElement(content).jsonObject
+        val workers = parsed.getValue("workers").jsonArray.map(JsonElement::toString)
+        fun ids(key: String) = parsed[key]?.jsonArray.orEmpty().map { it.jsonPrimitive.content }
+        val bounded = assembleAwaitResult(workers, ids("timed_out"), ids("running"), ids("unknown_workers"),
+            MAX_PUSH_BYTES - 32)
+        buildJsonObject {
+            Json.parseToJsonElement(bounded).jsonObject.forEach { (key, value) -> put(key, value) }
+            put("output_pruned", true)
+        }.toString()
+    }.getOrNull()
 
     private fun clearVerifiedArray(envelope: JsonObject, key: String): JsonObject {
         val verified = envelope["verified"]?.jsonObject ?: return envelope

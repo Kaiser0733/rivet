@@ -13,6 +13,7 @@ import androidx.compose.ui.test.performClick
 import androidx.compose.ui.test.performTouchInput
 import androidx.compose.ui.unit.dp
 import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.InternalContext
 import com.kaiser.rivet.browser.BrowserSession
 import com.kaiser.rivet.chat.ChatUiState
 import org.junit.Assert.assertEquals
@@ -118,5 +119,41 @@ class TranscriptScrollTest {
             state.value = state.value.copy(streamingText = "Followed again. ".repeat(20))
         }
         compose.runOnIdle { assertFalse(list.canScrollForward) }
+    }
+
+    @Test fun aGoalReplyInACompactedChatScrollsIntoView() {
+        val app: Application = RuntimeEnvironment.getApplication()
+        val browser = BrowserSession(app, models = null)
+        val list = LazyListState()
+        val visible = (1..20).flatMap { turn ->
+            listOf(AgentMessage.user("Question $turn"), AgentMessage.assistant("Answer $turn"))
+        } + InternalContext.compactionNotice(null, 4000)
+        val state = mutableStateOf(ChatUiState(messages = visible))
+        compose.setContent {
+            MessageList(state.value, onDismissError = {}, onOpenSettings = {},
+                onRetryProjectChanges = {}, onDiscardProjectChanges = {}, onRetryInterruptedTurn = {},
+                onDismissInterruptedTurn = {}, onAttachGoal = {}, onRaiseBudget = {}, onRetryTurn = {},
+                onChooseReasoning = {}, onOpenPreview = {}, missingFiles = emptySet(), browser = browser,
+                modifier = Modifier.size(340.dp, 360.dp), listState = list)
+        }
+        compose.onNodeWithText("Compacted to 4000 tokens").assertExists()
+        compose.onNode(hasScrollToIndexAction()).performTouchInput {
+            down(center)
+            repeat(4) {
+                advanceEventTime(250)
+                moveBy(Offset(0f, visibleSize.height / 6f))
+            }
+            advanceEventTime(600)
+            up()
+        }
+        compose.runOnIdle { assertTrue(list.canScrollForward) }
+
+        val goal = "Goal: ship the snake game · active · set 2026-11-18"
+        compose.runOnIdle {
+            state.value = state.value.copy(messages = visible + InternalContext.commandReply("/goal", goal, null),
+                commandAckCount = 1)
+        }
+        compose.runOnIdle { assertFalse(list.canScrollForward) }
+        compose.onNodeWithText("/goal\n$goal").assertExists()
     }
 }

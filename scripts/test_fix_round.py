@@ -29,9 +29,9 @@ class FixRoundSurfacesTest(unittest.TestCase):
         chat = (UI / "chat/ChatScreen.kt").read_text()
         model = (UI.parent / "chat/ChatViewModel.kt").read_text()
         self.assertIn(
-            "state.notice, showBrowserCard, state.compacting, totalItems, state.acceptedMessageCount)", chat)
+            "state.notice, showBrowserCard, state.compacting, totalItems, state.acceptedMessageCount, state.commandAckCount)", chat)
         follow = chat.split(
-            "state.compacting, totalItems, state.acceptedMessageCount) {", 1)[1].split(
+            "state.compacting, totalItems, state.acceptedMessageCount, state.commandAckCount) {", 1)[1].split(
             "LaunchedEffect(listState)", 1)[0]
         # A reader who is only watching, not touching the list, still follows the new row.
         self.assertIn("if (followBottom && totalItems > 0 && !userScrolling && !listState.isScrollInProgress)", follow)
@@ -45,7 +45,8 @@ class FixRoundSurfacesTest(unittest.TestCase):
         self.assertNotIn("contextMeterTokens(", model)
         self.assertIn("contextReadingForRequest(config, request)", model)
         self.assertIn("ContextEstimate(footprint(messages)", prepare)
-        self.assertIn("val historyTokens = context.footprint(compacted)", model)
+        self.assertIn("context.requestFor(compacted)", model)
+        self.assertIn("attempt.copy(afterTokens = after)", prepare)
 
     def test_termux_callback_targets_a_private_explicit_receiver(self):
         base = UI.parent

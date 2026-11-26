@@ -160,6 +160,7 @@ import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.ui.provider.labelRes
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.CompactionNotice
 import com.kaiser.rivet.agent.AgentConversationItem
 import com.kaiser.rivet.agent.AgentActivityGroup
 import com.kaiser.rivet.agent.AgentActivityOperation
@@ -628,6 +629,7 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         (if (state.unsupportedReasoning != null) 1 else 0)
     var followBottom by rememberSaveable { mutableStateOf(true) }
     var lastAcceptedCount by rememberSaveable { mutableStateOf(state.acceptedMessageCount) }
+    var lastCommandCount by rememberSaveable { mutableStateOf(state.commandAckCount) }
     var userScrolling by remember { mutableStateOf(false) }
     var programmaticScroll by remember { mutableStateOf(false) }
     val transcriptScrollConnection = remember(listState) {
@@ -655,11 +657,14 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     }
     // Sending a message is an explicit request to see it: after reading back through the
     // conversation, the reply and the user's own message must not land off-screen.
-    LaunchedEffect(state.acceptedMessageCount) {
-        if (lastAcceptedCount != state.acceptedMessageCount) {
-            lastAcceptedCount = state.acceptedMessageCount
+    LaunchedEffect(state.acceptedMessageCount, state.commandAckCount) {
+        val newReply = lastCommandCount != state.commandAckCount &&
+            state.messages.lastOrNull()?.internalContext?.kind == CompactionNotice.COMMAND_KIND
+        if (lastAcceptedCount != state.acceptedMessageCount || newReply) {
             followBottom = true
         }
+        lastAcceptedCount = state.acceptedMessageCount
+        lastCommandCount = state.commandAckCount
     }
     // Following the bottom while the reader is there. Two things move the list: a row appearing,
     // which this effect lands exactly, and a row growing — and growth is a layout event, not a
@@ -670,7 +675,7 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // has to handle rows appearing or disappearing, which move everything at once.
     LaunchedEffect(segmentedTurns.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
-        state.notice, showBrowserCard, state.compacting, totalItems, state.acceptedMessageCount) {
+        state.notice, showBrowserCard, state.compacting, totalItems, state.acceptedMessageCount, state.commandAckCount) {
         if (followBottom && totalItems > 0 && !userScrolling && !listState.isScrollInProgress) {
             programmaticScroll = true
             try {

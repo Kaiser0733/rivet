@@ -178,12 +178,16 @@ internal class CodingSessions(
 
     internal suspend fun appendCommandReply(id: String, message: AgentMessage) = onDatabase { db ->
         require(message.validatedContext()?.kind == CompactionNotice.COMMAND_KIND)
+        insertTranscriptNotice(db, id, message)
+        trimCompactedHistory(db, id)
+    }
+
+    private fun insertTranscriptNotice(db: SQLiteDatabase, id: String, message: AgentMessage) {
         db.insertOrThrow("events", null, ContentValues().apply {
             put("session_id", id)
             put("payload", json.encodeToString(AgentMessage.serializer(), message))
             put("created_at", System.currentTimeMillis())
         })
-        trimCompactedHistory(db, id)
     }
 
     override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean =
@@ -617,6 +621,9 @@ internal class CodingSessions(
                 put("prefix_hash", prefixHash); put("active_hash", activeHash)
                 put("summary_hash", summaryHash)
             })
+            attempt?.afterTokens?.let {
+                insertTranscriptNotice(db, id, InternalContext.compactionNotice(header(db, id).workspaceId, it))
+            }
             db.delete("active_events", "session_id=?", arrayOf(id))
             projected.forEach { message ->
                 db.insertOrThrow("active_events", null, ContentValues().apply {
@@ -1062,7 +1069,9 @@ internal class CodingSessions(
             arrayOf(id, through.toString())).use { cursor ->
             while (cursor.moveToNext()) {
                 val message = decode(cursor.getString(0))
-                if (message.internalContext?.kind == CompactionNotice.COMMAND_KIND) continue
+                val kind = message.internalContext?.kind
+                if (kind == CompactionNotice.COMMAND_KIND ||
+                    kind == CompactionNotice.KIND && activeSuffix.getOrNull(index) != message) continue
                 if (index >= activeSuffix.size || message != activeSuffix[index]) return false
                 index++
             }

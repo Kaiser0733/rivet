@@ -13,6 +13,21 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class SubagentContextTest {
+    @Test fun pushedAndAwaitedResultsKeepWorkerFindingsWithinTheCoordinatorBudget() {
+        val envelope = ResultEnvelope.build("w-1", com.kaiser.rivet.agent.RunPhase.Done,
+            WorkerClaim("long.txt begins here\n" + "λ".repeat(8_000)))
+        val pushed = SubagentContext.resultContent("w-1", "Inspect long.txt", envelope)
+        val awaited = ResultEnvelope.assembleAwaitResult(listOf(envelope))
+
+        assertTrue(pushed.toByteArray().size <= 3072)
+        assertTrue(awaited.toByteArray().size <= 6144)
+        for (result in listOf(pushed, awaited)) {
+            assertTrue(result.contains("w-1"))
+            assertTrue(result.contains("long.txt begins here"))
+            assertTrue(result.contains("\"truncated\":true"))
+        }
+    }
+
     private val workspace = "content://provider/tree/project"
     private val cloudConfig = ProviderConfig(
         id = "cfg-sonnet",

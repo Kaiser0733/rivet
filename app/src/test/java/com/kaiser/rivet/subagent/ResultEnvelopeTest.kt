@@ -72,7 +72,7 @@ class ResultEnvelopeTest {
         assertEquals("null", command["exit_code"].toString())
     }
 
-    @Test fun assembleAwaitResultCapsAggregatePayloadAt24KiBByTruncatingDiffsProportionally() {
+    @Test fun assembleAwaitResultCapsAggregatePayloadByTruncatingDiffsProportionally() {
         val bigBefore = (1..400).joinToString("\n") { "old line $it with padding text" }.toByteArray()
         val bigAfter = (1..400).joinToString("\n") { "new line $it with padding text" }.toByteArray()
         val envelopes = (1..3).map { idx ->
@@ -90,11 +90,11 @@ class ResultEnvelopeTest {
             )
         }
         val rawSum = envelopes.sumOf { it.toByteArray(Charsets.UTF_8).size }
-        assertTrue("Individual envelopes should exceed 24 KiB in total (was $rawSum)", rawSum > ResultEnvelope.MAX_AWAIT_BYTES)
+        assertTrue("Individual envelopes should exceed the total budget (was $rawSum)", rawSum > ResultEnvelope.MAX_AWAIT_BYTES)
 
         val assembled = ResultEnvelope.assembleAwaitResult(envelopes)
         val assembledBytes = assembled.toByteArray(Charsets.UTF_8).size
-        assertTrue("Assembled await result must be <= 24 KiB (was $assembledBytes)", assembledBytes <= ResultEnvelope.MAX_AWAIT_BYTES)
+        assertTrue("Assembled await result must fit the byte budget (was $assembledBytes)", assembledBytes <= ResultEnvelope.MAX_AWAIT_BYTES)
 
         val parsed = Json.parseToJsonElement(assembled).jsonObject
         val workers = parsed["workers"]!!.jsonArray
@@ -120,7 +120,7 @@ class ResultEnvelopeTest {
         }
         val assembled = ResultEnvelope.assembleAwaitResult(envelopes)
         val assembledBytes = assembled.toByteArray(Charsets.UTF_8).size
-        assertTrue("Escaped multi-line diffs must stay <= 24 KiB (was $assembledBytes)", assembledBytes <= ResultEnvelope.MAX_AWAIT_BYTES)
+        assertTrue("Escaped multi-line diffs must fit the byte budget (was $assembledBytes)", assembledBytes <= ResultEnvelope.MAX_AWAIT_BYTES)
         val workers = Json.parseToJsonElement(assembled).jsonObject["workers"]!!.jsonArray
         assertEquals(4, workers.size)
         assertTrue(workers.all { it.jsonObject["verified"]!!.jsonObject["diff"]!!.jsonPrimitive.content.isNotEmpty() })

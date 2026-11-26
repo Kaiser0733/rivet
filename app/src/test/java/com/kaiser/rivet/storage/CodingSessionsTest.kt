@@ -14,6 +14,7 @@ import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.AgentToolError
 import com.kaiser.rivet.agent.AgentUsage
 import com.kaiser.rivet.agent.AgentToolDefinition
+import com.kaiser.rivet.agent.InternalContext
 import com.kaiser.rivet.provider.ProviderType
 import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.runBlocking
@@ -994,6 +995,20 @@ class CodingSessionsTest {
                 assertEquals(64, it.getInt(0))
             }
         }
+    }
+
+    @Test fun committedCompactionIsVisibleAfterReopenBeforeAnyOtherSave() = runBlocking {
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val history = listOf(AgentMessage.user("Original task"), AgentMessage.assistant("Done"),
+            AgentMessage.user("Continue"))
+        sessions.save(history, interrupted = true)
+        val projected = sessions.compact(history, listOf(history.last()), "task state",
+            ContextAttempt("storage_pressure", "estimated", 12_000, 4_000, "provider", "model"))
+
+        val reopened = CodingSessions(app)
+        assertEquals(projected, reopened.load().messages)
+        assertEquals(history + InternalContext.compactionNotice(null, 4_000), reopened.recent(id))
     }
 
     @Test fun compactionCannotApplyToAnotherSelectedSessionWithMatchingMessages() = runBlocking {
