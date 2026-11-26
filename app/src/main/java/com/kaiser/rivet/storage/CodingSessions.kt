@@ -122,7 +122,7 @@ internal class CodingSessions(
         val active = activeMessages(db, id)
         val interrupted = hasPendingToolCall(active.lastOrNull()) ||
             (header.interrupted && hasUnfinishedTurn(active))
-        val messages = if (recover) recoverInterrupted(db, id, interrupted, active, bytes) else active
+        val messages = if (recover) recoverInterrupted(db, id, interrupted, active) else active
         return AgentSession(messages, interrupted, id, header.title, header.workspaceId, summary)
     }
 
@@ -874,7 +874,7 @@ internal class CodingSessions(
         InterruptedTurnRecovery.hasUnfinishedTurn(messages)
 
     private fun recoverInterrupted(db: SQLiteDatabase, id: String, interrupted: Boolean,
-                                   active: List<AgentMessage>, summaryBytes: Int): List<AgentMessage> {
+                                   active: List<AgentMessage>): List<AgentMessage> {
         if (!interrupted) {
             db.execSQL("UPDATE sessions SET interrupted=0 WHERE id=? AND interrupted!=0", arrayOf(id))
             return active
@@ -1221,12 +1221,6 @@ internal class CodingSessions(
 internal object InterruptedTurnRecovery {
     private val json = Json { ignoreUnknownKeys = true }
 
-    data class RecoveryPlan(
-        val pendingToolResult: AgentMessage,
-        val fitsInActive: Boolean,
-        val activeAfterRecovery: List<AgentMessage>,
-    )
-
     fun hasPendingToolCall(last: AgentMessage?): Boolean =
         last?.role == AgentRole.Assistant && last.toolCalls.isNotEmpty()
 
@@ -1247,26 +1241,6 @@ internal object InterruptedTurnRecovery {
                 "Interrupted  ${call.name}".take(256),
             )
         })
-    }
-
-    fun plan(active: List<AgentMessage>, summaryBytes: Int): RecoveryPlan? {
-        val pending = active.lastOrNull()?.takeIf(::hasPendingToolCall) ?: return null
-        val result = AgentMessage.tools(pending.toolCalls.map { call ->
-            AgentToolResult(
-                call.id,
-                call.name,
-                AgentToolError.content("interrupted"),
-                true,
-                "Interrupted  ${call.name}".take(256),
-            )
-        })
-        val fits = AgentSessionCodec.fits(active + result, summaryBytes)
-        val nextActive = if (fits) active + result else active.dropLast(1)
-        return RecoveryPlan(
-            pendingToolResult = result,
-            fitsInActive = fits,
-            activeAfterRecovery = nextActive,
-        )
     }
 
     fun validProjection(expected: List<AgentMessage>, retained: List<AgentMessage>): Boolean {

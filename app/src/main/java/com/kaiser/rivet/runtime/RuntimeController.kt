@@ -208,8 +208,6 @@ class RuntimeController(
             }
         }
         val id = processId
-        // Viewing another project is not a workspace change for this command.
-        val guard = backgroundScope.launch { }
         launchSignal.complete(Unit)
         var outcome: CommandOutput? = null
         var result: RuntimeCommandResult? = null
@@ -231,7 +229,6 @@ class RuntimeController(
                     catch (e: CancellationException) { throw e }
                     catch (_: Exception) { }
                     finally {
-                        guard.cancel()
                         try { finishForeground(plan, id, cwd, completed, spool) }
                         finally { retainBackgroundOutput(id, ring) }
                     }
@@ -249,7 +246,6 @@ class RuntimeController(
         } finally {
             if (!promoted.get()) {
                 withContext(NonCancellable) {
-                    guard.cancel()
                     running.cancelAndJoin()
                     result = finishForeground(plan, id, cwd, outcome, spool)
                 }
@@ -279,7 +275,7 @@ class RuntimeController(
                         leases.remove(plan.lease)
                         if (leases.isEmpty()) worktreeCommands.remove(plan.identity)
                     }
-                    if (!sync || hasCommandIn(plan.identity) || selection.currentIdentity() != plan.identity) null
+                    if (!sync || hasCommandIn(plan.identity)) null
                     else try { plan.mirror.sync() }
                     catch (e: MirrorFailure) { MirrorSyncResult(MirrorSync.Failed, e.path) }
                     catch (_: Exception) { MirrorSyncResult(MirrorSync.Failed) }

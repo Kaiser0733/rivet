@@ -109,6 +109,44 @@ class WorkspaceMirrorTest {
         }
     }
 
+    @Test fun foregroundCommandSyncsItsOwnProjectAfterViewingAnother() = runBlocking {
+        val selection = com.kaiser.rivet.workspace.WorkspaceSelection(app)
+        selection.select(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        val runtime = RuntimeController(app, selection)
+        val started = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        runtime.commandProcess = object : CommandProcess() {
+            override suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long?,
+                onOutput: ((String, String) -> Unit)?, memoryCapBytes: Long?,
+                onChunk: ((Boolean, ByteArray, Int) -> Unit)?, onStarted: () -> Unit): CommandOutput {
+                started.complete(Unit)
+                finish.await()
+                File(cwd, "from-command.txt").writeText("hello")
+                return CommandOutput(0, "", "", false, false, false)
+            }
+        }
+        val command = async {
+            withContext(TurnRunContext("session-a", tree.toString())) {
+                runtime.runCommand("fake command", "", 30_000L)
+            }
+        }
+        try {
+            withTimeout(3_000) { started.await() }
+            val other = DocumentsContract.buildTreeDocumentUri(tree.authority, "other-project")
+            app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+                .putString("tree", other.toString()).commit()
+            finish.complete(Unit)
+            val result = withTimeout(10_000) { command.await() }
+            assertNotEquals("pending", result.sync)
+            assertTrue(provider.nodes.values.any { it.name == "from-command.txt" })
+        } finally {
+            finish.complete(Unit)
+            app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit()
+                .putString("tree", tree.toString()).commit()
+        }
+    }
+
     private fun mirror() = WorkspaceMirror(app, workspace) { true }
     private suspend fun source(value: String, bytes: ByteArray) {
         val entry = workspace.createFile(path(value))
