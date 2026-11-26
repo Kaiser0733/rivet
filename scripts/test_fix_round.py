@@ -67,7 +67,7 @@ class FixRoundSurfacesTest(unittest.TestCase):
 
     def test_jump_action_uses_the_real_conversation_list(self):
         chat = (UI / "chat/ChatScreen.kt").read_text()
-        self.assertIn("if (totalItems > 0 && listState.canScrollForward && (!followBottom || !nearBottom))", chat)
+        self.assertIn("if (listState.canScrollForward)", chat)
         self.assertIn('Text("Jump to latest"', chat)
         jump = chat.split("val jumpScope", 1)[1].split("Jump to latest", 1)[0]
         # Jumping re-attaches follow before it scrolls, so the rest of the reply stays in view.

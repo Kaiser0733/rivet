@@ -30,6 +30,28 @@ import org.robolectric.annotation.Config
 class TranscriptScrollTest {
     @get:Rule val compose = createComposeRule()
 
+    @Test fun jumpIsAvailableEvenWhenTheLatestRowIsPartlyVisible() {
+        val app: Application = RuntimeEnvironment.getApplication()
+        val browser = BrowserSession(app, models = null)
+        val list = LazyListState()
+        val state = ChatUiState(messages = (1..20).flatMap { turn ->
+            listOf(AgentMessage.user("Question $turn"), AgentMessage.assistant("Answer $turn"))
+        })
+        compose.setContent {
+            MessageList(state, onDismissError = {}, onOpenSettings = {},
+                onRetryProjectChanges = {}, onDiscardProjectChanges = {}, onRetryInterruptedTurn = {},
+                onDismissInterruptedTurn = {}, onAttachGoal = {}, onRaiseBudget = {}, onRetryTurn = {},
+                onChooseReasoning = {}, onOpenPreview = {}, missingFiles = emptySet(), browser = browser,
+                modifier = Modifier.size(340.dp, 360.dp), listState = list)
+        }
+
+        compose.runOnIdle { assertFalse(list.canScrollForward) }
+        compose.runOnIdle { list.dispatchRawDelta(-12f) }
+        compose.onNodeWithText("Jump to latest").performClick()
+        compose.runOnIdle { assertFalse(list.canScrollForward) }
+        compose.onNodeWithText("Jump to latest").assertDoesNotExist()
+    }
+
     @Test fun scrollingTowardTheEndDoesNotReattachUntilTheReaderJumpsToLatest() {
         val app: Application = RuntimeEnvironment.getApplication()
         val browser = BrowserSession(app, models = null)

@@ -100,7 +100,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.key
@@ -119,7 +118,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -632,13 +630,6 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     var lastAcceptedCount by rememberSaveable { mutableStateOf(state.acceptedMessageCount) }
     var userScrolling by remember { mutableStateOf(false) }
     var programmaticScroll by remember { mutableStateOf(false) }
-    val bottomSlop = with(LocalDensity.current) { 72.dp.toPx() }
-    val nearBottom by remember(bottomSlop) { derivedStateOf {
-        val layout = listState.layoutInfo
-        val last = layout.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
-        if (last.index < layout.totalItemsCount - 1) false
-        else layout.viewportEndOffset - (last.offset + last.size) >= -bottomSlop
-    } }
     val transcriptScrollConnection = remember(listState) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -808,7 +799,7 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 }
             }
         }
-        if (totalItems > 0 && listState.canScrollForward && (!followBottom || !nearBottom)) {
+        if (listState.canScrollForward) {
             Surface(
                 onClick = {
                     jumpScope.launch {
