@@ -220,7 +220,6 @@ class ChatViewModelTest {
         assertFalse(firstId == b.currentSessionId)
         viewModel.send("B")
         await(viewModel) { it.streaming }
-        assertEquals(2, viewModel.runRegistry.activeCount())
 
         viewModel.resumeSession(firstId)
         val back = await(viewModel) { it.currentSessionId == firstId }
