@@ -728,3 +728,80 @@ test dispatcher. This is a test-support seam; no production behaviour changes.
 - No handset was attached. The Samsung callback from another Android package, live starter-provider output, Android capture consent and notification, SAF behavior on that device, and visual rendering on its screen still need a device pass.
 - The Termux report's package-targeted callback predates the explicit private receiver at the branch point. The reproduced drop on this branch was in the file-result path. The reported Termux storage appops were outside this change.
 - The recall fixtures verify Rivet's saved state, provider request preparation, and archive reply. They do not measure factual recall across live providers or reconstruct device prompts beyond the captured evidence.
+
+---
+
+# Final check — fully merged batch @5cec741a
+
+Reviewed the merged range `eb6f4f7..5cec741a` at the seam files:
+`ChatViewModel.kt`, `RuntimeController.kt`, `CodingSessions.kt`,
+`TaskCheckpoint.kt`, `SessionRun.kt`, `SessionRunRegistry.kt` and
+`report.md`. The merged-batch CI gate is green on run `45859986798`; no CI
+run or APK build was dispatched from this check.
+
+## Found and fixed
+
+Fix commit: `5b972ec4`.
+
+### 1. Foreground command sync followed the viewed project
+
+`RuntimeController.releaseCommandWorktree` retained a sweep-side
+`selection.currentIdentity() != plan.identity` guard after the parallel
+merge. A command started by a run in project A, while the user then viewed
+project B, finished with `sync = "pending"` and never wrote its worktree
+changes back to A's SAF tree. The captured `plan.mirror` is the correct
+authority for a per-project command; viewing another project is not a
+workspace change for that run. The guard was removed.
+
+JiTTest: `WorkspaceMirrorTest.foregroundCommandSyncsItsOwnProjectAfterViewingAnother`.
+The test starts a command under `TurnRunContext("session-a", tree)`, switches
+the viewed project before the process returns, and requires the captured
+project's file to be synced. It failed on the pre-fix tree with
+`sync = "pending"` and passes after the fix.
+
+### 2. Dead recovery path left by the sweep-wins resolution
+
+`InterruptedTurnRecovery.RecoveryPlan` and `plan(...)` were unreachable:
+`recoverInterrupted` uses the sweep append path by design, and the parallel
+`summaryBytes` parameter was no longer read. Removed the dead data class,
+function, and parameter. This changes no recovery behavior; the existing
+`CodingSessionsTest` recovery-at-cap coverage remains green.
+
+## Checked and left alone
+
+- ChatViewModel manual and automatic compaction use the N1–N7 atomic notice
+  path; the task-checkpoint pinned-quote priority and sweep omission flag
+  coexist.
+- `SessionRun` per-run state and `SessionRunRegistry` rendering were checked
+  for selected-run leakage. The only cross-project sync defect found is
+  fix 1.
+- `ChatViewModel` approval identity and queued-local paths were inspected;
+  no merge-conflict regression was found beyond the per-project command sync
+  above.
+- No conflict markers remain.
+
+## Verification
+
+- `:app:compileDebugKotlin`: BUILD SUCCESSFUL.
+- Broad local JUnit set: **377 tests, 0 failures**, covering
+  `ChatViewModelTest`, `ConversationTitleLifecycleTest`,
+  `CodingSessionsTest`, `WorkspaceMirrorTest`, `AgentToolExecutorTest`,
+  `AgentLoopTest`, `RunCheckpointGateTest`, `BrowserProjectScopeTest`,
+  `CommandToolTest`, `ProjectBindingTest`, and the N1–N7 feature classes
+  (`BuiltInSlashTest`, `DsmlToolCallsTest`, `BrowserEvalSessionTest`,
+  `BrowserKeyModalTest`, `ContextPreparationTest`, `WorkerPromotionTest`,
+  `PhoneCaptureToolTest`, `TermuxBridgeTest`, `TermuxFileWaitTest`,
+  `ResultEnvelopeTest`, `SubagentContextTest`, `TaskCheckpointTest`).
+- `WorkspaceMirrorTest` re-run after the final test cleanup: **43 tests OK**.
+- Python suite: **100 tests OK**.
+- `TranscriptScrollTest`: compiles, but the offline manual harness cannot
+  launch Compose's `ComponentActivity` (missing test manifest support and
+  hamcrest on the manual classpath); the Gradle unit-test configuration
+  cannot resolve its offline test dependencies in this container. The
+  failures are harness setup, not assertions. It was not rerun through CI.
+
+## Model/tooling note
+
+No model-side rate-limit or stream-stall errors surfaced during this check.
+Time was dominated by the offline Gradle compile (about four minutes per
+run) and the manual JUnit harness; there were no unexplained stalls.
