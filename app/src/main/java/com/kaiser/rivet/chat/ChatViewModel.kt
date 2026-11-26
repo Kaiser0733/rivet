@@ -2025,7 +2025,8 @@ class ChatViewModel private constructor(
                 .values.filterNot { it.removed }.forEach { instruction ->
                     observedPaths[WorkspacePath.parse(instruction.scope).parent()] = true
                 }
-            var instructions = project?.load(observedPaths)
+            var omittedObservedPaths = ProjectInstructions.observe(observedPaths, emptyMap())
+            var instructions = project?.load(observedPaths, omittedObservedPaths)
             // Skills rescan at the same lifecycle point as project instructions: turn
             // start. Everywhere else (each model step) reads this turn's snapshot.
             val agentWorkspace = workspace?.let(::SafAgentWorkspace)
@@ -2466,28 +2467,16 @@ class ChatViewModel private constructor(
                             summary = "Failed  ${call.name}",
                         )
                     }
-                    if (project == null) prepared else {
-                        val additions = project.targets(call).filterKeys { phone == null || !GrantPath.isExternal(it.value) }
-                        additions.forEach { (path, directory) ->
-                            if (path != WorkspacePath.ROOT) {
-                                observedPaths.remove(path)
-                                observedPaths[path] = directory
+                    if (project == null) prepared else prepared.withExecute {
+                        prepared.execute().also { result ->
+                            if (!result.error) {
+                                val targets = project.targets(call).filterKeys {
+                                    phone == null || !GrantPath.isExternal(it.value)
+                                }
+                                omittedObservedPaths = ProjectInstructions.observe(observedPaths, targets) ||
+                                    omittedObservedPaths
                             }
                         }
-                        while (observedPaths.size > 16) {
-                            val oldest = observedPaths.keys.firstOrNull { it != WorkspacePath.ROOT } ?: break
-                            observedPaths.remove(oldest)
-                        }
-                        instructions = project.load(observedPaths)
-                        val changed = workspaceId != null && ProjectContext.updates(durable,
-                            workspaceId, requireNotNull(instructions)).isNotEmpty()
-                        if (changed && call.name in MUTATION_TOOLS) PreparedAgentTool(
-                            call, null, effect = AgentToolEffect.ReadOnly,
-                        ) {
-                            AgentToolResult(call.id, call.name,
-                                "{\"error\":\"project_instructions_loaded\",\"required_action\":\"Review applicable AGENTS.md instructions, then retry.\"}",
-                                error = true, summary = "Project instructions loaded")
-                        } else prepared
                     }
                 },
                 requestApproval = approvals::await,
@@ -2565,7 +2554,7 @@ class ChatViewModel private constructor(
                 contextFootprint = { candidate -> context.footprint(candidate) },
                 contextUpdates = { candidate ->
                     if (project == null || workspaceId == null) emptyList() else {
-                        instructions = project.load(observedPaths)
+                        instructions = project.load(observedPaths, omittedObservedPaths)
                         val baseEvents = ProjectContext.updates(candidate, workspaceId, requireNotNull(instructions)) +
                             SkillContext.updates(candidate, workspaceId, skills) +
                             ToolchainContext.updates(candidate, workspaceId,

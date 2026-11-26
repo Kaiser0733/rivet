@@ -772,7 +772,7 @@ class ChatViewModelTest {
         assertEquals(sessions.load().messages, CodingSessions(app).load().messages)
     }
 
-    @Test fun nestedInstructionsAreLoadedBeforeFirstMutationApproval() = runBlocking {
+    @Test fun nestedInstructionsAreLoadedAfterTheMutationSucceeds() = runBlocking {
         val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.instructions-chat", "root")
         val info = ProviderInfo().apply {
             authority = tree.authority
@@ -799,10 +799,12 @@ class ChatViewModelTest {
         await(viewModel) { it.ready }
 
         viewModel.send("Create a file in src")
+        val waiting = await(viewModel) { it.pendingApproval != null }
+        viewModel.approve(requireNotNull(waiting.pendingApproval).approvalToken)
         val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "I will follow the project rule." }
 
         assertNull(complete.pendingApproval)
-        assertTrue(documents.createCalls >= createdBefore)
+        assertTrue(documents.createCalls > createdBefore)
         assertEquals(2, provider.requests.size)
         assertEquals(provider.requests[0].messages, provider.requests[1].messages.take(provider.requests[0].messages.size))
         val resultIndex = provider.requests[1].messages.indexOfFirst { it.role == com.kaiser.rivet.agent.AgentRole.Tool }
@@ -813,7 +815,7 @@ class ChatViewModelTest {
                 message.text.contains("Use the project naming rule.")
         })
         assertTrue(provider.requests[1].messages.any { message ->
-            message.toolResults.any { "project_instructions_loaded" in it.content }
+            message.toolResults.any { it.callId == "create" && !it.error }
         })
     }
 

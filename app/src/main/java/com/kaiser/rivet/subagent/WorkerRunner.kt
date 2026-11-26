@@ -143,6 +143,7 @@ internal class WorkerRunner(
         val client = services.clientFactory(config, apiKey)
         val turnId = UUID.randomUUID().toString()
         val observedPaths = linkedMapOf(WorkspacePath.ROOT to true)
+        var omittedObservedPaths = false
         var instructions: ProjectInstructionSet? = services.projectInstructions?.load(observedPaths)
 
         suspend fun contextEventsFor(messages: List<AgentMessage>): List<AgentMessage> {
@@ -368,38 +369,12 @@ internal class WorkerRunner(
                         }
 
                         val project = services.projectInstructions
-                        if (project == null) {
-                            basePrepared
-                        } else {
-                            val additions = project.targets(call)
-                            additions.forEach { (path, directory) ->
-                                if (path != WorkspacePath.ROOT) {
-                                    observedPaths.remove(path)
-                                    observedPaths[path] = directory
+                        if (project == null) basePrepared else basePrepared.withExecute {
+                            basePrepared.execute().also { result ->
+                                if (!result.error) {
+                                    omittedObservedPaths = ProjectInstructions.observe(observedPaths, project.targets(call)) ||
+                                        omittedObservedPaths
                                 }
-                            }
-                            while (observedPaths.size > 16) {
-                                val oldest = observedPaths.keys.firstOrNull { it != WorkspacePath.ROOT } ?: break
-                                observedPaths.remove(oldest)
-                            }
-                            instructions = project.load(observedPaths)
-                            val changed = ProjectContext.updates(
-                                durable,
-                                services.workspaceId,
-                                requireNotNull(instructions),
-                            ).isNotEmpty()
-                            if (changed && call.name in MUTATION_TOOLS) {
-                                PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
-                                    AgentToolResult(
-                                        call.id,
-                                        call.name,
-                                        "{\"error\":\"project_instructions_loaded\",\"required_action\":\"Review applicable AGENTS.md instructions, then retry.\"}",
-                                        error = true,
-                                        summary = "Project instructions loaded",
-                                    )
-                                }
-                            } else {
-                                basePrepared
                             }
                         }
                     }
@@ -472,7 +447,7 @@ internal class WorkerRunner(
                 contextFootprint = { candidate -> context.footprint(candidate) },
                 contextUpdates = { candidate ->
                     if (services.projectInstructions != null) {
-                        instructions = services.projectInstructions.load(observedPaths)
+                        instructions = services.projectInstructions.load(observedPaths, omittedObservedPaths)
                     }
                     contextEventsFor(candidate)
                 },
@@ -687,17 +662,5 @@ internal class WorkerRunner(
     }
 
     companion object {
-        private val MUTATION_TOOLS = setOf(
-            "write_file",
-            "apply_patch",
-            "create_file",
-            "create_directory",
-            "rename_path",
-            "move_path",
-            "delete_path",
-            "run_command",
-            "download_file",
-            "remember",
-        )
     }
 }

@@ -16,13 +16,17 @@ data class ProjectInstructionSet(val text: String, val files: List<String>, val 
 
 /** Loads only the directory chains the agent has touched, inside the selected SAF tree. */
 class ProjectInstructions(private val workspace: SafWorkspace) {
-    suspend fun load(targets: Map<WorkspacePath, Boolean>): ProjectInstructionSet {
+    suspend fun load(
+        targets: Map<WorkspacePath, Boolean>,
+        omittedObservedPaths: Boolean = false,
+    ): ProjectInstructionSet {
         val directories = TreeSet<WorkspacePath>(compareBy<WorkspacePath> { it.segments.size }.thenBy { it.value })
         directories += WorkspacePath.ROOT
-        var limited = false
+        var limited = omittedObservedPaths
+        var limitedDepth = false
         targets.forEach { (target, directory) ->
             val segments = (if (directory) target else target.parent()).segments
-            if (segments.size > MAX_DEPTH) limited = true
+            if (segments.size > MAX_DEPTH) limitedDepth = true
             var current = WorkspacePath.ROOT
             segments.take(MAX_DEPTH).forEach { segment ->
                 current = current.child(segment)
@@ -33,8 +37,16 @@ class ProjectInstructions(private val workspace: SafWorkspace) {
         val files = mutableListOf<String>()
         val entries = mutableListOf<ProjectInstructionFile>()
         val notices = mutableListOf<String>()
+        if (omittedObservedPaths) notices += "[Project instructions omitted for older tool paths.]"
+        if (limitedDepth) notices += "[Project instructions omitted below directory depth $MAX_DEPTH.]"
+        if (directories.size > MAX_DIRECTORIES) {
+            notices += "[Project instructions omitted for ${directories.size - MAX_DIRECTORIES} directories.]"
+        }
+        if (notices.isNotEmpty()) {
+            limited = true
+            sections += notices
+        }
         var bytes = 0
-        if (directories.size > MAX_DIRECTORIES) limited = true
         for (directory in directories.take(MAX_DIRECTORIES)) {
             val file = directory.child("AGENTS.md")
             val content = try { workspace.readProjectInstruction(file, PER_FILE_BYTES) }
@@ -75,6 +87,24 @@ class ProjectInstructions(private val workspace: SafWorkspace) {
         const val MAX_FILES = 8
         private const val MAX_DEPTH = 32
         private const val MAX_DIRECTORIES = 64
+        private const val MAX_OBSERVED_PATHS = 16
+
+        internal fun observe(
+            observed: LinkedHashMap<WorkspacePath, Boolean>,
+            additions: Map<WorkspacePath, Boolean>,
+        ): Boolean {
+            for ((path, directory) in additions) {
+                if (path == WorkspacePath.ROOT) continue
+                observed.remove(path)
+                observed[path] = directory
+            }
+            val omitted = observed.size > MAX_OBSERVED_PATHS
+            while (observed.size > MAX_OBSERVED_PATHS) {
+                observed.remove(observed.keys.first { it != WorkspacePath.ROOT })
+            }
+            return omitted
+        }
+
         private const val MAX_ARGUMENT_CHARS = 1_200_000
         private val PATH_TOOLS = setOf("read_file", "list_directory", "search_files", "write_file",
             "apply_patch", "create_file", "create_directory", "rename_path", "move_path",

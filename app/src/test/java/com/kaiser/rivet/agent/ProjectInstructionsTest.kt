@@ -71,6 +71,18 @@ class ProjectInstructionsTest {
         assertFalse(result.text.contains("x".repeat(100)))
     }
 
+    @Test fun directoryAndDepthOmissionsReachThePrompt() = runBlocking {
+        val paths = (1..70).associate { WorkspacePath.parse("dir-$it") to true } +
+            (WorkspacePath.parse((1..33).joinToString("/") { "d$it" }) to true)
+        val result = ProjectInstructions(workspace).load(paths)
+
+        assertTrue(result.limited)
+        assertTrue(result.notices.any { "directory depth" in it })
+        assertTrue(result.notices.any { "directories" in it })
+        assertTrue(ProjectContext.updates(emptyList(), "tree", result).single()
+            .internalContext!!.content.contains("omitted"))
+    }
+
     @Test fun toolTargetsRemainInsideWorkspaceAndAreDeterministic() {
         val loader = ProjectInstructions(workspace)
         val targets = loader.targets(AgentToolCall("1", "move_path",
