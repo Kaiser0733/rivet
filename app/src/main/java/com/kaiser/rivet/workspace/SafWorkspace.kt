@@ -279,6 +279,55 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
 
     // A text MIME can append .txt; extension lookup can also misclassify source
     // files (for example .ts as video). Let the requested name stand on its own.
+    internal suspend fun publishNewFile(
+        path: WorkspacePath,
+        input: InputStream,
+        expected: BinaryFingerprint,
+    ): Boolean = io {
+        mutations.withLock {
+            requireNonRoot(path)
+            val parent = resolve(path.parent())
+            if (!parent.directory) fail(WorkspaceFailure.Reason.NOT_DIRECTORY)
+            if (!parent.capabilities.create) fail(WorkspaceFailure.Reason.UNSUPPORTED)
+            absent(parent, path.name)
+            currentCoroutineContext().ensureActive()
+            withContext(NonCancellable) {
+                val temporary = ".rivet-${java.util.UUID.randomUUID()}.tmp"
+                val created = DocumentsContract.createDocument(
+                    resolver, uri(parent.documentId), "application/octet-stream", temporary,
+                ) ?: fail(WorkspaceFailure.Reason.PROVIDER)
+                var cleanup: WorkspaceEntry? = returnedChild(parent, created)
+                try {
+                    val entry = requireNotNull(cleanup)
+                    if (!entry.capabilities.rename) return@withContext false
+                    if (!entry.capabilities.write) fail(WorkspaceFailure.Reason.UNSUPPORTED)
+                    val descriptor = resolver.openFileDescriptor(uri(entry.documentId), "rwt")
+                        ?: fail(WorkspaceFailure.Reason.WRITE)
+                    ParcelFileDescriptor.AutoCloseOutputStream(descriptor).use { output ->
+                        input.copyTo(output)
+                        output.flush()
+                    }
+                    if (stream(entry, null) != expected) fail(WorkspaceFailure.Reason.WRITE)
+                    absent(parent, path.name)
+                    val moved = DocumentsContract.renameDocument(resolver, uri(entry.documentId), path.name)
+                        ?: fail(WorkspaceFailure.Reason.PROVIDER)
+                    val published = returnedChild(parent, moved)
+                    cleanup = published
+                    if (published.path != path) fail(WorkspaceFailure.Reason.WRITE)
+                    cleanup = null
+                    true
+                } finally {
+                    cleanup?.let { entry ->
+                        if (!DocumentsContract.deleteDocument(resolver, uri(entry.documentId)) ||
+                            children(parent, 5000).any { it.documentId == entry.documentId }) {
+                            fail(WorkspaceFailure.Reason.PROVIDER)
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     suspend fun createFile(path: WorkspacePath): WorkspaceEntry = create(path, "application/octet-stream")
     suspend fun createFileWithParents(path: WorkspacePath): WorkspaceEntry = create(path, "application/octet-stream", createParents = true)
     suspend fun createDirectory(path: WorkspacePath): WorkspaceEntry = create(path, Document.MIME_TYPE_DIR)

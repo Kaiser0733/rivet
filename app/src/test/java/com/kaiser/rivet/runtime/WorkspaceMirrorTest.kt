@@ -187,19 +187,20 @@ class WorkspaceMirrorTest {
     }
 
     @Test fun createdEmptySafFileResumesAfterWriteFailureAndProcessReconstruction() = runBlocking {
+        provider.renameSupported = false
         val first = mirror()
         File(first.prepare().worktree, "new.txt").writeText("target content")
         provider.rejectWriteOnceFor = "new.txt"
 
         assertEquals(MirrorSync.Failed, first.sync().state)
-        assertEquals(1, provider.createCalls)
+        assertEquals(2, provider.createCalls)
         assertArrayEquals(byteArrayOf(), bytes("new.txt"))
         assertTrue(files.walkTopDown().any { it.name == "partial-create.json" })
 
         val restored = mirror()
         assertTrue(restored.prepare().dirty)
         assertEquals(MirrorSync.Ok, restored.sync().state)
-        assertEquals(1, provider.createCalls)
+        assertEquals(2, provider.createCalls)
         assertEquals("target content", String(bytes("new.txt")))
         assertFalse(restored.hasLocalChanges())
         assertFalse(files.walkTopDown().any { it.name == "partial-create.json" })
@@ -209,17 +210,19 @@ class WorkspaceMirrorTest {
     }
 
     @Test fun createdEmptySafFileResumesInSameProcess() = runBlocking {
+        provider.renameSupported = false
         val mirror = mirror()
         File(mirror.prepare().worktree, "new.txt").writeText("target")
         provider.rejectWriteOnceFor = "new.txt"
 
         assertEquals(MirrorSync.Failed, mirror.sync().state)
         assertEquals(MirrorSync.Ok, mirror.sync().state)
-        assertEquals(1, provider.createCalls)
+        assertEquals(2, provider.createCalls)
         assertEquals("target", String(bytes("new.txt")))
     }
 
     @Test fun partialCreateReceiptCannotOverwriteChangedOrReplacedSafFile() = runBlocking {
+        provider.renameSupported = false
         val mirror = mirror()
         File(mirror.prepare().worktree, "new.txt").writeText("target content")
         provider.rejectWriteOnceFor = "new.txt"
@@ -233,10 +236,11 @@ class WorkspaceMirrorTest {
         workspace.delete(path("new.txt"))
         workspace.createFile(path("new.txt"))
         assertEquals(MirrorSync.Conflict, mirror().sync().state)
-        assertEquals(2, provider.createCalls)
+        assertEquals(3, provider.createCalls)
     }
 
     @Test fun partialCreateReceiptRejectsChangedLocalTarget() = runBlocking {
+        provider.renameSupported = false
         val mirror = mirror()
         val local = File(mirror.prepare().worktree, "new.txt")
         local.writeText("first target")
@@ -246,11 +250,12 @@ class WorkspaceMirrorTest {
 
         assertEquals(MirrorSync.Conflict, mirror().sync().state)
         assertArrayEquals(byteArrayOf(), bytes("new.txt"))
-        assertEquals(1, provider.createCalls)
+        assertEquals(2, provider.createCalls)
         assertFalse(files.walkTopDown().any { it.name == "partial-create.json" })
     }
 
     @Test fun partialCreateReceiptRejectsDirectReplacementWithSameEmptyBytes() = runBlocking {
+        provider.renameSupported = false
         val mirror = mirror()
         File(mirror.prepare().worktree, "new.txt").writeText("target")
         provider.rejectWriteOnceFor = "new.txt"
@@ -300,21 +305,23 @@ class WorkspaceMirrorTest {
         assertEquals("unsynced", local.readText())
     }
 
-    @Test fun normalizedDestinationIsReportedOnceAndNotRetried() = runBlocking {
-        provider.normalizeAllFileNames = true
+    @Test fun refusedPublishLeavesNoEmptyDestinationOrReceiptAndCanRetry() = runBlocking {
         provider.rejectRename = true
         val mirror = mirror()
         val root = mirror.prepare().worktree
         File(root, "review.md").writeText("review")
 
-        val result = mirror.sync()
-
-        assertEquals(MirrorSync.Failed, result.state)
-        assertEquals("review.md.txt", result.path)
-        assertEquals(1, provider.createCalls)
-        assertEquals(MirrorSync.Conflict, mirror.sync().state)
-        assertEquals(1, provider.createCalls)
+        val failed = mirror.sync()
+        assertEquals(MirrorSync.Failed, failed.state)
+        assertEquals("review.md", failed.path)
+        assertTrue(workspace.listDirectory(WorkspacePath.ROOT).isEmpty())
+        assertFalse(files.walkTopDown().any { it.name == "partial-create.json" })
         assertEquals("review", File(root, "review.md").readText())
+
+        provider.rejectRename = false
+        assertEquals(MirrorSync.Ok, mirror().sync().state)
+        assertEquals("review", String(bytes("review.md")))
+        assertEquals(listOf("review.md"), workspace.listDirectory(WorkspacePath.ROOT).map { it.path.value })
     }
 
     @Test fun localSymlinkIsNeverFollowedIntoSaf() = runBlocking {
@@ -386,6 +393,7 @@ class WorkspaceMirrorTest {
     }
 
     @Test fun discardAbandonsPartialCreateReceiptButKeepsProviderCreatedFile() = runBlocking {
+        provider.renameSupported = false
         val mirror = mirror()
         File(mirror.prepare().worktree, "new.txt").writeText("pending target")
         provider.rejectWriteOnceFor = "new.txt"

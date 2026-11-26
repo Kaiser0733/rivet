@@ -1,6 +1,7 @@
 package com.kaiser.rivet.runtime
 
 import android.content.Context
+import com.kaiser.rivet.workspace.SafWorkspace.BinaryFingerprint
 import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspacePath
@@ -250,6 +251,19 @@ class WorkspaceMirror(
                         if (partial?.path == path) {
                             emptyFile.sha256!!
                         } else {
+                            val target = local.getValue(path)
+                            val fingerprint = BinaryFingerprint(requireNotNull(target.size), requireNotNull(target.sha256))
+                            try {
+                                if (FileInputStream(file).use { workspace.publishNewFile(relative, it, fingerprint) }) {
+                                    continue
+                                }
+                            } catch (failure: WorkspaceFailure) {
+                                if (failure.reason in setOf(WorkspaceFailure.Reason.DUPLICATE, WorkspaceFailure.Reason.CONFLICT)) {
+                                    excluded += path
+                                    continue
+                                }
+                                return@withLock MirrorSyncResult(MirrorSync.Failed, path, skipped)
+                            }
                             val created = try {
                                 workspace.createFile(relative)
                             } catch (failure: WorkspaceFailure) {
