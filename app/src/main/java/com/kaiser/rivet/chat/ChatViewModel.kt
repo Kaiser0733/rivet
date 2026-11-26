@@ -1114,17 +1114,13 @@ class ChatViewModel private constructor(
         onAutonomyChange: (AutonomyMode) -> Unit = {},
     ) {
         val trimmed = text.trim()
-        val sessionId = selectedState.value.currentSessionId
-        // Stop publishes the stopped UI before the old job has finished its
-        // cancellation cleanup, but the run registry still owns the slot until
-        // that cleanup ends. A send in that gap must wait for ownership rather
-        // than be silently dropped by canStartRun.
-        val stopping = activeRun?.takeIf { it === selectedState && it.userCancelled }
-        val stopJob = stopping?.job
-        if (stopJob != null) {
+        val owner = selectedState
+        val sessionId = owner.value.currentSessionId
+        val finishing = owner.finishingJob()
+        if (finishing != null) {
             runRegistry.scope.launch {
-                stopJob.join()
-                if (selectedState.value.currentSessionId == sessionId) {
+                finishing.join()
+                if (selectedState === owner && owner.value.currentSessionId == sessionId) {
                     send(text, onFeedback, onAutonomyChange)
                 }
             }
@@ -1132,8 +1128,8 @@ class ChatViewModel private constructor(
         }
         val attachments = _composerAttachments.value[sessionId].orEmpty()
         if ((trimmed.isEmpty() && attachments.isEmpty()) || sessionId in _composerImports.value ||
-            !selectedState.value.ready || selectedState.value.recoveringProjectChanges) return
-        if (!canStartRun(selectedState)) return
+            owner.value.streaming || !owner.value.ready || owner.value.recoveringProjectChanges) return
+        if (!canStartRun(owner)) return
         val command = SlashCommands.builtIn(trimmed)
         if (command != null) {
             when (command) {
@@ -1164,7 +1160,7 @@ class ChatViewModel private constructor(
         }
         _sharedContent.update { it - sessionId }
         _composerAttachments.update { it - sessionId }
-        selectedState.update { state ->
+        owner.update { state ->
             val appended = state.messages + accepted
             val dropCount = (appended.size - 100).coerceAtLeast(0)
             val nextMessages = appended.takeLast(100)
@@ -1197,8 +1193,8 @@ class ChatViewModel private constructor(
                 externalUndo = null,
             )
         }
-        selectedState.workers.value = emptyList()
-        selectedState.startTurn(accepted.text.trim(), retryingInterrupted = false, acceptedUser = accepted)
+        owner.workers.value = emptyList()
+        owner.startTurn(accepted.text.trim(), retryingInterrupted = false, acceptedUser = accepted)
     }
 
     private suspend fun appendCommandReply(sessionId: String?, command: String, reply: String) {
@@ -2082,6 +2078,10 @@ class ChatViewModel private constructor(
         return true
     }
 
+    // A result or Stop can publish before the owner releases its run slot.
+    private fun SessionRun.finishingJob(): Job? =
+        job?.takeIf { (userCancelled || !value.streaming) && runRegistry.isActive(this) }
+
     private fun SessionRun.launchRun(body: suspend CoroutineScope.() -> Unit) {
         userCancelled = false
         pauseRequested = false
@@ -2124,7 +2124,15 @@ class ChatViewModel private constructor(
     private fun SessionRun.startTurn(trimmed: String, retryingInterrupted: Boolean,
                          acceptedUser: AgentMessage? = null, starterOpening: Boolean = false,
                          notice: String? = null) {
-        if (runRegistry.isActive(this) || runRegistry.isQueued(value.currentSessionId)) return
+        if (runRegistry.isActive(this)) {
+            val finishing = finishingJob() ?: return
+            runRegistry.scope.launch {
+                finishing.join()
+                if (!value.streaming) startTurn(trimmed, retryingInterrupted, acceptedUser, starterOpening, notice)
+            }
+            return
+        }
+        if (runRegistry.isQueued(value.currentSessionId)) return
         val localActive = runRegistry.activeRuns.value.values.any { !it.currentCloud || !it.providerKnown }
         if (!localActive) {
             startTurnNow(trimmed, retryingInterrupted, acceptedUser, starterOpening, notice)

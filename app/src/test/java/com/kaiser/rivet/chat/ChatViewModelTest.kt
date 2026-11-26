@@ -583,18 +583,46 @@ class ChatViewModelTest {
     }
 
     @Test fun stopWhilePreparingKeepsTheAcceptedMessageAndStartsNoSecondTurn() = runBlocking {
-        val provider = CompletableDeferred<ProviderRuntimeResult>()
-        val viewModel = newChatViewModel(app, RejectingPersistence(),
-            ProviderRuntimeSource { provider.await() },
+        val providerLoadStarted = CompletableDeferred<Unit>()
+        val persistence = RejectingPersistence()
+        val viewModel = newChatViewModel(app, persistence,
+            ProviderRuntimeSource {
+                providerLoadStarted.complete(Unit)
+                awaitCancellation()
+            },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready }
         viewModel.send("first")
+        withTimeout(5_000) { providerLoadStarted.await() }
+        val run = requireNotNull(viewModel.runRegistry.active.value)
         assertTrue(viewModel.uiState.value.streaming)
         viewModel.send("second")
+        assertEquals(1L, viewModel.uiState.value.acceptedMessageCount)
         viewModel.cancel()
         val stopped = await(viewModel) { !it.streaming && it.notice?.startsWith("Stopped") == true }
+        withTimeout(5_000) { run.job!!.join() }
         assertEquals(1L, stopped.acceptedMessageCount)
         assertEquals(listOf("first"), stopped.messages.map { it.text })
+        assertEquals(stopped.messages, persistence.load().messages)
+    }
+
+    @Test fun legacyStoreWithoutSessionIdPublishesAndPersistsTheCompletedReply() = runBlocking {
+        val store = AgentSessionStore(app)
+        store.clear()
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Done"))))
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val viewModel = newChatViewModel(app, store,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        val loaded = await(viewModel) { it.ready && !it.projectLoading }
+        assertNull(loaded.currentSessionId)
+
+        viewModel.send("Fix it")
+        val completed = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Done" }
+        val expected = listOf(AgentMessage.user("Fix it"), AgentMessage.assistant("Done"))
+        val saved = store.load()
+        assertEquals(expected, completed.messages)
+        assertEquals(expected, saved.messages)
+        assertFalse(saved.interrupted)
     }
 
     @Test fun acceptanceHappensBeforeAProviderLoadThatNeverReturns() = runBlocking {

@@ -20,10 +20,12 @@ import com.kaiser.rivet.storage.AgentSessionStore
 import com.kaiser.rivet.storage.CodingSessions
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.awaitCancellation
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.ExperimentalCoroutinesApi
 import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
@@ -60,6 +62,7 @@ class ConversationTitleLifecycleTest {
     }
     @After fun cleanup() = runBlocking {
         models.forEach { it.viewModelScope.coroutineContext[Job]?.cancelAndJoin() }
+        models.forEach { it.runRegistry.scope.coroutineContext[Job]?.cancelAndJoin() }
         models.clear()
         Dispatchers.resetMain()
     }
@@ -76,8 +79,11 @@ class ConversationTitleLifecycleTest {
                 onDelta: (String) -> Unit,
             ): AgentResponse {
                 requests += request
-                return if (requests.size == 1) AgentResponse("Here is the fix.")
-                    else AgentResponse("Fix Login Crash", usage = AgentUsage(12, 3))
+                return when {
+                    request.tools.isEmpty() -> AgentResponse("Fix Login Crash", usage = AgentUsage(12, 3))
+                    requests.size == 1 -> AgentResponse("Here is the fix.")
+                    else -> AgentResponse("You're welcome.")
+                }
             }
         }
         val vm = newChatViewModel(app, store,
@@ -98,7 +104,45 @@ class ConversationTitleLifecycleTest {
         vm.send("Thanks")
         withTimeout(5000) { vm.uiState.first { !it.streaming && it.acceptedMessageCount == 2L } }
         assertEquals(3, requests.size)
+        assertEquals(AgentMessage.assistant("You're welcome."), store.load().messages.last())
+        assertEquals(4, store.fullEventCount(id))
     }
+
+    @Test fun aFollowUpDuringFirstTurnCleanupRunsOnceAndKeepsTheGeneratedTitle() = runBlocking {
+        val finishFirst = CompletableDeferred<Unit>()
+        val (vm, store) = conversation { request ->
+            when {
+                request.tools.isEmpty() -> AgentResponse("Fix Login Crash")
+                request.messages.last().text == "Fix the login crash" -> {
+                    finishFirst.await()
+                    AgentResponse("Here is the fix.")
+                }
+                else -> AgentResponse("You're welcome.")
+            }
+        }
+        val id = vm.uiState.value.currentSessionId!!
+        vm.send("Fix the login crash")
+        val first = requireNotNull(vm.runRegistry.active.value)
+        launch(Dispatchers.Unconfined, start = CoroutineStart.UNDISPATCHED) {
+            withTimeout(5_000) {
+                first.projection.first { it.turnStartedWallClock == null }
+            }
+            assertSame("the first turn still owns the slot during cleanup", first, vm.runRegistry.active.value)
+            vm.send("Thanks")
+        }
+        finishFirst.complete(Unit)
+
+        withTimeout(5_000) {
+            vm.uiState.first {
+                !it.streaming && it.currentSessionTitle == "Fix Login Crash" &&
+                    it.messages.lastOrNull()?.text == "You're welcome."
+            }
+        }
+        assertEquals(listOf("Fix the login crash", "Here is the fix.", "Thanks", "You're welcome."),
+            store.load().messages.map { it.text })
+        assertEquals(4, store.fullEventCount(id))
+    }
+
     private suspend fun conversation(stream: suspend (AgentRequest) -> AgentResponse): Pair<ChatViewModel, CodingSessions> {
         val store = CodingSessions(app)
         val client = object : ProviderClient {

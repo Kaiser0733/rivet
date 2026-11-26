@@ -18,7 +18,8 @@ internal class SessionRunRegistry(app: Application) {
     val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     val sessions = CodingSessions(app)
     val active = MutableStateFlow<SessionRun?>(null)
-    val activeRuns = MutableStateFlow<Map<String, SessionRun>>(emptyMap())
+    // Single-transcript persistence can run without a stored conversation ID.
+    val activeRuns = MutableStateFlow<Map<String?, SessionRun>>(emptyMap())
     val unseen = MutableStateFlow<Set<String>>(emptySet())
     val queued = MutableStateFlow<Set<String>>(emptySet())
     val history = MutableStateFlow<List<CodingSessionHeader>?>(null)
@@ -51,7 +52,7 @@ internal class SessionRunRegistry(app: Application) {
     }
 
     fun begin(owner: SessionRun) {
-        val id = owner.value.currentSessionId ?: return
+        val id = owner.value.currentSessionId
         lastRun = owner
         activeRuns.value = activeRuns.value + (id to owner)
         active.value = owner
@@ -59,7 +60,7 @@ internal class SessionRunRegistry(app: Application) {
 
     fun finish(owner: SessionRun) {
         val id = owner.value.currentSessionId
-        if (id != null) activeRuns.value = activeRuns.value - id
+        activeRuns.value = activeRuns.value - id
         owner.pauseAction = null
         owner.checkpoints = null
         clearQueued(id)
