@@ -122,6 +122,9 @@ class AgentToolExecutor(
     private val readProjectImage: (suspend (String) -> ProjectImageRead)? = null,
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
+        if (worker && call.name in FileScopeRegistry.SHELL_TOOLS) {
+            return invalid(call, FileScopeRegistry.WORKER_SHELL_SCOPE_UNAVAILABLE)
+        }
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
         if (reservedGoalMutation(call)) return invalid(call, "reserved_goal")
         if (reservedMemoryMutation(call)) return invalid(call, "reserved_memory")

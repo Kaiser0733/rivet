@@ -19,6 +19,49 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentLoopTest {
+    @Test fun resumedWriteIsReportedAsAlreadyDoneAndNeverOverwritesTheFileAgain() = runTest {
+        val file = kotlin.io.path.createTempFile().toFile()
+        try {
+            val write = AgentToolCall("first", "write_file",
+                """{"path":"marker","content":"first write","expected_sha256":"old"}""")
+            val messages = mutableListOf(AgentMessage.user("Write a marker"))
+            var requests = 0
+            var writes = 0
+            fun loop(call: AgentToolCall, interrupt: Boolean) = AgentLoop(
+                requestModel = { _, _, _ ->
+                    if (requests++ == 0) AgentResponse(toolCalls = listOf(call))
+                    else if (interrupt) throw kotlinx.coroutines.CancellationException("run interrupted")
+                    else AgentResponse(text = "Finished")
+                },
+                prepareTool = { next ->
+                    PreparedAgentTool(next, AgentApprovalRequest(next, "Write file", "marker")) {
+                        writes++
+                        file.writeText("first write")
+                        AgentToolResult(next.id, next.name, "{}")
+                    }
+                },
+                requestApproval = { true },
+            )
+            try {
+                loop(write, interrupt = true).run(messages.toList(), emptyList(), onMessage = { messages += it })
+            } catch (_: kotlinx.coroutines.CancellationException) { }
+            assertEquals("first write", file.readText())
+            file.writeText("independent edit")
+            requests = 0
+            val replay = write.copy(id = "retry",
+                arguments = """{"expected_sha256":"new","content":"first write","path":"marker"}""")
+            val result = loop(replay, interrupt = false).run(messages.toList(), emptyList())
+
+            assertEquals(AgentStopReason.Completed, result.stopReason)
+            assertEquals(1, writes)
+            assertEquals("independent edit", file.readText())
+            assertEquals("Already done · write_file",
+                result.messages.flatMap { it.toolResults }.single { it.callId == "retry" }.summary)
+        } finally {
+            file.delete()
+        }
+    }
+
     @Test fun downloadOverwriteKeepsExistingPathDestructiveApproval() = runTest {
         for (created in listOf(true, false)) {
             val download = AgentToolCall("download", "download_file", "{}")

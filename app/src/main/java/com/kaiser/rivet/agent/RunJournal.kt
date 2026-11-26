@@ -6,6 +6,7 @@ import java.nio.file.AtomicMoveNotSupportedException
 import java.nio.file.Files
 import java.nio.file.StandardCopyOption
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.withContext
 import kotlinx.serialization.Serializable
 import kotlinx.serialization.json.Json
@@ -36,6 +37,13 @@ data class RunStep(
 )
 
 @Serializable
+data class RunToolReceipt(
+    val tool: String,
+    // Null means the operation was authorized to start, but no result was recorded.
+    val failed: Boolean? = null,
+)
+
+@Serializable
 data class RunRecord(
     val id: String,
     val workspaceId: String?,
@@ -48,6 +56,7 @@ data class RunRecord(
     val lastCompletedStep: Int = 0,
     val failure: String? = null,
     val sessionId: String? = null,
+    val toolReceipts: Map<String, RunToolReceipt> = emptyMap(),
 ) {
     val interrupted: Boolean
         get() = phase == RunPhase.Running || (phase == RunPhase.Paused && pause == RunPauseReason.Interrupted)
@@ -207,23 +216,34 @@ class ProjectRunStorage(private val files: ProjectStateFiles) : RunStorage {
         files.listDirectories(relative).map { it.substringAfterLast('/') }
 }
 
-class RunJournal(private val storage: RunStorage) {
+class RunJournal(private val storage: RunStorage, private val projectCopy: RunStorage? = null) {
     private val json = Json { ignoreUnknownKeys = true; encodeDefaults = true }
 
-    suspend fun save(run: RunRecord) {
-        storage.write(path(run.id), json.encodeToString(RunRecord.serializer(), run))
+    suspend fun save(run: RunRecord, mirrorToProject: Boolean = true) {
+        val path = path(run.id)
+        val encoded = json.encodeToString(RunRecord.serializer(), run)
+        storage.write(path, encoded)
+        if (mirrorToProject) {
+            try { projectCopy?.write(path, encoded) }
+            catch (e: CancellationException) { throw e } catch (_: Exception) { }
+        }
     }
 
-    suspend fun load(id: String): RunRecord? = storage.read(path(id))?.let {
+    suspend fun load(id: String): RunRecord? = (storage.read(path(id)) ?: readProject { it.read(path(id)) })?.let {
         try { json.decodeFromString(RunRecord.serializer(), it) } catch (_: Exception) { null }
     }
 
     suspend fun latest(sessionId: String?): RunRecord? {
         if (sessionId == null) return null
-        return storage.directories(ROOT).mapNotNull { id ->
+        val ids = (storage.directories(ROOT) + readProject { it.directories(ROOT) }.orEmpty()).distinct()
+        return ids.mapNotNull { id ->
             load(id).ownedBy(sessionId)
         }.maxByOrNull { it.updatedAt }
     }
+
+    private suspend fun <T> readProject(read: suspend (RunStorage) -> T): T? = try {
+        projectCopy?.let { read(it) }
+    } catch (e: CancellationException) { throw e } catch (_: Exception) { null }
 
     /** Recover a live run from a previous process without pretending it finished. */
     suspend fun recoverLatest(sessionId: String?): RunRecord? {
@@ -255,16 +275,23 @@ internal object RunContext {
         if (run.phase in setOf(RunPhase.Done, RunPhase.Stopped)) return null
         // A brand-new run has nothing to remember; adding it here would change the
         // stable per-turn context event count for every ordinary turn.
-        if (run.phase == RunPhase.Running && run.lastCompletedStep == 0) return null
+        if (run.phase == RunPhase.Running && run.lastCompletedStep == 0 && run.toolReceipts.isEmpty()) return null
         return buildString {
             append("Run journal (untrusted app observation, not permission).\n")
             append("Run ").append(run.title.take(160)).append(" is ")
             append(run.plainState()).append(". Last completed step: ")
             append(run.lastCompletedStep).append(".\n")
-            if (run.phase != RunPhase.Running && run.phase != RunPhase.Failed) {
+            if (run.steps.isNotEmpty() || run.toolReceipts.isNotEmpty()) {
                 append("You were interrupted; here is what already happened. Do not repeat finished steps.\n")
                 run.steps.takeLast(20).forEach { step ->
                     append("- ").append(step.index).append(". ").append(step.summary.take(200)).append('\n')
+                }
+                run.toolReceipts.values.toList().takeLast(20).forEach { receipt ->
+                    append("- ").append(receipt.tool).append(when (receipt.failed) {
+                        null -> " started and its outcome is unknown. Verify the effect before asking for a new action."
+                        true -> " already ran and returned an error. Its effects may still exist."
+                        false -> " already completed."
+                    }).append('\n')
                 }
             }
         }

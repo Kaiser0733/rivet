@@ -61,6 +61,7 @@ internal object ChatSupervisorServices {
         turnSessionId: () -> String?,
         sessions: () -> CodingSessions?,
         recordSpend: (ProviderConfig, AgentUsage, Boolean) -> Unit,
+        beforeModelRequest: (ProviderConfig) -> Unit,
         readAutonomyMode: suspend () -> AutonomyMode,
         systemInstruction: (Boolean, String?, String?) -> String,
         activityFor: (String) -> String,
@@ -128,6 +129,7 @@ internal object ChatSupervisorServices {
                 )
             }
         },
+        beforeModelRequest = beforeModelRequest,
         recordSpend = { config, usage, estimated ->
             if (usage != null) recordSpend(config, usage, estimated)
         },

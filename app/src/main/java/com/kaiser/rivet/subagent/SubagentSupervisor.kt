@@ -11,12 +11,14 @@ import com.kaiser.rivet.provider.withModelId
 import java.util.Locale
 import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.atomic.AtomicReference
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.CoroutineStart
 import kotlinx.coroutines.Job
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.channels.Channel
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
@@ -25,6 +27,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
 import kotlinx.serialization.json.buildJsonObject
@@ -39,6 +42,7 @@ import kotlinx.serialization.json.put
 internal class SubagentSupervisor(
     private val services: RunServices,
     private val scope: CoroutineScope,
+    private val workerIdleMs: Long = 300_000L,
 ) {
     private val workers = ConcurrentHashMap<String, WorkerRecord>()
     private val _state = MutableStateFlow<List<WorkerRecord>>(emptyList())
@@ -77,6 +81,7 @@ internal class SubagentSupervisor(
             model = "default",
         )
 
+    @Synchronized
     private fun updateWorker(worker: WorkerRecord) {
         workers[worker.id] = worker
         _state.value = workers.values.sortedBy { it.createdAt }
@@ -309,6 +314,16 @@ internal class SubagentSupervisor(
             liveCloudWorkers.add(worker.id)
         }
         val job = scope.launch(start = CoroutineStart.LAZY) {
+            val workerJob = coroutineContext[Job]!!
+            val events = Channel<Unit>(Channel.CONFLATED)
+            val idleFailure = AtomicReference<String?>()
+            val watchdog = launch {
+                while (withTimeoutOrNull(workerIdleMs) { events.receive() } != null) {
+                    // Each event renews the deadline, including streamed text and reasoning.
+                }
+                idleFailure.set("This worker produced no activity for ${workerIdleMs / 1_000} seconds.")
+                workerJob.cancel()
+            }
             try {
                 val loaded = services.providerSource.loadFor(entry.config.id)
                 if (loaded is ProviderRuntimeResult.Failure) {
@@ -343,6 +358,8 @@ internal class SubagentSupervisor(
                     resuming = resuming,
                     pauseSignal = { currentPauseReason },
                     stoppedByUser = { userStoppedWorkers.contains(worker.id) },
+                    onActivity = { events.trySend(Unit) },
+                    idleFailure = idleFailure::get,
                     onUpdate = { updated ->
                         updateWorker(updated)
                     },
@@ -370,12 +387,22 @@ internal class SubagentSupervisor(
                 updateWorker(failedRecord)
                 services.workerStore.saveWorker(failedRecord)
             } finally {
+                watchdog.cancel()
                 withContext(NonCancellable) {
-                    liveCloudWorkers.remove(worker.id)
-                    services.checkpointGate.scopeRegistry.release(worker.id)
-                    // Keep this job registered while drainQueue promotes queued work so
-                    // joinAll cannot observe an empty active set between completion and promotion.
-                    drainQueue()
+                    try {
+                        val latest = workers[worker.id]
+                        if (latest?.state == RunPhase.Running) {
+                            val failed = latest.lostExecution(idleFailure.get()
+                                ?: "This worker stopped before returning a result.")
+                            updateWorker(failed)
+                            services.workerStore.saveWorker(failed)
+                        }
+                    } finally {
+                        liveCloudWorkers.remove(worker.id)
+                        services.checkpointGate.scopeRegistry.release(worker.id)
+                        // Keep the job registered while drainQueue promotes queued work.
+                        drainQueue()
+                    }
                 }
             }
         }
@@ -467,7 +494,13 @@ internal class SubagentSupervisor(
         } else {
             val known = mutableListOf<String>()
             for (id in workerIds) {
-                val resolved = workers[id] ?: services.workerStore.loadWorker(id)?.also { updateWorker(it) }
+                val resolved = workers[id] ?: services.workerStore.loadWorker(id)?.let { stored ->
+                    val record = if (stored.state == RunPhase.Running) {
+                        services.workerStore.recoverWorkersForRun(stored.runId, activeJobs.keys.toSet())
+                            .firstOrNull { it.id == id } ?: stored
+                    } else stored
+                    record.also(::updateWorker)
+                }
                 if (resolved == null) {
                     unknownIds += id
                 } else {
@@ -623,7 +656,7 @@ internal class SubagentSupervisor(
 
     suspend fun relaunchPaused(runId: String) {
         currentPauseReason = null
-        val storedWorkers = services.workerStore.workersForRun(runId)
+        val storedWorkers = services.workerStore.recoverWorkersForRun(runId, activeJobs.keys.toSet())
         val configs = services.providerSource.configs()
         val resolvedPool = SubagentPool.resolve(services.poolState(), configs)
         val toSave = mutableListOf<WorkerRecord>()

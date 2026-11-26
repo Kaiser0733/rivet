@@ -24,6 +24,30 @@ import org.junit.Assert.assertNull
 import org.junit.Test
 
 class AgentToolExecutorTest {
+    @Test fun workerShellCannotWriteOutsideItsScopeButCoordinatorCan() = runTest {
+        val root = kotlin.io.path.createTempDirectory("rivet-worker-scope").toFile()
+        try {
+            val outsideScope = root.resolve("outside.txt").apply { writeText("untouched") }
+            val command = AgentToolCall("shell", "run_command",
+                """{"command":"printf changed > outside.txt"}""")
+            val run: suspend (String, String, Long) -> RuntimeCommandResult = { text, _, _ ->
+                val shell = ProcessBuilder("/bin/sh", "-c", text).directory(root).start()
+                RuntimeCommandResult(shell.waitFor(), "", sync = "ok")
+            }
+            val worker = AgentToolExecutor(FakeWorkspace(), runCommand = run, worker = true)
+            val refused = worker.prepare(command).execute()
+            assertTrue(refused.error)
+            assertTrue(refused.content.contains("worker_shell_scope_unavailable"))
+            assertEquals("untouched", outsideScope.readText())
+
+            val coordinator = AgentToolExecutor(FakeWorkspace(), runCommand = run)
+            assertFalse(coordinator.prepare(command).execute().error)
+            assertEquals("changed", outsideScope.readText())
+        } finally {
+            root.deleteRecursively()
+        }
+    }
+
     @Test fun presentIsReadOnlyAndRejectsDirectoriesAndWorkerCalls() = kotlinx.coroutines.runBlocking {
         val files = FakeWorkspace()
         val call = AgentToolCall("present-1", "present",

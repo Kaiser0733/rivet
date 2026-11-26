@@ -481,8 +481,8 @@ fun RivetApp(versionName: String, chatViewModel: ChatViewModel,
 
         // Hosted after every sheet and dialog so a pending approval is the top-most
         // window: composed earlier it could sit underneath one and never be seen.
-        val approvalState by chatViewModel.uiState.collectAsState()
-        approvalState.pendingApproval?.let { approval ->
+        val pendingApproval by chatViewModel.pendingApproval.collectAsState()
+        pendingApproval?.let { approval ->
             ApprovalDialog(approval, chatViewModel::approve, chatViewModel::deny, chatViewModel::stopForApproval)
         }
     }

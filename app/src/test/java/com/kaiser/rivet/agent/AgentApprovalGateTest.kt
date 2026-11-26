@@ -4,6 +4,7 @@ import kotlinx.coroutines.async
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
+import kotlinx.coroutines.withTimeoutOrNull
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
@@ -11,6 +12,60 @@ import org.junit.Assert.assertTrue
 import org.junit.Test
 
 class AgentApprovalGateTest {
+    @Test
+    fun expiredApprovalReachesTheModelAndCannotExecute() = runTest {
+        val gate = AgentApprovalGate()
+        val call = AgentToolCall("shell", "run_command", """{"command":"write"}""")
+        var requests = 0
+        var executed = false
+        val waiting = async {
+            AgentLoop(
+                requestModel = { messages, _, _ ->
+                    if (requests++ == 0) AgentResponse(toolCalls = listOf(call)) else {
+                        assertTrue(messages.last().toolResults.single().content.contains("approval_expired"))
+                        AgentResponse(text = "The approval expired.")
+                    }
+                },
+                prepareTool = { PreparedAgentTool(it, AgentApprovalRequest(it, "Run command", "write")) {
+                    executed = true
+                    AgentToolResult(it.id, it.name, "{}")
+                } },
+                requestApproval = gate::await,
+            ).run(listOf(AgentMessage.user("Run the command")), emptyList())
+        }
+        yield()
+        val token = gate.pending.value!!.approvalToken
+
+        try {
+            val result = withTimeoutOrNull(121_000) { waiting.await() }
+            assertEquals(AgentStopReason.Completed, result?.stopReason)
+            assertEquals("Approval expired · run_command",
+                result?.messages?.flatMap { it.toolResults }?.single()?.summary)
+            assertNull(gate.pending.value)
+            assertFalse(gate.resolve(token, approved = true))
+            assertFalse(executed)
+        } finally {
+            waiting.cancelAndJoin()
+        }
+    }
+
+    @Test
+    fun approvalChecksLiveDetailsBeforeGranting() = runTest {
+        val gate = AgentApprovalGate()
+        val call = AgentToolCall("delete", "delete_path", "{}")
+        var sameTarget = true
+        val pending = async {
+            runCatching {
+                gate.await(AgentApprovalRequest(call, "Delete file", "A.kt", reviewAtGrant = { sameTarget }))
+            }
+        }
+        yield()
+        val token = gate.pending.value!!.approvalToken
+        sameTarget = false
+        assertFalse(gate.grant(token))
+        assertEquals("approval_changed", (pending.await().exceptionOrNull() as ApprovalUnavailable).code)
+    }
+
     @Test
     fun approvalCanBeResolvedOnlyOnce() = runTest {
         val call = AgentToolCall("call-1", "write_file", "{}")

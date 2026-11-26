@@ -52,10 +52,10 @@ class RunSpendLedger(
         }
     }
 
-    fun resetRun(monthTotals: Pair<Double, Long>) {
+    fun resetRun(monthTotals: Pair<Double, Long>, runTotals: Pair<Double, Long> = 0.0 to 0L) {
         synchronized(lock) {
-            runSpendUsd = 0.0
-            runSpendTokens = 0L
+            runSpendUsd = runTotals.first
+            runSpendTokens = runTotals.second
             runCapOverrideUsd = null
             monthCapOverrideUsd = null
             runTokenOverride = null
@@ -69,7 +69,7 @@ class RunSpendLedger(
     fun raiseCapForCurrentRun(): Boolean {
         synchronized(lock) {
             if (!budgetPaused) return false
-            val caps = effectiveCapsLocked()
+            val caps = effectiveCapsLocked().withUnpricedFallback()
             runCapOverrideUsd = maxOf(runSpendUsd * 1.5, (caps.perRunUsd ?: 0.0) * 2, 1.0)
             monthCapOverrideUsd = maxOf(monthSpendUsd * 1.5, (caps.monthlyUsd ?: 0.0) * 2, 1.0)
             runTokenOverride = maxOf(runSpendTokens * 2, (caps.perRunTokens ?: 0L) * 2, 1L)
@@ -118,10 +118,9 @@ class RunSpendLedger(
                 monthSpendUsd += cost
             }
             addMonthlySpend(cost ?: 0.0, tokens)
-            val decision = SpendGuard.evaluate(
-                runSpendUsd, monthSpendUsd, runSpendTokens, monthSpendTokens, effectiveCapsLocked(),
-            )
-            val label = if (cost == null) "unknown pricing" else SpendGuard.liveLabel(runSpendUsd)
+            val caps = effectiveCapsLocked().let { if (cost == null) it.withUnpricedFallback() else it }
+            val decision = SpendGuard.evaluate(runSpendUsd, monthSpendUsd, runSpendTokens, monthSpendTokens, caps)
+            val label = if (cost == null) unpricedLabel(caps) else SpendGuard.liveLabel(runSpendUsd)
             if (decision.paused && !budgetPaused) {
                 budgetPaused = true
                 firePause = true
@@ -138,6 +137,26 @@ class RunSpendLedger(
         if (firePause) onBudgetPause()
         return update
     }
+
+    fun pricingWarning(config: ProviderConfig): String? = synchronized(lock) {
+        if (isLocalEndpoint(config.baseUrl) ||
+            PricingTable.price(config.model) != null || readUserPricePerMillionUsd() != null) return null
+        unpricedLabel(effectiveCapsLocked().withUnpricedFallback())
+    }
+
+    fun capReached(config: ProviderConfig): Boolean = synchronized(lock) {
+        val local = isLocalEndpoint(config.baseUrl)
+        val caps = if (!local && PricingTable.price(config.model) == null && readUserPricePerMillionUsd() == null) {
+            effectiveCapsLocked().withUnpricedFallback()
+        } else effectiveCapsLocked()
+        val decision = SpendGuard.evaluate(runSpendUsd, monthSpendUsd, runSpendTokens, monthSpendTokens, caps, local)
+        if (decision.paused) budgetPaused = true
+        decision.paused || budgetPaused
+    }
+
+    private fun unpricedLabel(caps: SpendCaps): String =
+        if (caps.perRunTokens != null || caps.monthlyTokens != null) SpendGuard.UNPRICED_TOKENS
+        else SpendGuard.UNPRICED
 
     private fun effectiveCapsLocked(): SpendCaps {
         val caps = readCaps()

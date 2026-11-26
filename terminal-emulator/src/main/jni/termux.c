@@ -1,3 +1,4 @@
+#define _GNU_SOURCE
 /* Modified by Rivet from termux/termux-app; see THIRD_PARTY_NOTICES.md. */
 #include <dirent.h>
 #include <errno.h>
@@ -11,6 +12,7 @@
 #include <sys/wait.h>
 #include <termios.h>
 #include <unistd.h>
+#include "command_owner.h"
 
 #define TERMUX_UNUSED(x) x __attribute__((__unused__))
 #ifdef __APPLE__
@@ -30,6 +32,7 @@ static int create_subprocess(JNIEnv* env,
         char* const argv[],
         char** envp,
         int* pProcessId,
+        int* pMonitorId,
         jint rows,
         jint columns,
         jint cell_width,
@@ -65,19 +68,45 @@ static int create_subprocess(JNIEnv* env,
     struct winsize sz = { .ws_row = (unsigned short) rows, .ws_col = (unsigned short) columns, .ws_xpixel = (unsigned short) (columns * cell_width), .ws_ypixel = (unsigned short) (rows * cell_height)};
     ioctl(ptm, TIOCSWINSZ, &sz);
 
+    int ready[2];
+    if (pipe2(ready, O_CLOEXEC) < 0) {
+        close(ptm);
+        return throw_runtime_exception(env, "Cannot create terminal monitor pipe");
+    }
+    pid_t owner = getpid();
     pid_t pid = fork();
     if (pid < 0) {
-        close(ptm);
+        close(ptm); close(ready[0]); close(ready[1]);
         return throw_runtime_exception(env, "Fork failed");
     } else if (pid > 0) {
-        *pProcessId = (int) pid;
+        close(ready[1]);
+        pid_t shell;
+        ssize_t received;
+        do { received = read(ready[0], &shell, sizeof(shell)); } while (received < 0 && errno == EINTR);
+        close(ready[0]);
+        if (received != (ssize_t) sizeof(shell)) {
+            close(ptm);
+            waitpid(pid, NULL, 0);
+            return throw_runtime_exception(env, "Cannot start terminal monitor");
+        }
+        *pProcessId = (int) shell;
+        *pMonitorId = (int) pid;
         return ptm;
     } else {
-        // Clear signals which the Android java process may have blocked:
-        sigset_t signals_to_unblock;
-        sigfillset(&signals_to_unblock);
-        sigprocmask(SIG_UNBLOCK, &signals_to_unblock, 0);
-
+        close(ready[0]);
+        if (rivet_close_descriptors(ptm, ready[1]) < 0) _exit(126);
+        sigset_t events;
+        if (rivet_prepare_monitor(owner, &events) < 0) _exit(126);
+        pid_t shell = fork();
+        if (shell < 0) _exit(126);
+        if (shell > 0) {
+            ssize_t announced = write(ready[1], &shell, sizeof(shell));
+            close(ready[1]); close(ptm);
+            if (announced != (ssize_t) sizeof(shell)) kill(shell, SIGKILL);
+            rivet_monitor(owner, shell, &events);
+        }
+        close(ready[1]);
+        rivet_prepare_shell();
         close(ptm);
         if (setsid() < 0) _exit(1);
 
@@ -87,16 +116,7 @@ static int create_subprocess(JNIEnv* env,
         if (dup2(pts, 0) < 0 || dup2(pts, 1) < 0 || dup2(pts, 2) < 0) _exit(1);
         if (pts > 2) close(pts);
 
-        DIR* self_dir = opendir("/proc/self/fd");
-        if (self_dir != NULL) {
-            int self_dir_fd = dirfd(self_dir);
-            struct dirent* entry;
-            while ((entry = readdir(self_dir)) != NULL) {
-                int fd = atoi(entry->d_name);
-                if (fd > 2 && fd != self_dir_fd) close(fd);
-            }
-            closedir(self_dir);
-        }
+        if (rivet_close_descriptors(-1, -1) < 0) _exit(126);
 
         clearenv();
         if (envp) for (; *envp; ++envp) putenv(*envp);
@@ -131,7 +151,7 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_createSubprocess(
         jint cell_width,
         jint cell_height)
 {
-    if (!cmd || !cwd || !processIdArray || (*env)->GetArrayLength(env, processIdArray) != 1)
+    if (!cmd || !cwd || !processIdArray || (*env)->GetArrayLength(env, processIdArray) != 2)
         return throw_runtime_exception(env, "Invalid terminal subprocess arguments");
     jsize arg_count = args ? (*env)->GetArrayLength(env, args) : 0;
     jsize env_count = envVars ? (*env)->GetArrayLength(env, envVars) : 0;
@@ -142,6 +162,7 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_createSubprocess(
     char const* cwd_utf8 = NULL;
     int ptm = -1;
     int proc_id = 0;
+    int monitor_id = 0;
     if (!argv || !envp) goto cleanup;
     for (jsize i = 0; i < arg_count; ++i) {
         jstring value = (jstring) (*env)->GetObjectArrayElement(env, args, i);
@@ -167,14 +188,14 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_createSubprocess(
     if (!cwd_utf8) goto cleanup;
     cmd_utf8 = (*env)->GetStringUTFChars(env, cmd, NULL);
     if (!cmd_utf8) goto cleanup;
-    ptm = create_subprocess(env, cmd_utf8, cwd_utf8, argv, envp, &proc_id,
+    ptm = create_subprocess(env, cmd_utf8, cwd_utf8, argv, envp, &proc_id, &monitor_id,
                             rows, columns, cell_width, cell_height);
     if (ptm >= 0) {
-        jint pid_value = proc_id;
-        (*env)->SetIntArrayRegion(env, processIdArray, 0, 1, &pid_value);
+        jint ids[] = { proc_id, monitor_id };
+        (*env)->SetIntArrayRegion(env, processIdArray, 0, 2, ids);
         if ((*env)->ExceptionCheck(env)) {
-            kill(proc_id, SIGKILL);
-            waitpid(proc_id, NULL, 0);
+            kill(monitor_id, SIGUSR1);
+            waitpid(monitor_id, NULL, 0);
             close(ptm);
             ptm = -1;
         }
@@ -219,6 +240,11 @@ JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_waitFor(JNIEnv* TERMUX_UNUSE
         // Should never happen - waitpid(2) says "One of the first three macros will evaluate to a non-zero (true) value".
         return 0;
     }
+}
+
+JNIEXPORT void JNICALL Java_com_termux_terminal_JNI_stopSubprocess(
+    JNIEnv* TERMUX_UNUSED(env), jclass TERMUX_UNUSED(clazz), jint pid) {
+    if (pid > 0) kill(pid, SIGUSR1);
 }
 
 JNIEXPORT jint JNICALL Java_com_termux_terminal_JNI_ptyCanonical(JNIEnv* TERMUX_UNUSED(env), jclass TERMUX_UNUSED(clazz), jint fd)

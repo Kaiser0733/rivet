@@ -20,7 +20,7 @@ class PersistentProcessServiceTest {
         Robolectric.buildService(PersistentProcessService::class.java).create().get()
 
     @Test
-    fun nonSensitiveApprovalGetsApproveAndDenyActionsInTheRunNotification() {
+    fun pendingApprovalOpensTheReviewFromTheRunNotification() {
         val notification = service().notification(ForegroundServiceState(
             activeTurns = 1,
             runTitle = "Create a file",
@@ -30,7 +30,7 @@ class PersistentProcessServiceTest {
             approvalDangerous = false,
         ))
 
-        assertEquals(listOf("Stop", "Approve", "Deny"), actions(notification))
+        assertEquals(listOf("Stop", "Review approval"), actions(notification))
         assertFalse(actions(notification).contains("Pause"))
         assertTrue(notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()
             .contains("Approval needed"))
@@ -46,6 +46,7 @@ class PersistentProcessServiceTest {
             approvalDangerous = true,
         ))
 
+        assertTrue(actions(notification).contains("Review approval"))
         assertFalse(actions(notification).contains("Approve"))
         assertFalse(actions(notification).contains("Deny"))
         assertTrue(notification.extras.getCharSequence(Notification.EXTRA_TEXT).toString()

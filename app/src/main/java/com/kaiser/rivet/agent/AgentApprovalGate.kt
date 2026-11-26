@@ -1,15 +1,20 @@
 package com.kaiser.rivet.agent
 
 import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
+import kotlinx.coroutines.withTimeoutOrNull
+
+internal class ApprovalUnavailable(val code: String) : Exception(code)
 
 class AgentApprovalGate {
     private data class Pending(
         val owner: Any?,
         val request: AgentApprovalRequest,
         val decision: CompletableDeferred<Boolean>,
+        val expiresAt: Long,
     )
 
     private val lock = Any()
@@ -25,11 +30,12 @@ class AgentApprovalGate {
         synchronized(lock) {
             check(nextToken < Long.MAX_VALUE) { "Approval token space exhausted." }
             val identified = request.copy(approvalToken = ++nextToken)
-            queue.addLast(Pending(owner, identified, decision))
+            queue.addLast(Pending(owner, identified, decision, System.currentTimeMillis() + TIMEOUT_MS))
             mutablePending.value = queue.firstOrNull()?.request
         }
         return try {
-            decision.await()
+            withTimeoutOrNull(TIMEOUT_MS) { decision.await() }
+                ?: throw ApprovalUnavailable("approval_expired")
         } finally {
             synchronized(lock) {
                 if (queue.removeAll { it.decision === decision }) {
@@ -39,12 +45,30 @@ class AgentApprovalGate {
         }
     }
 
-    fun resolve(approvalToken: Long, approved: Boolean): Boolean {
+    suspend fun grant(approvalToken: Long): Boolean {
+        val current = synchronized(lock) {
+            queue.firstOrNull()?.takeIf { it.request.approvalToken == approvalToken }
+        } ?: return false
+        val currentDetails = try { current.request.reviewAtGrant?.invoke() != false }
+        catch (e: CancellationException) { throw e } catch (_: Exception) { false }
+        return resolve(approvalToken, approved = true,
+            rejection = if (currentDetails) null else "approval_changed")
+    }
+
+    fun resolve(approvalToken: Long, approved: Boolean): Boolean =
+        resolve(approvalToken, approved, rejection = null)
+
+    private fun resolve(approvalToken: Long, approved: Boolean, rejection: String?): Boolean {
         val head = synchronized(lock) {
             val current = queue.firstOrNull()?.takeIf { it.request.approvalToken == approvalToken } ?: return false
             queue.removeFirst()
             mutablePending.value = queue.firstOrNull()?.request
             current
+        }
+        val reason = if (System.currentTimeMillis() >= head.expiresAt) "approval_expired" else rejection
+        if (reason != null) {
+            head.decision.completeExceptionally(ApprovalUnavailable(reason))
+            return false
         }
         return head.decision.complete(approved)
     }
@@ -70,4 +94,6 @@ class AgentApprovalGate {
         }
         all.forEach { it.decision.cancel() }
     }
+
+    companion object { const val TIMEOUT_MS = 120_000L }
 }

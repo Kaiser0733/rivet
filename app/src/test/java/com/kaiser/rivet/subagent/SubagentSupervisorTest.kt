@@ -144,6 +144,43 @@ class SubagentSupervisorTest {
     )
 
     @Test
+    fun killedWorkerIsFailedAndDoesNotHoldTheResumedCoordinator() = runBlocking {
+        val cloud = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        store.saveWorker(WorkerRecord(
+            id = "killed-worker", runId = "test-run", parentSessionId = "test-session",
+            workspaceId = "test-workspace", job = "build", brief = "build it",
+            configId = cloud.id, model = cloud.model, state = RunPhase.Running,
+        ))
+        val supervisor = SubagentSupervisor(testServices(store, listOf(cloud)), CoroutineScope(SupervisorJob()))
+
+        supervisor.relaunchPaused("test-run")
+
+        val failed = supervisor.state.value.single()
+        assertEquals(RunPhase.Failed, failed.state)
+        assertTrue(failed.error.orEmpty().contains("before this worker returned a result"))
+        assertEquals(failed.state, store.loadWorker(failed.id)?.state)
+        val results = withTimeout(1_000) { supervisor.beforeCompletionHold("test-workspace") }
+        assertTrue(results.single().internalContext?.content.orEmpty().contains("worker_lost"))
+    }
+
+    @Test
+    fun silentWorkerEndsWithAReasonAndReleasesTheCoordinator() = runBlocking {
+        val cloud = cloudConfig("c1")
+        val store = WorkerSessionStore.inMemory()
+        val services = testServices(store, listOf(cloud),
+            clientFactory = { _, _ -> ControllableClient(gate = CompletableDeferred()) })
+        val supervisor = SubagentSupervisor(services, CoroutineScope(SupervisorJob()), workerIdleMs = 1_000)
+        val spawn = supervisor.validateSpawn("""{"job":"build","brief":"build it"}""") as SpawnValidation.Valid
+        supervisor.executeSpawn(spawn.brief, spawn.entry, spawn.skill)
+
+        val results = withTimeout(4_000) { supervisor.beforeCompletionHold("test-workspace") }
+
+        assertEquals(RunPhase.Failed, supervisor.state.value.single().state)
+        assertTrue(results.single().internalContext?.content.orEmpty().contains("no activity for 1 seconds"))
+    }
+
+    @Test
     fun validateSpawnCatchesAllInvalidForms() = runBlocking {
         val config = cloudConfig("c1")
         val store = WorkerSessionStore.inMemory()

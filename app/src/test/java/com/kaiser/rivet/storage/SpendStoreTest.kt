@@ -14,6 +14,14 @@ import org.robolectric.annotation.Config
 class SpendStoreTest {
     private val context = org.robolectric.RuntimeEnvironment.getApplication()
 
+    @Test fun freshCapsAreOnAndAnExplicitOptOutSurvives() {
+        val store = SpendStore(context)
+        val caps = store.caps()
+        assertEquals(SpendCaps(1.0, 15.0, 500_000, 5_000_000), caps)
+        store.save(SpendCaps(), null)
+        assertEquals(SpendCaps(), SpendStore(context).caps())
+    }
+
     @Test fun capsAndMonthlyLedgerPersist() {
         val store = SpendStore(context)
         store.save(SpendCaps(perRunUsd = 2.0, monthlyUsd = 20.0, perRunTokens = 100,

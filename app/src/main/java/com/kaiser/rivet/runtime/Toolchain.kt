@@ -9,7 +9,6 @@ import java.io.BufferedOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
-import java.util.concurrent.TimeUnit
 import java.util.zip.ZipInputStream
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
@@ -265,7 +264,7 @@ internal class Toolchain(context: Context) {
      * generated scripts stay off PATH and are never exec'd directly. The network is never
      * touched: the wheel is bundled.
      */
-    private fun preparePip() {
+    private suspend fun preparePip() {
         val home = pythonHome ?: return
         val executable = pythonExecutable?.takeIf { it.isFile } ?: return
         val temporary = pythonTmp ?: return
@@ -274,44 +273,13 @@ internal class Toolchain(context: Context) {
             val base = baseEnvironment(home, path(), temporary, home)
             val env = pythonEnvironment(base, home, temporary,
                 caBundle?.takeIf { it.isFile && it.length() > 0 })
-            val process = ProcessBuilder(executable.absolutePath, "-m", "ensurepip", "--default-pip")
-                .directory(temporary)
-                .redirectErrorStream(true)
-                .apply {
-                    environment().clear()
-                    env.forEach { entry ->
-                        val split = entry.indexOf('=')
-                        if (split > 0) environment()[entry.substring(0, split)] = entry.substring(split + 1)
-                    }
-                }
-                .start()
-            val outputTail = StringBuilder()
-            val reader = Thread({
-                try {
-                    process.inputStream.bufferedReader().use { input ->
-                        val buffer = CharArray(2048)
-                        while (true) {
-                            val count = input.read(buffer)
-                            if (count < 0) break
-                            outputTail.append(buffer, 0, count)
-                            if (outputTail.length > 4096) {
-                                outputTail.delete(0, outputTail.length - 4096)
-                            }
-                        }
-                    }
-                } catch (_: Exception) { }
-            }, "rivet-ensurepip-drain").apply {
-                isDaemon = true
-                start()
-            }
-            val finished = process.waitFor(60, TimeUnit.SECONDS)
-            if (!finished) process.destroyForcibly()
-            reader.join(1_000)
-            val output = outputTail.toString()
-            if (!finished) {
+            val executablePath = "'" + executable.absolutePath.replace("'", "'\\''") + "'"
+            val output = CommandProcess().run("exec $executablePath -m ensurepip --default-pip",
+                temporary.absolutePath, env.toTypedArray(), 60_000)
+            if (output.timedOut) {
                 Log.w("Toolchain", "ensurepip timed out; python has no pip scripts")
-            } else if (process.exitValue() != 0) {
-                Log.w("Toolchain", "ensurepip failed (${process.exitValue()}): ${output.takeLast(400)}")
+            } else if (output.exitCode != 0) {
+                Log.w("Toolchain", "ensurepip failed (${output.exitCode}): ${output.stderr.takeLast(400)}")
             }
         } catch (e: CancellationException) {
             throw e

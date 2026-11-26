@@ -20,7 +20,7 @@ final class JNI {
      * @param cwd       The current working directory for the executed command
      * @param args      An array of arguments to the command
      * @param envVars   An array of strings of the form "VAR=value" to be added to the environment of the process
-     * @param processId A one-element array to which the process ID of the started process will be written.
+     * @param processId A two-element array for the shell PID and its monitor PID.
      * @return the file descriptor resulting from opening /dev/ptmx master device. The sub process will have opened the
      * slave device counterpart (/dev/pts/$N) and have it as stdint, stdout and stderr.
      */
@@ -35,6 +35,8 @@ final class JNI {
      * @return if >= 0, the exit status of the process. If < 0, the signal causing the process to stop negated.
      */
     public static native int waitFor(int processId);
+
+    public static native void stopSubprocess(int monitorId);
 
     /** Send a signal to the foreground process group attached to the pty master. */
     public static native int signalForegroundProcessGroup(int fd, int signal);

@@ -47,16 +47,11 @@ import com.kaiser.rivet.provider.withLimitLearning
 import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.runtime.ToolchainAvailability
 import com.kaiser.rivet.workspace.WorkspacePath
-import java.util.Collections
 import java.util.Locale
 import java.util.UUID
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
-import kotlinx.serialization.json.Json
-import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.intOrNull
-import kotlinx.serialization.json.jsonObject
 
 /**
  * Shared run-level dependencies passed from `ChatViewModel` (or tests) into
@@ -108,6 +103,7 @@ internal class RunServices(
         { _, _, _, _ -> },
     val recordSpend: suspend (config: ProviderConfig, usage: AgentUsage?, estimated: Boolean) -> Unit =
         { _, _, _ -> },
+    val beforeModelRequest: (ProviderConfig) -> Unit = {},
 )
 
 /**
@@ -117,8 +113,6 @@ internal class RunServices(
 internal class WorkerRunner(
     private val services: RunServices,
 ) {
-    private val json = Json { ignoreUnknownKeys = true }
-
     suspend fun run(
         initialWorker: WorkerRecord,
         brief: WorkerBrief,
@@ -128,10 +122,11 @@ internal class WorkerRunner(
         resuming: Boolean,
         pauseSignal: () -> RunPauseReason?,
         stoppedByUser: () -> Boolean,
+        onActivity: () -> Unit = {},
+        idleFailure: () -> String? = { null },
         onUpdate: suspend (WorkerRecord) -> Unit,
     ): WorkerRecord {
         var currentWorker = initialWorker
-        val observedCommands = Collections.synchronizedList(mutableListOf<ObservedCommand>())
         val loadedSkills = setOfNotNull(skill?.name ?: initialWorker.skill)
         val executor = services.createExecutor(loadedSkills)
         val tools = buildList {
@@ -141,7 +136,8 @@ internal class WorkerRunner(
             })
             addAll(services.extraTools)
         }.filterNot {
-            it.name == SubagentTools.SPAWN_TOOL || it.name == SubagentTools.AWAIT_TOOL
+            it.name == SubagentTools.SPAWN_TOOL || it.name == SubagentTools.AWAIT_TOOL ||
+                it.name in FileScopeRegistry.SHELL_TOOLS
         }
 
         val client = services.clientFactory(config, apiKey)
@@ -232,6 +228,7 @@ internal class WorkerRunner(
         }
 
         suspend fun publishUpdate(transform: (WorkerRecord) -> WorkerRecord) {
+            onActivity()
             currentWorker = transform(currentWorker)
             services.workerStore.saveWorker(currentWorker)
             onUpdate(currentWorker)
@@ -251,11 +248,12 @@ internal class WorkerRunner(
             val loop = AgentLoop(
                 secretValues = services.secretValues(),
                 requestModel = { messages, _, onText ->
+                    services.beforeModelRequest(config)
                     val request = context.requestFor(messages)
                     val response = client.streamAgent(
                         request = request,
-                        onReasoning = {},
-                        onDelta = onText,
+                        onReasoning = { onActivity() },
+                        onDelta = { delta -> onActivity(); onText(delta) },
                     )
                     try {
                         services.workerStore.recordUsage(
@@ -308,6 +306,13 @@ internal class WorkerRunner(
                     response
                 },
                 prepareTool = { call ->
+                    if (call.name in FileScopeRegistry.SHELL_TOOLS) {
+                        return@AgentLoop PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
+                            val code = FileScopeRegistry.WORKER_SHELL_SCOPE_UNAVAILABLE
+                            AgentToolResult(call.id, call.name, AgentToolError.content(code),
+                                error = true, summary = "Worker shell write scope unavailable")
+                        }
+                    }
                     // Structural depth-1 enforcement: workers can never call spawn_subagent or await_subagents.
                     if (call.name == SubagentTools.SPAWN_TOOL || call.name == SubagentTools.AWAIT_TOOL ||
                         call.name in AgentToolExecutor.phoneOnlyNames) {
@@ -362,17 +367,9 @@ internal class WorkerRunner(
                             }
                         }
 
-                        val wrappedPrepared = if (call.name == "run_command") {
-                            wrapCommandExecution(call, basePrepared, observedCommands) { activityLine ->
-                                publishUpdate { it.copy(activity = activityLine, updatedAt = System.currentTimeMillis()) }
-                            }
-                        } else {
-                            basePrepared
-                        }
-
                         val project = services.projectInstructions
                         if (project == null) {
-                            wrappedPrepared
+                            basePrepared
                         } else {
                             val additions = project.targets(call)
                             additions.forEach { (path, directory) ->
@@ -402,7 +399,7 @@ internal class WorkerRunner(
                                     )
                                 }
                             } else {
-                                wrappedPrepared
+                                basePrepared
                             }
                         }
                     }
@@ -518,13 +515,17 @@ internal class WorkerRunner(
                 runResult.messages,
                 interrupted = runResult.stopReason != AgentStopReason.Completed,
             )
-            return finalizeFromResult(currentWorker, runResult, observedCommands, onUpdate)
+            return finalizeFromResult(currentWorker, runResult, onUpdate)
         } catch (e: CancellationException) {
             return withContext(NonCancellable) {
+                val failure = idleFailure() ?: "This worker stopped before returning a result."
+                    .takeIf { pauseSignal() == null && !stoppedByUser() }
+                if (failure != null) return@withContext finalizeFailed(
+                    currentWorker, durable, "worker_lost", failure, onUpdate,
+                )
                 finalizeCancelled(
                     worker = currentWorker,
                     messages = durable,
-                    observedCommands = observedCommands,
                     pauseReason = pauseSignal(),
                     stoppedByUser = stoppedByUser(),
                     onUpdate = onUpdate,
@@ -539,7 +540,6 @@ internal class WorkerRunner(
                 finalizeFailed(
                     worker = currentWorker,
                     messages = durable,
-                    observedCommands = observedCommands,
                     stopReason = "provider_error",
                     error = errorMsg,
                     onUpdate = onUpdate,
@@ -551,56 +551,9 @@ internal class WorkerRunner(
         }
     }
 
-    private fun wrapCommandExecution(
-        call: AgentToolCall,
-        base: PreparedAgentTool,
-        observedCommands: MutableList<ObservedCommand>,
-        onActivity: suspend (String) -> Unit,
-    ): PreparedAgentTool {
-        val commandText = try {
-            (json.parseToJsonElement(call.arguments).jsonObject["command"] as? JsonPrimitive)
-                ?.takeIf { it.isString }?.content.orEmpty()
-        } catch (_: Exception) {
-            ""
-        }
-        return PreparedAgentTool(
-            call = base.call,
-            approval = base.approval,
-            resultContentLimitBytes = base.resultContentLimitBytes,
-            effect = base.effect,
-            basicAutonomyRisk = base.basicAutonomyRisk,
-            modelRequestsApproval = base.modelRequestsApproval,
-            blockedReason = base.blockedReason,
-            skillScript = base.skillScript,
-            skillScripts = base.skillScripts,
-            execute = {
-                if (services.isProjectLockBusy()) {
-                    onActivity("waiting for the project (another command is running)")
-                }
-                onActivity(services.activityFor(call.name))
-                try {
-                    val result = base.execute()
-                    val parsed = runCatching { json.parseToJsonElement(result.content).jsonObject }.getOrNull()
-                    val exitCode = (parsed?.get("exit_code") as? JsonPrimitive)?.intOrNull
-                    val sync = (parsed?.get("sync") as? JsonPrimitive)?.takeIf { it.isString }?.content
-                    if (commandText.isNotBlank()) {
-                        observedCommands += ObservedCommand(commandText, exitCode, sync)
-                    }
-                    result
-                } catch (e: CancellationException) {
-                    if (commandText.isNotBlank()) {
-                        observedCommands += ObservedCommand(commandText, null, "interrupted")
-                    }
-                    throw e
-                }
-            },
-        )
-    }
-
     private suspend fun finalizeFromResult(
         worker: WorkerRecord,
         result: AgentRunResult,
-        observedCommands: List<ObservedCommand>,
         onUpdate: suspend (WorkerRecord) -> Unit,
     ): WorkerRecord {
         val finalText = result.messages.lastOrNull {
@@ -624,7 +577,6 @@ internal class WorkerRunner(
             error = errorLine,
             files = attribution.files,
             outOfScopeChanges = attribution.outOfScopeChanges,
-            commands = observedCommands.toList(),
             diff = attribution.diff,
         )
         val summaryLine = if (completed) {
@@ -649,7 +601,6 @@ internal class WorkerRunner(
     private suspend fun finalizeCancelled(
         worker: WorkerRecord,
         messages: List<AgentMessage>,
-        observedCommands: List<ObservedCommand>,
         pauseReason: RunPauseReason?,
         stoppedByUser: Boolean,
         onUpdate: suspend (WorkerRecord) -> Unit,
@@ -679,7 +630,6 @@ internal class WorkerRunner(
             error = null,
             files = attribution.files,
             outOfScopeChanges = attribution.outOfScopeChanges,
-            commands = observedCommands.toList(),
             diff = attribution.diff,
         )
         val summaryLine = claim.summary.ifBlank {
@@ -702,7 +652,6 @@ internal class WorkerRunner(
     private suspend fun finalizeFailed(
         worker: WorkerRecord,
         messages: List<AgentMessage>,
-        observedCommands: List<ObservedCommand>,
         stopReason: String,
         error: String,
         onUpdate: suspend (WorkerRecord) -> Unit,
@@ -721,7 +670,6 @@ internal class WorkerRunner(
             error = error,
             files = attribution.files,
             outOfScopeChanges = attribution.outOfScopeChanges,
-            commands = observedCommands.toList(),
             diff = attribution.diff,
         )
         val updated = worker.withWorkerRun(failedRun).copy(

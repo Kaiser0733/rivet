@@ -128,7 +128,7 @@ fun SettingsScreen(
     hasProject: Boolean = false,
     onUpdateMemory: (String) -> Unit = {},
     onForgetMemoryLine: (Int) -> Unit = {},
-    spendCaps: SpendCaps = SpendCaps(),
+    spendCaps: SpendCaps = SpendCaps.DEFAULT,
     userPricePerMillionUsd: Double? = null,
     onSaveSpend: (SpendCaps, Double?) -> Unit = { _, _ -> },
     onOpenModels: () -> Unit = {},
@@ -869,7 +869,7 @@ private fun AgentDetail(
 
         Spacer(Modifier.height(22.dp))
         UtilityFold(R.drawable.ic_memory, "Spend guard") {
-            Text("Caps pause a run; they never stop it. Blank means no cap. Local models skip this.",
+            Text("Limits pause a run. Local models use token limits. If a model is unpriced, an enabled USD limit uses the default token limit when its token field is blank.",
                 style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onSurfaceVariant)
             Spacer(Modifier.height(8.dp))
@@ -888,14 +888,19 @@ private fun AgentDetail(
             OutlinedTextField(value = price, onValueChange = { price = it },
                 label = { Text("Unknown model price / million tokens (USD)") }, singleLine = true,
                 modifier = Modifier.fillMaxWidth().padding(top = 6.dp))
-            TextButton(onClick = {
-                onSaveSpend(SpendCaps(
-                    perRunUsd = perRunUsd.toDoubleOrNull()?.takeIf { it > 0 },
-                    monthlyUsd = monthlyUsd.toDoubleOrNull()?.takeIf { it > 0 },
-                    perRunTokens = perRunTokens.toLongOrNull()?.takeIf { it > 0 },
-                    monthlyTokens = monthlyTokens.toLongOrNull()?.takeIf { it > 0 },
-                ), price.toDoubleOrNull()?.takeIf { it > 0 })
-            }) { Text("Save spend limits") }
+            val validPrices = listOf(perRunUsd, monthlyUsd, price).all { value ->
+                value.isBlank() || value.toDoubleOrNull()?.let { it.isFinite() && it > 0 } == true
+            }
+            val validTokens = listOf(perRunTokens, monthlyTokens).all { value ->
+                value.isBlank() || value.toLongOrNull()?.let { it > 0 } == true
+            }
+            TextButton(
+                enabled = validPrices && validTokens,
+                onClick = {
+                    onSaveSpend(SpendCaps(perRunUsd.toDoubleOrNull(), monthlyUsd.toDoubleOrNull(),
+                        perRunTokens.toLongOrNull(), monthlyTokens.toLongOrNull()), price.toDoubleOrNull())
+                },
+            ) { Text("Save spend limits") }
         }
     }
 }

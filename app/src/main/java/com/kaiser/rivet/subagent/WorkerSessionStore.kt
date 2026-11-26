@@ -72,6 +72,19 @@ data class WorkerRecord(
     val awaitingApproval: Boolean
         get() = waitingReason == WAITING_FOR_APPROVAL
 
+    fun lostExecution(reason: String): WorkerRecord = withWorkerRun(
+        toWorkerRun().finish(RunPhase.Failed, failure = reason),
+    ).copy(
+        activity = null,
+        waitingReason = null,
+        summary = reason,
+        error = reason,
+        envelope = ResultEnvelope.build(id, RunPhase.Failed, WorkerClaim(reason),
+            stopReason = "worker_lost", error = reason),
+        interrupted = true,
+        updatedAt = System.currentTimeMillis(),
+    )
+
     fun toWorkerRun(): WorkerRun = WorkerRun(
         record = RunRecord(
             id = id,
@@ -144,6 +157,20 @@ internal class WorkerSessionStore internal constructor(
             }
         }
     }
+
+    suspend fun recoverWorkersForRun(runId: String, activeIds: Set<String> = emptySet()): List<WorkerRecord> =
+        withContext(Dispatchers.IO) {
+            lock.withLock {
+                backend.listWorkersForRun(runId).map { worker ->
+                    val recovered = if (worker.state == RunPhase.Running && worker.id !in activeIds) {
+                        worker.lostExecution("Rivet closed before this worker returned a result.")
+                            .also(backend::upsertWorker)
+                    } else worker
+                    summaryBytesByWorker[recovered.id] = recovered.summary.toByteArray(Charsets.UTF_8).size
+                    recovered
+                }
+            }
+        }
 
     suspend fun workersForSession(sessionId: String): List<WorkerRecord> = withContext(Dispatchers.IO) {
         lock.withLock {
