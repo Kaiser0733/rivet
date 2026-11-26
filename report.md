@@ -1,215 +1,183 @@
-# Model limits: automatic detection and learning
+# Rivet flaw sweep, remainder
 
-Branch `model-limits-detect`, based on `origin/batch/surface-fix` at
-`0729dabcfb01b052c77ec6d5af3e0a82aab8a9f3`. Implementation HEAD before this
-report: `3fcc4c98`. Nothing was merged, tagged, released, or version-bumped.
+Branch `flaw-sweep-2` started from `origin/batch/surface-fix` at
+`eb6f4f7840b0ecc37c2ef7266e83a0a13583db46`. The first-sweep merge omitted
+`flaw-sweep-inventory.md` from the branch tree; the untracked
+`flaw-sweep-inventory.md` in this worktree is the 55-row inventory from
+`4a71b97b`.
 
-The acceptance target was that a user can add a normal provider and model and
-Rivet fills both the context window and the maximum output itself. The resolver
-now does that for the known providers in the bundled table, for providers that
-report model metadata, and for limits learned from a provider error. The safe
-fallback is 32K, not the old 256K guess.
+The inherited branch did not compile. `7a3d5aca` added a `fingerprint` local
+to a `WorkspaceMirror` block that already had one. `c2b5a077` renames the
+publish-side local. The other changes after the inherited implementation
+commits are the test repairs and the one production regression fix listed
+below. `:app:compileDebugKotlin` fails on `05e86973` and succeeds on
+`c2b5a077`.
 
-## 1. Resolution order and the default
+The dsh references below name packages and shipped source files under
+`~/workspace/dsh-cli/node_modules/@deepseek-ai/`. Existing rows cite the
+commit that established the behavior on the starting branch. New rows name
+the implementation commit and its immediate parent in the verification
+section.
 
-Commits `53c1be28`, `6e8fa6f1`, `3fcc4c98`.
+| # | Verdict | Behavior and source evidence | Commit | JiTTest or baseline evidence |
+|---|---|---|---|---|
+| 1 | COPY | Existing `AgentLoop` advises at 3/5/8 repeated calls and continues after deterministic failures. Matches `dsh-repeat-tool-reminder/src/index.ts:2223–2260`. | `c902cd94` | First-sweep `repeatedIdenticalFailureGetsAdviceAndTurnContinues`. |
+| 2 | COPY | Existing loop uses the same advisory path for repeated reads. The unchanged-read turn stop is absent. | `c902cd94` | Repeat advice path and removed unchanged-read counter. |
+| 3 | DELETE | Existing loop has no iteration or tool-count ceiling. | `c902cd94` | Base code has no `RunawayGuard` or runaway stop reason. |
+| 4 | COPY | Existing tool failures stay correlated results. dsh commits materialized errors in `dsh-tools/src/pipeline.ts:204–225,494–508`. | `c902cd94` | First-sweep `runtimeFailureResultNoLongerEndsTheTurn`. |
+| 5 | COPY | Existing refusal policy remains. Fixed one remaining batch defect where a refusal appended placeholder results for siblings that still ran. Each sibling now gets its own result. dsh handles each approval outcome in `dsh-tools/src/pipeline.ts:431–479`. | `b533c2b2` | `policyRefusalDoesNotConsumeTheNextToolResult`. |
+| 6 | COPY | Existing Undo failure records a broken checkpoint and lets the mutation run. Session durability remains a separate prerequisite, as in `dsh-session-checkpoint-policy/src/index.ts:64–82`. | `7b044d4b` | First-sweep `checkpointFailureRunsApprovedMutationWithoutUndo`. |
+| 7 | PROTECTS | Broken Undo state stays recorded. Undo verification still refuses to overwrite external changes. | `7b044d4b` | Baseline `RunCheckpointGate` and restore checks. |
+| 8 | COPY | Empty model steps use the same cancellable retry policy as transient failures. The requests replay the same history and tool receipts. See `dsh-llm/src/retry-policy.ts` and `dsh-llm-retry/src/index.ts:212–237`. | `b533c2b2` | `PostToolCompletionTest`, including six empty attempts and a recovery after a tool receipt. |
+| 9 | COPY | Remaining failures finish the run and release the composer. Context-stop results now offer Retry too. Provider preflight failures can continue to the request. dsh appends `turn/end` in `dsh-agent-loop/src/agent.ts:418–428`. | `9ba3f1fb` | `automaticCompactionFailureLeavesTheRequestUsable`, plus cloud preflight integration. |
+| 10 | COPY | The coordinator waits for worker results after the model loop goes idle. Completion can resume the model with worker events. Teardown cancels workers before a bounded join. See `dsh-subagent/src/manager.ts:251–282` and `dsh-acp/src/session.ts:482–506`. | `8634ccfa` | `idleWaitDeliversWorkerResultsOnce`, `silentWorkerEndsWithAReasonAndReleasesTheCoordinator`. |
+| 11 | COPY | Await uses elapsed time while a worker is waiting for a person. Timeout returns the existing pending-worker result. See `dsh-tool-subagent-control/src/wait-agent.ts:67–119`. | `8634ccfa` | `approvalWaitCountsAgainstTheAwaitBudget`. |
+| 12 | COPY | F3 already added 120-second expiry, caller cancellation, queue removal and exact-token grant validation. `AgentLoop` turns expiry and unavailable approval into tool results. See `dsh-user-approval/src/index.ts:242–261,293–333`. | `13f79473` | `AgentApprovalGateTest` expiry and FIFO coverage. |
+| 13 | COPY | The UI already disabled submission during recovery. A rejected send now reports why and releases the pending composer submission while retaining the draft. dsh normally queues into `dsh-agent-loop/src/agent.ts:171–178` and `src/inbox.ts:108–112`. | `96a74ba8` | `stopWhilePreparingKeepsTheAcceptedMessageAndStartsNoSecondTurn` checks the refused-send notice. |
+| 14 | COPY | Blank or duplicate IDs and over-nested arguments get individual errors. IDs remain unique and a valid sibling still runs. See `dsh-tools/src/pipeline.ts:154–182`. | `b533c2b2` | `malformedCallsGetCorrelatedErrorsWhileTheValidSiblingRuns`. |
+| 15 | PROTECTS | Exact workspace identity still cancels the current work before it can dispatch against another project. | `8bbc8e15` | Existing workspace identity checks and cancellation. |
+| 16 | DELETE | Startup project restore no longer installs a persisted pending-changes gate. | `7b044d4b` | Startup no longer queries the removed sync blocker. |
+| 17 | COPY | Pending paths are reported in command sync data. `commandBlocker` and `backgroundBlocker` check runtime availability and device admission. dsh starts in the real cwd in `dsh-bash-local/src/index.ts:122–133`, with file-local version checks in `dsh-fs-local/src/index.ts:345–359`. | `7b044d4b` | First-sweep `runtimeDiscardChecksExactSelectionAndUnblocksCommandsAndSafTools`. |
+| 18 | DELETE | Foreground commands run in the available worktree after attempting sync. A dirty mirror does not refuse the command. | `7b044d4b` | First-sweep pending-change test and foreground call path. |
+| 19 | DELETE | Exit outcome and sync warning travel in the same result. `AgentLoop` has no sync-conflict stop classification. | `7b044d4b`, `c902cd94` | `runtimeFailureResultNoLongerEndsTheTurn` and `CommandToolTest`. |
+| 20 | DELETE | SAF tools operate directly on the selected documents. The workspace-wide `requireSafCurrent` prerequisite is absent. | `7b044d4b` | First-sweep pending-change test and direct SAF tool paths. |
+| 21 | DELETE | A pending path leaves the last complete worktree available to the terminal. | `7b044d4b` | `openTerminal` dirty-worktree fallback at base. |
+| 22 | DELETE | Background processes start in the available worktree after attempted sync. | `7b044d4b` | `spawnProcess` no longer rejects pending or failed mirror sync. |
+| 23 | COPY | `WorkspaceMirror` publishes a new file by filling and verifying a random SAF sibling, then renaming into an unoccupied destination. Failed publication cleans up the known sibling. See `dsh-atomic-write/src/index.ts:80–92`. Providers without rename retain the legacy receipt path. The first version of this code did not compile; `c2b5a077` names the publish fingerprint apart from the post-create empty-file check. | `7a3d5aca`, `c2b5a077` | `refusedPublishLeavesNoEmptyDestinationOrReceiptAndCanRetry` and legacy receipt tests; the compile result above is the parent-failure proof for `c2b5a077`. |
+| 24 | PROTECTS | `WorkspaceMirror.recover` still preserves dirty `previous/` and unverified discard state. | `e5ed3a73` | Existing recovery test explicitly preserves the dirty previous tree. |
+| 25 | COPY | Foreground process execution releases `RuntimeController.operations`. Shells can attach to the same worktree while the command runs. Restore and discard still wait for a live worktree writer. dsh controls execution and ordered commits in `dsh-tools/src/batch.ts:186–196`. | `9e9e70d3` | `foregroundTimeoutPromotesTheSameProcessWithoutHoldingTerminalAdmission`. |
+| 26 | COPY | Device slot refusal remains tool-local. dsh reports job start failures as results in `dsh-jobs/src/index.ts:73–79,106–114`. | `c902cd94` | Base process registry and tool-local failure handling. |
+| 27 | PROTECTS | Thermal admission, low-battery handling and memory enforcement remain. The first sweep removed their turn-stop amplification. | `c902cd94` | `TerminalGovernor` device policy and tool-local result path. |
+| 28 | PROTECTS | Background processes still need Android foreground-service admission. | `c902cd94` | Existing `foreground_service_unavailable` result path. |
+| 29 | COPY | Cancellation while the current terminal starts settles the pane with a launch error. Stale launches still release their handles. The async start had also overwritten a checkpoint-restore notice; `fc30c329` carries that notice through the start. See `dsh-terminal/src/index.ts:224–227`. | `18695d23`, `fc30c329` | `cancelledLaunchLeavesAnExplicitTerminalError`, `restoreNoticeMarksAReplacedSessionAndClearsOnWrite`. |
+| 30 | COPY | A running command can outlast its foreground wait under the same managed process ID. Existing device admission and foreground-service requirements still apply. See `dsh-tool-bash/src/index.ts:345–380`. | `9e9e70d3` | `foregroundTimeoutPromotesTheSameProcessWithoutHoldingTerminalAdmission`. |
+| 31 | PROTECTS | Descendant counting, PSS watchdog and process-tree termination remain in place. | `59601da4` and existing governor commits | Existing command tree checks. |
+| 32 | COPY | Command streams spill to app-cache files with workspace-owned handles. Existing line paging still works, and byte paging reaches the full stdout and stderr. See `dsh-tool-bash/src/index.ts:94–99,152–169` and `dsh-bash-local/src/index.ts:342–363`. The inherited test file dropped the `assertNotNull` import its own clear test uses; `61d6167d` restores it. | `05e86973`, `61d6167d` | `earlierSpillsRemainReadableAfterMoreThanEightCommandsAndReopening`, `bytePagingCanReadBeyondTheLinePreviewWithoutSplittingUtf8`. |
+| 33 | COPY | Terminal close and background exit preserve the sync outcome. Terminal UI names a pending path and `process_output` carries sync fields. Android SAF still requires a mirror for shell access. See `dsh-fs-local/src/index.ts:225–235,269–273`. | `18695d23` | `closingReportsThePathThatCouldNotSync`. |
+| 34 | PROTECTS | Discard still requires explicit user action and an exact project identity check. | `7965fa5e`, `7b044d4b` | Existing discard and workspace ownership tests. |
+| 35 | DELETE | Full toolchain storage no longer latches preparation as done. Terminal and command results report the condition while the shell remains available. | `1bf08c08` | `fullStorageIsReportedAndPreparationCanRetry`. |
+| 36 | DELETE / COPY | The tool deadline no longer discards the reply channel. It returns a pending operation ID that the same chat can poll without resending the command. Termux owns the external process. dsh promotes jobs in `dsh-tool-bash/src/index.ts:361–374`. | `e71dea82` | `lateCallbackCanBeReadWithoutDispatchingTheCommandAgain`. |
+| 37 | COPY | Coordinator and worker SQLite event stores keep correlated results above 512 KiB. The threshold triggers compaction. The legacy one-value store retains its serialization bound. See `dsh-compaction-basic/src/region.ts:410–426,500–508`. | `73866fe3` | `longSqliteProjectionKeepsTheCorrelatedReceiptOnRecovery`, `compactsAndAcceptsAnActiveProjectionOver512KiB`. |
+| 38 | COPY | Cloud requests continue after failed pressure compaction. A provider overflow still gets one retry when the request got smaller. The two-summarizer lifetime counter is gone. Native local capacity checks remain. See `dsh-compaction-basic/src/index.ts:157–175,213–257` and `src/config.ts:106`. | `9ba3f1fb` | `summaryProviderFailureStillSendsTheMainRequest`, `failedSummaryKeepsFullOriginalHistory`, `cloudProviderGetsTheRequestEvenWhenTheLocalEstimateIsOver`. |
+| 39 | DELETE | F3 already uses a durable budget pause with Resume and a one-run cap raise. Unpriced routes use token evidence. Caps are user policy and still apply. | `beecf51d` and existing budget pause code | `RunSpendLedger` and `ChatViewModel` budget pause and resume paths. |
+| 40 | COPY | Transient model failures retry with cancellable backoff and valid short HTTP Retry-After delays. See `dsh-llm/src/retry-policy.ts`, `dsh-llm-retry/src/index.ts:212–237` and `dsh-llm-deepseek/src/transport.ts:37–39`. | `b533c2b2` | `transientFailuresRetryBeforeToolDispatchAndHonorRetryAfter`. |
+| 41 | COPY | The idle/progress watchdog uses the same timeout retry policy. The 16 MB memory bound still applies. See `dsh-llm-deepseek/src/adapter.ts:68–80`. | `b533c2b2` | The transient retry test includes an SSE progress timeout. |
+| 42 | COPY / PROTECTS | Excess capacity and overlapping work return `activation_limit_reached`. The existing phone limits and protected 20-spawn bill boundary stay in effect. See `dsh-subagent/src/activation.ts:23–33`. | `8634ccfa` | `executeSpawnRefusesCapacityUntilTheCallerRetries`, `overlappingWriteScopesAreRefusedEvenWithFreeSlot`. |
+| 43 | COPY | Pausing stops admitted work. Refused new work produces no backlog. Recovery can still resume already-admitted workers, including legacy queued records. See `dsh-subagent/src/manager.ts:194–233`. | `8634ccfa` | `pauseKeepsAdmittedWorkersWithoutAddingABacklog`. |
+| 44 | PROTECTS | Read-only restrictions and worker file-scope enforcement stay in place. | `f9fac68a`, `64ac43f9` | Existing worker write-policy and shell-scope tests. |
+| 45 | COPY | Compacted checkpoints mark omitted history in the stored checkpoint and its model text. The recent tail and canonical history remain available according to the existing retention policy. See `dsh-compaction-basic/src/region.ts:410–426,506` and `dsh-compaction/src/index.ts:92–106`. | `9ba3f1fb` | `trimmingKeepsTheNewestStateAndRecordsTheOmissionAcrossReload`. |
+| 46 | COPY | Run recovery searches the owning chat's records using the transcript tail and persists a prompt digest for new runs. Starting a new turn explicitly settles a superseded pause. App-private journal save failures generate a recovery notice. dsh's event format and flush boundary are in `dsh-session/src/types.ts:206–227` and `dsh-session-checkpoint-policy/src/index.ts:64–82`. | `41fd3d48` | `recoveryCanFindTheInterruptedTurnThatOwnsTheTranscriptTail` and existing receipt recovery test. |
+| 47 | COPY | Both loops observe paths after successful tool execution and load instructions for the next request. See `dsh-agent-instructions/src/index.ts:330–373`. | `1ed150b6` | `nestedInstructionsAreLoadedAfterTheMutationSucceeds`. |
+| 48 | COPY | Depth, directory count and evicted observed paths now produce prompt notices. See `dsh-agent-instructions/src/render.ts:303–313`. | `1ed150b6` | `directoryAndDepthOmissionsReachThePrompt`. |
+| 49 | COPY | Project goals are app-owned. Existing files are imported once. File tools can edit the legacy goal file and the existing memory reservation still applies. See `dsh-goal/src/index.ts` and `dsh-tool-goal/src/authority.ts:99–116`. | `db04ecfe` | `projectGoalMigratesOnceAndMemoryStillUsesTheProjectFile`, `legacyGoalFileCanBeEditedAsAnOrdinaryFile`. |
+| 50 | DELETE | Bundled scripts now follow ordinary command approval. The first-use matcher, added prompt and standing grant were removed. | `cd501b8e` | `inspectingAnInstalledScriptUsesNormalCommandApproval`. |
+| 51 | PROTECTS | Browser auth, SSO, renderer memory and device form safety continue to use the existing policies. | Base `eb6f4f78` | Browser safety sources unchanged. |
+| 52 | COPY | A denial applies to the pending call. A repeated request receives its own ordinary policy decision. See `dsh-tools/src/pipeline.ts:431–479`. | `b533c2b2` | `deniedMutationGetsItsOwnDecisionAfterOverflowCompaction`. |
+| 53 | COPY | A result over the wire budget keeps UTF-8-safe head and tail with an explicit marker and original success/error status. See `dsh-compaction-tool-result-pruner/src/index.ts:83–121`. | `b533c2b2` | `oversizedToolResultKeepsBothEndsWithoutChangingTheOutcome`. |
+| 54 | COPY / DELETE | Background output tracks retained-start and total UTF-8 byte positions. Shell jobs run until settlement, stop, or teardown. Old `ttl_ms` arguments decode without applying a timer. See `dsh-jobs-local/src/ring.ts:37–46,100–111` and `dsh-jobs/src/types.ts:243–247`. | `830e0716` | `reportsTheAbsoluteByteOffsetAfterEviction`, `spawnProcessIsPersistentProcessWithApproval`. |
+| 55 | PROTECTS | Project-load access failures still explain the invalid binding. | `1e08b6be`, `c3de3107` | Existing project binding path in `ChatViewModel`. |
 
-Files · `provider/ModelLimits.kt`, `provider/ProviderConfig.kt`,
-`agent/ContextBudget.kt`, `agent/ContextBudgetTest.kt`.
+## Immediate parents
 
-The resolver applies a local hard ceiling, then a manual value, a learned cap,
-provider metadata, the known-model table, an observed usage floor, and finally
-32,768 tokens. A learned cap is scoped to provider id, endpoint and model and
-is ignored after expiry. Manual output wins for planning; the wire value is
-clamped to a provider or learned maximum so the user is not sent a request the
-provider already rejected. Manual context below a local ceiling is allowed;
-above it is clamped with a visible warning.
+| Implementation | Parent | Rows |
+|---|---|---|
+| `b533c2b2` | `eb6f4f78` | 5, 8, 14, 40–41, 52–53 |
+| `1ed150b6` | `b533c2b2` | 47–48 |
+| `cd501b8e` | `1ed150b6` | 50 |
+| `830e0716` | `cd501b8e` | 54 |
+| `8634ccfa` | `830e0716` | 10–11, 42–43 |
+| `96a74ba8` | `8634ccfa` | 13 |
+| `18695d23` | `96a74ba8` | 29, 33 |
+| `1bf08c08` | `18695d23` | 35 |
+| `db04ecfe` | `1bf08c08` | 49 |
+| `73866fe3` | `db04ecfe` | 37 |
+| `9ba3f1fb` | `73866fe3` | 9, 38, 45 |
+| `7a3d5aca` | `9ba3f1fb` | 23 |
+| `41fd3d48` | `7a3d5aca` | 46 |
+| `9e9e70d3` | `41fd3d48` | 25, 30 |
+| `e71dea82` | `9e9e70d3` | 36 |
+| `05e86973` | `e71dea82` | 32 |
+| `c2b5a077` | `05e86973` | 23 (compile fix) |
+| `61d6167d` | `c2b5a077` | 32 (test import fix) |
+| `fc30c329` | `61d6167d` | 29 (restore-notice regression) |
 
-The default reserve is proportional: `min(16K, max(2K, window/4))` when the
-window is only assumed. On 32K that gives 24,576 allowed input tokens,
-21,504 compact-at, and 18,432 compact-to. A learned prompt cap is applied after
-the reserve so it is not subtracted twice.
+## Test repairs
 
-## 2. Provider metadata and the bundled table
+The inherited test pass was not real: the branch did not compile. Once it compiled,
+the focused suite exposed stale and regressed tests. These commits repair the tests
+or the one production regression; none changes an inventory verdict.
 
-Commits `53c1be28`, `ffc91952`.
+| Commit | Parent | What it repairs |
+|---|---|---|
+| `9ceecc5b` | `fc30c329` | `AgentLoopTest`: per-request denial (not the removed latch), the retry policy, and head/tail result truncation. |
+| `5ea39829` | `9ceecc5b` | `ContextPreparationTest`: a failed summary surfaces to the caller without rewriting history. |
+| `7b2519db` | `5ea39829` | `ChatViewModelTest`: wait for project recovery before sending; use a non-retryable error for the partial-answer retry case. |
+| `365b10b5` | `7b2519db` | `CodingSessionsTest`: the recovered projection is trimmed to the active cap and keeps the prior summary and one synthetic tool result. |
+| `b75ade70` | `365b10b5` | `WorkspaceMirrorTest`: drive the replacement test through the legacy no-rename receipt path. |
 
-Files · `provider/OpenAiCompatibleClient.kt`, `provider/AnthropicClient.kt`,
-`provider/GeminiClient.kt`, `provider/ModelIdNormalizer.kt`,
-`provider/KnownModelLimits.kt`, `app/src/main/resources/model-limits.tsv`.
+## Verification
 
-Anthropic's `max_input_tokens` and `max_tokens`, Gemini's
-`inputTokenLimit`/`outputTokenLimit`, and the OpenAI-compatible spellings
-`context_length`, `context_window`, `contextLength`, `max_context_length`,
-`max_model_len`, `max_completion_tokens`, `maxOutputTokens`,
-`maxCompletionTokens`, and `outputTokenLimit` are parsed. OpenRouter's
-`top_provider` values still win within a listing because they describe the
-specific route. Generic gateways only get a completion cap when the user set
-it or an error taught it; documented first-party clients also send provider
-metadata. The OpenRouter request ceiling is unchanged for unknown routes.
+Environment: JDK 17 (`/home/hatch/tmp/jdk-17.0.13+11`), Gradle 8.13,
+Android SDK 35 (`/home/hatch/android-sdk`), `GRADLE_USER_HOME` a workspace copy
+of the prepared dependency cache, `-Djava.net.preferIPv4Stack=true` for the
+Gradle/Kotlin daemons, Kotlin compiled in-process, and `LANG=C.UTF-8` for the
+test JVMs. The sandbox's default locale is US-ASCII; the mirror test uses a
+Unicode path and fails under it. CI is UTF-8, so this is an environment
+workaround, not a code change.
 
-The table is a 5,188-row models.dev snapshot from 2026-11-25. It is loaded from
-resources, not fetched at runtime. `ModelIdNormalizer` strips GGUF quantisation
-for local ids, one owner prefix, a routing suffix after `:`, Fireworks'
-`accounts/fireworks/models/` path, and date stamps. It deliberately leaves
-`-mini`, `-flash`, `-pro`, and `-32k` alone. Ambiguous normalised stems return
-no table answer rather than guessing. `scripts/generate_model_limits.py`
-regenerates the table; models.dev is MIT-licensed and the notice and licence are
-in `THIRD_PARTY_NOTICES.md` and `licenses/models.dev-MIT.txt`.
+Real results from this worktree:
 
-## 3. Error learning
+- `:app:compileDebugKotlin` on `05e86973` (the inherited head): **FAILED** —
+  `WorkspaceMirror.kt:255` and `:284` declared the same `fingerprint` local.
+- `:app:compileDebugKotlin` on `c2b5a077`: **PASSED** (`BUILD SUCCESSFUL in 17m 8s`).
+- `:app:compileDebugUnitTestKotlin` on `61d6167d`: **PASSED** (`BUILD SUCCESSFUL in 3m 59s`) after the missing `assertNotNull` import.
+- Focused suite on the final tree, 28 classes: **425 tests, 0 failures, 0 errors, 0 skipped** (`BUILD SUCCESSFUL in 1m 49s`; final result files in `app/build/test-results/testDebugUnitTest/`).
+- `:app:compileDebugKotlin` on the final tree: **PASSED** (`BUILD SUCCESSFUL in 39s`, all tasks up to date).
 
-Commit `6e8fa6f1`.
+The first focused run failed 11 of 425 tests. The failures were stale
+expectations for mechanisms this sweep removed (denial latch, no-retry policy,
+`output_limit` replacement, two-summary cap, exact 512 KiB projection), two
+`ChatViewModelTest` races that waited only for `ready` before sending, one
+Unicode-path mirror test under the sandbox's US-ASCII locale, and the terminal
+restore-notice regression. All are explained; the final run above is after
+those repairs.
 
-Files · `provider/ModelLimitLearningPolicy.kt`, `provider/Http.kt`,
-`provider/ProviderError.kt`, `agent/AgentLoop.kt`,
-`chat/ChatViewModel.kt`, `chat/ProviderRuntimeSource.kt`,
-`subagent/WorkerRunner.kt`, `storage/ProviderStore.kt`.
-
-Numeric context and output limits are parsed from HTTP 400/413/422 bodies and
-structured codes. Byte limits, rate limits, and unrelated 400s are rejected.
-A context observation must be between 512 and 10M, must be below the current
-estimate, and must be plausible against the attempted token count. The first
-observation is provisional for 24 hours; an identical second error confirms it
-for 90 days. Output learning is downward-only. A successful request that
-reports more input tokens than a learned cap clears that cap and records the
-observed floor. Nothing overwrites a manual value.
-
-The same-turn path stores a prompt cap in `ContextPreparation` before the loop
-compacts again. Output learning is persisted after the error and used on the
-next turn; it does not retry generation in the same turn. The editor exposes
-"Reset learned limit" whenever a learning exists and persists the reset
-immediately.
-
-## 4. Local models
-
-Commit `fedd6a2a`.
-
-Files · `local/GgufMetadata.kt`, `local/LocalModelManager.kt`,
-`local/LocalProviderClient.kt`, `local/GgufMetadataTest.kt`,
-`local/LocalLimitMergeTest.kt`.
-
-GGUF v2/v3 metadata is read up to 32 MB. The reader takes the architecture's
-`*.context_length`, falling back to the rope scaling original context, and
-returns null on malformed or truncated input. The effective local context is
-the smaller of the training context and the device budget. Old installs are
-parsed lazily when first needed. New installs get a detected
-`ModelContextLimit` instead of a manual value, and `syncProviders` merges
-manual values, reasoning, headers and learning forward rather than overwriting
-them. A manual lower context is passed to the native load as the requested
-size; it cannot raise the GGUF/device ceiling.
-
-## 5. Editor and meter
-
-Commit `f1cb6a4b`.
-
-Files · `ui/provider/ProviderEditor.kt`, `ui/provider/ProviderEditorState.kt`,
-`ui/provider/ProvidersViewModel.kt`, `ui/chat/ContextMeter.kt`,
-`subagent/SubagentPool.kt`.
-
-The editor shows the resolved source (manual, learned, provider, known model,
-lower bound, default, local) under both fields. Detected output is shown as
-detected but is not described as a sent request cap. Endpoint changes clear
-detected and learned data. Saved providers whose model has no known limit are
-auto-detected when the model list is fetched; a normalised match keeps the
-user's typed model id. The meter says "assumed context window" when the number
-came from the fallback rather than a measurement. Subagent pool entries keep
-the live config's limit instead of overriding it with the snapshot taken when
-the model was ticked.
-
-## Tests actually run
-
-- `:app:compileDebugKotlin` — **BUILD SUCCESSFUL** on the final implementation
-  (offline Gradle 8.13, JDK 17).
-- Manual JVM JUnit run of the touched suites — **100 tests, 0 failures**. The
-  classes were `ModelLimitsTest`, `ModelLimitEvidenceTest`,
-  `KnownModelLimitsTest`, `ProviderConfigLimitsTest`,
-  `ModelLimitLearningPolicyTest`, `GgufMetadataTest`, `LocalLimitMergeTest`,
-  `ModelLimitLoopTest`, `ContextBudgetTest`, `ProviderConfigTest`,
-  `HttpErrorTest`, `ProviderErrorClassificationTest`, and
-  `SubagentPoolTest`.
-- Provider wire-shape suites — **77 tests, 0 failures**: `AnthropicClientTest`,
-  `GeminiClientTest`, and `OpenAiCompatibleClientTest`. The runner needs
-  `-Djava.net.preferIPv4Stack=true` for MockWebServer in this sandbox.
-- `AgentLoopTest` — **60 of 66 passed** in the same harness. The 6 failures all
-  fail at `AgentToolExecutor` static initialisation with
-  `NoClassDefFoundError: android/content/pm/PackageManager$NameNotFoundException`;
-  the manual JVM classpath has no Android runtime. The new `ModelLimitLoopTest`
-  covers the overflow/retry and output-observer paths and passed 3/3.
-- Python generator tests — **100 tests, 0 failures** via
-  `python3 -m unittest discover -s scripts -p 'test_*.py'`.
-- `:app:processDebugJavaRes` — **BUILD SUCCESSFUL**; the 211 KB
-  `model-limits.tsv` was present in the processed Java resources.
-
-I could not run the full Gradle unit suite offline: `:app:compileDebugUnitTestKotlin`
-failed to resolve `androidx.compose.ui:ui-test-junit4`, Robolectric,
-MockWebServer, `okhttp-tls`, and `kotlinx-coroutines-test`. That is why the
-suites above were compiled and run directly with the cached production classes.
-No GitHub Actions run has been started from this machine.
-
-The new tests exercise APIs that do not exist on the parent, so the red side is
-a parent compile failure rather than a completed failing test. I did not claim
-a parent test run I could not perform.
+Parent-failure evidence: `c2b5a077` is proven by the compile failure on its
+parent `05e86973`; `fc30c329` is proven by
+`restoreNoticeMarksAReplacedSessionAndClearsOnWrite` failing on the pre-fix
+tree and passing in the final suite. The other rows name their immediate
+parent in the table above and ship the named JiTTest. I did not rebuild every
+parent commit: a full Kotlin compile in this worktree takes about 17 minutes,
+and there are sixteen parent checkouts. That is the main verification gap.
 
 ## Honest gaps
 
-- No real provider was called. Limit parsing, request shapes, and learning are
-  covered by local tests, not live Anthropic/Gemini/DeepSeek/Mistral/Groq/
-  Together/OpenRouter traffic.
-- No Android device or Robolectric run. The editor layout, the clickable reset,
-  and the GGUF read on a real downloaded model remain device/CI verification.
-- `ContextPreparationTest` is Robolectric-based and did not compile in the
-  manual harness; it is left for CI.
-- Provider input-limit kind is stored (`InputOnly` for Anthropic/Gemini) but
-  planning still treats it as a total window. That is deliberately
-  conservative: it may reserve output space twice rather than send a request
-  that overflows.
-- Output-limit learning is next-turn only; there is no same-turn generation
-  retry after `OutputLimitExceeded`.
-- Output limits carried inside a streamed provider error are not learned; only
-  HTTP/body evidence is.
-- The table is a point-in-time snapshot. A model newer than 2026-11-25 falls
-  back to provider metadata, usage observations, or 32K.
-- The GGUF parser is tested with synthetic v2/v3 headers. A real model whose
-  metadata sits beyond the 32 MB header cap will be treated as having no
-  training ceiling and fall back to the device budget.
-
-## Gate-fix: cheap pruning across a provider switch (Hermes round, 2026-11-25)
-
-CI run `45599253948` on `model-limits-detect` @`e6b0cf3c` failed only
-`ChatViewModelTest > cheapPruningKeepsFullHistoryAndSendsSmallerContext` with a
-`TimeoutCancellationException`. The branch reproduces it locally: the named
-test fails before the fix and passes after it. Base `0729dabc` passes the same
-test in the same harness.
-
-**Root cause.** The test creates its second provider with
-`config.copy(id = "provider-b", model = "model-b")` and no
-`modelContextLimit`. That fixture relied on the old 256K fallback window. The
-first turn deliberately prunes the 22 large tool results but keeps the full
-event history; the second model is unknown, so the intended new behavior
-resolves it to 32K. The preserved transcript is still larger than 32K, so
-`ContextPreparation` correctly raises `ContextCapacityTooSmall`, the turn ends
-with the “This chat is too long…” error, and the test never sees
-`"After switch"`. There is no hang in the resolver, table load, learning path,
-or provider request. The test’s second fixture encoded the old default, not a
-pruning failure.
-
-**Fix.** Commit `e12eb99c` pins the switched provider to an explicit 40K
-`ModelContextLimit`, matching the first provider’s 40K window. This keeps the
-test about pruning across provider switches rather than about the unknown-model
-fallback. No timeout, assertion, or production behavior was changed.
-
-**Tests run.**
-
-- Named test, branch before fix: **fail** (`TimeoutCancellationException`).
-- Named test, branch with `e12eb99c`: **pass**.
-- Full `ChatViewModelTest`: **55/69 passed**. The 14 failures are the same
-  undo/checkpoint/approval timeouts that occur on base `0729dabc` in this
-  manual Robolectric harness; the named test is not among them. CI remains the
-  authoritative full-class run.
-- Model-limit suites: **100/100 passed** (the same list as the main report).
-- Provider wire-shape suites: **77/77 passed**.
-- Python generator suite: **100/100 passed**.
-- `:app:compileDebugKotlin`: **BUILD SUCCESSFUL**.
-
-No merge, PR, tag, release, APK, or version change was made.
+- The inherited branch did not compile, so its earlier report could not have run
+  the tests it named. The fixes here restore the compile and the test pass; the
+  results above are the first real runs in this worktree.
+- Not every parent checkout was rebuilt (see the verification note). The named
+  JiTTests and their immediate parents are listed, but only `c2b5a077` and
+  `fc30c329` were observed failing on their parents here.
+- The local test run needs `LANG=C.UTF-8` and an IPv4 daemon flag in this
+  sandbox. CI has a UTF-8 locale and does not need the flag; the code does not
+  depend on either.
+- SAF providers without rename still use the recoverable create receipt. SAF
+  supplies provider-defined rename semantics, and a provider failure or
+  process death can leave a temporary sibling visible. Existing legacy
+  receipts remain readable.
+- Shell writes still reach a private worktree first. Terminal and process
+  results expose copy-back failures. A physical Android device is required
+  to exercise the JNI process tree, foreground service promotion, and real
+  document providers together.
+- The local native path retains its capacity preflight. The legacy
+  single-value conversation store retains the byte limit it needs for
+  migration and recovery.
+- Journal records remain atomically updated snapshots backed by durable
+  conversation events. Older runs can be recovered for a matching tail.
+  There is no UI for switching between arbitrary earlier run snapshots in
+  the middle of a newer transcript. Project-copy writes remain best effort
+  after the app-private record is saved.
+- Command spill files are in Android's app cache and can be reclaimed by the
+  platform. Termux operation handles survive subsequent turns in the same
+  chat for the lifetime of the view model. Termux owns external execution
+  and its reply channel does not survive Rivet process death.
