@@ -1,215 +1,196 @@
-# Model limits: automatic detection and learning
+# F2 — file safety: failed writes, uncovered checkpoints, and external Undo
 
-Branch `model-limits-detect`, based on `origin/batch/surface-fix` at
-`0729dabcfb01b052c77ec6d5af3e0a82aab8a9f3`. Implementation HEAD before this
-report: `3fcc4c98`. Nothing was merged, tagged, released, or version-bumped.
+Branch `flaw-files`, based on `origin/batch/surface-fix` at
+`6f9f78adaf462b8daef3e539c7375084f36bd134`. Implementation HEAD before this
+report: `79ea7be724878e0d7db625dc99449b4b3e92db94`. Nothing was merged,
+tagged, released, or built as an APK. `versionName`/`versionCode` are
+unchanged, and the self-updater was not touched.
 
-The acceptance target was that a user can add a normal provider and model and
-Rivet fills both the context window and the maximum output itself. The resolver
-now does that for the known providers in the bundled table, for providers that
-report model metadata, and for limits learned from a provider error. The safe
-fallback is 32K, not the old 256K guess.
+The brief's numbering is inconsistent with the flaw report: it calls the SAF
+rollback "1.4" and the external-delete work "1.2". This report uses the flaw
+report's numbers — 1.1 SAF truncation, 1.2 external grants, 1.4 checkpoint
+gaps. Two file guesses in the handoff do not exist: there is no
+`checkpoint/CheckpointManager.kt` (the scan is `runtime/TurnCheckpoint.kt`) and
+no `RuntimeController.kt:1357` (the real SAF write paths are in
+`workspace/SafWorkspace.kt`).
 
-## 1. Resolution order and the default
+## 1. A failed SAF verify no longer leaves a truncated file (finding 1.1)
 
-Commits `53c1be28`, `6e8fa6f1`, `3fcc4c98`.
+Commit `46b7cf74`. Existing before this session.
 
-Files · `provider/ModelLimits.kt`, `provider/ProviderConfig.kt`,
-`agent/ContextBudget.kt`, `agent/ContextBudgetTest.kt`.
+**Root cause.** `SafWorkspace.writeFileFrom` and `SafWorkspace.write` opened a
+document with mode `"rwt"`, which truncates first, then verified the new bytes.
+On a write or verify failure the original was already gone, so a storage
+hiccup became permanent data loss.
 
-The resolver applies a local hard ceiling, then a manual value, a learned cap,
-provider metadata, the known-model table, an observed usage floor, and finally
-32,768 tokens. A learned cap is scoped to provider id, endpoint and model and
-is ignored after expiry. Manual output wins for planning; the wire value is
-clamped to a provider or learned maximum so the user is not sent a request the
-provider already rejected. Manual context below a local ceiling is allowed;
-above it is clamped with a visible warning.
+**Change.** Both paths now read the pre-write bytes into a bounded rollback
+buffer before opening `"rwt"`. If the write, stream, or post-write verify
+fails, the previous bytes are written back inside `NonCancellable`; the
+caller still receives `WorkspaceFailure(WRITE)`.
 
-The default reserve is proportional: `min(16K, max(2K, window/4))` when the
-window is only assumed. On 32K that gives 24,576 allowed input tokens,
-21,504 compact-at, and 18,432 compact-to. A learned prompt cap is applied after
-the reserve so it is not subtracted twice.
+The buffer is in memory and capped at 8 MiB (`MAX_ROLLBACK_BYTES`). A file
+larger than that is still written without a rollback copy; that limitation is
+listed under honest gaps.
 
-## 2. Provider metadata and the bundled table
+**JiTTest.** `SafWorkspaceTest.failedVerifyOrMidStreamWriteLeavesOriginalSafFileByteIdentical`.
+The test arms the disposable provider to corrupt the document on the verify
+read and asserts the original bytes are unchanged after
+`WorkspaceFailure(WRITE)`.
 
-Commits `53c1be28`, `ffc91952`.
+**Red/green.** Parent is `6f9f78ad`. This session reproduced the parent
+behaviour by disabling the two `restore(entry, original)` calls on the branch:
+the test failed with `org.junit.ComparisonFailure` at
+`SafWorkspaceTest.kt:603`. With the fix restored, `SafWorkspaceTest` passes
+40/40. The exact parent commit itself cannot run the test as written because
+the test file was added in `46b7cf74`.
 
-Files · `provider/OpenAiCompatibleClient.kt`, `provider/AnthropicClient.kt`,
-`provider/GeminiClient.kt`, `provider/ModelIdNormalizer.kt`,
-`provider/KnownModelLimits.kt`, `app/src/main/resources/model-limits.tsv`.
+## 2. Checkpoint gaps are named honestly (finding 1.4)
 
-Anthropic's `max_input_tokens` and `max_tokens`, Gemini's
-`inputTokenLimit`/`outputTokenLimit`, and the OpenAI-compatible spellings
-`context_length`, `context_window`, `contextLength`, `max_context_length`,
-`max_model_len`, `max_completion_tokens`, `maxOutputTokens`,
-`maxCompletionTokens`, and `outputTokenLimit` are parsed. OpenRouter's
-`top_provider` values still win within a listing because they describe the
-specific route. Generic gateways only get a completion cap when the user set
-it or an error taught it; documented first-party clients also send provider
-metadata. The OpenRouter request ceiling is unchanged for unknown routes.
+Commit `36281642`. Existing before this session.
 
-The table is a 5,188-row models.dev snapshot from 2026-11-25. It is loaded from
-resources, not fetched at runtime. `ModelIdNormalizer` strips GGUF quantisation
-for local ids, one owner prefix, a routing suffix after `:`, Fireworks'
-`accounts/fireworks/models/` path, and date stamps. It deliberately leaves
-`-mini`, `-flash`, `-pro`, and `-32k` alone. Ambiguous normalised stems return
-no table answer rather than guessing. `scripts/generate_model_limits.py`
-regenerates the table; models.dev is MIT-licensed and the notice and licence are
-in `THIRD_PARTY_NOTICES.md` and `licenses/models.dev-MIT.txt`.
+**What is actually in the tree.** Full checkpoint coverage is **not**
+implemented, and the brief's "checkpoint-coverage item" is the spec's
+fallback instead:
 
-## 3. Error learning
+- `runtime/TurnCheckpoint.kt` still skips `.git` subtrees and files
+  (`scan`: `preVisitDirectory` around line 283, `visitFile` around line 319),
+  gitignored paths (line 292), and symlinks/non-regular files (lines 279-281,
+  320-325). `stageUndo` restores ignored directories from the *current*
+  worktree (`preserveIgnoredDirectories`, lines 363-383), so a deleted ignored
+  folder stays deleted.
+- `runtime/WorkspaceMirror.kt` never mirrors `.git` (`isVcsPath`), and the
+  checkpoint is taken from that mirror. Even a changed scan filter would have
+  no `.git` bytes to save without a separate delete-time snapshot.
+- Commit `36281642` therefore makes the delete approval honest:
+  `.git` says "Rivet keeps no copy of repository metadata such as .git, so
+  this cannot be undone"; ignored build folders and symlinks are named as
+  not covered by the 3-turn Undo copy.
 
-Commit `6e8fa6f1`.
+**Why full coverage was not added.** Covering `.git` needs a new
+delete-time snapshot of the SAF tree, not the mirror; covering ignored trees
+would defeat the entry cap that keeps checkpoints inside 50,000 entries and
+500 MB. The spec says to stop a fix that needs a larger architecture change
+and explain it; this is that explanation. The fallback is the shipped
+protection.
 
-Files · `provider/ModelLimitLearningPolicy.kt`, `provider/Http.kt`,
-`provider/ProviderError.kt`, `agent/AgentLoop.kt`,
-`chat/ChatViewModel.kt`, `chat/ProviderRuntimeSource.kt`,
-`subagent/WorkerRunner.kt`, `storage/ProviderStore.kt`.
+**JiTTest.**
+`AgentLoopTest.deleteApprovalSaysRepositoryMetadataCannotBeUndone` and
+`AgentLoopTest.deleteApprovalNamesIgnoredFoldersAndSymlinksAsUncovered`.
 
-Numeric context and output limits are parsed from HTTP 400/413/422 bodies and
-structured codes. Byte limits, rate limits, and unrelated 400s are rejected.
-A context observation must be between 512 and 10M, must be below the current
-estimate, and must be plausible against the attempted token count. The first
-observation is provisional for 24 hours; an identical second error confirms it
-for 90 days. Output learning is downward-only. A successful request that
-reports more input tokens than a learned cap clears that cap and records the
-observed floor. Nothing overwrites a manual value.
+**Red/green.** Parent is `46b7cf74` (the wording change's parent). This
+session reproduced the parent wording on the branch: both tests failed with
+`AssertionError` at `AgentLoopTest.kt:835` and `:848`. With `36281642`
+restored, `AgentLoopTest` passes 68/68.
 
-The same-turn path stores a prompt cap in `ContextPreparation` before the loop
-compacts again. Output learning is persisted after the error and used on the
-next turn; it does not retry generation in the same turn. The editor exposes
-"Reset learned limit" whenever a learning exists and persists the reset
-immediately.
+## 3. External-grant deletes have a real Undo path (finding 1.2)
 
-## 4. Local models
+Commit `79ea7be724878e0d7db625dc99449b4b3e92db94`.
 
-Commit `fedd6a2a`.
+**Root cause.** `AgentToolExecutor` marked every external `delete_path`
+`undoable = false` and appended `NO_EXTERNAL_UNDO`; `ChatViewModel` skipped
+the checkpoint gate for external file mutations; `RuntimeController` Undo
+only operated on the current project mirror. Nothing copied the bytes before
+the SAF provider removed them, so the approval's "Deletion is permanent" was
+true.
 
-Files · `local/GgufMetadata.kt`, `local/LocalModelManager.kt`,
-`local/LocalProviderClient.kt`, `local/GgufMetadataTest.kt`,
-`local/LocalLimitMergeTest.kt`.
+**Change.**
 
-GGUF v2/v3 metadata is read up to 32 MB. The reader takes the architecture's
-`*.context_length`, falling back to the rope scaling original context, and
-returns null on malformed or truncated input. The effective local context is
-the smaller of the training context and the device budget. Old installs are
-parsed lazily when first needed. New installs get a detected
-`ModelContextLimit` instead of a manual value, and `syncProviders` merges
-manual values, reasoning, headers and learning forward rather than overwriting
-them. A manual lower context is passed to the native load as the requested
-size; it cannot raise the GGUF/device ceiling.
+- New `workspace/ExternalDeleteStore.kt` stages a grant delete in app-private
+  storage (`filesDir/external-deletes`, deliberately not the evictable OS
+  cache, so the Undo survives a process restart). Each entry writes
+  `entry.json` and a payload tree atomically; files and whole folders are
+  supported. Caps: 500 MB and 50,000 files per staged delete, three retained
+  turn groups, 500 MB total retained.
+- `AgentToolExecutor.delete_path` plans before the approval:
+  - readable and inside the caps → approval says Rivet keeps a copy and sets
+    `undoable = true`;
+  - over a cap → the measured byte count and the limit are named, and the
+    approval says it cannot be undone (the delete proceeds);
+  - unreadable → the approval says Rivet could not copy it and it cannot be
+    undone (the delete proceeds).
+  The copy is made immediately before `workspace.delete`, after approval.
+- A failed provider delete is still an error result, never a success. The
+  staged copy is discarded only when a fresh structural scan proves the
+  target is byte-identical to the pre-delete stamp; a partial delete keeps
+  the copy.
+- `ChatViewModel` owns one store, stamps each run with a turn id, and shows a
+  separate Undo row ("N files deleted outside the project"). Undo restores
+  the tree to the original grant path, verifies every restored file's size and
+  SHA-256, then deletes the store entry. A newer file at the same path stops
+  Undo with `undo_conflict` instead of overwriting it. Dismissing the row
+  removes the staged copy.
+- Readability is probed without copying twice: `SafWorkspace.canRead` opens
+  the document and reads one byte.
 
-## 5. Editor and meter
+**JiTTest.** `ExternalDeleteStoreTest` (7 tests): byte-identical binary file
+restore; folder restore including an empty nested directory; two deletes in
+one turn share one row and both return; over-cap approval names the size and
+the cannot-undo line; unreadable file is not promised Undo; failed provider
+delete is an error and discards an intact copy; a newer file blocks Undo.
 
-Commit `f1cb6a4b`.
+**Red/green.** Parent is `36281642`. The new JiTTest necessarily cannot
+compile on that commit because `ExternalDeleteStore` and the executor's
+staging parameters do not exist there. To prove the test catches the missing
+behaviour and not only the API, this session removed the plan/stage call on
+the branch: `externalDeleteIsStagedAndUndoRestoresTheExactBytes` failed with
+`AssertionError` at `ExternalDeleteStoreTest.kt:108`. With the fix restored,
+all 7 tests pass.
 
-Files · `ui/provider/ProviderEditor.kt`, `ui/provider/ProviderEditorState.kt`,
-`ui/provider/ProvidersViewModel.kt`, `ui/chat/ContextMeter.kt`,
-`subagent/SubagentPool.kt`.
+## Verification
 
-The editor shows the resolved source (manual, learned, provider, known model,
-lower bound, default, local) under both fields. Detected output is shown as
-detected but is not described as a sent request cap. Endpoint changes clear
-detected and learned data. Saved providers whose model has no known limit are
-auto-detected when the model list is fetched; a normalised match keeps the
-user's typed model id. The meter says "assumed context window" when the number
-came from the fallback rather than a measurement. Subagent pool entries keep
-the live config's limit instead of overriding it with the snapshot taken when
-the model was ticked.
+Environment: local Gradle 8.13 wrapper, JDK 17, Android SDK 35, offline
+dependency mirror, Robolectric 28. The machine has no Java on `PATH`, so the
+runs used `JAVA_HOME` explicitly; no Android device was used.
 
-## Tests actually run
-
-- `:app:compileDebugKotlin` — **BUILD SUCCESSFUL** on the final implementation
-  (offline Gradle 8.13, JDK 17).
-- Manual JVM JUnit run of the touched suites — **100 tests, 0 failures**. The
-  classes were `ModelLimitsTest`, `ModelLimitEvidenceTest`,
-  `KnownModelLimitsTest`, `ProviderConfigLimitsTest`,
-  `ModelLimitLearningPolicyTest`, `GgufMetadataTest`, `LocalLimitMergeTest`,
-  `ModelLimitLoopTest`, `ContextBudgetTest`, `ProviderConfigTest`,
-  `HttpErrorTest`, `ProviderErrorClassificationTest`, and
-  `SubagentPoolTest`.
-- Provider wire-shape suites — **77 tests, 0 failures**: `AnthropicClientTest`,
-  `GeminiClientTest`, and `OpenAiCompatibleClientTest`. The runner needs
-  `-Djava.net.preferIPv4Stack=true` for MockWebServer in this sandbox.
-- `AgentLoopTest` — **60 of 66 passed** in the same harness. The 6 failures all
-  fail at `AgentToolExecutor` static initialisation with
-  `NoClassDefFoundError: android/content/pm/PackageManager$NameNotFoundException`;
-  the manual JVM classpath has no Android runtime. The new `ModelLimitLoopTest`
-  covers the overflow/retry and output-observer paths and passed 3/3.
-- Python generator tests — **100 tests, 0 failures** via
-  `python3 -m unittest discover -s scripts -p 'test_*.py'`.
-- `:app:processDebugJavaRes` — **BUILD SUCCESSFUL**; the 211 KB
-  `model-limits.tsv` was present in the processed Java resources.
-
-I could not run the full Gradle unit suite offline: `:app:compileDebugUnitTestKotlin`
-failed to resolve `androidx.compose.ui:ui-test-junit4`, Robolectric,
-MockWebServer, `okhttp-tls`, and `kotlinx-coroutines-test`. That is why the
-suites above were compiled and run directly with the cached production classes.
-No GitHub Actions run has been started from this machine.
-
-The new tests exercise APIs that do not exist on the parent, so the red side is
-a parent compile failure rather than a completed failing test. I did not claim
-a parent test run I could not perform.
+- `:app:compileDebugKotlin` — **BUILD SUCCESSFUL**.
+- Final focused suite, restored branch `79ea7be7`:
+  `ExternalDeleteStoreTest` 7/7, `SafWorkspaceTest` 40/40,
+  `AgentLoopTest` 68/68, `AgentToolExecutorTest` 32/32,
+  `UndoFailureMessageTest` 6/6 — **153 tests, 0 failures, 0 errors**.
+- Red run with the three fixes' behaviour disabled on the branch:
+  `SafWorkspaceTest.failedVerifyOrMidStreamWriteLeavesOriginalSafFileByteIdentical`
+  (ComparisonFailure at line 603),
+  `AgentLoopTest.deleteApprovalSaysRepositoryMetadataCannotBeUndone`
+  (AssertionError at line 835),
+  `AgentLoopTest.deleteApprovalNamesIgnoredFoldersAndSymlinksAsUncovered`
+  (AssertionError at line 848), and
+  `ExternalDeleteStoreTest.externalDeleteIsStagedAndUndoRestoresTheExactBytes`
+  (AssertionError) — **4 failed, 0 passed**, as intended.
+- No PR, merge, tag, release, or APK. Branch pushed as `flaw-files`.
 
 ## Honest gaps
 
-- No real provider was called. Limit parsing, request shapes, and learning are
-  covered by local tests, not live Anthropic/Gemini/DeepSeek/Mistral/Groq/
-  Together/OpenRouter traffic.
-- No Android device or Robolectric run. The editor layout, the clickable reset,
-  and the GGUF read on a real downloaded model remain device/CI verification.
-- `ContextPreparationTest` is Robolectric-based and did not compile in the
-  manual harness; it is left for CI.
-- Provider input-limit kind is stored (`InputOnly` for Anthropic/Gemini) but
-  planning still treats it as a total window. That is deliberately
-  conservative: it may reserve output space twice rather than send a request
-  that overflows.
-- Output-limit learning is next-turn only; there is no same-turn generation
-  retry after `OutputLimitExceeded`.
-- Output limits carried inside a streamed provider error are not learned; only
-  HTTP/body evidence is.
-- The table is a point-in-time snapshot. A model newer than 2026-11-25 falls
-  back to provider metadata, usage observations, or 32K.
-- The GGUF parser is tested with synthetic v2/v3 headers. A real model whose
-  metadata sits beyond the 32 MB header cap will be treated as having no
-  training ceiling and fall back to the device budget.
-
-## Gate-fix: cheap pruning across a provider switch (Hermes round, 2026-11-25)
-
-CI run `45599253948` on `model-limits-detect` @`e6b0cf3c` failed only
-`ChatViewModelTest > cheapPruningKeepsFullHistoryAndSendsSmallerContext` with a
-`TimeoutCancellationException`. The branch reproduces it locally: the named
-test fails before the fix and passes after it. Base `0729dabc` passes the same
-test in the same harness.
-
-**Root cause.** The test creates its second provider with
-`config.copy(id = "provider-b", model = "model-b")` and no
-`modelContextLimit`. That fixture relied on the old 256K fallback window. The
-first turn deliberately prunes the 22 large tool results but keeps the full
-event history; the second model is unknown, so the intended new behavior
-resolves it to 32K. The preserved transcript is still larger than 32K, so
-`ContextPreparation` correctly raises `ContextCapacityTooSmall`, the turn ends
-with the “This chat is too long…” error, and the test never sees
-`"After switch"`. There is no hang in the resolver, table load, learning path,
-or provider request. The test’s second fixture encoded the old default, not a
-pruning failure.
-
-**Fix.** Commit `e12eb99c` pins the switched provider to an explicit 40K
-`ModelContextLimit`, matching the first provider’s 40K window. This keeps the
-test about pruning across provider switches rather than about the unknown-model
-fallback. No timeout, assertion, or production behavior was changed.
-
-**Tests run.**
-
-- Named test, branch before fix: **fail** (`TimeoutCancellationException`).
-- Named test, branch with `e12eb99c`: **pass**.
-- Full `ChatViewModelTest`: **55/69 passed**. The 14 failures are the same
-  undo/checkpoint/approval timeouts that occur on base `0729dabc` in this
-  manual Robolectric harness; the named test is not among them. CI remains the
-  authoritative full-class run.
-- Model-limit suites: **100/100 passed** (the same list as the main report).
-- Provider wire-shape suites: **77/77 passed**.
-- Python generator suite: **100/100 passed**.
-- `:app:compileDebugKotlin`: **BUILD SUCCESSFUL**.
-
-No merge, PR, tag, release, APK, or version change was made.
+1. **Fix 1 only protects files up to 8 MiB.** `RollbackBuffer` keeps the old
+   bytes in memory and drops them when the file is larger, so a failed verify
+   on a >8 MiB file can still leave it truncated. Commit `46b7cf74` comments
+   this limitation. It was left as shipped because the brief treated Fix 1 as
+   already closed; a temp-file rollback is the next step for that class.
+2. **Fix 1/2 parent-red was reproduced by disabling the fix on the branch,
+   not by checking out the parent commit.** Both tests were added in the same
+   commit as their fix, so the parent commit cannot run them as written.
+3. **Full checkpoint coverage for `.git`/ignored/symlinks is still absent.**
+   The shipped protection is the approval copy, which is exactly what the
+   spec allows when coverage is impossible; the classes are named in the
+   dialog instead of being silently unprotected.
+4. **External Undo restore is not transactional.** If the provider fails
+   halfway through restoring a folder, some files can be back and the entry
+   is kept; retrying then hits `undo_conflict` for the already-restored paths.
+   The user is told the copy is still kept, but the UI has no repair flow.
+5. **Restore covers bytes and directory structure, not timestamps or file
+   permissions.** "Byte-for-byte" is verified (size + SHA-256); provider
+   mtime is whatever creation produces.
+6. **Staging uses `filesDir`, not `cacheDir` as the brief's wording says.**
+   That is intentional for Undo durability, but it means the copies count
+   against app data until Undo, dismissal, or pruning.
+7. **The per-delete cap is 500 MB; a single turn can stage several deletes.**
+   The current group can exceed the 500 MB retention target until a later
+   prune because the just-created group is always kept. No test covers that
+   multi-large-delete edge.
+8. **The readability probe is not a guarantee.** It opens each file and reads
+   one byte before approval. A provider that revokes access after approval
+   makes staging fail; the delete then aborts (safe, but the approval promised
+   a copy that was not made).
+9. **Only unit/Robolectric coverage.** No physical SAF provider, no process
+   restart after a real delete, and no Compose/UI test for the new Undo row.
+10. **`ExternalDeleteStore` is new API surface.** The parent-red for Fix 3 is
+   therefore behavioural (staging disabled), not a runnable parent test.
