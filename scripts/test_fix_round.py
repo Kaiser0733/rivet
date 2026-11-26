@@ -86,7 +86,7 @@ class FixRoundSurfacesTest(unittest.TestCase):
         chat = (UI / "chat/ChatScreen.kt").read_text()
         footer = chat.split("private fun ChangeSummary", 1)[1].split("private fun InterruptedTurnRow", 1)[0]
         self.assertNotIn("spendLabel", footer)
-        self.assertIn('spendLabel?.takeUnless { it == "unknown pricing" }', chat)
+        self.assertIn('spendLabel?.takeUnless { it.startsWith("Unpriced model") }', chat)
 
     def test_archive_fts_finds_stored_text_within_one_session(self):
         import re
