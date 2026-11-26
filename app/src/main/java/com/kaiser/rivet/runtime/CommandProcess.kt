@@ -90,6 +90,8 @@ internal object CommandNative {
     external fun start(command: String, cwd: String, environment: Array<String>,
                        addressSpaceLimitBytes: Long): IntArray
     external fun waitFor(pid: Int): Int
+    external fun signalGroup(pid: Int, signal: Int)
+    external fun signalLeader(pid: Int, signal: Int)
     external fun stop(pid: Int, signal: Int)
     external fun reapStaleMonitors()
     external fun closeFd(fd: Int)

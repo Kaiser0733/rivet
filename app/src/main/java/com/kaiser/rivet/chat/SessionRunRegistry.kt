@@ -3,7 +3,6 @@ package com.kaiser.rivet.chat
 import android.app.Application
 import com.kaiser.rivet.agent.AgentApprovalGate
 import com.kaiser.rivet.agent.AgentRunControl
-import com.kaiser.rivet.agent.NotificationApprovals
 import com.kaiser.rivet.runtime.ManagedProcesses
 import com.kaiser.rivet.storage.CodingSessionHeader
 import com.kaiser.rivet.storage.CodingSessions
@@ -31,7 +30,6 @@ internal class SessionRunRegistry(app: Application) {
 
     init {
         val processes = ManagedProcesses.forApplication(app)
-        NotificationApprovals.gate = approvals
         scope.launch {
             approvals.pending.collect { pending ->
                 processes.updateApproval(pending)

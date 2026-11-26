@@ -2947,7 +2947,7 @@ class ChatViewModel private constructor(
                             is TurnCheckpointOutcome.Finished -> {
                                 if (outcome.hasChanges && activeRun === owner) {
                                     val record = runtime.latestCheckpoint()
-                                    if (record?.id == outcome.id && undoBarOwned(record, sessionId)) {
+                                    if (record?.id == outcome.id && undoBarOwned(record)) {
                                         val row = undoRowFor(record)
                                         owner.update { state ->
                                             if (state.currentSessionId != record.sessionId) state
@@ -2971,7 +2971,7 @@ class ChatViewModel private constructor(
                     if (activeRun === owner && !userCancelled) owner.update {
                         if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
                     }
-                    if (ticket == generation) {
+                    if (activeRun === owner) {
                         try { rehydrateExternalUndo(externalUndoTurnStart) }
                         catch (e: CancellationException) { throw e }
                         catch (_: Exception) { }
@@ -3520,7 +3520,7 @@ class ChatViewModel private constructor(
         }
     }
 
-    private fun undoBarOwned(record: CheckpointRecord?): Boolean {
+    private fun undoBarOwned(record: CheckpointRecord?, sessionId: String? = selectedState.value.currentSessionId): Boolean {
         val id = record?.id ?: return false
         return undoBarVisible(record, sessionId) &&
             id !in dismissedUndoBars
