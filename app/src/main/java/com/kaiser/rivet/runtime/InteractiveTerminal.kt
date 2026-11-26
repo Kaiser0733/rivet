@@ -89,7 +89,7 @@ internal class InteractiveTerminalSession(
     private val onNaturalExit: (String, Int) -> Unit = { _, _ -> },
     private val onClosed: (String) -> Unit = {},
     private val onStopRecorded: (String) -> Unit = {},
-    private val onSync: suspend (String) -> Unit = {},
+    private val onSync: suspend (String) -> MirrorSyncResult? = { null },
     private val engineFactory: TerminalEngineFactory = PtyTerminalEngineFactory,
     private val treeWatcher: TerminalTreeWatcher = DefaultTerminalTreeWatcher,
     private val killGroup: (Int) -> Unit = { pid ->
@@ -187,13 +187,17 @@ internal class InteractiveTerminalSession(
             // A stop from the Processes surface cancels this job from its caller's thread.
             // Hop cleanup onto scope so engine creation/close stay serialized on the session owner.
             scope.launch {
-                if (ticket == generation && !finished) closeInternal(markEnded = true)
+                if (ticket == generation && !finished) {
+                    if (starting) failStart("session_closing", launch?.managedId)
+                    else closeInternal(markEnded = true)
+                }
             }
         }
         scope.launch {
             val launch = try {
                 launchFactory(job)
             } catch (e: CancellationException) {
+                if (ticket == generation && !finished) failStart("session_closing", null)
                 throw e
             } catch (_: Exception) {
                 TerminalLaunch(error = "runtime_unavailable")
@@ -207,7 +211,7 @@ internal class InteractiveTerminalSession(
                 )) {
                 launch.managedId?.let(onClosed)
                 if (ticket == generation && !finished && !job.isActive) {
-                    closeInternal(markEnded = true)
+                    failStart("session_closing", null)
                 }
                 return@launch
             }
@@ -220,6 +224,7 @@ internal class InteractiveTerminalSession(
             val created = try {
                 engineFactory.create(launch, observer)
             } catch (e: CancellationException) {
+                if (ticket == generation && !finished) failStart("session_closing", launch.managedId)
                 throw e
             } catch (_: Exception) {
                 null
@@ -236,7 +241,7 @@ internal class InteractiveTerminalSession(
                     killSession(created.pid)
                 }
                 if (ticket == generation && !finished) {
-                    closeInternal(markEnded = !job.isActive)
+                    failStart("session_closing", launch.managedId)
                 }
                 return@launch
             }
@@ -416,7 +421,7 @@ internal class InteractiveTerminalSession(
             error = null, exitCode = exitCode, pid = 0) }
         previous?.managedId?.let { onNaturalExit(it, exitCode) }
         val identity = previous?.workspaceIdentity
-        if (!identity.isNullOrEmpty()) scope.launch { onSync(identity) }
+        if (!identity.isNullOrEmpty()) syncClosedTerminal(identity)
     }
 
     private fun closeInternal(markEnded: Boolean) {
@@ -444,7 +449,20 @@ internal class InteractiveTerminalSession(
             ended = markEnded, exitCode = null, pid = 0) }
         previous?.managedId?.let(onClosed)
         val identity = previous?.workspaceIdentity
-        if (!identity.isNullOrEmpty() && markEnded) scope.launch { onSync(identity) }
+        if (!identity.isNullOrEmpty() && markEnded) syncClosedTerminal(identity)
+    }
+
+    private fun syncClosedTerminal(identity: String) {
+        val closedGeneration = generation
+        scope.launch {
+            val result = onSync(identity) ?: return@launch
+            if (closedGeneration != generation || !finished) return@launch
+            val notice = when (result.state) {
+                MirrorSync.Failed, MirrorSync.Conflict -> terminalSyncNotice(result)
+                MirrorSync.NoChanges, MirrorSync.Ok -> null
+            }
+            if (notice != null) mutableState.update { it.copy(notice = notice) }
+        }
     }
 
     private fun killSession(pid: Int) {

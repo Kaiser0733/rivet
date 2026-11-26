@@ -55,6 +55,7 @@ class InteractiveTerminalTest {
         },
         cwd: () -> String? = { null },
         killDescendants: (Int) -> Unit = {},
+        onSync: suspend (String) -> MirrorSyncResult? = { null },
     ): Harness {
         val engines = mutableListOf<FakeEngine>()
         val closed = mutableListOf<String>()
@@ -74,6 +75,7 @@ class InteractiveTerminalTest {
             },
             onNaturalExit = { id, code -> exits += id to code },
             onClosed = { id -> closed += id },
+            onSync = onSync,
             onStopRecorded = { reason -> stops += reason },
             treeWatcher = treeWatcher,
             killGroup = { _ -> },
@@ -341,6 +343,30 @@ class InteractiveTerminalTest {
         delay(TERMINAL_RESIZE_DEBOUNCE_MS + 1)
         assertEquals(2, engine.resizes)
         assertEquals(Triple(100, 12, 8), engine.lastSize)
+    }
+
+    @Test fun cancelledLaunchLeavesAnExplicitTerminalError() = runTest {
+        val terminal = InteractiveTerminalSession(
+            scope = this,
+            launchFactory = { throw kotlinx.coroutines.CancellationException("Launch cancelled") },
+        )
+        terminal.open("A")
+        terminal.ensureStarted(80, 24, 8, 16)
+        settle()
+
+        assertFalse(terminal.state.value.starting)
+        assertEquals("session_closing", terminal.state.value.error)
+    }
+
+    @Test fun closingReportsThePathThatCouldNotSync() = runTest {
+        val fixture = harness(this, onSync = { MirrorSyncResult(MirrorSync.Conflict, "README.md") })
+        fixture.holder.open("A")
+        fixture.holder.ensureStarted(80, 24, 8, 16)
+        settle()
+        fixture.holder.close()
+        settle()
+
+        assertEquals("Project changes for README.md are still pending.", fixture.holder.state.value.notice)
     }
 
     @Test fun closingWhileEngineCreateIsInFlightClosesTheCreatedEngineAndDoesNotLeak() = runTest {

@@ -38,6 +38,10 @@ data class MirrorSyncResult(val state: MirrorSync, val path: String? = null,
                             val skipped: List<String> = emptyList(),
                             val conflicts: List<String> = emptyList())
 
+internal fun terminalSyncNotice(result: MirrorSyncResult): String =
+    result.path?.let { "Project changes for $it are still pending." }
+        ?: "Some terminal changes are still pending in the project."
+
 // One conflicted file must not read as "the whole project is dirty", so every
 // comparison drops the paths the baseline recorded as unresolvable.
 private fun Map<String, MirrorEntry>.withoutExcluded(excluded: Set<String>): Map<String, MirrorEntry> =

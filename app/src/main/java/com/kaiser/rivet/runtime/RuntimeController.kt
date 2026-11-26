@@ -68,6 +68,7 @@ data class ProcessOutputSnapshot(
     val stderrStart: Long = 0,
     val stdoutEnd: Long? = null,
     val stderrEnd: Long? = null,
+    val sync: MirrorSyncResult? = null,
 )
 
 /** A project sync is a UI-blocking prerequisite for the terminal; it must never hold
@@ -283,13 +284,11 @@ class RuntimeController(
         )
     }
 
-    /** Best effort: the interactive shell's mirrored edits reach SAF when it ends. */
-    internal suspend fun syncTerminal(identity: String) {
-        operations.withLock {
-            if (mirrorIdentity != identity) return@withLock
-            try { mirror?.sync() } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { }
-        }
+    internal suspend fun syncTerminal(identity: String): MirrorSyncResult? = operations.withLock {
+        if (mirrorIdentity != identity || selection.currentIdentity() != identity) return@withLock null
+        try { mirror?.sync() } catch (e: CancellationException) { throw e }
+        catch (e: MirrorFailure) { MirrorSyncResult(MirrorSync.Failed, e.path) }
+        catch (_: Exception) { MirrorSyncResult(MirrorSync.Failed) }
     }
 
     internal fun recordTerminalStop(reason: String) = governor.recordStop(reason)
@@ -643,8 +642,8 @@ class RuntimeController(
                         it.exitCode,
                     )
                 }
-                if (selection.currentIdentity() == identity && !operations.isLocked) {
-                    runCatching { syncTerminal(identity) }
+                withContext(NonCancellable) {
+                    syncTerminal(identity)?.let { registry.setProjectSync(id, it) }
                 }
             }
         }
@@ -709,6 +708,7 @@ class RuntimeController(
             stderrStart = snap?.err?.start ?: 0,
             stdoutEnd = snap?.out?.end,
             stderrEnd = snap?.err?.end,
+            sync = info.projectSync,
         )
     }
 

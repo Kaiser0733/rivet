@@ -48,6 +48,7 @@ data class ManagedProcessInfo(
     val rootPath: String? = null,
     val entryPath: String? = null,
     val commandForDisplay: String? = null,
+    val projectSync: MirrorSyncResult? = null,
 )
 
 /** App-process ownership for live commands, loopback previews, and active agent turns. */
@@ -280,6 +281,12 @@ class ManagedProcesses {
             it.info.kind == ManagedProcessKind.Background && it.info.status in ACTIVE
         } ?: return@synchronized
         entry.info = entry.info.copy(output = boundedOutput(stdout, stderr))
+        publishLocked()
+    }
+
+    internal fun setProjectSync(id: String, sync: MirrorSyncResult) = synchronized(lock) {
+        val entry = entries[id] ?: return@synchronized
+        entry.info = entry.info.copy(projectSync = sync)
         publishLocked()
     }
 

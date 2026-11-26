@@ -231,6 +231,7 @@ private fun terminalErrorMessage(code: String?): String? = when (code) {
     "workspace_unavailable" -> "No workspace is selected. Choose a project in the chat first."
     "process_limit" -> "No process slot is free. Stop a running process and try again."
     "sync_required" -> "The workspace has conflicting changes. Resolve them before opening a terminal."
+    "session_closing" -> "Terminal start was cancelled. Open the terminal again."
     "sync_timeout" -> "The workspace took too long to sync. The terminal is usable again; try once more."
     "sync_failed" -> "The workspace couldn't finish syncing. The terminal is usable again; try once more."
     "thermal_blocked" -> "The phone is too hot. Wait for it to cool before opening a terminal."

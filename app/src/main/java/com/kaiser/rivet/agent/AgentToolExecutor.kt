@@ -9,6 +9,7 @@ import com.kaiser.rivet.runtime.ManagedProcessKind
 import com.kaiser.rivet.runtime.ManagedProcesses
 import com.kaiser.rivet.runtime.CommandOutputCache
 import com.kaiser.rivet.runtime.CommandOutputSlicer
+import com.kaiser.rivet.runtime.code
 import com.kaiser.rivet.runtime.BackgroundLaunch
 import com.kaiser.rivet.runtime.ProcessOutputSnapshot
 import com.kaiser.rivet.runtime.PreviewPaths
@@ -522,6 +523,10 @@ class AgentToolExecutor(
                             output.stdoutEnd?.let { put("stdout_total_bytes", it) }
                             output.stderrEnd?.let { put("stderr_total_bytes", it) }
                             put("stderr_present", output.stderrPresent || slice.stderrPresent)
+                            output.sync?.let { sync ->
+                                put("sync", sync.state.code)
+                                sync.path?.let { put("sync_path", it) }
+                            }
                             put("total_lines", slice.totalLines)
                             put("returned_lines", slice.returnedLines)
                             slice.nextOffset?.let { put("next_offset", it) }
