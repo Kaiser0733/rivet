@@ -272,11 +272,10 @@ class ContextPreparationTest {
         assertEquals("no summary is worth paying for here", 0, provider.requests.size)
     }
 
-    // A summariser that keeps failing must not be paid for on every step of the turn.
-    // A summariser that keeps failing must not be paid for on every step of the turn, and
-    // its own failure must surface. Once the attempts are spent the request is sent as it
-    // stands, because refusing a request that still fits is the dead stop dc5235a removed.
-    @Test fun aFailingSummariserIsPaidForTwiceAndThenTheTurnProceeds() = runBlocking {
+    // A summariser failure belongs to the caller: AgentLoop sends the still-fitting request
+    // for cloud turns and keeps the transcript. Compaction itself never rewrites history on
+    // a failure, and there is no lifetime counter left that could spend a later step's call.
+    @Test fun aFailingSummariserSurfacesWithoutChangingTheTranscript() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val sessions = CodingSessions(app)
@@ -289,20 +288,13 @@ class ContextPreparationTest {
         val provider = FailingSummaryProvider()
         val preparation = preparation(sessions, id, 32_768, provider)
 
-        // The bounded attempts are spent, and each one surfaces the summariser's failure.
-        repeat(2) {
-            try {
-                preparation.prepare(history)
-                throw AssertionError("a failed summary must not pass silently")
-            } catch (_: IllegalStateException) { /* expected: the provider's failure surfaces */ }
-        }
-        assertEquals("summary attempts are bounded per turn", 2, provider.requests.size)
-
-        // The next step must not buy a third summary and must not refuse the request.
-        val sent = preparation.prepare(history)
-        assertEquals("the turn proceeds with the transcript as it stands", history, sent)
-        assertEquals("no further summary was bought", 2, provider.requests.size)
+        try {
+            preparation.prepare(history)
+            error("a failed summary must not pass silently")
+        } catch (_: IllegalStateException) { /* expected: the provider's failure surfaces */ }
+        assertEquals(1, provider.requests.size)
         assertEquals("nothing was committed", "", preparation.summary)
+        assertEquals("the stored transcript is unchanged", history, sessions.recent(id))
     }
 
     // The last resort that legitimately refuses: a request whose own minimum projection
