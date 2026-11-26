@@ -2035,9 +2035,11 @@ class ChatViewModel private constructor(
                 { call: AgentToolCall -> bridge.prepare(call, workspace) { id -> liveGrant(id) } }
             }
             val capture = if (phone == null) null else (getApplication<Application>() as? RivetApplication)?.phoneCapture
-            val saveCapture: (suspend (String) -> String)? = workspace?.let { selected ->
+            val saveCapture: (suspend (String) -> String)? = workspace?.takeIf {
+                it.tree.toString() == current.currentSessionWorkspaceId
+            }?.let { selected ->
                 { capturePath ->
-                    check(workspaceSelection.currentIdentity() == selected.tree.toString())
+                    check(previewIdentityMatches(selected.tree.toString()))
                     val file = File(capturePath)
                     val name = "screenshot-${file.name}"
                     file.inputStream().use { input ->

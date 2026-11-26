@@ -21,9 +21,10 @@ internal object PhoneCaptureTool {
     ) = PreparedAgentTool(call, null) {
         val args = runCatching { Json.parseToJsonElement(call.arguments) }.getOrNull()
         if (args != buildJsonObject {}) return@PreparedAgentTool failure(call, "invalid_arguments")
+        if (saveToProject == null) return@PreparedAgentTool failure(call, "phone_shot_needs_project")
         val result = capture()
         val path = result.path ?: return@PreparedAgentTool failure(call, result.error ?: "phone_shot_unavailable")
-        val savedPath = try { saveToProject?.invoke(path) ?: path }
+        val savedPath = try { saveToProject(path) }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { return@PreparedAgentTool failure(call, "phone_shot_save_failed") }
         val attachment = VisionCapability.shotAttachment(vision(), path)

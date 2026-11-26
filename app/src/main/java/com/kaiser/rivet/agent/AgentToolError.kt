@@ -63,6 +63,7 @@ internal object AgentToolError {
         "phone_shot_timeout" to "Screen capture timed out.",
         "phone_shot_notification_missing" to "Android didn't post Rivet's capture notification. Check Screen capture notifications.",
         "phone_shot_save_failed" to "Rivet captured the screen but couldn't save the image to the project.",
+        "phone_shot_needs_project" to "Choose a project folder before capturing the screen.",
         "phone_shot_unavailable" to "Rivet couldn't start screen capture on this device.",
         "phone_shot_needs_foreground" to "Rivet needs to be on screen to ask for capture permission — bring Rivet to the front and retry",
         "phone_shot_notifications_off" to "Turn on Rivet's Screen capture notifications, then try again.",
