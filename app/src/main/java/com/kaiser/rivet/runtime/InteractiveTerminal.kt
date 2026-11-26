@@ -25,6 +25,7 @@ internal data class TerminalLaunch(
     val workspaceIdentity: String = "",
     val memoryCapBytes: Long? = null,
     val error: String? = null,
+    val notice: String? = null,
 )
 
 internal const val TERMINAL_RESIZE_DEBOUNCE_MS = 150L
@@ -270,7 +271,7 @@ internal class InteractiveTerminalSession(
                 return@launch
             }
             mutableState.update { it.copy(running = true, starting = false, ended = false,
-                error = null, pid = created.pid) }
+                error = null, notice = launch.notice, pid = created.pid) }
             // The shell may already have exited between the state update and this line.
             if (!finished && created.pid > 0) {
                 watcherJob = scope.launch { watchTree(ticket, created, launch) }

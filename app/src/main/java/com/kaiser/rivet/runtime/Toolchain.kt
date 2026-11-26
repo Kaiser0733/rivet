@@ -116,24 +116,23 @@ internal class Toolchain(context: Context) {
      * process, off the main thread. With none of the three binaries this is a no-op and
      * [path] plus the command environment stay exactly as they are today.
      */
-    suspend fun ensurePrepared() {
-        if (prepared) return
+    suspend fun ensurePrepared(): String? {
+        if (prepared) return null
         val farm = binDir
         if (farm == null) {
             prepared = true
-            return
+            return null
         }
         val binary = busybox?.takeIf { it.isFile }
         val python = pythonExecutable?.takeIf { it.isFile }
         val gitBinary = git?.takeIf { it.isFile }
         val gitRemote = gitRemoteHttps?.takeIf { it.isFile }
-        withContext(Dispatchers.IO) {
+        return withContext(Dispatchers.IO) {
             try {
                 // Plan §5 rule 10: Zone D takes no new bytes at the 1 GB cap. The farm and
                 // the stdlib are the Zone D writers; installs use the same gate.
                 if (!ToolchainStorage.admits(dataRoot, 0L)) {
-                    prepared = true
-                    return@withContext
+                    return@withContext "Toolchain storage is full. The system shell is still available."
                 }
                 // The CA file is independent of the binaries; extract it even when a
                 // device is missing the toolchain so the next update can use it.
@@ -149,7 +148,7 @@ internal class Toolchain(context: Context) {
                         (nativeDir?.absolutePath ?: "an unavailable native directory") +
                         "; commands use the legacy shell environment.")
                     prepared = true
-                    return@withContext
+                    return@withContext null
                 }
                 if (python != null) {
                     // A broken stdlib must not cost the BusyBox farm or the legacy PATH;
@@ -195,6 +194,7 @@ internal class Toolchain(context: Context) {
             } catch (_: Exception) {
                 // A farm that cannot be built leaves PATH alone; commands still run.
             }
+            null
         }
     }
 

@@ -478,6 +478,7 @@ class AgentToolExecutor(
                             success(call, buildJsonObject {
                                 put("process_id", result.processId)
                                 put("status", result.status)
+                                result.toolchainWarning?.let { put("toolchain_warning", it) }
                                 result.exitCode?.let { put("exit_code", it) }
                                 put("stdout", result.stdout)
                                 put("stderr", result.stderr)
@@ -844,6 +845,7 @@ class AgentToolExecutor(
             slice.nextOffset?.let { put("next_offset", it) }
             slice.matchedLines?.let { put("matched_lines", it) }
             result.outputId?.let { put("output_id", it) }
+            result.toolchainWarning?.let { put("toolchain_warning", it) }
             put("timed_out", result.timedOut)
             if (result.tooManyChildren) put("too_many_child_processes", true)
             if (result.memoryLimit) put("memory_limit", true)

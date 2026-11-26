@@ -29,6 +29,20 @@ class ToolchainUnavailableTest {
         assertEquals(SYSTEM_PATH, toolchain.path())
     }
 
+    @Test fun fullStorageIsReportedAndPreparationCanRetry() = runBlocking {
+        val toolchain = Toolchain(RuntimeEnvironment.getApplication())
+        val root = requireNotNull(toolchain.dataRoot).apply { mkdirs() }
+        val full = java.io.File(root, "full")
+        try {
+            java.io.RandomAccessFile(full, "rw").use { it.setLength(STORAGE_CAP_BYTES) }
+            assertEquals("Toolchain storage is full. The system shell is still available.",
+                toolchain.ensurePrepared())
+        } finally {
+            full.delete()
+        }
+        assertNull(toolchain.ensurePrepared())
+    }
+
     @Test fun aContextWithoutANativeLibraryDirIsTreatedAsNoBinary() {
         val app = RuntimeEnvironment.getApplication()
         // A fresh ApplicationInfo has no nativeLibraryDir, the same shape the

@@ -38,6 +38,7 @@ data class RuntimeCommandResult(
     val memoryLimit: Boolean = false,
     val stderrPresent: Boolean = false,
     val outputId: String? = null,
+    val toolchainWarning: String? = null,
 )
 
 data class PreviewLaunch(
@@ -55,6 +56,7 @@ data class BackgroundLaunch(
     val stderrPresent: Boolean,
     val readyMatched: Boolean?,
     val exitCode: Int?,
+    val toolchainWarning: String? = null,
 )
 
 data class ProcessOutputSnapshot(
@@ -81,6 +83,7 @@ private data class BackgroundPlan(
     val environment: Array<String>,
     val command: String,
     val credentialFile: File?,
+    val toolchainWarning: String?,
 )
 
 data class RunCheckpointRestoreResult(
@@ -141,7 +144,7 @@ class RuntimeController(
         }
         // First use in this process: build the applet farm before PATH is composed.
         // Without libbusybox.so this is a no-op and the environment is unchanged.
-        toolchain.ensurePrepared()
+        val toolchainWarning = toolchain.ensurePrepared()
         // Auth is resolved for this git command only; no generic shell environment gets it.
         val credentialFile = if (toolchain.gitReady && GitCommandAuth.needsAuth(command)) {
             withContext(Dispatchers.IO) { gitHub.refresh() }
@@ -192,7 +195,8 @@ class RuntimeController(
             RuntimeCommandResult(result.exitCode, result.stdout, result.stderr, result.stdoutTruncated,
                 result.stderrTruncated, result.timedOut, cwd, "not_started",
                 tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit,
-                stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId)) }
+                stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId,
+            toolchainWarning = toolchainWarning)) }
         val sync = try { active.sync() }
             catch (_: CancellationException) {
                 // The command already ran. Return its exit status with an
@@ -202,14 +206,16 @@ class RuntimeController(
                     "interrupted", vcsNote = worktreeVcsNote(ready.worktree),
                     tooManyChildren = result.tooManyChildren,
                     memoryLimit = result.memoryLimit,
-                    stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId)
+                    stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId,
+            toolchainWarning = toolchainWarning)
             } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
         RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
             result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
             sync.state.code, sync.path, syncSkipped = sync.skipped, syncConflicts = sync.conflicts,
             vcsNote = worktreeVcsNote(ready.worktree),
             tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit,
-            stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId)
+            stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId,
+            toolchainWarning = toolchainWarning)
     }
 
     /** Plan §5 rule 14: the one plain terminal state sentence. */
@@ -258,7 +264,7 @@ class RuntimeController(
         }
         readyCheck.second?.let { errorCode -> return@withLock TerminalLaunch(error = errorCode) }
         val ready = readyCheck.first ?: return@withLock TerminalLaunch(error = "sync_failed")
-        toolchain.ensurePrepared()
+        val toolchainWarning = toolchain.ensurePrepared()
         val directory = try { runtimeDirectory(ready.worktree, "") }
         catch (_: MirrorFailure) { return@withLock TerminalLaunch(error = "sync_timeout") }
         val environment = terminalEnvironment(environment(active, directory).toList())
@@ -281,6 +287,7 @@ class RuntimeController(
             managedId = managedId,
             workspaceIdentity = identity,
             memoryCapBytes = governor.memoryCapBytes(),
+            notice = toolchainWarning,
         )
     }
 
@@ -582,7 +589,7 @@ class RuntimeController(
                 catch (_: Exception) { }
                 ready = active.prepare()
             }
-            toolchain.ensurePrepared()
+            val toolchainWarning = toolchain.ensurePrepared()
             val credentialFile = if (toolchain.gitReady && GitCommandAuth.needsAuth(command)) {
                 withContext(Dispatchers.IO) { gitHub.refresh() }
             } else null
@@ -590,7 +597,7 @@ class RuntimeController(
             val directory = runtimeDirectory(ready.worktree, cwd)
             val environment = environment(active, directory)
             val identity = mirrorIdentity ?: throw MirrorFailure("workspace_unavailable")
-            BackgroundPlan(identity, directory.absolutePath, environment, effectiveCommand, credentialFile)
+            BackgroundPlan(identity, directory.absolutePath, environment, effectiveCommand, credentialFile, toolchainWarning)
         }
         val identity = launch.identity
         val directory = launch.directory
@@ -689,6 +696,7 @@ class RuntimeController(
             snap.stderrPresent,
             if (pattern != null) matched else null,
             info?.exitCode,
+            toolchainWarning = launch.toolchainWarning,
         )
     }
 
