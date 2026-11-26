@@ -49,11 +49,19 @@ internal class DsmlToolCalls(private val emitText: (String) -> Unit) {
         val calls = mutableListOf<AgentToolCall>()
         val text = envelope.replace(response.text) { match ->
             if (response.toolCalls.isEmpty()) {
-                invocation.findAll(match.groupValues[1]).take(32 - calls.size).forEach { call ->
+                val body = match.groupValues[1]
+                val starts = invokeStart.findAll(body).toList()
+                starts.forEachIndexed { index, call ->
+                    if (calls.size == 32) return@forEachIndexed
                     val name = call.groupValues[1].let {
                         if (it == "list_files" && it !in allowed && "list_directory" in allowed) "list_directory" else it
                     }
-                    val parameters = call.groupValues[2]
+                    val end = starts.getOrNull(index + 1)?.range?.first ?: body.length
+                    val segment = body.substring(call.range.last + 1, end)
+                    val close = invokeEnd.find(segment)
+                    // The model can omit the closing tag on an empty invocation.
+                    val parameters = if (close != null) segment.substring(0, close.range.first)
+                        else segment.takeIf(String::isBlank) ?: return@forEachIndexed
                     if (name in allowed && parameters.length < 65_536) {
                         parseArguments(parameters)?.let {
                             calls += AgentToolCall("call_" + UUID.randomUUID().toString().replace("-", ""), name, it)
@@ -75,8 +83,9 @@ internal class DsmlToolCalls(private val emitText: (String) -> Unit) {
         private val endTag = Regex("""<\s*/\s*${MARK}${GROUP}\s*>""", RegexOption.IGNORE_CASE)
         private val envelope = Regex("${startTag.pattern}(.*?)${endTag.pattern}",
             setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
-        private val invocation = Regex("""<\s*${MARK}invoke\s+name\s*=\s*"([A-Za-z0-9_-]+)"\s*>(.*?)<\s*/\s*${MARK}invoke\s*>""",
-            setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
+        private val invokeStart = Regex("""<\s*${MARK}invoke\s+name\s*=\s*"([A-Za-z0-9_-]+)"\s*>""",
+            RegexOption.IGNORE_CASE)
+        private val invokeEnd = Regex("""<\s*/\s*${MARK}invoke\s*>""", RegexOption.IGNORE_CASE)
         private val parameter = Regex("""<\s*${MARK}parameter\s+name\s*=\s*"([A-Za-z0-9_-]+)"\s+string\s*=\s*"(true|false)"\s*>(.*?)<\s*/\s*${MARK}parameter\s*>""",
             setOf(RegexOption.DOT_MATCHES_ALL, RegexOption.IGNORE_CASE))
         private val openMarkers = listOf("<|DSML|function_calls>", "<|DSML|tool_calls>", "<|DSML|calls>")
