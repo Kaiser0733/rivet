@@ -271,6 +271,7 @@ data class ChatUiState(
 enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn }
 
 data class WorkerSheetState(
+    val workerId: String? = null,
     val worker: WorkerRecord? = null,
     val messages: List<AgentMessage> = emptyList(),
     val loading: Boolean = false,
@@ -345,6 +346,7 @@ class ChatViewModel private constructor(
     private val _subagents = MutableStateFlow<List<WorkerRecord>>(emptyList())
     val subagents: StateFlow<List<WorkerRecord>> = _subagents.asStateFlow()
     private val _workerSheet = MutableStateFlow(WorkerSheetState())
+    private var workerSheetLoad: Job? = null
     val workerSheet: StateFlow<WorkerSheetState> = _workerSheet.asStateFlow()
     private var activeSupervisor: SubagentSupervisor?
         get() = selectedState.activeSupervisor
@@ -1216,8 +1218,17 @@ class ChatViewModel private constructor(
         if (sessionId != null) sessions?.appendCommandReply(sessionId, row)
         selectedState.update {
             if (it.currentSessionId != sessionId) it
-            else it.copy(messages = (it.messages + row).takeLast(100), notice = null, error = null,
-                commandAckCount = it.commandAckCount + 1)
+            else {
+                val visible = (it.messages + row).takeLast(100)
+                val remapped = com.kaiser.rivet.ui.chat.remapTurnMetadataAfterVisibilityChange(
+                    it.messages, visible, it.messageReasoning, it.turnDurationsMs,
+                    isInternal = { message -> message.role == AgentRole.Context || message.internalContext != null },
+                    isUser = { message -> message.role == AgentRole.User },
+                    sameMessage = { first, second -> first == second },
+                )
+                it.copy(messages = visible, messageReasoning = remapped.reasoning, turnDurationsMs = remapped.durations,
+                    notice = null, error = null, commandAckCount = it.commandAckCount + 1)
+            }
         }
     }
 
@@ -1424,6 +1435,7 @@ class ChatViewModel private constructor(
                 val context = ContextPreparation(sql, sessionId,
                     clientFactory(snapshot.config, snapshot.apiKey), snapshot.config,
                     UUID.randomUUID().toString(), owner.activeSummary, workspaceId,
+                    savedGoal = { owner.value.goal.ownedBy(sessionId)?.text },
                     useRequestEstimate = true, redactions = secrets.sensitiveValues().toList()) { messages, _ ->
                     owner.idleContextRequest(snapshot.config, workspaceId, messages, pinnedArchive)
                 }
@@ -1434,31 +1446,15 @@ class ChatViewModel private constructor(
                         notice = "Nothing to compact yet.", error = null) }
                     return@launchRun
                 }
-                val historyTokens = context.footprint(compacted)
-                val notice = InternalContext.compactionNotice(workspaceId, historyTokens)
-                val noticed = compacted + notice
-                try {
-                    sql.save(noticed, interrupted = false, expectedSessionId = sessionId)
-                } catch (e: CancellationException) { throw e
-                } catch (e: Exception) {
-                    // The compaction itself is already durable; only the marker row failed.
-                    val restored = sql.load()
-                    owner.activeMessages = restored.messages
-                    owner.activeSummary = restored.summary
-                    if (runRegistry.isActive(owner)) owner.update { it.copy(streaming = false, activity = null,
-                        error = if (e is AgentSessionLimitException) CONTEXT_LIMIT_ERROR
-                        else "Could not save the conversation. Check available storage and try again.") }
-                    return@launchRun
-                }
-                owner.activeMessages = noticed
+                owner.activeMessages = compacted
                 owner.activeSummary = context.summary
                 if (runRegistry.isActive(owner)) {
-                    val estimate = try { context.estimate(noticed) }
+                    val visible = sql.recent(sessionId)
+                    val estimate = try { context.estimate(compacted) }
                     catch (e: CancellationException) { throw e }
-                    catch (_: Exception) { ContextEstimate(context.footprint(noticed), "estimated") }
-                    val meter = readContextMeter(snapshot.config, context.requestFor(noticed))
+                    catch (_: Exception) { ContextEstimate(context.footprint(compacted), "estimated") }
+                    val meter = readContextMeter(snapshot.config, context.requestFor(compacted))
                     owner.update { state ->
-                        val visible = (state.messages + notice).takeLast(100)
                         val remapped = com.kaiser.rivet.ui.chat.remapTurnMetadataAfterVisibilityChange(
                             oldMessages = state.messages,
                             newMessages = visible,
@@ -2377,8 +2373,11 @@ class ChatViewModel private constructor(
                 { call: AgentToolCall -> termuxBridge.prepare(call, workspace, termuxOwner) { id -> liveGrant(id) } }
             }
             val capture = if (phone == null) null else (getApplication<Application>() as? RivetApplication)?.phoneCapture
-            val saveCapture: (suspend (String) -> String)? = workspace?.let { selected ->
+            val saveCapture: (suspend (String) -> String)? = workspace?.takeIf {
+                it.tree.toString() == current.currentSessionWorkspaceId
+            }?.let { selected ->
                 { capturePath ->
+                    check(previewIdentityMatches(selected.tree.toString()))
                     val file = File(capturePath)
                     val name = "screenshot-${file.name}"
                     file.inputStream().use { input ->
@@ -2534,7 +2533,8 @@ class ChatViewModel private constructor(
                 }
             } else emptyList()
             val context = ContextPreparation(sessions, sessionId, client, snapshot.config,
-                turnId, activeSummary, workspaceId, currentRequest = acceptedUser?.text, useRequestEstimate = true,
+                turnId, owner.activeSummary, workspaceId, currentRequest = acceptedUser?.text,
+                savedGoal = { owner.value.goal.ownedBy(sessionId)?.text }, useRequestEstimate = true,
                 redactions = secrets.sensitiveValues().toList(),
                 onCompactionStarted = {
                     if (runRegistry.isActive(owner)) owner.update { it.copy(compacting = true) }
@@ -2641,7 +2641,12 @@ class ChatViewModel private constructor(
                 secretValues = secrets.sensitiveValues().toList(),
                 requestModel = request@{ messages, _, onText ->
                     checkSpendBeforeRequest(snapshot.config)
-                    if (recalling) return@request AgentResponse(text = ArchiveRecall.directAnswer(recallWindows, recallQueries))
+                    if (recalling) {
+                        val quote = ArchiveRecall.directAnswer(recallWindows, recallQueries)
+                        val goal = owner.value.goal.ownedBy(sessionId)
+                            ?.takeIf { ArchiveRecall.asksForGoal(prompt) }?.statusLine()
+                        return@request AgentResponse(text = listOfNotNull(quote, goal).joinToString("\n\n"))
+                    }
                     val request = context.requestFor(messages)
                     lastSystem = request.system
                     val runtimePhase = owner.runtimeContext
@@ -2825,18 +2830,14 @@ class ChatViewModel private constructor(
                         if (runRegistry.isActive(owner)) owner.update { it.copy(compacting = false) }
                     }
                     if (compacted != candidate) {
-                        // A completed compaction leaves one visible, persisted marker row;
-                        // modelMessages keeps it off the wire and projection carries the earlier ones.
-                        val historyTokens = context.footprint(compacted)
-                        val noticed = compacted + InternalContext.compactionNotice(workspaceId, historyTokens)
                         durable.clear()
-                        durable.addAll(noticed)
-                        activeMessages = noticed
+                        durable.addAll(compacted)
+                        activeMessages = compacted
                         activeSummary = context.summary
-                        val meter = readContextMeter(snapshot.config, context.requestFor(noticed))
+                        val meter = readContextMeter(snapshot.config, context.requestFor(compacted))
                         if (runRegistry.isActive(owner)) owner.update { it.copy(contextMeter = meter) }
-                        noticed
-                    } else compacted
+                    }
+                    compacted
                 },
                 strictContextCapacity = snapshot.config.type == ProviderType.Local,
                 contextFootprint = { candidate -> context.footprint(candidate) },
@@ -3533,15 +3534,18 @@ class ChatViewModel private constructor(
 
     /** Opening a worker only reads its transcript; the active session is untouched. */
     fun openWorker(workerId: String) {
-        if (_workerSheet.value.worker?.id == workerId && !_workerSheet.value.loading) return
+        if (_workerSheet.value.workerId == workerId && _workerSheet.value.error == null) return
+        workerSheetLoad?.cancel()
         _workerSheet.value = WorkerSheetState(
+            workerId = workerId,
             worker = _subagents.value.firstOrNull { it.id == workerId },
             loading = true,
         )
-        viewModelScope.launch {
+        workerSheetLoad = viewModelScope.launch {
             try {
                 val transcript = workerStore.inspectTranscript(workerId)
                 _workerSheet.value = WorkerSheetState(
+                    workerId = workerId,
                     worker = transcript.worker,
                     messages = transcript.messages,
                 )
@@ -3554,6 +3558,8 @@ class ChatViewModel private constructor(
     }
 
     fun closeWorker() {
+        workerSheetLoad?.cancel()
+        workerSheetLoad = null
         _workerSheet.value = WorkerSheetState()
     }
 

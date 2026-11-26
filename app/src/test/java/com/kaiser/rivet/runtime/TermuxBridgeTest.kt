@@ -1,9 +1,13 @@
 package com.kaiser.rivet.runtime
 
 import org.junit.Assert.*
+import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.TemporaryFolder
 
 class TermuxBridgeTest {
+    @get:Rule val temporary = TemporaryFolder()
+
     @Test fun buildsServiceIntentWithoutSplittingCommands() {
         val intent = buildRunCommandIntent("git status", "/storage/emulated/0/Project")
         assertEquals("com.termux.RUN_COMMAND", intent.action)
@@ -33,6 +37,21 @@ class TermuxBridgeTest {
         assertTrue(wrapped.contains("> \"\$folder/out.txt\" 2> \"\$folder/err.txt\""))
         assertTrue(wrapped.contains("code.tmp"))
         assertTrue(wrapped.contains("\"\$folder/code\""))
+    }
+
+    @Test fun fileOutputAlsoReturnsABoundedPreviewInTheCallbackStreams() {
+        val folder = temporary.newFolder()
+        val original = "termux-output\n".repeat(1000)
+        val wrapped = TermuxCommand.withFileOutput("printf '%s' '$original'; printf 'warning' >&2; exit 7", folder.path)
+            .replace(TermuxCommand.BASH, "bash")
+        val callbackOut = temporary.newFile()
+        val callbackErr = temporary.newFile()
+        val process = ProcessBuilder("bash", "-c", wrapped).redirectOutput(callbackOut).redirectError(callbackErr).start()
+
+        assertEquals(7, process.waitFor())
+        assertEquals(original, folder.resolve("out.txt").readText())
+        assertEquals(original.take(6 * 1024 + 1), callbackOut.readText())
+        assertEquals("warning", callbackErr.readText())
     }
 
     @Test fun successfulResultKeepsStdoutStderrAndExitCode() {

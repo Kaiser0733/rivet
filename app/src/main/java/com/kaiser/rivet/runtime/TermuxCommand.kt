@@ -33,7 +33,7 @@ internal object TermuxCommand {
         return (value ?: 120_000L).coerceAtMost(600_000L)
     }
 
-    fun withFileOutput(command: String, folder: String): String = """
+    fun withFileOutput(command: String, folder: String, previewBytes: Int = 6 * 1024): String = """
         folder=${quote(folder)}
         if ! mkdir -p -- "${'$'}folder" || ! { : > "${'$'}folder/out.txt" && : > "${'$'}folder/err.txt"; }; then
             exec $BASH -c ${quote(command)}
@@ -41,6 +41,8 @@ internal object TermuxCommand {
         $BASH -c ${quote(command)} > "${'$'}folder/out.txt" 2> "${'$'}folder/err.txt"
         code=${'$'}?
         printf '%s\n' "${'$'}code" > "${'$'}folder/code.tmp" && mv -- "${'$'}folder/code.tmp" "${'$'}folder/code"
+        head -c ${previewBytes + 1} -- "${'$'}folder/out.txt"
+        head -c ${previewBytes + 1} -- "${'$'}folder/err.txt" >&2
         exit "${'$'}code"
     """.trimIndent()
 

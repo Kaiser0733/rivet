@@ -50,6 +50,7 @@ internal class ContextPreparation(
     initialSummary: String,
     private val workspaceId: String? = null,
     private val currentRequest: String? = null,
+    private val savedGoal: () -> String? = { null },
     private val onCompactionStarted: () -> Unit = {},
     private val useRequestEstimate: Boolean = false,
     private val redactions: List<String> = emptyList(),
@@ -146,7 +147,7 @@ internal class ContextPreparation(
             (acceptableTokens - floorTokens).coerceAtLeast(0L) / 2)
 
         val previous = TaskCheckpoint.previous(summary)
-        val rawGoal = currentRequest ?: messages.lastOrNull { it.role == AgentRole.User }?.text ?: previous.goal
+        val rawGoal = savedGoal() ?: currentRequest ?: messages.lastOrNull { it.role == AgentRole.User }?.text ?: previous.goal
         val goal = InternalContext.clampUtf8(AgentContext.redact(rawGoal), 512)
         val pinned = previous.copy(goal = goal)
         // A long pasted request still stays intact in the transcript and can benefit from stubbing.

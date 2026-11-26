@@ -1001,11 +1001,10 @@ class ChatViewModelTest {
         val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Complete" }
 
         assertNull(complete.error)
-        // The compaction notice is a real persisted transcript row now.
-        assertEquals(1, sessions.load().messages.count {
+        assertEquals(2, sessions.recent(id).count {
             it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
         })
-        assertEquals(69, sessions.fullEventCount(id))
+        assertEquals(70, sessions.fullEventCount(id))
         assertTrue(AgentContext.serializedBytes(sessions.load().messages) <
             AgentContext.serializedBytes(history) / 2)
         assertEquals("", sessions.load().summary)
@@ -1016,7 +1015,7 @@ class ChatViewModelTest {
             .any { it.content.contains("output_pruned") })
         // recent() is the visible transcript: context rows are hidden there except
         // the compaction notice, which is a persisted row that renders in the chat.
-        assertEquals(69, sessions.recent(id, 100).size)
+        assertEquals(70, sessions.recent(id, 100).size)
         assertTrue(sessions.recent(id, 100).none {
             it.internalContext != null && it.validatedContext()?.kind != com.kaiser.rivet.agent.CompactionNotice.KIND
         })
@@ -1037,7 +1036,7 @@ class ChatViewModelTest {
         await(switched) { !it.streaming && it.messages.lastOrNull()?.text == "After switch" }
         assertEquals("model-b", switchedProvider.requests.single().model)
         assertTrue(switchedProvider.requests.single().messages.last().text.contains("Follow up"))
-        assertEquals(71, sessions.fullEventCount(id))
+        assertEquals(72, sessions.fullEventCount(id))
     }
 
     @Test fun knownCapacityPreparesContextBelowOldByteThreshold() = runBlocking {
@@ -1071,7 +1070,7 @@ class ChatViewModelTest {
         assertTrue(provider.requests[0].system.contains("\"DECISIONS + WHY\""))
         assertTrue(provider.requests[1].messages.size < history.size + 1)
         assertEquals(goal, com.kaiser.rivet.agent.TaskCheckpoint.parse(sessions.load().summary)?.goal)
-        assertEquals(1, sessions.load().messages.count {
+        assertEquals(1, sessions.recent(id).count {
             it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
         })
         assertEquals(history.size + 3, sessions.fullEventCount(id))
@@ -1237,7 +1236,7 @@ class ChatViewModelTest {
             com.kaiser.rivet.agent.AgentContext.redact(newestUser), 512)
         assertEquals(expectedGoal, com.kaiser.rivet.agent.TaskCheckpoint.parse(sessions.load().summary)?.goal)
         assertEquals(512, expectedGoal.toByteArray(Charsets.UTF_8).size)
-        assertEquals(1, sessions.load().messages.count {
+        assertEquals(1, sessions.recent(id).count {
             it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
         })
         assertTrue(AgentContext.serializedBytes(sessions.load().messages) <
@@ -1246,6 +1245,50 @@ class ChatViewModelTest {
         assertEquals(history, done.messages.dropLast(1))
         assertEquals(history.size + 1, sessions.fullEventCount(id))
         assertFalse(done.streaming)
+    }
+
+    @Test fun compactedLongChatRetainsItsPinnedNumberAndSavedGoal() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val pinned = "Remember the pinned number is 5000."
+        val history = (0 until 33).flatMap { index ->
+            listOf(AgentMessage.user(if (index == 0) pinned else "Inspect part $index"),
+                AgentMessage.assistant("Part $index " + "x".repeat(1_300)))
+        }
+        sessions.save(history, interrupted = false)
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "{}"), AgentResponse(text = "number"))))
+        val endpoint = "https://example.invalid"
+        val config = ProviderConfig("test", ProviderType.Gemini, "Test", endpoint, "small",
+            modelContextLimit = ModelContextLimit("small", endpoint, 8192))
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+        viewModel.send("/goal ship the snake game")
+        await(viewModel) { it.goal?.text == "ship the snake game" && it.commandAckCount == 1L }
+
+        viewModel.compactHistory()
+        val compacted = await(viewModel) { !it.streaming && !it.compacting }
+        assertNull(compacted.error)
+        val saved = CodingSessions(app).load()
+        val checkpoint = requireNotNull(com.kaiser.rivet.agent.TaskCheckpoint.parse(saved.summary))
+        assertEquals("ship the snake game", checkpoint.goal)
+        assertTrue(pinned in checkpoint.userQuotes)
+        assertFalse(saved.messages.any { it.text == pinned })
+        assertTrue(compacted.messages.last().internalContext!!.content.startsWith("Compacted to "))
+
+        viewModel.send("/goal")
+        val status = await(viewModel) { it.commandAckCount == 2L }
+        assertTrue(status.messages.last().internalContext!!.content.contains("Goal: ship the snake game"))
+        assertEquals(status.messages, CodingSessions(app).recent(id))
+        assertEquals(saved, CodingSessions(app).load())
+
+        viewModel.send("What was the pinned number and what is my current goal?")
+        val recalled = await(viewModel) { !it.streaming && it.acceptedMessageCount == 1L }
+        val answer = recalled.messages.last().text
+        assertTrue(answer.contains(pinned))
+        assertTrue(answer.contains("Goal: ship the snake game"))
     }
 
     @Test fun manualCompactionOnAFreshSessionIsAPlainNoOp() = runBlocking {
@@ -1456,7 +1499,7 @@ class ChatViewModelTest {
         val restarted = CodingSessions(app).load()
         assertEquals(second, restarted.messages)
         assertEquals(preparation.summary, restarted.summary)
-        assertEquals(40, sessions.fullEventCount(id))
+        assertEquals(42, sessions.fullEventCount(id))
         assertEquals(history, sessions.recent(id, 100).take(history.size))
     }
 
@@ -1501,7 +1544,7 @@ class ChatViewModelTest {
         assertEquals(2, secondProvider.requests.size)
         assertEquals("small", secondProvider.requests.last().model)
         assertTrue(CodingSessions(app).load().summary.contains("Continue on small model"))
-        assertEquals(1, sessions.load().messages.count {
+        assertEquals(1, sessions.recent(id).count {
             it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
         })
         assertEquals(history.size + 5, sessions.fullEventCount(id))

@@ -80,11 +80,11 @@ object SubagentContext {
     }
 
     fun resultContent(workerId: String, job: String, envelopeJson: String): String {
-        val header = "Subagent finished ($workerId · ${job.trim()}):\n"
-        val budget = (InternalContext.MAX_CONTENT_BYTES - header.toByteArray(Charsets.UTF_8).size).coerceAtLeast(0)
+        val shortJob = InternalContext.clampUtf8(job.trim(), 256, "…")
+        val header = "Subagent finished ($workerId · $shortJob):\n"
+        val budget = ResultEnvelope.MAX_PUSH_BYTES - header.toByteArray(Charsets.UTF_8).size
         val redacted = AgentContext.redact(envelopeJson)
-        val clamped = InternalContext.clampUtf8(redacted, budget)
-        return header + clamped
+        return header + ResultEnvelope.assembleAwaitResult(listOf(redacted), maxTotalBytes = budget)
     }
 
     fun resultEvent(

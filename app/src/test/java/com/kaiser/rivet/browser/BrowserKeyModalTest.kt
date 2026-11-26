@@ -8,6 +8,7 @@ import android.webkit.WebView
 import com.kaiser.rivet.agent.AgentToolCall
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.test.UnconfinedTestDispatcher
 import kotlinx.coroutines.test.resetMain
 import kotlinx.coroutines.test.runTest
@@ -33,6 +34,7 @@ class BrowserKeyModalTest {
     @Before fun setUp() { Dispatchers.setMain(UnconfinedTestDispatcher()) }
     @After fun tearDown() {
         session?.endSession()
+        runBlocking { session?.awaitPendingWorkForTest() }
         session = null
         Dispatchers.resetMain()
     }

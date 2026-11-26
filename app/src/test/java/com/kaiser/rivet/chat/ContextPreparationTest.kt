@@ -3,7 +3,10 @@ package com.kaiser.rivet.chat
 import android.app.Application
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentResponse
+import com.kaiser.rivet.agent.AgentToolCall
+import com.kaiser.rivet.agent.AgentToolResult
 import com.kaiser.rivet.agent.ContextCapacityTooSmall
+import com.kaiser.rivet.agent.RunPhase
 import com.kaiser.rivet.agent.TaskState
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ModelContextLimit
@@ -19,6 +22,8 @@ import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.storage.ContextAttempt
 import com.kaiser.rivet.storage.ContextEstimate
 import com.kaiser.rivet.storage.ContextStore
+import com.kaiser.rivet.subagent.ResultEnvelope
+import com.kaiser.rivet.subagent.WorkerClaim
 import kotlinx.coroutines.runBlocking
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
@@ -77,7 +82,7 @@ class ContextPreparationTest {
 
         assertTrue(retained.contains(history.last()))
         assertTrue(retained.count { it.internalContext == null } < history.size)
-        assertEquals(history, sessions.recent(id))
+        assertEquals(history, sessions.recent(id).filter { it.internalContext == null })
         assertEquals(1, provider.requests.size)
         assertTrue(preparation.summary.contains("Continue"))
     }
@@ -120,7 +125,7 @@ class ContextPreparationTest {
         assertEquals(1, reduced.count { it.internalContext?.kind == "summary" })
 
         assertTrue(provider.requests.isEmpty())
-        assertEquals(latest, sessions.recent(id))
+        assertEquals(latest, sessions.recent(id).filter { it.internalContext == null })
         assertTrue(sessions.load().summary.contains("Continue the fix"))
     }
 
@@ -146,7 +151,35 @@ class ContextPreparationTest {
         assertTrue(input.contains(newestRemoved))
         assertTrue(input.contains("Earlier removed events omitted"))
         assertTrue(input.contains("Check the latest boundary"))
-        assertEquals(history, sessions.recent(id, 100).takeLast(100))
+        assertEquals(history, sessions.recent(id).filter { it.internalContext == null })
+    }
+
+    @Test fun longChatCompactsWithAnOversizedWorkerResultInItsNewestGroup() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val id = sessions.load().id!!
+        val call = AgentToolCall("wait", "await_subagents", "{}")
+        val envelope = ResultEnvelope.build("worker-1", RunPhase.Done,
+            WorkerClaim("long.txt begins here\n" + "λ".repeat(9_000)))
+        val originalResult = """{"workers":[$envelope]}"""
+        val history = (1..32).flatMap { index ->
+            listOf(AgentMessage.user("Check $index"), AgentMessage.assistant("Checked $index"))
+        } + listOf(AgentMessage.user("What did the worker find?"), AgentMessage.assistant("", listOf(call)),
+            AgentMessage.tools(listOf(AgentToolResult(call.id, call.name, originalResult))))
+        sessions.save(history, interrupted = true)
+        val preparation = preparation(sessions, id, 8192, SummaryProvider())
+
+        val retained = preparation.prepare(history, force = true)
+
+        val result = retained.last().toolResults.single()
+        assertEquals(call.id, result.callId)
+        assertTrue(result.content.toByteArray().size <= 3072)
+        assertTrue(result.content.contains("long.txt begins here"))
+        assertTrue(result.content.contains("worker-1"))
+        assertTrue(preparation.footprint(retained) < preparation.footprint(history))
+        assertEquals(retained, sessions.load().messages)
+        assertEquals(history, sessions.recent(id).filter { it.internalContext == null })
     }
 
     @Test fun transcriptWithRepeatedLargeFileCreateAndReadBacksStubsInsteadOfDying() = runBlocking {

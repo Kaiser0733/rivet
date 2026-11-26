@@ -16,9 +16,11 @@ internal object ArchiveRecall {
     const val TOOL = "search_archive"
     const val NOT_FOUND = "I couldn't find that in this conversation."
     private val pastReference = Regex(
-        """\b(?:remember (?:when|what|how|the|my)|last time|earlier|previous(?:ly)?|before (?:this|we)|first (?:turn|message)|what did (?:i|we|you)|(?:the|my|our) code word|do you remember|from (?:this|our|the) (?:chat|conversation))\b""",
+        """\b(?:remember (?:when|what|how|the|my)|last time|earlier|previous(?:ly)?|before (?:this|we)|first (?:turn|message|request)|what did (?:i|we|you)|what (?:is|was) (?:the|my|our) pinned number|(?:the|my|our) code word|do you remember|from (?:this|our|the) (?:chat|conversation))\b""",
         RegexOption.IGNORE_CASE,
     )
+    private val goalQuestion = Regex("""\b(?:what (?:is|was)|what's) (?:the|my|our) (?:current |saved |active )?goal\b""",
+        RegexOption.IGNORE_CASE)
     private val words = Regex("""[\p{L}\p{N}]+""")
     private val stop = setOf("about", "after", "again", "also", "been", "before", "could", "earlier",
         "first", "from", "give", "have", "last", "message", "remember", "said", "tell", "that",
@@ -41,6 +43,8 @@ internal object ArchiveRecall {
         })
 
     fun required(prompt: String): Boolean = pastReference.containsMatchIn(prompt)
+
+    fun asksForGoal(prompt: String): Boolean = goalQuestion.containsMatchIn(prompt)
 
     fun terms(phrase: String): List<String> = words.findAll(phrase.take(1024).lowercase())
         .map { it.value }.filter { it.length >= 3 && it !in stop }.distinct().take(8).toList()

@@ -1,5 +1,6 @@
 package com.kaiser.rivet.agent
 
+import com.kaiser.rivet.subagent.ResultEnvelope
 import kotlinx.serialization.builtins.ListSerializer
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonPrimitive
@@ -84,17 +85,17 @@ internal object AgentContext {
     private fun pruneToolGroup(group: List<AgentMessage>): List<AgentMessage> {
         val assistant = group[0]
         val tool = group[1]
-        // A worker's delivered result is the coordinator's whole reason for waiting;
-        // stubbing it silently deletes finished subagent work. Keep it intact and let
-        // the existing MAX_TOOL_RESULT_BYTES cap (with its own truncation note) apply.
-        if (tool.toolResults.any { it.name == WORKER_RESULT_TOOL }) return group
         val prunedCalls = assistant.toolCalls.zip(tool.toolResults).map { (call, result) ->
             if (result.error || call.arguments.toByteArray(Charsets.UTF_8).size < 2048 ||
                 call.name == "run_command" && !runCommandCanPrune(result)) call
             else call.copy(arguments = prunedArguments(call))
         }
         val prunedResults = tool.toolResults.map { result ->
-            if (result.error || result.content.toByteArray(Charsets.UTF_8).size < 2048 ||
+            if (!result.error && result.name == WORKER_RESULT_TOOL) {
+                val content = if (result.content.toByteArray(Charsets.UTF_8).size > ResultEnvelope.MAX_PUSH_BYTES)
+                    ResultEnvelope.compactAwaitResult(result.content) ?: prunedContent(result) else result.content
+                result.copy(content = content)
+            } else if (result.error || result.content.toByteArray(Charsets.UTF_8).size < 2048 ||
                 result.name == "run_command" && !runCommandCanPrune(result)) result
             else result.copy(
                 content = prunedContent(result),

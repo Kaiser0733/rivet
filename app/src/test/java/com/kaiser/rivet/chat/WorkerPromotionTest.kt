@@ -114,6 +114,15 @@ class WorkerPromotionTest {
         assertEquals(promoted, vm.uiState.value.currentSessionId)
     }
 
+    @Test fun closingWorkerWhileItsTranscriptLoadsDoesNotReopenTheSheet() = runBlocking {
+        vm.openWorker(worker.id)
+        vm.closeWorker()
+        delay(150)
+
+        assertNull(vm.workerSheet.value.worker)
+        assertTrue(vm.workerSheet.value.messages.isEmpty())
+    }
+
     @Test fun openWorkerAndContinueWorkerOnRunningWorkerDoNotMutateLiveTranscript() = runBlocking {
         val live = WorkerRecord(
             id = "w-live",

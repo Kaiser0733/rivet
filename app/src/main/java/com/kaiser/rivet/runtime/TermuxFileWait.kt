@@ -32,7 +32,21 @@ internal class TermuxFileWait(
     suspend fun await(returned: Deferred<TermuxRunResult>, timeoutMillis: Long): TermuxRunResult? {
         var lastRead: TermuxFileRead = TermuxFileRead.Missing
         val result = withTimeoutOrNull(timeoutMillis) {
-            awaitFiles { lastRead = it }
+            while (true) {
+                val failure = lastRead as? TermuxFileRead.Failed
+                if (failure == null || failure.reason.retryableTermuxRead()) lastRead = read()
+                val saved = lastRead as? TermuxFileRead.Done
+                if (saved != null) return@withTimeoutOrNull saved.result
+                if (returned.isCompleted) {
+                    val callback = returned.await()
+                    if (callback.stdout.isNotEmpty() || callback.stderr.isNotEmpty()) {
+                        return@withTimeoutOrNull callback
+                    }
+                }
+                delay(pollMillis)
+            }
+            @Suppress("UNREACHABLE_CODE")
+            null
         }
         val outcome = when (val read = lastRead) {
             TermuxFileRead.Missing -> "MISSING"
@@ -41,26 +55,10 @@ internal class TermuxFileWait(
                 "stdout=${read.result.stdout.length} stderr=${read.result.stderr.length}"
         }
         onReadOutcome(outcome)
-        return result ?: if (returned.isCompleted || lastRead != TermuxFileRead.Missing) {
+        val callbackError = if (returned.isCompleted) returned.await().takeIf { it.error != null } else null
+        return result ?: callbackError ?: if (returned.isCompleted || lastRead != TermuxFileRead.Missing) {
             missingOutput(outcome)
         } else null
-    }
-
-    private suspend fun awaitFiles(onRead: (TermuxFileRead) -> Unit): TermuxRunResult {
-        while (true) {
-            val attempt = read()
-            onRead(attempt)
-            when (attempt) {
-                TermuxFileRead.Missing -> Unit
-                is TermuxFileRead.Failed -> if (!attempt.reason.retryableTermuxRead()) {
-                    return missingOutput(attempt.reason.name)
-                }
-                is TermuxFileRead.Done -> if (attempt.result.stdout.isNotEmpty() || attempt.result.stderr.isNotEmpty()) {
-                    return attempt.result
-                }
-            }
-            delay(pollMillis)
-        }
     }
 
     private fun missingOutput(outcome: String) = TermuxRunResult(

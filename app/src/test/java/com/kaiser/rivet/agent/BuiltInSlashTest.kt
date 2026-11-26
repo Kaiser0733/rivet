@@ -25,4 +25,17 @@ class BuiltInSlashTest {
         assertEquals(GoalCommand.Set("finish the tea essay"),
             parseGoalCommand(SlashCommands.normalize("//goal finish the tea essay")))
     }
+
+    @Test fun invisibleFormattingBetweenSlashPrefixesDoesNotMakeGoalUnknown() {
+        val input = "/\u200B／Goal"
+        assertEquals(BuiltInSlash.Goal, SlashCommands.builtIn(input))
+        assertNull(SlashCommands.unknownLeading(input, emptyList()))
+    }
+
+    @Test fun goalStatusDoesNotCopyAndClipThePreviousAssistantAnswer() {
+        val date = "2026-11-18"
+        val goal = GoalDocument("ship the snake game", GoalState.Active, date)
+            .withProgress("I don't have a live session's transcript. ".repeat(12), "session")
+        assertEquals("Goal: ship the snake game · active · set $date", goal.statusLine())
+    }
 }

@@ -37,4 +37,26 @@ class DsmlToolCallsTest {
         assertEquals(AgentResponse(plain, listOf(native)), adapter.finish(AgentResponse(plain, listOf(native)), tools))
         assertEquals(plain, visible.toString())
     }
+
+    @Test fun starterOpeningExecutesBothCallsWhenTheEmptyInvocationHasNoClosingTag() {
+        val opening = "I'll start by looking at the workspace.\n"
+        val wire = opening + """
+            < | DSML | calls>
+            < | DSML | invoke name="run_command">
+            < | DSML | parameter name="command" string="true">ls -la</ | DSML | parameter>
+            </ | DSML | invoke>
+            < | DSML | invoke name="git_status">
+            </ | DSML | calls>
+        """.trimIndent()
+        val visible = StringBuilder()
+        val adapter = DsmlToolCalls { visible.append(it) }
+        wire.chunked(1).forEach(adapter::delta)
+        val response = adapter.finish(AgentResponse(text = wire),
+            tools + AgentToolDefinition("run_command", "", buildJsonObject {}))
+
+        assertEquals(opening, visible.toString())
+        assertEquals(opening, response.text)
+        assertEquals(listOf("run_command", "git_status"), response.toolCalls.map { it.name })
+        assertEquals(listOf("""{"command":"ls -la"}""", "{}"), response.toolCalls.map { it.arguments })
+    }
 }

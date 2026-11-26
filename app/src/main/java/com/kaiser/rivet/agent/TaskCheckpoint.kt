@@ -46,7 +46,11 @@ internal data class TaskCheckpoint(
                 else message.text.lineSequence()
             }
             .filter { it.isNotBlank() && it.toByteArray(Charsets.UTF_8).size <= 320 && AgentContext.redact(it) == it }
-        val quotes = (lines + userQuotes.asSequence()).distinct().take(9).toList()
+        val candidates = (lines + userQuotes.asSequence()).distinct().toList()
+        val (pinned, recent) = candidates.partition { line ->
+            !line.trimEnd().endsWith('?') && pinnedQuote.containsMatchIn(line)
+        }
+        val quotes = pinned + recent
         return copy(userQuotes = quotes.take(8), omitted = omitted || quotes.size > 8)
     }
 
@@ -101,6 +105,7 @@ internal data class TaskCheckpoint(
     companion object {
         private const val SUPERSEDED = "SUPERSEDED: "
         private const val RESOLVED = "RESOLVED: "
+        private val pinnedQuote = Regex("""\b(?:remember|pin|pinned)\b""", RegexOption.IGNORE_CASE)
         private val json = Json { encodeDefaults = true }
 
         private fun safeItems(items: List<String>) = items.map(AgentContext::redact).filter(String::isNotBlank)

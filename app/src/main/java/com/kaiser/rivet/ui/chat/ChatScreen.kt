@@ -100,7 +100,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.SideEffect
 import androidx.compose.runtime.collectAsState
-import androidx.compose.runtime.derivedStateOf
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.produceState
 import androidx.compose.runtime.key
@@ -112,6 +111,7 @@ import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.semantics.Role
+import androidx.compose.ui.semantics.role
 import androidx.compose.ui.semantics.stateDescription
 import androidx.compose.ui.semantics.semantics
 import androidx.compose.ui.Alignment
@@ -119,7 +119,6 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.platform.LocalContext
-import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.platform.LocalConfiguration
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.res.stringResource
@@ -163,6 +162,7 @@ import com.kaiser.rivet.provider.offeredReasoning
 import com.kaiser.rivet.ui.provider.labelRes
 import com.kaiser.rivet.agent.AgentMessage
 import com.kaiser.rivet.agent.AgentRole
+import com.kaiser.rivet.agent.CompactionNotice
 import com.kaiser.rivet.agent.AgentConversationItem
 import com.kaiser.rivet.agent.AgentActivityGroup
 import com.kaiser.rivet.agent.AgentActivityOperation
@@ -665,15 +665,9 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
         (if (state.unsupportedReasoning != null) 1 else 0)
     var followBottom by rememberSaveable { mutableStateOf(true) }
     var lastAcceptedCount by rememberSaveable { mutableStateOf(state.acceptedMessageCount) }
+    var lastCommandCount by rememberSaveable { mutableStateOf(state.commandAckCount) }
     var userScrolling by remember { mutableStateOf(false) }
     var programmaticScroll by remember { mutableStateOf(false) }
-    val bottomSlop = with(LocalDensity.current) { 72.dp.toPx() }
-    val nearBottom by remember(bottomSlop) { derivedStateOf {
-        val layout = listState.layoutInfo
-        val last = layout.visibleItemsInfo.lastOrNull() ?: return@derivedStateOf true
-        if (last.index < layout.totalItemsCount - 1) false
-        else layout.viewportEndOffset - (last.offset + last.size) >= -bottomSlop
-    } }
     val transcriptScrollConnection = remember(listState) {
         object : NestedScrollConnection {
             override fun onPreScroll(available: Offset, source: NestedScrollSource): Offset {
@@ -699,11 +693,14 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     }
     // Sending a message is an explicit request to see it: after reading back through the
     // conversation, the reply and the user's own message must not land off-screen.
-    LaunchedEffect(state.acceptedMessageCount) {
-        if (lastAcceptedCount != state.acceptedMessageCount) {
-            lastAcceptedCount = state.acceptedMessageCount
+    LaunchedEffect(state.acceptedMessageCount, state.commandAckCount) {
+        val newReply = lastCommandCount != state.commandAckCount &&
+            state.messages.lastOrNull()?.internalContext?.kind == CompactionNotice.COMMAND_KIND
+        if (lastAcceptedCount != state.acceptedMessageCount || newReply) {
             followBottom = true
         }
+        lastAcceptedCount = state.acceptedMessageCount
+        lastCommandCount = state.commandAckCount
     }
     // Following the bottom while the reader is there. Two things move the list: a row appearing,
     // which this effect lands exactly, and a row growing — and growth is a layout event, not a
@@ -714,7 +711,7 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
     // has to handle rows appearing or disappearing, which move everything at once.
     LaunchedEffect(segmentedTurns.size, streamingReasoning.isNotBlank(), streamingText.isNotBlank(),
         state.streaming, state.activity, state.toolLifecycle, state.interruptedTurn, state.error,
-        state.notice, showBrowserCard, state.compacting, totalItems, state.acceptedMessageCount) {
+        state.notice, showBrowserCard, state.compacting, totalItems, state.acceptedMessageCount, state.commandAckCount) {
         if (followBottom && totalItems > 0 && !userScrolling && !listState.isScrollInProgress) {
             programmaticScroll = true
             try {
@@ -843,7 +840,7 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                 }
             }
         }
-        if (totalItems > 0 && listState.canScrollForward && (!followBottom || !nearBottom)) {
+        if (listState.canScrollForward) {
             Surface(
                 onClick = {
                     jumpScope.launch {
@@ -857,7 +854,8 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                         }
                     }
                 },
-                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 8.dp),
+                modifier = Modifier.align(Alignment.BottomEnd).padding(end = 18.dp, bottom = 8.dp)
+                    .semantics { role = Role.Button },
                 shape = MaterialTheme.shapes.extraLarge,
                 color = MaterialTheme.colorScheme.surfaceContainerHigh,
             ) {

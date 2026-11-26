@@ -163,7 +163,7 @@ class ImprovementsTest(unittest.TestCase):
         self.assertIn("ConversationContextMeter(contextReading", chat)
         model = source("chat/ChatViewModel.kt")
         self.assertIn("contextEstimate = estimate, contextMeter = meter, error = null", model)
-        self.assertIn("context.requestFor(noticed)", model)
+        self.assertIn("context.requestFor(compacted)", model)
         self.assertIn("currentEstimate - sampledEstimate", source("storage/ContextUsageDelta.kt"))
         self.assertIn("base_estimated_tokens", source("storage/CodingSessions.kt"))
 

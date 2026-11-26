@@ -40,15 +40,18 @@ class TermuxFileWaitTest {
         assertEquals(output, wait.await(CompletableDeferred(broadcast), 10_000))
     }
 
-    @Test fun emptyFirstFileReadIsRetried() = runTest {
-        val output = TermuxRunResult(stdout = "saved", stderr = "details", exitCode = 7)
-        var reads = 0
-        val wait = TermuxFileWait(outputPath, read = {
-            TermuxFileRead.Done(if (reads++ == 0) TermuxRunResult(exitCode = 0) else output)
-        })
+    @Test fun aPublishedExitStatusCompletesEvenWhenTheCommandPrintsNothing() = runTest {
+        val output = TermuxRunResult(exitCode = 7)
+        val wait = TermuxFileWait(outputPath, read = { TermuxFileRead.Done(output) })
 
         assertEquals(output, wait.await(CompletableDeferred(TermuxRunResult(exitCode = 0)), 10_000))
-        assertEquals(2, reads)
+    }
+
+    @Test fun deliveredStdoutReachesTheCallerWhenProjectFilesAreUnreadable() = runTest {
+        val broadcast = TermuxRunResult(stdout = "hello-from-termux\n", stderr = "details", exitCode = 7)
+        val wait = TermuxFileWait(outputPath, read = { TermuxFileRead.Failed(WorkspaceFailure.Reason.PERMISSION) })
+
+        assertEquals(broadcast, wait.await(CompletableDeferred(broadcast), 10_000))
     }
 
     @Test fun errorOnlyBroadcastDoesNotShortenTheFileDeadline() = runTest {
