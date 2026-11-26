@@ -1,173 +1,158 @@
 package com.kaiser.rivet.runtime
 
 import java.io.File
-import java.util.LinkedHashMap
+import java.io.FileOutputStream
+import java.io.IOException
+import java.io.RandomAccessFile
 import java.util.UUID
 
-/**
- * On-disk spool for command output that was too large for the live capture window.
- * A handle lets a later run_command slice/grep the same bytes without re-running the
- * command. The cache is deliberately process-owned and bounded; callers fall back to
- * the original command if a handle has been evicted.
- */
-class CommandOutputCache(
-    private val directory: File,
-    private val maxEntries: Int = MAX_ENTRIES,
-    private val maxStreamBytes: Int = MAX_STREAM_BYTES,
-    private val maxTotalBytes: Int = MAX_TOTAL_BYTES,
-) {
-    data class CachedOutput(
-        val id: String,
-        val stdout: String,
-        val stderr: String,
-        val stdoutTruncated: Boolean,
-        val stderrTruncated: Boolean,
+/** Owns full command streams in the app cache and exposes workspace-scoped paging handles. */
+class CommandOutputCache(private val directory: File) {
+    class CachedOutput internal constructor(
+        private val root: File,
         val workspace: String?,
-    )
+    ) {
+        val id get() = root.name
+        val stdout get() = preview(stdoutFile)
+        val stderr get() = preview(stderrFile)
+        val stdoutTruncated get() = stdoutFile.length() > PREVIEW_BYTES
+        val stderrTruncated get() = stderrFile.length() > PREVIEW_BYTES
+        private val stdoutFile get() = File(root, "stdout")
+        private val stderrFile get() = File(root, "stderr")
 
-    private data class Meta(
-        val id: String,
-        val workspace: String?,
-        val bytes: Int,
-        val stdoutTruncated: Boolean,
-        val stderrTruncated: Boolean,
-    )
-
-    private val entries = LinkedHashMap<String, Meta>(16, 0.75f, true)
-    private var totalBytes = 0
-
-    init {
-        require(maxEntries > 0) { "maxEntries must be positive" }
-        require(maxStreamBytes > 0) { "maxStreamBytes must be positive" }
-        require(maxTotalBytes > 0) { "maxTotalBytes must be positive" }
-        directory.mkdirs()
-    }
-
-    @Synchronized
-    fun put(
-        stdout: String,
-        stderr: String,
-        workspace: String? = null,
-        force: Boolean = false,
-        stdoutTruncated: Boolean = false,
-        stderrTruncated: Boolean = false,
-    ): String? {
-        if (!force && !worthCaching(stdout, stderr)) return null
-        val streamLimit = minOf(maxStreamBytes, maxTotalBytes)
-        val out = clip(stdout, streamLimit)
-        val err = clip(stderr, streamLimit)
-        val id = UUID.randomUUID().toString()
-        val meta = Meta(
-            id = id,
-            workspace = workspace,
-            bytes = out.text.toByteArray(Charsets.UTF_8).size +
-                err.text.toByteArray(Charsets.UTF_8).size,
-            stdoutTruncated = stdoutTruncated || out.truncated,
-            stderrTruncated = stderrTruncated || err.truncated,
-        )
-        try {
-            file(id, "stdout").writeText(out.text, Charsets.UTF_8)
-            file(id, "stderr").writeText(err.text, Charsets.UTF_8)
-            file(id, "meta").writeText(workspace.orEmpty(), Charsets.UTF_8)
-        } catch (e: Exception) {
-            delete(id)
-            throw e
+        private fun preview(file: File): String = RandomAccessFile(file, "r").use { input ->
+            val bytes = ByteArray(minOf(input.length(), PREVIEW_BYTES.toLong()).toInt())
+            input.readFully(bytes)
+            bytes.copyOf(completeUtf8Prefix(bytes)).toString(Charsets.UTF_8)
         }
-        entries[id] = meta
-        totalBytes += meta.bytes
-        evictToBudget()
-        return if (entries.containsKey(id)) id else null
-    }
 
-    @Synchronized
-    fun get(id: String): CachedOutput? {
-        val meta = entries[id] ?: return null
-        val outFile = file(id, "stdout")
-        val errFile = file(id, "stderr")
-        if (!outFile.isFile || !errFile.isFile) {
-            remove(id)
-            return null
+        internal fun read(offset: Long, stderr: Boolean): BytePage =
+            RandomAccessFile(if (stderr) stderrFile else stdoutFile, "r").use { file ->
+                val total = file.length()
+                var start = offset.coerceIn(0, total)
+                file.seek(start)
+                while (start < total) {
+                    val value = file.read()
+                    if ((value and 0xc0) != 0x80) break
+                    start++
+                }
+                file.seek(start)
+                val bytes = ByteArray(minOf(total - start, PAGE_BYTES.toLong()).toInt())
+                file.readFully(bytes)
+                val end = if (start + bytes.size < total) completeUtf8Prefix(bytes) else bytes.size
+                BytePage(bytes.copyOf(end).toString(Charsets.UTF_8), start, start + end, total)
+            }
+
+        private fun completeUtf8Prefix(bytes: ByteArray): Int {
+            var leader = bytes.lastIndex
+            while (leader >= 0 && (bytes[leader].toInt() and 0xc0) == 0x80) leader--
+            if (leader < 0) return bytes.size
+            val byte = bytes[leader].toInt() and 0xff
+            val expected = when (byte) {
+                in 0xc2..0xdf -> 2
+                in 0xe0..0xef -> 3
+                in 0xf0..0xf4 -> 4
+                else -> 1
+            }
+            return if (bytes.size - leader < expected) leader else bytes.size
         }
-        val stdout = outFile.readText(Charsets.UTF_8)
-        val stderr = errFile.readText(Charsets.UTF_8)
-        return CachedOutput(
-            id = id,
-            stdout = stdout,
-            stderr = stderr,
-            stdoutTruncated = meta.stdoutTruncated,
-            stderrTruncated = meta.stderrTruncated,
-            workspace = meta.workspace,
-        )
     }
 
-    @Synchronized
-    fun remove(id: String) {
-        entries.remove(id)?.let { totalBytes -= it.bytes }
-        delete(id)
-    }
+    internal data class BytePage(val text: String, val start: Long, val end: Long, val total: Long)
 
-    @Synchronized
-    fun clearForWorkspace(workspace: String) {
-        entries.values.filter { it.workspace == workspace }.map { it.id }
-            .forEach(::remove)
-    }
+    internal class Spool(private val root: File, private val workspace: String?) {
+        private var stdout: FileOutputStream? = null
+        private var stderr: FileOutputStream? = null
+        private var failed = false
 
-    @Synchronized
-    fun clear() {
-        entries.keys.toList().forEach(::remove)
-        entries.clear()
-        totalBytes = 0
-    }
+        private var opened = false
 
-    @Synchronized
-    fun size(): Int = entries.size
-
-    private fun worthCaching(stdout: String, stderr: String): Boolean =
-        stdout.toByteArray(Charsets.UTF_8).size > CACHE_THRESHOLD_BYTES ||
-            stderr.toByteArray(Charsets.UTF_8).size > CACHE_THRESHOLD_BYTES ||
-            lineCount(stdout) > CACHE_THRESHOLD_LINES ||
-            lineCount(stderr) > CACHE_THRESHOLD_LINES
-
-    private fun lineCount(text: String): Int =
-        if (text.isEmpty()) 0 else text.count { it == '\n' } + if (text.endsWith('\n')) 0 else 1
-
-    private fun clip(text: String, limit: Int): Clipped {
-        if (text.toByteArray(Charsets.UTF_8).size <= limit) return Clipped(text, false)
-        var low = 0
-        var high = text.length
-        while (low < high) {
-            val mid = (low + high + 1) / 2
-            if (text.substring(0, mid).toByteArray(Charsets.UTF_8).size <= limit) {
-                low = mid
-            } else {
-                high = mid - 1
+        private fun open() {
+            opened = true
+            try {
+                if (!root.mkdirs()) throw IOException("Could not create command output directory")
+                stdout = FileOutputStream(File(root, "stdout"))
+                stderr = FileOutputStream(File(root, "stderr"))
+            } catch (_: IOException) {
+                failed = true
             }
         }
-        return Clipped(text.substring(0, low), true)
-    }
 
-    private data class Clipped(val text: String, val truncated: Boolean)
+        @Synchronized fun append(isStderr: Boolean, bytes: ByteArray, size: Int) {
+            if (!opened) open()
+            if (failed) return
+            try {
+                (if (isStderr) stderr else stdout)?.write(bytes, 0, size)
+            } catch (_: IOException) {
+                failed = true
+            }
+        }
 
-    private fun evictToBudget() {
-        while (entries.size > maxEntries || totalBytes > maxTotalBytes) {
-            val eldest = entries.keys.firstOrNull() ?: break
-            remove(eldest)
+        @Synchronized fun finish(keep: Boolean): String? {
+            if (!opened) return null
+            for (stream in listOf(stdout, stderr)) {
+                try { stream?.close() } catch (_: IOException) { failed = true }
+            }
+            if (failed || !keep) {
+                root.deleteRecursively()
+                if (failed) throw IOException("Could not store full command output")
+                return null
+            }
+            try {
+                // A reader can discover the spill only after both streams have closed.
+                File(root, "owner").writeText(workspace.orEmpty())
+                return root.name
+            } catch (error: IOException) {
+                root.deleteRecursively()
+                throw error
+            }
         }
     }
 
-    private fun file(id: String, suffix: String): File = File(directory, "$id.$suffix")
+    internal fun begin(workspace: String?): Spool =
+        Spool(File(directory, UUID.randomUUID().toString()), workspace)
 
-    private fun delete(id: String) {
-        file(id, "stdout").delete()
-        file(id, "stderr").delete()
-        file(id, "meta").delete()
+    fun put(stdout: String, stderr: String, workspace: String? = null, force: Boolean = false): String? {
+        if (!force && !worthCaching(stdout, stderr)) return null
+        val spool = begin(workspace)
+        val out = stdout.toByteArray()
+        val err = stderr.toByteArray()
+        spool.append(false, out, out.size)
+        spool.append(true, err, err.size)
+        return spool.finish(keep = true)
     }
 
+    fun get(id: String): CachedOutput? {
+        if (!ID.matches(id)) return null
+        return load(File(directory, id))
+    }
+
+    private fun load(root: File): CachedOutput? = try {
+        if (!File(root, "stdout").isFile || !File(root, "stderr").isFile) null
+        else CachedOutput(root, File(root, "owner").readText().takeIf(String::isNotEmpty))
+    } catch (_: IOException) { null }
+
+    fun clearForWorkspace(workspace: String) {
+        directory.listFiles().orEmpty().filter { load(it)?.workspace == workspace }.forEach(File::deleteRecursively)
+    }
+
+    fun clear() {
+        directory.listFiles().orEmpty().filter { load(it) != null }.forEach(File::deleteRecursively)
+    }
+
+    fun size(): Int = directory.listFiles().orEmpty().count { load(it) != null }
+
     companion object {
-        const val MAX_ENTRIES = 8
-        const val MAX_STREAM_BYTES = 1 * 1_024 * 1_024
-        const val MAX_TOTAL_BYTES = 4 * 1_024 * 1_024
-        const val CACHE_THRESHOLD_BYTES = 8 * 1_024
-        const val CACHE_THRESHOLD_LINES = 100
+        private val ID = Regex("[0-9a-f-]{36}")
+        private const val PREVIEW_BYTES = 1_024 * 1_024
+        // Retain space for JSON quoting of control characters on the tool wire.
+        private const val PAGE_BYTES = 3 * 1_024
+
+        internal fun worthCaching(stdout: String, stderr: String): Boolean =
+            stdout.toByteArray().size > 8 * 1_024 || stderr.toByteArray().size > 8 * 1_024 ||
+                lineCount(stdout) > 100 || lineCount(stderr) > 100
+
+        private fun lineCount(text: String): Int = if (text.isEmpty()) 0
+            else text.count { it == '\n' } + if (text.endsWith('\n')) 0 else 1
     }
 }

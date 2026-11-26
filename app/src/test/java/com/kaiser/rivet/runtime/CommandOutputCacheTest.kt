@@ -3,7 +3,6 @@ package com.kaiser.rivet.runtime
 import java.nio.file.Files
 import org.junit.After
 import org.junit.Assert.assertEquals
-import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -21,30 +20,28 @@ class CommandOutputCacheTest {
         assertNull(cache.get("missing"))
     }
 
-    @Test fun largeOutputsRoundTripAndEvictLeastRecentlyUsed() {
-        val cache = CommandOutputCache(dir, maxEntries = 2, maxTotalBytes = 1_000_000)
-        val first = cache.put((1..120).joinToString("\n") { "a$it" }, "err-a")!!
-        val second = cache.put((1..120).joinToString("\n") { "b$it" }, "err-b")!!
-        assertEquals("err-a", cache.get(first)!!.stderr)
-        val third = cache.put((1..120).joinToString("\n") { "c$it" }, "err-c")!!
-        assertNotNull(cache.get(first))
-        assertNull(cache.get(second))
-        assertNotNull(cache.get(third))
-        assertEquals(2, cache.size())
+    @Test fun earlierSpillsRemainReadableAfterMoreThanEightCommandsAndReopening() {
+        val cache = CommandOutputCache(dir)
+        val first = cache.put((1..120).joinToString("\n") { "a$it" }, "err-a", workspace = "ws")!!
+        repeat(9) { cache.put("b".repeat(600_000), "err", force = true) }
+        val reopened = CommandOutputCache(dir)
+        assertEquals("err-a", reopened.get(first)?.stderr)
+        assertEquals("ws", reopened.get(first)?.workspace)
+        assertEquals(10, reopened.size())
     }
 
-    @Test fun perStreamAndTotalBudgetsAreEnforced() {
-        val cache = CommandOutputCache(dir, maxEntries = 8, maxStreamBytes = 100,
-            maxTotalBytes = 250)
-        val first = cache.put("a".repeat(120), "s".repeat(120), force = true)!!
-        val entry = cache.get(first)!!
-        assertTrue(entry.stdoutTruncated)
+    @Test fun bytePagingCanReadBeyondTheLinePreviewWithoutSplittingUtf8() {
+        val cache = CommandOutputCache(dir)
+        val prefix = "a".repeat(1_100_000)
+        val id = cache.put("", prefix + "a".repeat(3071) + "😀tail", force = true)!!
+        val entry = cache.get(id)!!
         assertTrue(entry.stderrTruncated)
-        assertEquals(100, entry.stdout.length)
-        assertEquals(100, entry.stderr.length)
-        val second = cache.put("b".repeat(90), "", force = true)!!
-        assertNull(cache.get(first))
-        assertNotNull(cache.get(second))
+
+        val first = entry.read(prefix.length.toLong(), stderr = true)
+        assertEquals("a".repeat(3071), first.text)
+        val tail = entry.read(first.end, stderr = true)
+        assertEquals("😀tail", tail.text)
+        assertEquals(tail.total, tail.end)
     }
 
     @Test fun clearAndWorkspaceScopedClearRemoveOnlyTheirOwnFiles() {

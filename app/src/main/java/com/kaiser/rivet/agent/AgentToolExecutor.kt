@@ -421,9 +421,25 @@ class AgentToolExecutor(
                     require(args.maxLines == null || args.maxLines in 1..CommandOutputSlicer.MAX_LINES)
                     require(args.grep == null || args.grep.length <= CommandOutputSlicer.MAX_GREP_CHARS)
                     if (outputId != null) {
+                        require(args.byteOffset == null || (args.byteOffset >= 0 &&
+                            args.offset == null && args.tail == null && args.grep == null && args.maxLines == null))
+                        require(args.outputStream == null ||
+                            (args.byteOffset != null && args.outputStream in setOf("stdout", "stderr")))
                         return readOnly(call) {
                             val cached = readCommandOutput?.invoke(outputId, currentWorkspaceIdentity())
                                 ?: throw AgentWorkspaceFailure("output_unavailable")
+                            if (args.byteOffset != null) {
+                                val isStderr = args.outputStream == "stderr"
+                                val page = cached.read(args.byteOffset, isStderr)
+                                return@readOnly success(call, buildJsonObject {
+                                    put("output_id", outputId)
+                                    put("output_stream", if (isStderr) "stderr" else "stdout")
+                                    put("text", page.text)
+                                    put("byte_offset", page.start)
+                                    put("total_bytes", page.total)
+                                    if (page.end < page.total) put("next_byte_offset", page.end)
+                                }, "Paged command output")
+                            }
                             val slice = CommandOutputSlicer.slice(
                                 cached.stdout, cached.stderr,
                                 offset = args.offset, tail = args.tail, grep = args.grep,
@@ -433,6 +449,7 @@ class AgentToolExecutor(
                             commandPage(call, outputId, cached.stdoutTruncated, cached.stderrTruncated, slice)
                         }
                     }
+                    require(args.byteOffset == null && args.outputStream == null)
                     val cwd = path(args.cwd, root = true)
                     require(args.timeoutMs in 1000..MAX_COMMAND_TIMEOUT_MS)
                     PreparedAgentTool(
@@ -523,6 +540,7 @@ class AgentToolExecutor(
                             output.stdoutEnd?.let { put("stdout_total_bytes", it) }
                             output.stderrEnd?.let { put("stderr_total_bytes", it) }
                             put("stderr_present", output.stderrPresent || slice.stderrPresent)
+                            output.outputId?.let { put("output_id", it) }
                             output.sync?.let { sync ->
                                 put("sync", sync.state.code)
                                 sync.path?.let { put("sync_path", it) }
@@ -809,6 +827,9 @@ class AgentToolExecutor(
         slice.nextOffset?.let { put("next_offset", it) }
         slice.matchedLines?.let { put("matched_lines", it) }
         put("output_id", outputId)
+        if (sourceStdoutTruncated || sourceStderrTruncated) {
+            put("paging", "Use output_id with byte_offset and output_stream for the full streams.")
+        }
         put("sync", "not_started")
     }, "Paged cached command output")
 
@@ -844,6 +865,7 @@ class AgentToolExecutor(
             slice.nextOffset?.let { put("next_offset", it) }
             slice.matchedLines?.let { put("matched_lines", it) }
             result.outputId?.let { put("output_id", it) }
+            result.outputWarning?.let { put("output_warning", it) }
             result.processId?.let {
                 put("process_id", it)
                 put("status", "running_in_background")
@@ -1082,6 +1104,8 @@ class AgentToolExecutor(
         val tail: Int? = null,
         val grep: String? = null,
         @kotlinx.serialization.SerialName("max_lines") val maxLines: Int? = null,
+        @kotlinx.serialization.SerialName("byte_offset") val byteOffset: Long? = null,
+        @kotlinx.serialization.SerialName("output_stream") val outputStream: String? = null,
     )
 
 
@@ -1162,6 +1186,7 @@ class AgentToolExecutor(
                 schema(emptyList(), "command" to string, "output_id" to string, "cwd" to string,
                     "timeout_ms" to buildJsonObject { put("type", "integer"); put("minimum", 1000); put("maximum", MAX_COMMAND_TIMEOUT_MS) },
                     "offset" to nonNegativeInteger,
+                    "byte_offset" to nonNegativeInteger, "output_stream" to string,
                     "tail" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 500) },
                     "grep" to string,
                     "max_lines" to buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 500) },

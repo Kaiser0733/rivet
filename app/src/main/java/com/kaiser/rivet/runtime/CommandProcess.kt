@@ -104,11 +104,6 @@ internal data class CommandOutput(
     val timedOut: Boolean,
     val tooManyChildren: Boolean = false,
     val memoryLimit: Boolean = false,
-    /** Up to 1 MiB, used only for the on-disk paging spool. */
-    val stdoutFull: String = stdout,
-    val stderrFull: String = stderr,
-    val stdoutFullTruncated: Boolean = false,
-    val stderrFullTruncated: Boolean = false,
 )
 
 internal data class CommandExitOutcome(
@@ -162,10 +157,8 @@ internal open class CommandProcess {
                 }
             val stdout = BoundedCapture()
             val stderr = BoundedCapture()
-            val fullStdout = FullCapture(SPOOL_LIMIT_BYTES)
-            val fullStderr = FullCapture(SPOOL_LIMIT_BYTES)
-            val stdoutReader = async(Dispatchers.IO) { collect(stdoutFd, stdout, fullStdout) { bytes, count -> onChunk?.invoke(false, bytes, count) } }
-            val stderrReader = async(Dispatchers.IO) { collect(stderrFd, stderr, fullStderr) { bytes, count -> onChunk?.invoke(true, bytes, count) } }
+            val stdoutReader = async(Dispatchers.IO) { collect(stdoutFd, stdout) { bytes, count -> onChunk?.invoke(false, bytes, count) } }
+            val stderrReader = async(Dispatchers.IO) { collect(stderrFd, stderr) { bytes, count -> onChunk?.invoke(true, bytes, count) } }
             val exited = CompletableDeferred<Int>()
             Thread({
                 try { exited.complete(CommandNative.waitFor(pid)) }
@@ -207,10 +200,7 @@ internal open class CommandProcess {
                 }
                 CommandOutput(exitCode, stdout.text(), stderr.text(), stdout.truncated,
                     stderr.truncated, timedOut, tooManyChildren.get(),
-                    memoryLimit.get() || reportsMemoryFailure(stderr.text()),
-                    stdoutFull = fullStdout.text(), stderrFull = fullStderr.text(),
-                    stdoutFullTruncated = fullStdout.truncated,
-                    stderrFullTruncated = fullStderr.truncated)
+                    memoryLimit.get() || reportsMemoryFailure(stderr.text()))
             } catch (e: CancellationException) {
                 withContext(NonCancellable) {
                     terminate(pid, exited)
@@ -240,7 +230,6 @@ internal open class CommandProcess {
     private fun collect(
         descriptor: ParcelFileDescriptor,
         output: BoundedCapture,
-        full: FullCapture,
         onChunk: (ByteArray, Int) -> Unit,
     ) {
         try {
@@ -250,36 +239,12 @@ internal open class CommandProcess {
                     val size = input.read(buffer)
                     if (size < 0) break
                     output.append(buffer, size)
-                    full.append(buffer, size)
                     onChunk(buffer, size)
                 }
             }
         } catch (_: IOException) { /* Closing the descriptor interrupts collection. */ }
     }
 
-    private companion object {
-        const val SPOOL_LIMIT_BYTES = 1 * 1024 * 1024
-    }
-}
-
-/** Head-only spool for paging; never exposed as the live tool result. */
-internal class FullCapture(private val limit: Int) {
-    private val buffer = ByteArray(limit)
-    private var size = 0
-    var truncated = false
-        private set
-
-    @Synchronized fun append(bytes: ByteArray, count: Int) {
-        val room = limit - size
-        if (count > room) truncated = true
-        val take = minOf(room, count)
-        if (take > 0) {
-            bytes.copyInto(buffer, size, 0, take)
-            size += take
-        }
-    }
-
-    @Synchronized fun text(): String = buffer.copyOf(size).toString(Charsets.UTF_8)
 }
 
 /** Bounded head and tail retain useful diagnostics without retaining whole logs. */

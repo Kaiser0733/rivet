@@ -44,6 +44,7 @@ data class RuntimeCommandResult(
     val outputId: String? = null,
     val toolchainWarning: String? = null,
     val processId: String? = null,
+    val outputWarning: String? = null,
 )
 
 data class PreviewLaunch(
@@ -76,6 +77,7 @@ data class ProcessOutputSnapshot(
     val stdoutEnd: Long? = null,
     val stderrEnd: Long? = null,
     val sync: MirrorSyncResult? = null,
+    val outputId: String? = null,
 )
 
 /** A project sync is a UI-blocking prerequisite for the terminal; it must never hold
@@ -167,6 +169,7 @@ class RuntimeController(
             }
         } ?: return RuntimeCommandResult(cwd = cwd, sync = "not_started", error = refusal)
 
+        val spool = outputCache.begin(plan.identity)
         val launchSignal = CompletableDeferred<Unit>()
         val running = backgroundScope.async {
             launchSignal.await()
@@ -183,7 +186,10 @@ class RuntimeController(
                         onOutput?.invoke(stdout, stderr)
                     }
                 },
-                onChunk = ring::append,
+                onChunk = { isStderr, bytes, count ->
+                    ring.append(isStderr, bytes, count)
+                    spool.append(isStderr, bytes, count)
+                },
                 onStarted = { started.set(true) },
             )
         }
@@ -191,7 +197,10 @@ class RuntimeController(
             processId = registry.registerCommand(command, cwd, plan.identity, projectName(), running)
             if (processId == null) {
                 running.cancel()
-                releaseCommandWorktree(plan, sync = false)
+                withContext(NonCancellable + Dispatchers.IO) {
+                    runCatching { spool.finish(keep = false) }
+                    releaseCommandWorktree(plan, sync = false)
+                }
                 return RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "process_limit")
             }
         }
@@ -222,7 +231,7 @@ class RuntimeController(
                     catch (_: Exception) { }
                     finally {
                         guard.cancel()
-                        try { finishForeground(plan, id, cwd, completed) }
+                        try { finishForeground(plan, id, cwd, completed, spool) }
                         finally { retainBackgroundOutput(id, ring) }
                     }
                 }
@@ -241,7 +250,7 @@ class RuntimeController(
                 withContext(NonCancellable) {
                     guard.cancel()
                     running.cancelAndJoin()
-                    result = finishForeground(plan, id, cwd, outcome)
+                    result = finishForeground(plan, id, cwd, outcome, spool)
                 }
             }
         }
@@ -284,7 +293,11 @@ class RuntimeController(
         id: String?,
         cwd: String,
         output: CommandOutput?,
+        spool: CommandOutputCache.Spool,
     ): RuntimeCommandResult? = withContext(NonCancellable + Dispatchers.IO) {
+        val keepOutput = output != null && (output.stdoutTruncated || output.stderrTruncated ||
+            CommandOutputCache.worthCaching(output.stdout, output.stderr))
+        val spill = runCatching { spool.finish(keepOutput) }
         val sync = releaseCommandWorktree(plan, sync = true)
         if (sync != null && id != null) managedProcesses?.setProjectSync(id, sync)
         if (output == null) {
@@ -293,16 +306,13 @@ class RuntimeController(
         }
         if (output.memoryLimit) governor.recordStop("memory limit")
         else if (output.tooManyChildren) governor.recordStop("too many child processes")
-        val outputId = runCatching {
-            outputCache.put(output.stdoutFull, output.stderrFull, workspace = plan.identity,
-                stdoutTruncated = output.stdoutFullTruncated, stderrTruncated = output.stderrFullTruncated)
-        }.getOrNull()
         val result = RuntimeCommandResult(output.exitCode, output.stdout, output.stderr,
             output.stdoutTruncated, output.stderrTruncated, output.timedOut, cwd,
             sync?.state?.code ?: "pending", sync?.path, syncSkipped = sync?.skipped.orEmpty(),
             syncConflicts = sync?.conflicts.orEmpty(), vcsNote = worktreeVcsNote(plan.mirror.worktree),
             tooManyChildren = output.tooManyChildren, memoryLimit = output.memoryLimit,
-            stderrPresent = output.stderrFull.isNotEmpty(), outputId = outputId,
+            stderrPresent = output.stderr.isNotEmpty(), outputId = spill.getOrNull(),
+            outputWarning = if (spill.isFailure && keepOutput) "Full command output could not be saved." else null,
             toolchainWarning = plan.toolchainWarning)
         if (id != null) managedProcesses?.finishCommand(id, result)
         result
@@ -824,6 +834,7 @@ class RuntimeController(
             stdoutEnd = snap?.out?.end,
             stderrEnd = snap?.err?.end,
             sync = info.projectSync,
+            outputId = info.outputId,
         )
     }
 

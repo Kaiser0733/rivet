@@ -49,6 +49,7 @@ data class ManagedProcessInfo(
     val entryPath: String? = null,
     val commandForDisplay: String? = null,
     val projectSync: MirrorSyncResult? = null,
+    val outputId: String? = null,
 )
 
 /** App-process ownership for live commands, loopback previews, and active agent turns. */
@@ -125,7 +126,7 @@ class ManagedProcesses {
             result.error != null || result.exitCode != 0 || result.memoryLimit || result.tooManyChildren -> ManagedProcessStatus.Failed
             else -> ManagedProcessStatus.Completed
         }
-        entry.info = entry.info.copy(status = status, exitCode = result.exitCode,
+        entry.info = entry.info.copy(status = status, exitCode = result.exitCode, outputId = result.outputId,
             output = boundedOutput(result.stdout, result.stderr),
             finishedAtMillis = entry.info.finishedAtMillis ?: System.currentTimeMillis())
         trimCompletedLocked()
