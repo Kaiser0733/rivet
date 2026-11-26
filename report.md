@@ -318,3 +318,71 @@ reused only when no turn is active and no goal is set.
 - Test-only stability commit `aba7cbda` gives the project-browser tests a
   15-second project-open window instead of the shared 5-second helper; no
   production code changed for it.
+
+## Gate diagnosis (Sol)
+
+[CI run 45803262155](https://github.com/Kaiser0733/rivet/actions/runs/45803262155)
+on `a3cb363e` recorded 18 failures in 1,928 Kotlin tests. Its JUnit XML
+recorded 14 deadline expirations and four assertion failures. All 18 were
+production regressions. The 5-second deadlines exposed missing state changes.
+The existing wait budgets and assertions were retained.
+
+The three unmodified classes reproduced the same 18 failures locally out of
+126 tests. This used JDK 17, `LANG=C.UTF-8`, the warm Gradle classpath and the
+existing Robolectric SDKs. The local assertion output matched the CI values,
+including the title test's two calls and discard's `Expected mismatch`.
+
+`SessionRunRegistry.begin` started requiring a stored conversation ID in
+`ac20b46f`. The single-transcript `AgentSessionPersistence` path still
+allows an absent ID. Those turns ran provider code, but owner checks
+skipped previews, transcript writes, completion, and cancellation. The
+registry now tracks these turns. A follow-up sent while its previous turn is
+finishing waits for that owner's job before admission.
+
+| Test | Original CI failure | Bucket | Root cause | Fix |
+| --- | --- | --- | --- | --- |
+| `ChatViewModelTest.streamingPreviewIsTransientAndCompletedMessageReplacesIt` | :532, expected `# Finished`, got empty preview | REAL | The unregistered run could receive deltas but could not publish the transient preview. | `a743f632` |
+| `ChatViewModelTest.sessionLimitKeepsLastGoodStateWithoutRetryAndNextTurnCanRun` | :657, 5-second deadline | REAL | The run skipped the assistant save that would surface the limit and skipped its terminal state. | `a743f632` |
+| `ChatViewModelTest.aRejectedEffortOffersTheNextStepDownAndResendsTheSameMessage` | :1717, 5-second deadline | REAL | The lower-effort replay lacked an owner to commit and publish its successful reply. Recovery actions now also wait out an earlier owner's cleanup. | `a743f632` |
+| `ChatViewModelTest.unexpectedPersistenceFailureDoesNotRetrySameTranscript` | :684, 5-second deadline | REAL | The ID-less owner check skipped the failing assistant save and never published the storage error. | `a743f632` |
+| `ChatViewModelTest.mutationAtSessionLimitNeverRequestsApprovalAndClearAllowsNextTurn` | :832, 5-second deadline | REAL | The ID-less turn skipped durable tool events and could not publish the session-limit result. | `a743f632` |
+| `ChatViewModelTest.stopWhilePreparingKeepsTheAcceptedMessageAndStartsNoSecondTurn` | :595, 5-second deadline | REAL | The preparing turn was absent from the registry, and a second send could accept another bubble before admission. Stop now cancels the one registered job and preserves its prompt. | `a743f632` |
+| `ChatViewModelTest.unavailableCommandReturnsToolResultAndModelContinues` | :494, 5-second deadline | REAL | The unregistered turn skipped the tool failure and follow-up assistant events in the durable and visible transcript. | `a743f632` |
+| `ChatViewModelTest.retryAfterAPartialAnswerDoesNotSendThePromptTwice` | :1759, 5-second deadline | REAL | The owner check dropped the incomplete assistant event and the replay's completion, breaking transcript reuse. | `a743f632` |
+| `ChatViewModelTest.acceptanceHappensBeforeAProviderLoadThatNeverReturns` | :613, 5-second deadline | REAL | The prompt appeared, but Stop treated its unregistered job as unstarted and left the blocked provider load running. | `a743f632` |
+| `ChatViewModelTest.oversizedPromptLimitRollsBackAcceptedBubbleAndSkipsFinallySave` | :2599, 5-second deadline | REAL | The oversized-prompt catch rolled back the bubble, then skipped the error and idle state because the turn had no registry entry. | `a743f632` |
+| `ChatViewModelTest.projectSelectionStartsBoundConversationAndHistoryKeepsItsProject` | :164, expected `project`, got `Another project` | REAL | History published the new session ID with the old viewed project. Cached runs could skip restoring the bound project entirely. The selected state now publishes after resolving the project and browser. | `cef339c9` |
+| `ChatViewModelTest.laterCheckpointPostFailureDoesNotHideSavedMutation` | :468, 5-second deadline | REAL | The ID-less turn could perform mutations but skipped transcript updates and completion publication. | `a743f632` |
+| `ChatViewModelTest.turnRunsUnderForegroundServiceWithOngoingNotificationAndStopsOnEnd` | :1562, 5-second deadline | REAL | The service started and the provider answered. The missing owner suppressed the final answer and idle state the test awaited. | `a743f632` |
+| `ChatViewModelTest.anEffortRefusedInsideTheStreamStillOffersTheStepDown` | :1796, 5-second deadline | REAL | The streamed refusal offered a step-down, but the unregistered replay could not publish its completion. | `a743f632` |
+| `ChatViewModelTest.nestedInstructionsAreLoadedBeforeFirstMutationApproval` | :919, 5-second deadline | REAL | The unregistered owner skipped durable tool events and the final reply after the nested instructions were loaded. | `a743f632` |
+| `ChatViewModelTest.streamingReasoningAccumulatesSeparatelyAndSurvivesTurnCompletion` | :1671, 5-second deadline | REAL | The owner check suppressed both reasoning and answer previews for the ID-less session. | `a743f632` |
+| `ConversationTitleLifecycleTest.firstSuccessfulTurnTitlesNewConversationWithoutChangingEvents` | :100, expected 3 provider calls, got 2 | REAL | The title could appear during first-turn cleanup. Send accepted the follow-up, admission dropped it while the old owner held the slot, and the old cleanup cleared its streaming state. | `a743f632` |
+| `WorkspaceMirrorTest.runtimeDiscardChecksExactSelectionAndUnblocksCommandsAndSafTools` | :449, `Expected mismatch` | REAL | Explicit discard used the background mirror lookup, which ignores viewed selection. The action now uses the viewed mirror and its selection check during staging. | `8c4740f6` |
+
+The regression tests also ran against the original production classes.
+
+- `legacyStoreWithoutSessionIdPublishesAndPersistsTheCompletedReply` timed out
+  waiting for the reply. The strengthened Stop test found no registered owner
+  after the provider load had started.
+- `aFollowUpDuringFirstTurnCleanupRunsOnceAndKeepsTheGeneratedTitle` sent the
+  follow-up while the previous owner still held the slot. The follow-up reply
+  never arrived.
+- The strengthened `openingAnotherProjectLeavesTheRunningProjectLiveAndWritable`
+  observed B's project name when reattaching running A.
+- The strengthened discard test failed at its pre-existing mismatch assertion.
+  It also checks the viewed selection and SAF bytes after rejecting a switch
+  during the refresh.
+
+### Local verification
+
+- `:app:compileDebugKotlin`, `:app:compileDebugUnitTestKotlin`, and the
+  filtered `:app:testDebugUnitTest` passed on the fixed source with
+  `LANG=C.UTF-8`. The same 136 tests passed in a direct JUnit/Robolectric run
+  of the Gradle-built classes.
+- `ChatViewModelTest` 75/75, `ConversationTitleLifecycleTest` 12/12,
+  `WorkspaceMirrorTest` 41/41, and `AgentApprovalGateTest` 8/8 passed.
+- The run covered cross-project continuation and reattachment, the per-project
+  browser, queued local-turn admission and Stop, conversation switching,
+  background approval ownership, and FIFO approval resolution.
+- All 100 Python source checks passed.
