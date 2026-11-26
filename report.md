@@ -150,6 +150,53 @@ parent in the table above and ship the named JiTTest. I did not rebuild every
 parent commit: a full Kotlin compile in this worktree takes about 17 minutes,
 and there are sixteen parent checkouts. That is the main verification gap.
 
+## Gate fix
+
+CI run `45781513337` on `a8b5d159` ran 1894 tests and failed three. I checked
+the parent `eb6f4f78` first, in a detached worktree using the same dependency
+cache: all three failing methods passed there (`CoordinatorBudgetTest` 2/2 and
+`ConversationTitleLifecycleTest.failedIncompleteOrBlockedToolTurnNeverRequestsTitle`
+1/1, `BUILD SUCCESSFUL`). None is PARENT-RED.
+
+| Failure | Verdict | Evidence | Fix commit |
+|---|---|---|---|
+| `CoordinatorBudgetTest.emptyCloudProjectPinsTheSyntheticBaseline` | SWEEP-CAUSED (test pin) | Branch pin was 7,243; actual request is 7,269. Parent passes at 7,243. The test's dynamic `baseline` checks at lines 56–57 still pass. | `bc14219e` |
+| `CoordinatorBudgetTest.emptyCloudProjectPinsTheDeviceBaseline` | SWEEP-CAUSED (test pin) | Branch pin was 7,250; actual request is 7,276. Parent passes at 7,250. Same cause and same +26 delta. | `bc14219e` |
+| `ConversationTitleLifecycleTest.failedIncompleteOrBlockedToolTurnNeverRequestsTitle` | SWEEP-CAUSED (test scenario) | Branch times out at the failed-turn wait; parent passes the same test in 18.7 s. The turn still never requests a title; the old empty-response mode now enters the retry path. | `52db883b` |
+
+The coordinator delta is the `run_command` schema added by `05e86973`: cached
+output byte paging (row 32) adds the `byte_offset` and `output_stream`
+properties. The test sums the serialized tool definitions, and those two
+properties add 26 estimated tokens (about 78 bytes at the 3-bytes-per-token
+estimate) for both models; the model-to-model difference remains 7 tokens. The
+feature needs the properties, so the pinned baselines move by the same
+deliberate amount. This is not a bare number bump: the dynamic request size and
+the reading still agree, and only the intentional prompt-growth pin changed.
+
+The title failure is the retry policy from `b533c2b2`: `ProviderError.EmptyResponse`
+is now retryable, and `AgentLoop.requestWithRetry` makes five retries before it
+surfaces `EmptyResponse` (row 40). This test sets `Dispatchers.setMain` to an
+`UnconfinedTestDispatcher`; the retry `delay`s run on that virtual scheduler
+while the test's `withTimeout` is real-time, so the previous empty-response mode
+never advanced. The production retry is intended and is covered by
+`PostToolCompletionTest.aBlankBeforeAnyToolAlsoUsesTheRetryPolicy` (six
+requests). The title guard test now uses an explicit non-retryable
+`ProviderError.IncompleteGeneration("empty")`, which still exercises the
+failed/incomplete/blocked turn invariant and the no-title assertion without
+depending on the retry scheduler.
+
+Local gate after the fixes: `:app:compileDebugKotlin` passed; the gate classes
+ran 14 tests with 0 failures; the 28-class focused suite ran 425 tests with 0
+failures, 0 errors, 0 skipped. A combined run of both sets ran 30 classes and
+439 tests with 0 failures, 0 errors, 0 skipped.
+
+One additional local flake was observed while rerunning the gate classes:
+`ConversationTitleLifecycleTest.cancelledTurnNeverStartsTitleRequestOrRegeneratesLater`
+failed once with `expected:<2> but was:<1>` because its wait saw
+`acceptedMessageCount == 2` before the second provider call. It passed
+unchanged on the next rerun and is not one of the three CI failures; I left it
+unchanged.
+
 ## Honest gaps
 
 - The inherited branch did not compile, so its earlier report could not have run
