@@ -13,7 +13,12 @@ import java.io.File
 import java.nio.file.Files
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import kotlinx.coroutines.CompletableDeferred
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.async
+import kotlinx.coroutines.flow.first
+import kotlinx.coroutines.withTimeout
 import kotlinx.coroutines.cancelAndJoin
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
@@ -58,6 +63,52 @@ class WorkspaceMirrorTest {
     @After fun cleanup() { files.deleteRecursively() }
 
     private fun path(value: String) = WorkspacePath.parse(value)
+    @Test fun foregroundTimeoutPromotesTheSameProcessWithoutHoldingTerminalAdmission() = runBlocking {
+        val selection = com.kaiser.rivet.workspace.WorkspaceSelection(app)
+        selection.select(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        val registry = ManagedProcesses()
+        registry.onForegroundServiceStarted(true)
+        val runtime = RuntimeController(app, selection, registry)
+        val started = CompletableDeferred<Unit>()
+        val finish = CompletableDeferred<Unit>()
+        var starts = 0
+        runtime.commandProcess = object : CommandProcess() {
+            override suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long?,
+                onOutput: ((String, String) -> Unit)?, memoryCapBytes: Long?,
+                onChunk: ((Boolean, ByteArray, Int) -> Unit)?, onStarted: () -> Unit): CommandOutput {
+                starts++
+                onStarted()
+                onChunk?.invoke(false, "partial".toByteArray(), 7)
+                started.complete(Unit)
+                finish.await()
+                onChunk?.invoke(false, " final".toByteArray(), 6)
+                return CommandOutput(0, "partial final", "", false, false, false)
+            }
+        }
+        val shell = Job()
+        val command = async { runtime.runCommand("fake command", "", 1_000L) }
+        try {
+            withTimeout(3_000) { started.await() }
+            val terminal = withTimeout(750) { runtime.openTerminal(shell) }
+            assertNull(terminal.error)
+            val launch = withTimeout(3_000) { command.await() }
+            val id = requireNotNull(launch.processId)
+            assertEquals("partial", launch.stdout)
+            assertEquals(ManagedProcessKind.Background, registry.info(id, tree.toString())?.kind)
+
+            finish.complete(Unit)
+            withTimeout(3_000) {
+                registry.processes.first { entries -> entries.any { it.id == id && it.status == ManagedProcessStatus.Completed } }
+            }
+            assertEquals("partial final", runtime.outputFor(id, tree.toString())?.stdout)
+            assertEquals(1, starts)
+        } finally {
+            finish.complete(Unit)
+            shell.cancel()
+        }
+    }
+
     private fun mirror() = WorkspaceMirror(app, workspace) { true }
     private suspend fun source(value: String, bytes: ByteArray) {
         val entry = workspace.createFile(path(value))

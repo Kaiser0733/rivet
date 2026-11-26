@@ -129,11 +129,12 @@ internal suspend fun awaitExitOrTimeout(
     }
 }
 
-internal class CommandProcess {
-    suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long?,
+internal open class CommandProcess {
+    open suspend fun run(command: String, cwd: String, environment: Array<String>, timeoutMs: Long?,
                     onOutput: ((String, String) -> Unit)? = null,
                     memoryCapBytes: Long? = null,
-                    onChunk: ((Boolean, ByteArray, Int) -> Unit)? = null): CommandOutput =
+                    onChunk: ((Boolean, ByteArray, Int) -> Unit)? = null,
+                    onStarted: () -> Unit = {}): CommandOutput =
         coroutineScope {
             // The PSS watchdog compares the true cap. The rlimit only stops a process
             // that allocates faster than the sampler can run, so it gets 3x headroom
@@ -192,6 +193,7 @@ internal class CommandProcess {
                 )
             }
             try {
+                onStarted()
                 val outcome = if (timeoutMs == null) CommandExitOutcome(exited.await(), timedOut = false)
                     else awaitExitOrTimeout(exited, timeoutMs) { terminate(pid, exited) }
                 val exitCode = outcome.exitCode

@@ -8,10 +8,14 @@ import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import java.io.File
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.CompletableDeferred
+import kotlinx.coroutines.async
+import kotlinx.coroutines.cancelAndJoin
+import kotlinx.coroutines.joinAll
+import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.Job
-import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -39,6 +43,7 @@ data class RuntimeCommandResult(
     val stderrPresent: Boolean = false,
     val outputId: String? = null,
     val toolchainWarning: String? = null,
+    val processId: String? = null,
 )
 
 data class PreviewLaunch(
@@ -82,8 +87,17 @@ private data class BackgroundPlan(
     val directory: String,
     val environment: Array<String>,
     val command: String,
-    val credentialFile: File?,
     val toolchainWarning: String?,
+)
+
+private data class ForegroundPlan(
+    val mirror: WorkspaceMirror,
+    val identity: String,
+    val directory: File,
+    val environment: Array<String>,
+    val memoryCap: Long?,
+    val toolchainWarning: String?,
+    val lease: CompletableDeferred<Unit>,
 )
 
 data class RunCheckpointRestoreResult(
@@ -108,6 +122,9 @@ class RuntimeController(
     private val gitHub = GitHubTokenStore(app)
     private val governor = TerminalGovernor(app)
     private val operations = Mutex()
+    private val gitCommands = Mutex()
+    private val worktreeCommands = mutableMapOf<String, MutableSet<CompletableDeferred<Unit>>>()
+    internal var commandProcess = CommandProcess()
     private var mirrorIdentity: String? = null
     private var mirror: WorkspaceMirror? = null
 
@@ -123,99 +140,211 @@ class RuntimeController(
      * the command, limits, timeout, or kill path.
      */
     suspend fun runCommand(command: String, cwd: String, timeoutMs: Long,
-                           onOutput: ((String, String) -> Unit)?): RuntimeCommandResult = operations.withLock {
-        val active = currentMirror() ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "workspace_unavailable")
-        // Plan §5 rules 11/12: fresh readings gate every start, so a SERIOUS throttle
-        // lifts on the first command after the phone cools.
-        val readings = governor.readings()
-        managedProcesses?.setActiveLimit(effectiveSlots(readings.thermalStatus))
-        commandGate(timeoutMs, readings)?.let { code ->
-            return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = code)
+                           onOutput: ((String, String) -> Unit)?): RuntimeCommandResult {
+        val registry = managedProcesses
+        val ring = ProcessLogRing()
+        val promoted = java.util.concurrent.atomic.AtomicBoolean(false)
+        val started = java.util.concurrent.atomic.AtomicBoolean(false)
+        var processId: String? = null
+        var refusal = "workspace_unavailable"
+        val plan = operations.withLock {
+            val active = currentMirror() ?: return@withLock null
+            val identity = requireNotNull(mirrorIdentity)
+            val readings = governor.readings()
+            registry?.setActiveLimit(effectiveSlots(readings.thermalStatus))
+            commandGate(timeoutMs, readings)?.let {
+                refusal = it
+                return@withLock null
+            }
+            governor.commandStarted()
+            val ready = shellWorktree(active, identity)
+            val warning = toolchain.ensurePrepared()
+            val directory = runtimeDirectory(ready.worktree, cwd)
+            val environment = environment(active, directory)
+            ForegroundPlan(active, identity, directory, environment, governor.memoryCapBytes(),
+                warning, CompletableDeferred()).also {
+                worktreeCommands.getOrPut(identity) { mutableSetOf() }.add(it.lease)
+            }
+        } ?: return RuntimeCommandResult(cwd = cwd, sync = "not_started", error = refusal)
+
+        val launchSignal = CompletableDeferred<Unit>()
+        val running = backgroundScope.async {
+            launchSignal.await()
+            runShell(command, plan.directory.absolutePath, plan.environment,
+                timeoutMs = if (registry == null) timeoutMs else null,
+                memoryCap = plan.memoryCap,
+                onOutput = { stdout, stderr ->
+                    val id = processId
+                    if (promoted.get() && id != null) {
+                        val output = ring.snapshot()
+                        registry?.updateBackgroundOutput(id, output.stdout, output.stderr)
+                    } else {
+                        if (id != null) registry?.updateCommandOutput(id, stdout, stderr)
+                        onOutput?.invoke(stdout, stderr)
+                    }
+                },
+                onChunk = ring::append,
+                onStarted = { started.set(true) },
+            )
         }
-        governor.commandStarted()
-        var ready = active.prepare()
-        if (ready.dirty) {
-            // Push what can be pushed, then run in the private worktree even if a
-            // per-file disagreement remains. The command result names the pending
-            // paths; it is not a reason to refuse every command in the project.
-            try { active.sync() } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { }
-            ready = active.prepare()
-        }
-        // First use in this process: build the applet farm before PATH is composed.
-        // Without libbusybox.so this is a no-op and the environment is unchanged.
-        val toolchainWarning = toolchain.ensurePrepared()
-        // Auth is resolved for this git command only; no generic shell environment gets it.
-        val credentialFile = if (toolchain.gitReady && GitCommandAuth.needsAuth(command)) {
-            withContext(Dispatchers.IO) { gitHub.refresh() }
-        } else null
-        val effectiveCommand = GitCommandAuth.authenticated(command, credentialFile)
-        val directory = runtimeDirectory(ready.worktree, cwd)
-        val environment = environment(active, directory)
-        val processId = managedProcesses?.let { registry ->
-            val job = currentCoroutineContext()[Job]
-                ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "runtime_unavailable")
-            val identity = mirrorIdentity
-                ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "workspace_unavailable")
-            registry.registerCommand(command, cwd, identity, projectName(), job)
-                ?: return@withLock RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "process_limit")
-        }
-        fun publish(stdout: String, stderr: String) {
-            processId?.let { managedProcesses?.updateCommandOutput(it, stdout, stderr) }
-            onOutput?.invoke(stdout, stderr)
-        }
-        val publisher: ((String, String) -> Unit)? =
-            if (processId == null && onOutput == null) null else ::publish
-        val memoryCap = governor.memoryCapBytes()
-        val result = try {
-            CommandProcess().run(effectiveCommand, directory.absolutePath, environment, timeoutMs,
-                onOutput = publisher, memoryCapBytes = memoryCap)
-        } catch (e: CancellationException) {
-            processId?.let { managedProcesses?.failCommand(it) }
-            throw e
-        } catch (e: Exception) {
-            processId?.let { managedProcesses?.failCommand(it) }
-            throw e
-        } finally {
-            if (credentialFile != null) {
-                withContext(NonCancellable + Dispatchers.IO) { gitHub.clearCredentialFile() }
+        if (registry != null) {
+            processId = registry.registerCommand(command, cwd, plan.identity, projectName(), running)
+            if (processId == null) {
+                running.cancel()
+                releaseCommandWorktree(plan, sync = false)
+                return RuntimeCommandResult(cwd = cwd, sync = "not_started", error = "process_limit")
             }
         }
-        if (result.memoryLimit) governor.recordStop("memory limit")
-        else if (result.tooManyChildren) governor.recordStop("too many child processes")
+        val id = processId
+        val guard = backgroundScope.launch {
+            selection.awaitIdentityChange(plan.identity)
+            running.cancel(CancellationException("Workspace changed"))
+        }
+        launchSignal.complete(Unit)
+        var outcome: CommandOutput? = null
+        var result: RuntimeCommandResult? = null
+        var backgroundError: String? = null
+        try {
+            outcome = if (id == null) running.await() else withTimeoutOrNull(timeoutMs) { running.await() }
+            if (outcome == null && running.isCompleted) outcome = running.await()
+            val promotion = outcome == null && id != null && started.get()
+            val acquired = promotion && registry != null && registry.promoteCommand(requireNotNull(id))
+            val serviceReady = acquired && requireNotNull(registry).ensureForegroundService(app)
+            if (promotion && !serviceReady) backgroundError =
+                if (acquired) "foreground_service_unavailable" else "process_limit"
+            if (serviceReady && id != null) {
+                backgroundRings[id] = ring
+                promoted.set(true)
+                backgroundScope.launch {
+                    var completed: CommandOutput? = null
+                    try { completed = running.await() }
+                    catch (e: CancellationException) { throw e }
+                    catch (_: Exception) { }
+                    finally {
+                        guard.cancel()
+                        try { finishForeground(plan, id, cwd, completed) }
+                        finally { retainBackgroundOutput(id, ring) }
+                    }
+                }
+                val preview = ring.snapshot()
+                return RuntimeCommandResult(
+                    stdout = preview.stdout.takeLast(ProcessLogRing.MAX_OUTPUT_CHARS),
+                    stderr = preview.stderr.takeLast(ProcessLogRing.MAX_OUTPUT_CHARS),
+                    stdoutTruncated = preview.out.start > 0 || preview.stdout.length > ProcessLogRing.MAX_OUTPUT_CHARS,
+                    stderrTruncated = preview.err.start > 0 || preview.stderr.length > ProcessLogRing.MAX_OUTPUT_CHARS,
+                    stderrPresent = preview.stderrPresent, cwd = cwd, sync = "pending",
+                    timedOut = true, processId = id, toolchainWarning = plan.toolchainWarning,
+                )
+            }
+        } finally {
+            if (!promoted.get()) {
+                withContext(NonCancellable) {
+                    guard.cancel()
+                    running.cancelAndJoin()
+                    result = finishForeground(plan, id, cwd, outcome)
+                }
+            }
+        }
+        return result ?: RuntimeCommandResult(cwd = cwd, sync = "interrupted", timedOut = true,
+            error = backgroundError, toolchainWarning = plan.toolchainWarning)
+    }
+
+    private suspend fun shellWorktree(active: WorkspaceMirror, identity: String): MirrorReady {
+        if (hasCommandIn(identity)) return MirrorReady(active.worktree, dirty = false)
+        val ready = active.prepare()
+        if (!ready.dirty) return ready
+        try { active.sync() } catch (e: CancellationException) { throw e }
+        catch (_: Exception) { }
+        return active.prepare()
+    }
+
+    private fun hasCommandIn(identity: String?): Boolean =
+        identity != null && !worktreeCommands[identity].isNullOrEmpty()
+
+    private suspend fun releaseCommandWorktree(plan: ForegroundPlan, sync: Boolean): MirrorSyncResult? =
+        withContext(NonCancellable) {
+            operations.withLock {
+                try {
+                    worktreeCommands[plan.identity]?.let { leases ->
+                        leases.remove(plan.lease)
+                        if (leases.isEmpty()) worktreeCommands.remove(plan.identity)
+                    }
+                    if (!sync || hasCommandIn(plan.identity) || selection.currentIdentity() != plan.identity) null
+                    else try { plan.mirror.sync() }
+                    catch (e: MirrorFailure) { MirrorSyncResult(MirrorSync.Failed, e.path) }
+                    catch (_: Exception) { MirrorSyncResult(MirrorSync.Failed) }
+                } finally {
+                    plan.lease.complete(Unit)
+                }
+            }
+        }
+
+    private suspend fun finishForeground(
+        plan: ForegroundPlan,
+        id: String?,
+        cwd: String,
+        output: CommandOutput?,
+    ): RuntimeCommandResult? = withContext(NonCancellable + Dispatchers.IO) {
+        val sync = releaseCommandWorktree(plan, sync = true)
+        if (sync != null && id != null) managedProcesses?.setProjectSync(id, sync)
+        if (output == null) {
+            if (id != null) managedProcesses?.failCommand(id)
+            return@withContext null
+        }
+        if (output.memoryLimit) governor.recordStop("memory limit")
+        else if (output.tooManyChildren) governor.recordStop("too many child processes")
         val outputId = runCatching {
-            outputCache.put(
-                result.stdoutFull, result.stderrFull,
-                workspace = mirrorIdentity,
-                stdoutTruncated = result.stdoutFullTruncated,
-                stderrTruncated = result.stderrFullTruncated,
-            )
+            outputCache.put(output.stdoutFull, output.stderrFull, workspace = plan.identity,
+                stdoutTruncated = output.stdoutFullTruncated, stderrTruncated = output.stderrFullTruncated)
         }.getOrNull()
-        processId?.let { id -> managedProcesses?.finishCommand(id,
-            RuntimeCommandResult(result.exitCode, result.stdout, result.stderr, result.stdoutTruncated,
-                result.stderrTruncated, result.timedOut, cwd, "not_started",
-                tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit,
-                stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId,
-            toolchainWarning = toolchainWarning)) }
-        val sync = try { active.sync() }
-            catch (_: CancellationException) {
-                // The command already ran. Return its exit status with an
-                // interrupted sync so the correlated event can be persisted.
-                return@withLock RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
-                    result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
-                    "interrupted", vcsNote = worktreeVcsNote(ready.worktree),
-                    tooManyChildren = result.tooManyChildren,
-                    memoryLimit = result.memoryLimit,
-                    stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId,
-            toolchainWarning = toolchainWarning)
-            } catch (e: Exception) { MirrorSyncResult(MirrorSync.Failed) }
-        RuntimeCommandResult(result.exitCode, result.stdout, result.stderr,
-            result.stdoutTruncated, result.stderrTruncated, result.timedOut, cwd,
-            sync.state.code, sync.path, syncSkipped = sync.skipped, syncConflicts = sync.conflicts,
-            vcsNote = worktreeVcsNote(ready.worktree),
-            tooManyChildren = result.tooManyChildren, memoryLimit = result.memoryLimit,
-            stderrPresent = result.stderrFull.isNotEmpty(), outputId = outputId,
-            toolchainWarning = toolchainWarning)
+        val result = RuntimeCommandResult(output.exitCode, output.stdout, output.stderr,
+            output.stdoutTruncated, output.stderrTruncated, output.timedOut, cwd,
+            sync?.state?.code ?: "pending", sync?.path, syncSkipped = sync?.skipped.orEmpty(),
+            syncConflicts = sync?.conflicts.orEmpty(), vcsNote = worktreeVcsNote(plan.mirror.worktree),
+            tooManyChildren = output.tooManyChildren, memoryLimit = output.memoryLimit,
+            stderrPresent = output.stderrFull.isNotEmpty(), outputId = outputId,
+            toolchainWarning = plan.toolchainWarning)
+        if (id != null) managedProcesses?.finishCommand(id, result)
+        result
+    }
+
+    private suspend fun runShell(
+        command: String,
+        directory: String,
+        environment: Array<String>,
+        timeoutMs: Long?,
+        memoryCap: Long?,
+        onOutput: (String, String) -> Unit,
+        onChunk: (Boolean, ByteArray, Int) -> Unit,
+        onStarted: () -> Unit = {},
+    ): CommandOutput {
+        suspend fun execute(effective: String) = commandProcess.run(
+            effective, directory, environment, timeoutMs, onOutput, memoryCap, onChunk, onStarted,
+        )
+        if (!toolchain.gitReady || !GitCommandAuth.needsAuth(command)) return execute(command)
+        return gitCommands.withLock {
+            val credential = gitHub.refresh()
+            try { execute(GitCommandAuth.authenticated(command, credential)) }
+            finally { if (credential != null) gitHub.clearCredentialFile() }
+        }
+    }
+
+    private fun retainBackgroundOutput(id: String, ring: ProcessLogRing) {
+        drainedRings[id] = ring
+        backgroundRings.remove(id)
+        drainedOrder.add(id)
+        while (drainedRings.size > 8) drainedOrder.poll()?.let(drainedRings::remove)
+    }
+
+    private suspend fun <T> withIdleWorktree(block: suspend () -> T): T {
+        while (true) {
+            val pending = operations.withLock {
+                val leases = selection.currentIdentity()?.let(worktreeCommands::get).orEmpty()
+                if (leases.isEmpty()) return block()
+                leases.toList()
+            }
+            pending.joinAll()
+        }
     }
 
     /** Plan §5 rule 14: the one plain terminal state sentence. */
@@ -237,12 +366,7 @@ class RuntimeController(
         governor.commandStarted()
         val readyCheck = try {
             withTimeout(WORKSPACE_SYNC_TIMEOUT_MS) {
-                var state = active.prepare()
-                if (state.dirty) {
-                    try { active.sync() } catch (e: CancellationException) { throw e }
-                    catch (_: Exception) { }
-                    state = active.prepare()
-                }
+                val state = shellWorktree(active, requireNotNull(mirrorIdentity))
                 if (state.dirty) {
                     // A pending path does not make the last complete worktree
                     // unusable; open the terminal there instead of a dead end.
@@ -293,6 +417,7 @@ class RuntimeController(
 
     internal suspend fun syncTerminal(identity: String): MirrorSyncResult? = operations.withLock {
         if (mirrorIdentity != identity || selection.currentIdentity() != identity) return@withLock null
+        if (hasCommandIn(identity)) return@withLock MirrorSyncResult(MirrorSync.Conflict)
         try { mirror?.sync() } catch (e: CancellationException) { throw e }
         catch (e: MirrorFailure) { MirrorSyncResult(MirrorSync.Failed, e.path) }
         catch (_: Exception) { MirrorSyncResult(MirrorSync.Failed) }
@@ -315,7 +440,7 @@ class RuntimeController(
                                 sessionId: String? = null): String = operations.withLock {
         if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        val ready = active.prepare()
+        val ready = active.prepare(refreshExternal = !hasCommandIn(mirrorIdentity))
         if (ready.dirty) throw MirrorFailure("sync_required")
         checkpoints(workspaceId).begin(ready.worktree, runId, sessionId)
     }
@@ -323,7 +448,7 @@ class RuntimeController(
     suspend fun finishCheckpoint(workspaceId: String, id: String): Boolean = operations.withLock {
         if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        val ready = active.prepare()
+        val ready = active.prepare(refreshExternal = !hasCommandIn(mirrorIdentity))
         if (ready.dirty) throw MirrorFailure("sync_required")
         checkpoints(workspaceId).finish(id, ready.worktree)
     }
@@ -331,7 +456,7 @@ class RuntimeController(
     suspend fun recordCheckpointPost(workspaceId: String, id: String) = operations.withLock {
         if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        val ready = active.prepare()
+        val ready = active.prepare(refreshExternal = !hasCommandIn(mirrorIdentity))
         if (ready.dirty) throw MirrorFailure("sync_required")
         checkpoints(workspaceId).recordPost(id, ready.worktree)
     }
@@ -339,7 +464,7 @@ class RuntimeController(
     suspend fun checkpointMatchesPost(workspaceId: String, id: String): Boolean = operations.withLock {
         if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        val ready = active.prepare()
+        val ready = active.prepare(refreshExternal = !hasCommandIn(mirrorIdentity))
         if (ready.dirty) throw MirrorFailure("sync_required")
         checkpoints(workspaceId).matchesPost(id, ready.worktree)
     }
@@ -404,7 +529,7 @@ class RuntimeController(
         operations.withLock {
             if (selection.currentIdentity() != workspaceId) throw MirrorFailure("workspace_changed")
             val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-            val ready = active.prepare()
+            val ready = active.prepare(refreshExternal = !hasCommandIn(mirrorIdentity))
             if (ready.dirty && !allowDirty) throw MirrorFailure("sync_required")
             runCheckpoints(workspaceId).begin(ready.worktree, runId, sequence, summary)
         }
@@ -415,7 +540,7 @@ class RuntimeController(
             val active = currentMirror() ?: return@withLock
             // A completed run is expected to leave local edits; that is the checkpoint's
             // reason to exist. prepare() still gives the canonical worktree path.
-            val ready = active.prepare()
+            val ready = active.prepare(refreshExternal = !hasCommandIn(mirrorIdentity))
             runCheckpoints(workspaceId).finish(id, ready.worktree)
         }
     }
@@ -429,7 +554,7 @@ class RuntimeController(
         record: RunCheckpointInfo,
         undoRun: Boolean = false,
     ): RunCheckpointRestoreResult =
-        operations.withLock {
+        withIdleWorktree {
             if (selection.currentIdentity() != record.workspace) throw MirrorFailure("workspace_changed")
             val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
             var ready = active.prepare()
@@ -446,7 +571,7 @@ class RuntimeController(
                 if (synced.state == MirrorSync.Conflict || synced.state == MirrorSync.Failed) {
                     val staged = stageTarget(ready.worktree)
                     if (staged.conflicts.isNotEmpty()) {
-                        return@withLock RunCheckpointRestoreResult(emptyList(), staged.conflicts)
+                        return@withIdleWorktree RunCheckpointRestoreResult(emptyList(), staged.conflicts)
                     }
                     store.discard(stageOwner)
                     throw MirrorFailure("sync_required", synced.path)
@@ -456,7 +581,7 @@ class RuntimeController(
             }
             val staged = stageTarget(ready.worktree)
             if (staged.conflicts.isNotEmpty()) {
-                return@withLock RunCheckpointRestoreResult(emptyList(), staged.conflicts)
+                return@withIdleWorktree RunCheckpointRestoreResult(emptyList(), staged.conflicts)
             }
             try {
                 active.installCheckpoint(staged.stage)
@@ -497,10 +622,10 @@ class RuntimeController(
         checkpoints(record.workspace).changes(record)
     }
 
-    suspend fun undoLastCheckpoint(): MirrorSyncResult = operations.withLock {
+    suspend fun undoLastCheckpoint(): MirrorSyncResult = withIdleWorktree {
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         val identity = selection.currentIdentity() ?: throw MirrorFailure("workspace_unavailable")
-        val ready = active.prepare()
+        val ready = active.prepare(refreshExternal = !hasCommandIn(mirrorIdentity))
         if (ready.dirty) throw MirrorFailure("sync_required")
         val store = checkpoints(identity)
         val record = store.latest() ?: throw CheckpointFailure("undo_unavailable")
@@ -533,7 +658,7 @@ class RuntimeController(
 
     private suspend fun gitInspection(): GitInspection {
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
-        val ready = active.prepare()
+        val ready = active.prepare(refreshExternal = !hasCommandIn(mirrorIdentity))
         if (ready.dirty) throw MirrorFailure("sync_required")
         return GitInspection(ready.worktree)
     }
@@ -583,27 +708,17 @@ class RuntimeController(
             managedProcesses?.setActiveLimit(effectiveSlots(readings.thermalStatus))
             commandGate(Long.MAX_VALUE, readings)?.let { throw MirrorFailure(it) }
             if (managedProcesses?.canStartBackground() == false) throw MirrorFailure("process_limit")
-            var ready = active.prepare()
-            if (ready.dirty) {
-                try { active.sync() } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { }
-                ready = active.prepare()
-            }
+            val identity = requireNotNull(mirrorIdentity)
+            val ready = shellWorktree(active, identity)
             val toolchainWarning = toolchain.ensurePrepared()
-            val credentialFile = if (toolchain.gitReady && GitCommandAuth.needsAuth(command)) {
-                withContext(Dispatchers.IO) { gitHub.refresh() }
-            } else null
-            val effectiveCommand = GitCommandAuth.authenticated(command, credentialFile)
             val directory = runtimeDirectory(ready.worktree, cwd)
             val environment = environment(active, directory)
-            val identity = mirrorIdentity ?: throw MirrorFailure("workspace_unavailable")
-            BackgroundPlan(identity, directory.absolutePath, environment, effectiveCommand, credentialFile, toolchainWarning)
+            BackgroundPlan(identity, directory.absolutePath, environment, command, toolchainWarning)
         }
         val identity = launch.identity
         val directory = launch.directory
         val environment = launch.environment
         val effectiveCommand = launch.command
-        val credentialFile = launch.credentialFile
         var job: Job? = null
         val registry = managedProcesses ?: throw MirrorFailure("runtime_unavailable")
         val id = registry.registerBackground(command, identity, projectName()) {
@@ -613,14 +728,14 @@ class RuntimeController(
         val runningJob = backgroundScope.launch {
             var outcome: CommandOutput? = null
             try {
-                outcome = CommandProcess().run(
+                outcome = runShell(
                     effectiveCommand, directory, environment, timeoutMs = null,
                     onOutput = { _, _ ->
                         val output = ring.snapshot()
                         registry.updateBackgroundOutput(id, output.stdout, output.stderr)
                     },
                     onChunk = ring::append,
-                    memoryCapBytes = governor.memoryCapBytes(),
+                    memoryCap = governor.memoryCapBytes(),
                 )
             } catch (e: CancellationException) {
                 registry.finishBackground(id, ManagedProcessStatus.Stopped, null)
@@ -628,15 +743,7 @@ class RuntimeController(
             } catch (_: Exception) {
                 registry.finishBackground(id, ManagedProcessStatus.Failed, null)
             } finally {
-                if (credentialFile != null) {
-                    withContext(NonCancellable + Dispatchers.IO) { gitHub.clearCredentialFile() }
-                }
-                backgroundRings.remove(id)
-                drainedRings[id] = ring
-                drainedOrder.add(id)
-                while (drainedRings.size > 8) {
-                    drainedOrder.poll()?.let(drainedRings::remove)
-                }
+                retainBackgroundOutput(id, ring)
                 val output = ring.snapshot()
                 registry.updateBackgroundOutput(id, output.stdout, output.stderr)
                 outcome?.let {
@@ -799,12 +906,12 @@ class RuntimeController(
         if (id != null) managedProcesses?.finishTurn(id)
     }
 
-    suspend fun retryPendingChanges(expectedWorkspace: String): MirrorSyncResult? = operations.withLock {
-        if (selection.currentIdentity() != expectedWorkspace) return@withLock null
+    suspend fun retryPendingChanges(expectedWorkspace: String): MirrorSyncResult? = withIdleWorktree {
+        if (selection.currentIdentity() != expectedWorkspace) return@withIdleWorktree null
         currentMirror()?.sync()
     }
 
-    suspend fun discardPendingChanges(expectedWorkspace: String): MirrorReady = operations.withLock {
+    suspend fun discardPendingChanges(expectedWorkspace: String): MirrorReady = withIdleWorktree {
         if (selection.currentIdentity() != expectedWorkspace) throw MirrorFailure("workspace_changed")
         val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
         if (mirrorIdentity != expectedWorkspace || selection.currentIdentity() != expectedWorkspace) {

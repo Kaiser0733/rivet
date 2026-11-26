@@ -56,7 +56,7 @@ class ManagedProcesses {
     private data class Entry(
         var info: ManagedProcessInfo,
         val workspaceIdentity: String,
-        val persistent: Boolean,
+        var persistent: Boolean,
         val stop: () -> Unit,
     )
 
@@ -107,11 +107,22 @@ class ManagedProcesses {
         id
     }
 
+    internal fun promoteCommand(id: String): Boolean = synchronized(lock) {
+        val entry = entries[id]?.takeIf {
+            it.info.kind == ManagedProcessKind.Command && it.info.status == ManagedProcessStatus.Running
+        } ?: return@synchronized false
+        if (!canStartPersistentLocked()) return@synchronized false
+        entry.persistent = true
+        entry.info = entry.info.copy(kind = ManagedProcessKind.Background)
+        publishLocked()
+        true
+    }
+
     fun finishCommand(id: String, result: RuntimeCommandResult) = synchronized(lock) {
         val entry = entries[id] ?: return@synchronized
         val status = when {
             entry.info.status == ManagedProcessStatus.Stopping -> ManagedProcessStatus.Stopped
-            result.error != null || result.exitCode != 0 -> ManagedProcessStatus.Failed
+            result.error != null || result.exitCode != 0 || result.memoryLimit || result.tooManyChildren -> ManagedProcessStatus.Failed
             else -> ManagedProcessStatus.Completed
         }
         entry.info = entry.info.copy(status = status, exitCode = result.exitCode,

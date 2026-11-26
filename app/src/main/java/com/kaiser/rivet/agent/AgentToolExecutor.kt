@@ -844,6 +844,10 @@ class AgentToolExecutor(
             slice.nextOffset?.let { put("next_offset", it) }
             slice.matchedLines?.let { put("matched_lines", it) }
             result.outputId?.let { put("output_id", it) }
+            result.processId?.let {
+                put("process_id", it)
+                put("status", "running_in_background")
+            }
             result.toolchainWarning?.let { put("toolchain_warning", it) }
             put("timed_out", result.timedOut)
             if (result.tooManyChildren) put("too_many_child_processes", true)
@@ -870,8 +874,13 @@ class AgentToolExecutor(
             } else throw AgentWorkspaceFailure("output_limit")
             encoded = value()
         }
-        return AgentToolResult(call.id, call.name, encoded.toString(), result.error != null,
-            if (result.error == null) "Command exited  ${result.exitCode}" else "Failed  run_command")
+        val summary = when {
+            result.error != null -> "Failed  run_command"
+            result.processId != null -> "Command running in background"
+            result.timedOut -> "Command timed out"
+            else -> "Command exited  ${result.exitCode}"
+        }
+        return AgentToolResult(call.id, call.name, encoded.toString(), result.error != null, summary)
     }
 
     private fun boundedGitStatus(status: RepositoryStatus): JsonObject {

@@ -93,7 +93,7 @@ class WorkspaceMirror(
     val home: File get() = File(base, "home")
     val temporary: File get() = File(base, "tmp")
 
-    suspend fun prepare(): MirrorReady = withContext(Dispatchers.IO) {
+    suspend fun prepare(refreshExternal: Boolean = true): MirrorReady = withContext(Dispatchers.IO) {
         mutex.withLock {
             selected()
             recover()
@@ -102,7 +102,7 @@ class WorkspaceMirror(
             val local = localSnapshot()
             val dirty = local.withoutExcluded(baseline.excluded) !=
                 baseline.entries.withoutExcluded(baseline.excluded) || readPartialCreate() != null
-            if (!dirty && safSnapshot().withoutExcluded(baseline.excluded) !=
+            if (refreshExternal && !dirty && safSnapshot().withoutExcluded(baseline.excluded) !=
                 baseline.entries.withoutExcluded(baseline.excluded)) materialize()
             MirrorReady(worktree, dirty)
         }
