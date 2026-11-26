@@ -575,6 +575,7 @@ class ChatViewModel private constructor(
     @Volatile private var userCancelledTicket = 0L
     @Volatile private var pauseRequestedTicket = 0L
     @Volatile private var pauseReason: RunPauseReason = RunPauseReason.User
+    private val termuxBridge = TermuxBridge(app)
     private val runtimeController = RuntimeController(app, workspaceSelection, managedProcesses) {
         _uiState.value.projectName
     }
@@ -2099,13 +2100,13 @@ class ChatViewModel private constructor(
                 customTabOpener = { url -> browser.customTabOpener?.invoke(url) == true },
             )
             val grantTrees = if (phone == null) emptyMap() else grantedFolders.list().associate { it.id to it.treeUri }
-            val termux = phone?.let { TermuxBridge(getApplication<Application>()) }
             suspend fun liveGrant(id: String, write: Boolean = false): SafWorkspace {
                 val expected = grantTrees[id] ?: throw com.kaiser.rivet.agent.AgentWorkspaceFailure("grant_missing")
                 return grantedFolders.resolve(id, write, expected)
             }
-            val prepareTermux = termux?.let { bridge ->
-                { call: AgentToolCall -> bridge.prepare(call, workspace) { id -> liveGrant(id) } }
+            val termuxOwner = _uiState.value.currentSessionId ?: workspaceId.orEmpty()
+            val prepareTermux = phone?.let {
+                { call: AgentToolCall -> termuxBridge.prepare(call, workspace, termuxOwner) { id -> liveGrant(id) } }
             }
             val capture = if (phone == null) null else (getApplication<Application>() as? RivetApplication)?.phoneCapture
             val saveCapture: (suspend (String) -> String)? = workspace?.let { selected ->
@@ -3600,6 +3601,7 @@ class ChatViewModel private constructor(
     }
 
     override fun onCleared() {
+        termuxBridge.close()
         try { connectivity?.unregisterNetworkCallback(networkCallback) } catch (_: Exception) { }
         terminalSession.close()
         super.onCleared()

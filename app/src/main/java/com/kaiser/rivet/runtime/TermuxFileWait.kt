@@ -13,6 +13,7 @@ internal data class TermuxRunResult(
     val detail: String? = null,
     val outputPath: String? = null,
     val truncated: Boolean = false,
+    val operationId: String? = null,
 )
 
 

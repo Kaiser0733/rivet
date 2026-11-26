@@ -30,7 +30,6 @@ import kotlinx.coroutines.withTimeoutOrNull
 import kotlinx.serialization.json.Json
 import kotlinx.serialization.json.JsonObject
 import kotlinx.serialization.json.JsonPrimitive
-import kotlinx.serialization.json.buildJsonArray
 import kotlinx.serialization.json.buildJsonObject
 import kotlinx.serialization.json.contentOrNull
 import kotlinx.serialization.json.jsonObject
@@ -39,6 +38,26 @@ import kotlinx.serialization.json.put
 
 internal class TermuxBridge(context: Context) {
     private val app = context.applicationContext
+
+    private val pending = java.util.concurrent.ConcurrentHashMap<String, PendingTermux>()
+
+    private data class PendingTermux(
+        val owner: String,
+        val action: String,
+        val callback: PendingIntent,
+        val returned: CompletableDeferred<TermuxRunResult>,
+        val files: OutputFiles?,
+    ) {
+        fun close() {
+            callback.cancel()
+            TermuxResultReceiver.unregister(action)
+        }
+    }
+
+    fun close() {
+        pending.values.forEach(PendingTermux::close)
+        pending.clear()
+    }
 
     fun installed(): Boolean = try {
         @Suppress("DEPRECATION")
@@ -49,10 +68,22 @@ internal class TermuxBridge(context: Context) {
     fun prepare(
         call: AgentToolCall,
         project: SafWorkspace?,
+        owner: String,
         resolveGrant: suspend (String) -> SafWorkspace,
     ): PreparedAgentTool {
+        val objectArgs = runCatching { Json.parseToJsonElement(call.arguments).jsonObject }.getOrNull()
+        if (objectArgs?.containsKey("operation_id") == true) {
+            val operationId = runCatching {
+                require(objectArgs.keys == setOf("operation_id"))
+                requireNotNull(string(objectArgs, "operation_id"))
+            }.getOrNull()
+            return PreparedAgentTool(call, null, effect = com.kaiser.rivet.agent.AgentToolEffect.ReadOnly) {
+                if (operationId == null) failure(call, "invalid_arguments")
+                else toolResult(call, lookup(operationId, owner))
+            }
+        }
         val args = runCatching {
-            val json = Json.parseToJsonElement(call.arguments).jsonObject
+            val json = requireNotNull(objectArgs)
             require(json.keys.all { it in setOf("command", "cwd", "timeout_ms") })
             val command = string(json, "command") ?: error("Command is required")
             val cwd = string(json, "cwd").orEmpty()
@@ -69,7 +100,7 @@ internal class TermuxBridge(context: Context) {
             dangerous = true)) {
             val result = try {
                 if (!installed()) TermuxRunResult(error = "termux_missing")
-                else execute(args, location(args.cwd, project, resolveGrant))
+                else execute(args, location(args.cwd, project, resolveGrant), owner)
             } catch (e: CancellationException) { throw e }
             catch (e: AgentWorkspaceFailure) { TermuxRunResult(error = e.code) }
             catch (_: WorkspaceFailure) { TermuxRunResult(error = "termux_cwd_unavailable") }
@@ -84,7 +115,7 @@ internal class TermuxBridge(context: Context) {
         return result.error?.let { code ->
             listOfNotNull(AgentToolError.action(code), result.detail?.takeIf { it.isNotBlank() })
                 .joinToString("\n")
-        } ?: listOf(result.stdout, result.stderr)
+        } ?: if (result.operationId != null) "Termux has not replied yet." else listOf(result.stdout, result.stderr)
             .filter { it.isNotBlank() }.joinToString("\n").trim()
             .ifBlank { "Termux returned no text (exit ${result.exitCode ?: "unknown"})." }
     }
@@ -125,10 +156,12 @@ internal class TermuxBridge(context: Context) {
         return File(Environment.getExternalStorageDirectory(), path.value).path
     }
 
-    private suspend fun execute(args: Arguments, location: Location): TermuxRunResult = withContext(Dispatchers.Main.immediate) {
+    private suspend fun execute(args: Arguments, location: Location, owner: String? = null): TermuxRunResult = withContext(Dispatchers.Main.immediate) {
         val fallback = location.files
         val returned = CompletableDeferred<TermuxRunResult>()
-        val action = app.packageName + ".TERMUX_RESULT." + UUID.randomUUID()
+        val id = UUID.randomUUID().toString()
+        val action = app.packageName + ".TERMUX_RESULT." + id
+        var retained = false
         val mutable = if (Build.VERSION.SDK_INT >= 31) PendingIntent.FLAG_MUTABLE else 0
         val callback = PendingIntent.getBroadcast(app, 0,
             Intent(app, TermuxResultReceiver::class.java).setAction(action)
@@ -156,15 +189,40 @@ internal class TermuxBridge(context: Context) {
                     Log.d("RivetTermux", "Saved command output: $outcome")
                 }).await(returned, args.timeout)
             }
-            result ?: fallback?.partialResult() ?: TermuxRunResult(error = "termux_timeout")
+            if (result != null && (result.error != "termux_output_missing" || returned.isCompleted ||
+                    fallback?.canStillComplete() == false)) return@withContext result
+            if (owner != null) {
+                pending[id] = PendingTermux(owner, action, callback, returned, fallback)
+                retained = true
+            }
+            (fallback?.partialResult() ?: TermuxRunResult()).copy(operationId = id)
         } catch (_: SecurityException) {
             TermuxRunResult(error = "termux_permission_required")
         } catch (_: IllegalStateException) {
             TermuxRunResult(error = "termux_unavailable")
         } finally {
-            callback.cancel()
-            TermuxResultReceiver.unregister(action)
+            if (!retained) {
+                callback.cancel()
+                TermuxResultReceiver.unregister(action)
+            }
         }
+    }
+
+    private suspend fun lookup(id: String, owner: String): TermuxRunResult {
+        val operation = pending[id]?.takeIf { it.owner == owner }
+            ?: return TermuxRunResult(error = "termux_operation_unavailable")
+        val files = operation.files
+        val result = when (val saved = files?.completedResult()) {
+            is TermuxFileRead.Done -> saved.result
+            is TermuxFileRead.Failed -> if (!saved.reason.retryableTermuxRead()) {
+                TermuxRunResult(error = "termux_output_missing", detail = saved.reason.name,
+                    outputPath = files?.outputPath)
+            } else null
+            else -> null
+        } ?: operation.returned.takeIf { it.isCompleted }?.await()
+        if (result == null) return (files?.partialResult() ?: TermuxRunResult()).copy(operationId = id)
+        if (pending.remove(id, operation)) operation.close()
+        return result
     }
 
     private class OutputFiles(
@@ -183,8 +241,9 @@ internal class TermuxBridge(context: Context) {
                 ?: readFailure?.let { TermuxFileRead.Failed(it) } ?: TermuxFileRead.Missing
         }
 
-        suspend fun partialResult(): TermuxRunResult =
-            result(null)?.copy(error = "termux_timeout") ?: TermuxRunResult(error = "termux_timeout")
+        fun canStillComplete(): Boolean = readFailure?.retryableTermuxRead() != false
+
+        suspend fun partialResult(): TermuxRunResult? = result(null)
 
         private suspend fun result(exitCode: Int?): TermuxRunResult? {
             val output = read { workspace.readTextRegion(path.child("out.txt"), 0, OUTPUT_BYTES) }
@@ -229,6 +288,10 @@ internal class TermuxBridge(context: Context) {
                     result.detail?.let { put("detail", it.take(400)) }
                 }
                 result.exitCode?.let { put("exit_code", it) }
+                result.operationId?.let {
+                    put("status", "pending")
+                    put("operation_id", it)
+                }
                 put("stdout", result.stdout.take(limit).dropLastWhile { it.isHighSurrogate() })
                 put("stderr", result.stderr.take(limit).dropLastWhile { it.isHighSurrogate() })
                 val truncated = result.truncated || result.stdout.length > limit || result.stderr.length > limit
@@ -241,7 +304,8 @@ internal class TermuxBridge(context: Context) {
             limit /= 2
         } while (content.toByteArray(Charsets.UTF_8).size > AgentLoop.MAX_TOOL_RESULT_BYTES && limit > 0)
         return AgentToolResult(call.id, call.name, content, error = result.error != null,
-            summary = result.error?.let(AgentToolError::action) ?: "Termux command finished")
+            summary = result.error?.let(AgentToolError::action)
+                ?: if (result.operationId == null) "Termux command finished" else "Waiting for Termux")
     }
 
     private fun string(json: JsonObject, key: String): String? {
@@ -256,15 +320,15 @@ internal class TermuxBridge(context: Context) {
             "termux_command",
             "Run a shell command with the Termux user's permissions outside Rivet's sandbox. " +
                 "Use cwd for a project-relative, granted-folder, or absolute Termux directory. " +
-                "A timeout doesn't stop the process. This command has no Rivet Undo.",
+                "When the wait expires, it returns an operation_id. Pass only operation_id to check for the result. This command has no Rivet Undo.",
             buildJsonObject {
                 put("type", "object")
                 put("properties", buildJsonObject {
                     put("command", buildJsonObject { put("type", "string") })
+                    put("operation_id", buildJsonObject { put("type", "string") })
                     put("cwd", buildJsonObject { put("type", "string") })
                     put("timeout_ms", buildJsonObject { put("type", "integer"); put("minimum", 1); put("maximum", 600_000) })
                 })
-                put("required", buildJsonArray { add(JsonPrimitive("command")) })
                 put("additionalProperties", false)
             },
         )
