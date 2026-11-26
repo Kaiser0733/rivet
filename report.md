@@ -194,3 +194,14 @@ runs used `JAVA_HOME` explicitly; no Android device was used.
    restart after a real delete, and no Compose/UI test for the new Undo row.
 10. **`ExternalDeleteStore` is new API surface.** The parent-red for Fix 3 is
    therefore behavioural (staging disabled), not a runnable parent test.
+11. **Restore follows the provider's returned path.** It creates the file with
+    the recorded display name but writes to whatever path the provider
+    returns; a provider that normalizes names (for example, appending `.txt`)
+    can put the bytes back under a slightly different name. The disposable
+    provider does not normalize, so this path is untested.
+12. **Only the newest external-delete group is offered in the UI.** The store
+    retains up to three groups, but the Undo row is built from the newest one;
+    an older group stays on disk until pruning and cannot be reached by a tap.
+13. **Project Undo and external Undo are separate rows.** A turn that both
+    changed project files and deleted an external file needs two taps, one on
+    each row; there is no combined undo.
