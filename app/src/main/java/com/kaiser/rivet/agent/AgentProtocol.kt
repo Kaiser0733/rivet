@@ -99,7 +99,7 @@ data class AgentApprovalRequest(
     val dangerous: Boolean = false,
     val approvalToken: Long = 0L,
     val requester: String? = null,
-    /** True when this mutation is inside the project tree and a recent turn checkpoint can restore it. */
+    /** True when a recent turn checkpoint or a staged external-delete copy can restore this mutation. */
     val undoable: Boolean = false,
 )
 

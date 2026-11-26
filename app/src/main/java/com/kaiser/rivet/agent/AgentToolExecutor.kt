@@ -16,12 +16,18 @@ import com.kaiser.rivet.runtime.PreviewLaunch
 import com.kaiser.rivet.runtime.ProjectDownloader
 import com.kaiser.rivet.runtime.DownloadFailure
 import com.kaiser.rivet.runtime.isVcsPath
+import com.kaiser.rivet.workspace.ExternalDeleteFailure
+import com.kaiser.rivet.workspace.ExternalDeleteGuard
+import com.kaiser.rivet.workspace.ExternalDeleteProtection
 import com.kaiser.rivet.workspace.GrantPath
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.WorkspaceStructuralStamp
 import java.io.InputStream
 import java.io.FileInputStream
+import java.util.Locale
 import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.NonCancellable
+import kotlinx.coroutines.withContext
 import com.kaiser.rivet.runtime.PhoneCaptureTool
 import com.kaiser.rivet.runtime.PhoneIntents
 import com.kaiser.rivet.runtime.TermuxBridge
@@ -122,6 +128,11 @@ class AgentToolExecutor(
     private val prepareTermuxCommand: ((AgentToolCall) -> PreparedAgentTool)? = null,
     private val preparePhoneIntent: ((AgentToolCall) -> PreparedAgentTool?)? = null,
     private val readProjectImage: (suspend (String) -> ProjectImageRead)? = null,
+    // External-grant deletes are copied into app storage before the provider removes
+    // them, because the project checkpoint never sees a grant tree.
+    private val externalDeletes: ExternalDeleteGuard? = null,
+    private val currentSessionId: () -> String? = { null },
+    private val currentTurnId: String? = null,
 ) {
     suspend fun prepare(call: AgentToolCall): PreparedAgentTool {
         if (call.arguments.toByteArray().size > MAX_ARGUMENT_BYTES) return invalid(call, "arguments_too_large")
@@ -352,9 +363,35 @@ class AgentToolExecutor(
                 "delete_path" -> {
                     val args = json.decodeFromString<PathArgs>(call.arguments); val path = path(args.path)
                     val approved = workspace.observeStructural(path, recursive = true)
+                    // Decided before the approval so its wording can promise an Undo
+                    // only when Rivet can actually keep a copy of the bytes.
+                    val protection = externalDeletes
+                        ?.takeIf { GrantPath.isExternal(path) && GrantPath.parse(path).grantId != null }
+                        ?.plan(path)
                     mutation(call, "Delete", path, path.length, path,
-                        modelRequestsApproval = args.askUser) {
-                        workspace.delete(path, approved)
+                        modelRequestsApproval = args.askUser, externalProtection = protection) {
+                        val staged = if (protection is ExternalDeleteProtection.Available) {
+                            externalDeletes?.stage(path, currentSessionId(), currentTurnId)
+                        } else null
+                        try {
+                            workspace.delete(path, approved)
+                        } catch (e: Exception) {
+                            // A failed provider delete may still have removed part of a
+                            // folder. Keep the copy unless the target is provably the same
+                            // bytes as when the delete started. This check also has to run
+                            // on cancellation, before the staged copy can be cleaned up.
+                            withContext(NonCancellable) {
+                                val intact = try {
+                                    workspace.observeStructural(path, recursive = true) == approved
+                                } catch (_: Exception) {
+                                    false
+                                }
+                                if (staged != null && intact) {
+                                    runCatching { externalDeletes?.discard(staged) }
+                                }
+                            }
+                            throw e
+                        }
                         success(call, buildJsonObject { put("path", path); put("deleted", true) }, "Deleted  $path")
                     }
                 }
@@ -636,12 +673,26 @@ class AgentToolExecutor(
         destructivePath: String? = null,
         modelRequestsApproval: Boolean = false,
         memoryFact: String? = null,
+        externalProtection: ExternalDeleteProtection? = null,
         action: suspend () -> AgentToolResult,
     ): PreparedAgentTool {
         val external = externalTargets(call)
+        val protected = externalProtection is ExternalDeleteProtection.Available
+        val note = when {
+            !external -> ""
+            protected -> "\nRivet keeps a copy in app storage so this delete can be undone."
+            externalProtection is ExternalDeleteProtection.TooLarge -> {
+                val bytes = "%,d".format(Locale.US, externalProtection.bytes)
+                val limit = "%,d".format(Locale.US, externalProtection.limitBytes)
+                "\nThis is outside the project and is too large to keep a copy of ($bytes bytes; the limit is $limit), so this delete cannot be undone."
+            }
+            externalProtection is ExternalDeleteProtection.Unreadable ->
+                "\nThis is outside the project and Rivet could not read it to keep an Undo copy, so this delete cannot be undone."
+            else -> NO_EXTERNAL_UNDO
+        }
         return PreparedAgentTool(
-            call, AgentApprovalRequest(call, title, detail + if (external) NO_EXTERNAL_UNDO else "",
-                destructivePath, undoable = !external),
+            call, AgentApprovalRequest(call, title, detail + note,
+                destructivePath, undoable = !external || protected),
             // Paths contain no controls: three UTF-8 bytes per UTF-16 unit covers
             // their JSON representation. Fixed fields, hashes and numbers fit in 512.
             resultContentLimitBytes = minOf(AgentLoop.MAX_TOOL_RESULT_BYTES, 512 + resultPathChars * 3),
@@ -679,6 +730,12 @@ class AgentToolExecutor(
         val size = entry?.takeIf { !it.directory }?.size?.let { "\n%,d bytes".format(java.util.Locale.US, it) } ?: ""
         val warning = if (request.call.name == "delete_path") {
             when {
+                // A granted folder is not in the project tree, so its Undo comes
+                // from the copy Rivet staged in app storage, not the checkpoint.
+                GrantPath.isExternal(target) && request.undoable ->
+                    "This is outside the project. Undo restores it from the copy Rivet kept in app storage."
+                GrantPath.isExternal(target) ->
+                    "This may be one of your existing files. Deletion is permanent."
                 !request.undoable -> "This may be one of your existing files. Deletion is permanent."
                 // Rivet never mirrors repository metadata into the project folder, so the
                 // checkpoint holds no copy of it. Say that instead of promising an Undo
@@ -702,6 +759,8 @@ class AgentToolExecutor(
     } catch (e: WorkspaceFailure) {
         failure(call, e.reason.name.lowercase())
     } catch (e: AgentWorkspaceFailure) {
+        failure(call, e.code)
+    } catch (e: ExternalDeleteFailure) {
         failure(call, e.code)
     } catch (e: MirrorFailure) {
         failure(call, e.code, subject = e.path)

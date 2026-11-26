@@ -117,6 +117,18 @@ class SafWorkspace(private val resolver: ContentResolver, val tree: Uri) {
         stream(resolve(path), null)
     }
 
+    // The approval is allowed to promise an Undo copy only if the provider will let
+    // Rivet read the document. Opening it and reading one byte catches a revoked or
+    // provider-side refusal without copying the whole file twice.
+    suspend fun canRead(path: WorkspacePath): Boolean = io {
+        val entry = resolve(path)
+        if (entry.directory) fail(WorkspaceFailure.Reason.NOT_FILE)
+        val descriptor = resolver.openFileDescriptor(uri(entry.documentId), "r")
+            ?: fail(WorkspaceFailure.Reason.PROVIDER)
+        ParcelFileDescriptor.AutoCloseInputStream(descriptor).use { it.read() }
+        true
+    }
+
     suspend fun observeStructural(path: WorkspacePath, recursive: Boolean): WorkspaceStructuralStamp = io {
         val entry = resolve(path)
         structuralStamp(entry, resolve(path.parent()), recursive)
