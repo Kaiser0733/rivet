@@ -984,7 +984,7 @@ class CodingSessionsTest {
             }
         }
         assertEquals(compacted, CodingSessions(app).load().messages)
-        assertEquals(history, sessions.recent(id))
+        assertEquals(history + InternalContext.compactionNotice(null, 4_000), sessions.recent(id))
         repeat(65) { index ->
             sessions.recordContextFailure(id, ContextAttempt("overflow", "estimated", index.toLong(),
                 null, "provider", "model", failure = "context_headroom_unavailable"))

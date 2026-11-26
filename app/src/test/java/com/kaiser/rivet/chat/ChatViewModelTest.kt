@@ -873,10 +873,10 @@ class ChatViewModelTest {
         val complete = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Complete" }
 
         assertNull(complete.error)
-        assertEquals(1, sessions.recent(id).count {
+        assertEquals(2, sessions.recent(id).count {
             it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
         })
-        assertEquals(69, sessions.fullEventCount(id))
+        assertEquals(70, sessions.fullEventCount(id))
         assertTrue(AgentContext.serializedBytes(sessions.load().messages) <
             AgentContext.serializedBytes(history) / 2)
         assertEquals("", sessions.load().summary)
@@ -887,7 +887,7 @@ class ChatViewModelTest {
             .any { it.content.contains("output_pruned") })
         // recent() is the visible transcript: context rows are hidden there except
         // the compaction notice, which is a persisted row that renders in the chat.
-        assertEquals(69, sessions.recent(id, 100).size)
+        assertEquals(70, sessions.recent(id, 100).size)
         assertTrue(sessions.recent(id, 100).none {
             it.internalContext != null && it.validatedContext()?.kind != com.kaiser.rivet.agent.CompactionNotice.KIND
         })
@@ -908,7 +908,7 @@ class ChatViewModelTest {
         await(switched) { !it.streaming && it.messages.lastOrNull()?.text == "After switch" }
         assertEquals("model-b", switchedProvider.requests.single().model)
         assertTrue(switchedProvider.requests.single().messages.last().text.contains("Follow up"))
-        assertEquals(71, sessions.fullEventCount(id))
+        assertEquals(72, sessions.fullEventCount(id))
     }
 
     @Test fun knownCapacityPreparesContextBelowOldByteThreshold() = runBlocking {
@@ -1116,7 +1116,7 @@ class ChatViewModelTest {
             com.kaiser.rivet.agent.AgentContext.redact(newestUser), 512)
         assertEquals(expectedGoal, com.kaiser.rivet.agent.TaskCheckpoint.parse(sessions.load().summary)?.goal)
         assertEquals(512, expectedGoal.toByteArray(Charsets.UTF_8).size)
-        assertEquals(1, sessions.load().messages.count {
+        assertEquals(1, sessions.recent(id).count {
             it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
         })
         assertTrue(AgentContext.serializedBytes(sessions.load().messages) <
@@ -1379,7 +1379,7 @@ class ChatViewModelTest {
         val restarted = CodingSessions(app).load()
         assertEquals(second, restarted.messages)
         assertEquals(preparation.summary, restarted.summary)
-        assertEquals(40, sessions.fullEventCount(id))
+        assertEquals(42, sessions.fullEventCount(id))
         assertEquals(history, sessions.recent(id, 100).take(history.size))
     }
 
@@ -1424,7 +1424,7 @@ class ChatViewModelTest {
         assertEquals(2, secondProvider.requests.size)
         assertEquals("small", secondProvider.requests.last().model)
         assertTrue(CodingSessions(app).load().summary.contains("Continue on small model"))
-        assertEquals(1, sessions.load().messages.count {
+        assertEquals(1, sessions.recent(id).count {
             it.validatedContext()?.kind == com.kaiser.rivet.agent.CompactionNotice.KIND
         })
         assertEquals(history.size + 5, sessions.fullEventCount(id))
