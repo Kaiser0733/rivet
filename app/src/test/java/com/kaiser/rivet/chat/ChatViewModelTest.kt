@@ -234,6 +234,48 @@ class ChatViewModelTest {
         val finished = await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "B done" }
         assertEquals(listOf("B", "B done"), finished.messages.map { it.text })
     }
+
+    @Test fun eachProjectKeepsItsOwnBrowserSession() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val authority = "com.kaiser.rivet.browser-project"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        val documents = Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        val other = DocumentsContract.buildTreeDocumentUri(authority, "other")
+        documents.nodes["other"] = TestDocumentsProvider.Node("Another project", null, true,
+            java.io.File.createTempFile("browser-other", ".test", app.cacheDir))
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val viewModel = newChatViewModel(app, CodingSessions(app),
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready && !it.projectLoading }
+        val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION or
+            Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+        viewModel.selectProject(tree, flags)
+        val first = await(viewModel) { it.projectName == "project" && !it.projectLoading }
+        val firstBrowser = viewModel.browser
+        assertEquals(tree.toString(), firstBrowser.projectKey)
+
+        viewModel.selectProject(other, flags)
+        val second = await(viewModel) { it.projectName == "Another project" && !it.projectLoading }
+        assertFalse("each project needs its own browser session", firstBrowser === viewModel.browser)
+        assertEquals("the second project must not move the first project's page",
+            tree.toString(), firstBrowser.projectKey)
+        assertEquals(other.toString(), viewModel.browser.projectKey)
+
+        viewModel.resumeSession(first.currentSessionId!!)
+        await(viewModel) { it.currentSessionId == first.currentSessionId }
+        assertSame("returning to a project restores its own browser", firstBrowser, viewModel.browser)
+        assertEquals(tree.toString(), firstBrowser.projectKey)
+    }
     @Test fun lostProjectAccessStopsSendWithoutCallingTheProviderOrChangingConversation() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
@@ -2227,6 +2269,95 @@ class ChatViewModelTest {
         })
     }
 
+
+    @Test fun secondLocalTurnQueuesAndCanBeStoppedBeforeItStarts() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        val other = sessions.create(null).id!!
+        sessions.select(first)
+        val release = CompletableDeferred<Unit>()
+        var requests = 0
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit): AgentResponse {
+                requests++
+                release.await()
+                return AgentResponse(text = "first done")
+            }
+        }
+        val config = ProviderConfig(id = "local", type = ProviderType.Local, name = "Local",
+            baseUrl = "local://test", model = "local-test")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "") }, { _, _ -> provider })
+        await(viewModel) { it.ready && it.currentSessionId == first }
+        viewModel.send("First local")
+        await(viewModel) { it.streaming && requests >= 1 }
+
+        viewModel.resumeSession(other)
+        await(viewModel) { it.currentSessionId == other }
+        viewModel.send("Second local")
+        val queued = await(viewModel) { it.activity == "Waiting for the local model…" }
+        assertTrue(queued.streaming)
+        assertEquals(1, requests)
+        viewModel.stop()
+        val stopped = await(viewModel) { !it.streaming }
+        assertEquals("Stopped before the queued turn started.", stopped.notice)
+        release.complete(Unit)
+        await(viewModel) { it.currentSessionId == other && !it.streaming }
+        assertEquals("a stopped queued turn must never start", 1, requests)
+        assertTrue(sessions.recent(other).any { it.text == "Second local" })
+        assertFalse(sessions.recent(other).any { it.text == "first done" })
+    }
+
+    @Test fun queuedLocalTurnStartsWhenTheRunningOneFinishes() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        AgentSessionStore(app).clear()
+        val sessions = CodingSessions(app)
+        val first = sessions.load().id!!
+        val other = sessions.create(null).id!!
+        sessions.select(first)
+        val releaseFirst = CompletableDeferred<Unit>()
+        var requests = 0
+        val requested = mutableListOf<String>()
+        val provider = object : ProviderClient {
+            override suspend fun listModels(): List<ModelInfo> = emptyList()
+            override suspend fun testConnection() = TestResult(true, "ok")
+            override suspend fun streamAgent(request: AgentRequest, onReasoning: (String) -> Unit,
+                onDelta: (String) -> Unit): AgentResponse {
+                requests++
+                val last = request.messages.lastOrNull { it.role == com.kaiser.rivet.agent.AgentRole.User }?.text.orEmpty()
+                requested += last
+                if (last.contains("First")) releaseFirst.await()
+                val answer = if (last.contains("First")) "first done" else "second done"
+                onDelta(answer)
+                return AgentResponse(text = answer)
+            }
+        }
+        val config = ProviderConfig(id = "local", type = ProviderType.Local, name = "Local",
+            baseUrl = "local://test", model = "local-test")
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "") }, { _, _ -> provider })
+        await(viewModel) { it.ready && it.currentSessionId == first }
+        viewModel.send("First local")
+        await(viewModel) { it.streaming && requests >= 1 }
+
+        viewModel.resumeSession(other)
+        await(viewModel) { it.currentSessionId == other }
+        viewModel.send("Second local")
+        await(viewModel) { it.activity == "Waiting for the local model…" }
+        assertEquals(1, requests)
+
+        releaseFirst.complete(Unit)
+        await(viewModel) { requests >= 2 }
+        val done = await(viewModel) { !it.streaming }
+        assertEquals("second done", done.messages.lastOrNull()?.text)
+        assertEquals("the queued turn starts once", 1, requested.count { it.contains("Second") })
+        assertTrue(requests >= 2)
+    }
     @Test fun stopClearsStreamingWhileProviderCleanupIsStillHeld() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
