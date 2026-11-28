@@ -1826,7 +1826,10 @@ class ChatViewModelTest {
         await(viewModel) { it.goal?.text == "ship the snake game" && it.commandAckCount == 1L }
 
         viewModel.compactHistory()
-        val compacted = await(viewModel) { !it.streaming && !it.compacting }
+        val compacted = await(viewModel) {
+            !it.streaming && !it.compacting &&
+                (it.error != null || it.messages.lastOrNull()?.internalContext?.content?.startsWith("Compacted to ") == true)
+        }
         assertNull(compacted.error)
         val saved = CodingSessions(app).load()
         val checkpoint = requireNotNull(com.kaiser.rivet.agent.TaskCheckpoint.parse(saved.summary))
