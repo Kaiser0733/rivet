@@ -14,7 +14,7 @@ class BrowserObservedCostTest {
         val observed = BrowserObservedCost.bytes(ownPssGrowth, baselineAvail, currentAvail)
         assertEquals(229 * mb, observed)
         val budget = BrowserGovernor.decide(BrowserMemorySignals(2_000 * mb,
-            observedBrowserBytes = observed))
+            observedBrowserBytes = observed), BrowserMemoryLimit.Mb250)
         assertTrue("v9 cost must cross the reader-first tier",
             budget.tier.ordinal >= BrowserTier.ReaderFirst.ordinal)
     }
@@ -24,7 +24,7 @@ class BrowserObservedCostTest {
         assertEquals(100 * mb, parentObserved)
         assertEquals(BrowserTier.Normal,
             BrowserGovernor.decide(BrowserMemorySignals(2_000 * mb,
-                observedBrowserBytes = parentObserved)).tier)
+                observedBrowserBytes = parentObserved), BrowserMemoryLimit.Mb250).tier)
     }
 
     @Test fun negativeHeadroomIsClampedToZero() {

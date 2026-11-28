@@ -23,7 +23,7 @@ class RendererPssSelectionTest {
         assertEquals(260 * mb, growth)
         assertNotEquals(BrowserTier.Normal,
             BrowserGovernor.decide(BrowserMemorySignals(2_000 * mb,
-                observedBrowserBytes = growth)).tier)
+                observedBrowserBytes = growth), BrowserMemoryLimit.Mb250).tier)
     }
 
     @Test fun noSameUidPeerMeansNoRendererSignal() {
