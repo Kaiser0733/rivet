@@ -1,4 +1,29 @@
-# Send setup and old conversations
+# Send refusal and conversation directories
+
+## Root cause on 7840a9fd
+
+The delivered APK's embedded Git revision is `7840a9fd7bd448e5972bd79e22b8b1de9198679e`. The screenshots identify the catch and show that the two taps were accepted. They contain no throwable. I could not reproduce that catch with revoked grants, and there was no connected phone or logcat from either failing tap.
+
+| Reported case | Source path on the delivered revision |
+| --- | --- |
+| New session, picked folder, two saved prompts | `ChatScreen.kt:438–459` calls `ChatViewModel.send`. `ChatViewModel.kt:1179–1220` appends the user message and calls `startTurn`. Lines 2176–2195 dispatch to `startTurnNow` and lines 2229–2243 enter the setup catch and construct the client. Lines 2261–2267 resolve the tree and check `candidate?.takeIf { it.stat(WorkspacePath.ROOT).directory }`. A dead grant either produces `WorkspaceFailure(PERMISSION)` through `SafWorkspace.kt:35–37,43,606–612` or loses access during the provider query. The exception is inside `turnSupport` at 2264, whose Throwable arm at 2204–2206 returns null. The turn prepares without project instructions, mirror or journal at 2276–2325. A revoked grant alone reached `client.streamAgent` at 2648 and saved the reply in the first-turn reproduction. |
+| Old conversation with lost access | `ProjectBinding.kt:13–18` evaluates the stored binding and accessible project. `accessibleProjectId == null` yields `AccessLost`, which `ChatScreen.kt:363–366` renders as the grey notice. The checks at `ChatViewModel.kt:1171–1175,2217–2222` only decline on `Mismatch`. The accepted turn follows the same path as the first send. The stored URI is passed to `WorkspaceSelection.openTree` at 2265, where `WorkspaceSelection.kt:123–127` tries a readable grant by exact URI and then by document identity. When both are missing, the stat throws the same `WorkspaceFailure(PERMISSION)` and the same support boundary returns null. The revoked-grant old-chat reproduction reached the provider and saved the reply with its previous transcript and original binding. |
+| Exact start-refusal banner | `ChatViewModel.kt:3115–3122` catches a non-cancellation throwable that escaped the narrower setup and run handlers. The exact selector is `if (requestStarted) ... else "Rivet couldn't start this request. Try again."`; the flag is initialized false at 2233 and set just before streaming at 2647. The catch logs `e.javaClass.name` and `e.message` and publishes only the banner. The throwable on either reported tap remains unknown. |
+
+The dead-grant theory is insufficient for both reports. The red/green experiment used an existing document provider and revoked its persisted read and write permission while leaving the document root intact. Both new tests passed on the delivered revision. The previous moved-root test covers a different failure where the grant survives and the document disappears. Android documents that persisted grants can outlive the original document. [Android Storage Access Framework](https://developer.android.com/training/data-storage/shared/documents-files#persist-permissions)
+
+Round 2's project access, instruction read, previous journal save and checkpoint backend paths all catch the corresponding failures. Run checkpoint gate construction also falls under `turnSupport` through `startRun` at 2314–2316 and 1724–1726, and under the turn Undo setup at 2327–2330. Its constructor at `RunCheckpointGate.kt:106–153` builds in-memory state. There is no grant I/O there. If either device refusal followed the dead-grant path, an additional failure escaped a different boundary. The screenshots cannot name that operation.
+
+### The folder picker has a separate, reproducible cause
+
+`WorkspaceSelection.select` writes the single `workspace/tree` preference at `WorkspaceSelection.kt:86–95`. `ChatViewModel.kt:778,879–895` restores it independently of the stored chat. Lines 3872–3906 combine that viewed project with the target chat's binding. `ProjectBinding.kt:16–18` can then display the mismatch for a valid chat, and the two Send guards above can decline with the explicit mismatch message. The owner's successful mismatch-screen send is consistent with a banner evaluated from earlier UI state or with a state change before dispatch. A mismatch that remains true at dispatch cannot produce the pictured generic refusal. The stored chat row itself is preserved on project selection. The UI offers a new conversation at `ProjectsScreen.kt:72–79,123–134`, and `ChatViewModel.kt:1019–1040` creates one whenever the chosen folder differs. `changingTheFolderKeepsTheConversationAndItsTranscript` is red on `7840a9fd`: the active conversation ID changes after selecting the second folder.
+
+The global selection explains the directory defect and can independently stop a Send through the mismatch checks. It has no demonstrated causal link to the two generic refusals.
+
+<details>
+<summary>Previous send investigation and earlier work</summary>
+
+## Send setup and old conversations
 
 ## Pre-provider census at 5ca61af3
 
@@ -935,5 +960,7 @@ function, and parameter. This changes no recovery behavior; the existing
 No model-side rate-limit or stream-stall errors surfaced during this check.
 Time was dominated by the offline Gradle compile (about four minutes per
 run) and the manual JUnit harness; there were no unexplained stalls.
+
+</details>
 
 </details>

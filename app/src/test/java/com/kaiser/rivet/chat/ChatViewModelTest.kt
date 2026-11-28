@@ -326,6 +326,77 @@ class ChatViewModelTest {
         assertEquals(tree.toString(), sessions.load(id).workspaceId)
     }
 
+    @Test fun firstSendStillReachesProviderAfterTheFolderGrantIsRevoked() = runBlocking {
+        sendWithRevokedGrant(existingChat = false)
+    }
+
+    @Test fun oldChatStillSendsAndSavesTheReplyAfterTheFolderGrantIsRevoked() = runBlocking {
+        sendWithRevokedGrant(existingChat = true)
+    }
+
+    private suspend fun sendWithRevokedGrant(existingChat: Boolean) {
+        app.deleteDatabase("coding-sessions.db")
+        val authority = "com.kaiser.rivet.revoked-grant"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        projectDocuments(authority)
+        val selection = WorkspaceSelection(app)
+        selection.select(tree, projectGrantFlags)
+        val store = CodingSessions(app)
+        val id = requireNotNull(store.create(tree.toString()).id)
+        store.rename(id, "Project chat")
+        val previous = if (existingChat) {
+            listOf(AgentMessage.user("Earlier question"), AgentMessage.assistant("Earlier answer"))
+        } else emptyList()
+        store.save(previous, interrupted = false)
+        app.contentResolver.releasePersistableUriPermission(tree,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        assertFalse(app.contentResolver.persistedUriPermissions.any { it.uri == tree && it.isReadPermission })
+
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Hello!"))))
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val viewModel = newChatViewModel(app, store,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        val ready = await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == id }
+        assertEquals(tree.toString(), ready.currentSessionWorkspaceId)
+        assertNull(ready.projectIdentity)
+
+        assertTrue(viewModel.send("hey"))
+        val done = await(viewModel) { !it.streaming &&
+            (it.error != null || it.messages.any { message -> message.text == "Hello!" }) }
+        assertNull(done.error)
+        assertEquals("hey", provider.requests.single().messages.last().text)
+        val saved = store.load(id)
+        assertEquals(tree.toString(), saved.workspaceId)
+        assertEquals(previous.map { it.text } + listOf("hey", "Hello!"),
+            saved.messages.filter { it.internalContext == null }.map { it.text })
+    }
+
+    @Test fun changingTheFolderKeepsTheConversationAndItsTranscript() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        val firstAuthority = "com.kaiser.rivet.original-folder"
+        val secondAuthority = "com.kaiser.rivet.replacement-folder"
+        val first = DocumentsContract.buildTreeDocumentUri(firstAuthority, "root")
+        val second = DocumentsContract.buildTreeDocumentUri(secondAuthority, "root")
+        projectDocuments(firstAuthority)
+        projectDocuments(secondAuthority)
+        WorkspaceSelection(app).select(first, projectGrantFlags)
+        val store = CodingSessions(app)
+        val id = requireNotNull(store.create(first.toString()).id)
+        val transcript = listOf(AgentMessage.user("Earlier question"), AgentMessage.assistant("Earlier answer"))
+        store.save(transcript, interrupted = false)
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val viewModel = newChatViewModel(app, store,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> QueueProvider(ArrayDeque()) })
+        await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == id }
+
+        viewModel.selectProject(second, projectGrantFlags)
+        val ready = await(viewModel) { !it.projectLoading && it.projectIdentity == second.toString() }
+        assertEquals(id, ready.currentSessionId)
+        assertEquals(transcript, ready.messages)
+        assertEquals(second.toString(), store.load(id).workspaceId)
+    }
+
     @Test fun newProjectConversationSendsEvenWhenTheRunCheckpointThrows() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         val authority = "com.kaiser.rivet.checkpoint-error-chat"
