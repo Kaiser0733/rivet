@@ -363,6 +363,60 @@ class ChatViewModelTest {
         assertTrue(registry.sessions.load(id).messages.any { it.text == "Answered" })
     }
 
+    @Test fun legacyConversationSendsAndAdoptsTheSelectedProjectWhenSaved() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        val authority = "com.kaiser.rivet.legacy-chat"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        WorkspaceSelection(app).select(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        val sessions = CodingSessions(app)
+        val legacyId = requireNotNull(sessions.create(null).id)
+        sessions.clearAutoTitle(legacyId)
+        sessions.save(listOf(AgentMessage.user("Earlier prompt"), AgentMessage.assistant("Earlier reply")),
+            interrupted = false)
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Continued"))))
+        val viewModel = newChatViewModel(app, sessions,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        val ready = await(viewModel) { it.ready && !it.projectLoading && it.projectIdentity == tree.toString() }
+        assertEquals(legacyId, ready.currentSessionId)
+        assertNull(ready.currentSessionWorkspaceId)
+
+        assertTrue(viewModel.send("New prompt"))
+        val done = await(viewModel) { !it.streaming &&
+            (it.error != null || it.messages.any { message -> message.text == "Continued" }) }
+
+        assertNull(done.error)
+        assertTrue(provider.requests.single().messages.any { it.text == "New prompt" })
+        assertTrue(done.messages.any { it.text == "New prompt" })
+        assertEquals(tree.toString(), done.currentSessionWorkspaceId)
+        val reloaded = CodingSessions(app).load(legacyId)
+        assertEquals(tree.toString(), reloaded.workspaceId)
+        assertTrue(reloaded.messages.any { it.text == "New prompt" })
+
+        viewModel.runRegistry.active.first { it == null }
+        val owner = requireNotNull(viewModel.runRegistry.lastRun)
+        val otherTree = DocumentsContract.buildTreeDocumentUri(authority, "other")
+        owner.update { it.copy(projectIdentity = otherTree.toString()) }
+        assertTrue(viewModel.send("Wrong project"))
+        val mismatch = await(viewModel) { !it.streaming && it.error == PROJECT_BINDING_MISMATCH_MESSAGE }
+
+        assertEquals(1, provider.requests.size)
+        assertFalse(mismatch.messages.any { it.text == "Wrong project" })
+        val unchanged = sessions.load(legacyId)
+        assertEquals(tree.toString(), unchanged.workspaceId)
+        assertFalse(unchanged.messages.any { it.text == "Wrong project" })
+    }
+
     @Test fun reselectingTheExactBoundTreeAfterAccessLossKeepsTheConversation() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()

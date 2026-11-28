@@ -129,12 +129,18 @@ internal class CodingSessions(
     override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) =
         save(messages, interrupted, expectedSessionId = null)
 
-    suspend fun save(messages: List<AgentMessage>, interrupted: Boolean, expectedSessionId: String?) =
+    suspend fun save(
+        messages: List<AgentMessage>, interrupted: Boolean, expectedSessionId: String?,
+        workspaceIdIfUnbound: String? = null,
+    ) =
         onDatabase { db ->
         val id = expectedSessionId ?: activeId(db)
-        header(db, id)
         db.beginTransaction()
         try {
+            val boundWorkspaceId = header(db, id).workspaceId
+            check(workspaceIdIfUnbound == null || boundWorkspaceId == null || boundWorkspaceId == workspaceIdIfUnbound) {
+                "Session project binding changed"
+            }
             val count = db.rawQuery("SELECT COUNT(*) FROM active_events WHERE session_id=?", arrayOf(id)).use {
                 it.moveToFirst(); it.getInt(0)
             }
@@ -171,9 +177,9 @@ internal class CodingSessions(
                 })
             }
             trimCompactedHistory(db, id)
-            db.execSQL("UPDATE sessions SET interrupted=?, updated_at=? WHERE id=?",
+            db.execSQL("UPDATE sessions SET interrupted=?, updated_at=?, workspace_id=COALESCE(workspace_id, ?) WHERE id=?",
                 arrayOf(if (interrupted || hasPendingToolCall(messages.lastOrNull())) 1 else 0,
-                    System.currentTimeMillis(), id))
+                    System.currentTimeMillis(), workspaceIdIfUnbound, id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }

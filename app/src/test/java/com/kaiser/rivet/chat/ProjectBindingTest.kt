@@ -29,8 +29,8 @@ class ProjectBindingTest {
             projectBindingState("session", null, null, false))
     }
 
-    @Test fun unboundSessionDoesNotSilentlyAttachToSelectedProject() {
-        assertEquals(ProjectBindingState.Mismatch,
+    @Test fun unboundSessionCanUseTheSelectedProject() {
+        assertEquals(ProjectBindingState.None,
             projectBindingState("session", null, "content://provider/tree/one", false))
     }
 }

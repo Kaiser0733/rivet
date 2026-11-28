@@ -2107,7 +2107,7 @@ class ChatViewModel private constructor(
         pauseRequested = false
         pauseAction = { reason -> pauseRun(this, reason) }
         raiseBudgetAction = { raiseOwnedBudgetCap() }
-        val runtime = TurnRunContext(value.currentSessionId, value.currentSessionWorkspaceId)
+        val runtime = TurnRunContext(value.currentSessionId, value.currentSessionWorkspaceId ?: value.projectIdentity)
         runtimeContext = runtime
         reserveTurn(true)
         runRegistry.begin(this)
@@ -2204,6 +2204,7 @@ class ChatViewModel private constructor(
             var turnToken: String? = null
             var acceptedPersisted = false
             var persistAcceptedOnExit = true
+            var workspaceIdToAdopt: String? = null
             fun releaseTurn() {
                 val token = turnToken ?: return
                 turnToken = null
@@ -2255,7 +2256,7 @@ class ChatViewModel private constructor(
             // A turn is bound to its own conversation's project, not to whichever project
             // the user happens to be viewing when the coroutine actually starts.
             val workspace = try {
-                value.currentSessionWorkspaceId?.let {
+                (value.currentSessionWorkspaceId ?: value.projectIdentity)?.let {
                     SafWorkspace(getApplication<Application>().contentResolver, Uri.parse(it))
                 } ?: workspaceSelection.restore()?.first
             } catch (e: CancellationException) {
@@ -2291,7 +2292,8 @@ class ChatViewModel private constructor(
             }
             val current = owner.value
             val binding = projectBindingState(current.currentSessionId,
-                current.currentSessionWorkspaceId, workspaceId, projectLoading = false)
+                current.currentSessionWorkspaceId, workspaceId?.let { current.projectIdentity ?: it },
+                projectLoading = false)
             if (workspaceAccessFailed || binding == ProjectBindingState.AccessLost) {
                 persistAcceptedOnExit = false
                 rollbackAcceptedUser(acceptedUser)
@@ -2312,6 +2314,9 @@ class ChatViewModel private constructor(
                     interruptedTurn = wasInterrupted,
                     error = PROJECT_BINDING_MISMATCH_MESSAGE) }
                 return@launchRun
+            }
+            if (sessionId != null && current.currentSessionWorkspaceId == null) {
+                workspaceIdToAdopt = workspaceId
             }
             val runtime = runtimeController
             val project = workspace?.let(::ProjectInstructions)
@@ -2383,7 +2388,7 @@ class ChatViewModel private constructor(
             }
             val capture = if (phone == null) null else (getApplication<Application>() as? RivetApplication)?.phoneCapture
             val saveCapture: (suspend (String) -> String)? = workspace?.takeIf {
-                it.tree.toString() == current.currentSessionWorkspaceId
+                it.tree.toString() == (current.currentSessionWorkspaceId ?: workspaceIdToAdopt)
             }?.let { selected ->
                 { capturePath ->
                     check(previewIdentityMatches(selected.tree.toString()))
@@ -2582,7 +2587,7 @@ class ChatViewModel private constructor(
             }
             val durable = (activeMessages + initialContext(activeMessages) + pendingUser).toMutableList()
             try {
-                persistTurn(durable, interrupted = true)
+                persistTurn(durable, interrupted = true, workspaceIdIfUnbound = workspaceIdToAdopt)
                 acceptedPersisted = true
             } catch (_: AgentSessionLimitException) {
                 persistAcceptedOnExit = false
@@ -2604,8 +2609,8 @@ class ChatViewModel private constructor(
                     error = "Could not save the conversation. Check available storage and try again.") }
                 return@launchRun
             }
-            val updatedHistory = if (pendingUser.isNotEmpty() &&
-                owner.value.sessions.none { it.id == sessionId && it.hasMessages }) {
+            val updatedHistory = if (workspaceIdToAdopt != null || (pendingUser.isNotEmpty() &&
+                owner.value.sessions.none { it.id == sessionId && it.hasMessages })) {
                 try {
                     sessions?.list()
                 } catch (e: CancellationException) {
@@ -3140,7 +3145,7 @@ class ChatViewModel private constructor(
                 val cancelled = !currentCoroutineContext().isActive || userCancelled || pauseRequested
                 val accepted = acceptedUser
                 if (accepted != null && persistAcceptedOnExit && !acceptedPersisted) {
-                    withContext(NonCancellable) { persistAcceptedTail(accepted) }
+                    withContext(NonCancellable) { persistAcceptedTail(accepted, workspaceIdToAdopt) }
                 }
                 withContext(NonCancellable) {
                     val live = currentSessionRun()
@@ -3408,11 +3413,11 @@ class ChatViewModel private constructor(
     }
 
     /** A pre-persist failure still leaves the accepted bubble durable for the next launch. */
-    private suspend fun SessionRun.persistAcceptedTail(accepted: AgentMessage) {
+    private suspend fun SessionRun.persistAcceptedTail(accepted: AgentMessage, workspaceIdIfUnbound: String?) {
         val durable = if (activeMessages.lastOrNull() == accepted) activeMessages
             else activeMessages + accepted
         activeMessages = durable
-        try { persistTurn(durable, interrupted = true) }
+        try { persistTurn(durable, interrupted = true, workspaceIdIfUnbound = workspaceIdIfUnbound) }
         catch (e: CancellationException) { throw e }
         catch (_: Exception) { }
         update { state ->
@@ -3431,11 +3436,17 @@ class ChatViewModel private constructor(
         else sessionStore.markInterrupted(interrupted)
     }
 
-    private suspend fun SessionRun.persistTurn(messages: List<AgentMessage>, interrupted: Boolean) {
+    private suspend fun SessionRun.persistTurn(
+        messages: List<AgentMessage>, interrupted: Boolean, workspaceIdIfUnbound: String? = null,
+    ) {
         val bound = value.currentSessionId
         val sql = sessions
-        if (bound != null && sql != null) sql.save(messages, interrupted, bound)
-        else sessionStore.save(messages, interrupted)
+        if (bound != null && sql != null) {
+            sql.save(messages, interrupted, bound, workspaceIdIfUnbound)
+            if (workspaceIdIfUnbound != null) update { state ->
+                state.copy(currentSessionWorkspaceId = workspaceIdIfUnbound)
+            }
+        } else sessionStore.save(messages, interrupted)
     }
 
     private suspend fun SessionRun.stableFailure(durable: List<AgentMessage>, message: String,
@@ -3885,7 +3896,7 @@ class ChatViewModel private constructor(
                     ) }
                 }
                 val project = previous.value
-                val binding = selected.workspaceId
+                val binding = cached?.value?.currentSessionWorkspaceId ?: selected.workspaceId
                 val restoreBinding = binding != null && (cached == null || project.projectIdentity != binding)
                 val workspace = try {
                     when {
