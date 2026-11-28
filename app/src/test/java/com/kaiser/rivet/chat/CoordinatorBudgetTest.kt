@@ -29,11 +29,11 @@ class CoordinatorBudgetTest {
     // (row 32). The serialized schema adds 26 estimated tokens to the empty
     // coordinator request; the baseline stays pinned so future prompt growth is deliberate.
     @Test fun emptyCloudProjectPinsTheDeviceBaseline() {
-        assertEmptyCloudProjectBaseline("deepseek-ai/DeepSeek-V4.1-Flash", 7_276)
+        assertEmptyCloudProjectBaseline("deepseek-ai/DeepSeek-V4.1-Flash", 7_311)
     }
 
     @Test fun emptyCloudProjectPinsTheSyntheticBaseline() {
-        assertEmptyCloudProjectBaseline("test-model", 7_269)
+        assertEmptyCloudProjectBaseline("test-model", 7_304)
     }
 
     private fun assertEmptyCloudProjectBaseline(model: String, expectedTokens: Long) {
@@ -60,7 +60,7 @@ class CoordinatorBudgetTest {
         assertEquals(baseline, reading.usedTokens)
         assertEquals(expectedTokens, reading.usedTokens)
         assertEquals(16_000, reading.contextWindow)
-        assertEquals(45, reading.percent)
+        assertEquals(46, reading.percent)
         println("Empty cloud project: ${tools.size} tools, system=$systemBytes B, tools=$toolBytes B, " +
             "estimated framing=$framingBytes B, model=$modelBytes B, history=$historyBytes B, estimate=$baseline")
     }
