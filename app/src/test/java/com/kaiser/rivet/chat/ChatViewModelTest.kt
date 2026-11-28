@@ -334,7 +334,35 @@ class ChatViewModelTest {
         sendWithRevokedGrant(existingChat = true)
     }
 
-    private suspend fun sendWithRevokedGrant(existingChat: Boolean) {
+    @Test fun deadFolderChatSendsWithAnotherFolderInTheLegacyPreference() = runBlocking {
+        sendWithRevokedGrant(existingChat = true, anotherSelectedFolder = true)
+    }
+
+    @Test fun providerSetupRefusalOffersErrorDetailsAfterFolderGrantLoss() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        val authority = "com.kaiser.rivet.refusal-details"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        projectDocuments(authority)
+        WorkspaceSelection(app).select(tree, projectGrantFlags)
+        val store = CodingSessions(app)
+        val id = requireNotNull(store.create(tree.toString()).id)
+        app.contentResolver.releasePersistableUriPermission(tree,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val viewModel = newChatViewModel(app, store,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> throw IllegalStateException("Provider client could not be initialized") })
+        val ready = await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == id }
+        assertNull(ready.projectIdentity)
+
+        assertTrue(viewModel.send("hey"))
+        val failed = await(viewModel) { !it.streaming && it.error != null }
+        assertEquals("Rivet couldn't start this request. Try again.", failed.error)
+        assertEquals("ShowDetails", failed.errorAction?.name)
+    }
+
+    private suspend fun sendWithRevokedGrant(existingChat: Boolean, anotherSelectedFolder: Boolean = false) {
         app.deleteDatabase("coding-sessions.db")
         val authority = "com.kaiser.rivet.revoked-grant"
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
@@ -351,6 +379,11 @@ class ChatViewModelTest {
         app.contentResolver.releasePersistableUriPermission(tree,
             Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
         assertFalse(app.contentResolver.persistedUriPermissions.any { it.uri == tree && it.isReadPermission })
+        if (anotherSelectedFolder) {
+            val otherAuthority = "com.kaiser.rivet.other-project"
+            projectDocuments(otherAuthority)
+            selection.select(DocumentsContract.buildTreeDocumentUri(otherAuthority, "root"), projectGrantFlags)
+        }
 
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Hello!"))))
         val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
@@ -358,9 +391,10 @@ class ChatViewModelTest {
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         val ready = await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == id }
         assertEquals(tree.toString(), ready.currentSessionWorkspaceId)
-        assertNull(ready.projectIdentity)
+        if (!anotherSelectedFolder) assertNull(ready.projectIdentity)
 
-        assertTrue(viewModel.send("hey"))
+        val accepted = viewModel.send("hey")
+        assertTrue("Send was declined: ${viewModel.uiState.value.error}", accepted)
         val done = await(viewModel) { !it.streaming &&
             (it.error != null || it.messages.any { message -> message.text == "Hello!" }) }
         assertNull(done.error)

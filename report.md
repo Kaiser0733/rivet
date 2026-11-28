@@ -2,6 +2,14 @@
 
 ## Root cause on 7840a9fd
 
+### Continuation findings
+
+**Exact generic refusal reproduced with a separate setup failure.** `ChatScreen.kt:438–459` calls `ChatViewModel.send`. After accepting the prompt at `ChatViewModel.kt:1179–1220`, `startTurn` dispatches `startTurnNow` at 2176–2195. Inside its setup `try`, `clientFactory(snapshot.config, snapshot.apiKey)` at 2243 throws the test's `IllegalStateException("Provider client could not be initialized")`. Provider construction occurs before the folder lookup at 2264–2267. The outer catch at 3115–3122 sees `requestStarted == false`, logs the class and message, and publishes the exact banner without either detail or a tap action. `providerSetupRefusalOffersErrorDetailsAfterFolderGrantLoss` exercises this boundary with a revoked grant and a fault injected at the client factory. This proves a way to reproduce the exact refusal and the diagnostic defect. It does not identify the throwable on the phone.
+
+**The global directory also blocks a full send with a dead chat grant.** `WorkspaceSelection.select` commits the other tree to `workspace/tree` at `WorkspaceSelection.kt:86–95`. `loadProject` restores that global tree and publishes its identity at `ChatViewModel.kt:879–889`, even when the active conversation is bound to a different, revoked tree. `projectBindingState` compares the two IDs at `ProjectBinding.kt:13–18`. `ChatViewModel.send` returns false at 1171–1175 before accepting the prompt or reaching the provider. `deadFolderChatSendsWithAnotherFolderInTheLegacyPreference` tests this exact sequence and requires both provider delivery and a durable reply. This is a direct consequence of the same global-selection model that replaces the conversation during folder selection. It produces the explicit project-mismatch message. The generic refusal reproduced above comes from a separate catch.
+
+**Device evidence gap.** There was no device attached to ADB and the available logs did not contain either refusal. A revoked grant by itself still goes through `turnSupport("project access")` and sends on the delivered revision, as the new- and old-conversation controls below show. Attributing either device refusal to client construction, the global mismatch, or another specific throwing expression would require the throwable from a failing tap.
+
 The delivered APK's embedded Git revision is `7840a9fd7bd448e5972bd79e22b8b1de9198679e`. The screenshots identify the catch and show that the two taps were accepted. They contain no throwable. I could not reproduce that catch with revoked grants, and there was no connected phone or logcat from either failing tap.
 
 | Reported case | Source path on the delivered revision |
