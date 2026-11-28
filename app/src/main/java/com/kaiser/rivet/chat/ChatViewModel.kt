@@ -3789,7 +3789,9 @@ class ChatViewModel private constructor(
 
     fun resumeSession(id: String) {
         changeSession { store ->
-            store.select(id, recover = liveSession?.value?.currentSessionId != id)
+            val live = runRegistry.activeRuns.value.containsKey(id) || runRegistry.isQueued(id) ||
+                (selectedState.value.currentSessionId == id && selectedState.value.streaming)
+            store.select(id, recover = !live)
         }
     }
 
@@ -3846,59 +3848,67 @@ class ChatViewModel private constructor(
         closeWorker()
         val ticket = ++generation
         sessionLoadJob?.cancel()
+        val previous = selectedState
+        val acceptedAtLoad = previous.value.acceptedMessageCount
         return viewModelScope.launch {
             try {
                 val selected = action(store)
                 val history = store.list()
                 if (ticket != generation) return@launch
-                val previous = selectedState
-                val cached = runRegistry.activeRuns.value[selected.id]
+                fun liveOwner(): SessionRun? = runRegistry.activeRuns.value[selected.id]
                     ?: queuedLocalTurns.firstOrNull { it.owner.value.currentSessionId == selected.id }?.owner
                     ?: runRegistry.lastRun?.takeIf { it.value.currentSessionId == selected.id }
+                    ?: previous.takeIf {
+                        it.value.currentSessionId == selected.id &&
+                            (it.value.streaming || it.value.acceptedMessageCount != acceptedAtLoad)
+                    }
+                val liveAtLoad = liveOwner()
+                val visible = if (liveAtLoad == null) selected.id?.let { store.recent(it) } ?: selected.messages
+                    else emptyList()
+                val usage = if (liveAtLoad == null) selected.id?.let { store.usage(it) } else null
+                val durations = if (liveAtLoad == null) selected.id?.let { store.turnDurations(it) }.orEmpty()
+                    else emptyMap()
+                if (ticket != generation) return@launch
+                val project = previous.value
+                val binding = liveOwner()?.value?.currentSessionWorkspaceId ?: selected.workspaceId
+                val restoreBinding = binding != null && !sameWorkspaceTree(project.projectIdentity, binding)
+                val workspace = turnSupport("conversation project access") {
+                    when {
+                        restoreBinding -> workspaceSelection.view(Uri.parse(requireNotNull(binding)))
+                        liveAtLoad == null -> workspaceSelection.restore()?.first
+                        else -> null
+                    }
+                }
+                val projectName = if (restoreBinding) workspace?.let {
+                    turnSupport("conversation project name") { it.displayName() } ?: "Selected project"
+                } else project.projectName
+                if (ticket != generation) return@launch
+                // A turn can have been accepted while any of the database or SAF reads suspended.
+                val cached = liveOwner() ?: liveAtLoad
                 val next = cached ?: if (previous.value.currentSessionId == selected.id) previous else SessionRun()
                 if (cached == null) {
-                    val visible = selected.id?.let { store.recent(it) } ?: selected.messages
-                    val usage = selected.id?.let { store.usage(it) }
-                    val durations = selected.id?.let { store.turnDurations(it) }.orEmpty()
-                    if (ticket != generation) return@launch
                     next.activeMessages = selected.messages
                     next.activeSummary = selected.summary
-                    next.update { it.copy(
+                }
+                val projectIdentity = if (restoreBinding) workspace?.tree?.toString() else project.projectIdentity
+                next.update {
+                    val state = if (cached != null) it else it.copy(
                         messages = visible,
                         usage = usage,
                         turnDurationsMs = durations,
                         interruptedTurn = selected.interrupted && selected.messages.isNotEmpty(),
-                    ) }
+                    )
+                    state.copy(ready = true, sessions = history,
+                        currentSessionId = selected.id, currentSessionTitle = if (cached == null) selected.title else it.currentSessionTitle,
+                        currentSessionWorkspaceId = if (cached == null) binding else it.currentSessionWorkspaceId,
+                        projectName = projectName, projectIdentity = projectIdentity,
+                        projectLoading = !restoreBinding && project.projectLoading,
+                        projectError = if (restoreBinding) null else project.projectError,
+                        spendCaps = project.spendCaps, userPricePerMillionUsd = project.userPricePerMillionUsd,
+                    )
                 }
-                val project = previous.value
-                val binding = cached?.value?.currentSessionWorkspaceId ?: selected.workspaceId
-                val restoreBinding = binding != null && (cached == null || project.projectIdentity != binding)
-                val workspace = try {
-                    when {
-                        restoreBinding -> workspaceSelection.view(Uri.parse(requireNotNull(binding)))
-                        cached == null -> workspaceSelection.restore()?.first
-                        else -> null
-                    }
-                } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { null }
-                val projectName = if (restoreBinding) workspace?.let {
-                    try { it.displayName() }
-                    catch (e: CancellationException) { throw e }
-                    catch (_: Exception) { "Selected project" }
-                } else project.projectName
-                if (ticket != generation) return@launch
-                val projectIdentity = if (restoreBinding) workspace?.tree?.toString() else project.projectIdentity
-                next.update { it.copy(
-                    ready = true, sessions = history,
-                    currentSessionId = selected.id, currentSessionTitle = selected.title,
-                    currentSessionWorkspaceId = binding,
-                    projectName = projectName, projectIdentity = projectIdentity,
-                    projectLoading = !restoreBinding && project.projectLoading,
-                    projectError = if (restoreBinding) null else project.projectError,
-                    spendCaps = project.spendCaps, userPricePerMillionUsd = project.userPricePerMillionUsd,
-                ) }
                 if (projectIdentity != project.projectIdentity) terminalSession.close()
-                showBrowser(binding ?: projectIdentity)
+                showBrowser(projectIdentity ?: binding)
                 attachRun(next)
                 if (cached == null) {
                     refreshGoalMemory(workspace, selected.id)

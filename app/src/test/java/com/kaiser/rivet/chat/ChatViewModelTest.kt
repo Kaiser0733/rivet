@@ -24,6 +24,10 @@ import com.kaiser.rivet.storage.CodingSessions
 import com.kaiser.rivet.workspace.TestDocumentsProvider
 import com.kaiser.rivet.workspace.WorkspaceSelection
 import com.kaiser.rivet.workspace.WorkspacePath
+import java.util.concurrent.Executors
+import kotlin.coroutines.CoroutineContext
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.asCoroutineDispatcher
 import com.kaiser.rivet.provider.AgentRequest
 import com.kaiser.rivet.provider.ModelInfo
 import com.kaiser.rivet.provider.ModelContextLimit
@@ -517,6 +521,69 @@ class ChatViewModelTest {
         assertEquals("Continue after re-picking", provider.requests.single().messages.last().text)
         assertTrue(provider.requests.single().tools.any { it.name == "run_command" })
         assertEquals("Continued on the same project", store.load(id).messages.last().text)
+    }
+
+    @Test fun reopeningTheSelectedConversationCannotPublishAnOlderTranscriptOverSend() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        val store = CodingSessions(app)
+        val id = requireNotNull(store.create(null).id)
+        store.rename(id, "Old chat")
+        store.save(listOf(AgentMessage.user("Earlier prompt"), AgentMessage.assistant("Earlier reply")),
+            interrupted = false)
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Replied"))))
+        val releaseProvider = CompletableDeferred<Unit>()
+        val loadStarted = CompletableDeferred<Unit>()
+        val resumeRead = CompletableDeferred<Runnable>()
+        val readResumed = CompletableDeferred<Unit>()
+        val armOnCaller = ThreadLocal<Boolean>()
+        Executors.newSingleThreadExecutor().asCoroutineDispatcher().use { main ->
+            var reloadJob: Job? = null
+            var reloadDispatches = 0
+            Dispatchers.setMain(object : CoroutineDispatcher() {
+                override fun dispatch(context: CoroutineContext, block: Runnable) {
+                    if (armOnCaller.get() == true) reloadJob = context[Job]
+                    if (reloadJob != null && context[Job] === reloadJob && ++reloadDispatches == 4) {
+                        // The database returned recent messages, before the reload can publish them.
+                        resumeRead.complete(Runnable {
+                            main.dispatch(context, Runnable {
+                                block.run()
+                                readResumed.complete(Unit)
+                            })
+                        })
+                    } else main.dispatch(context, block)
+                }
+            })
+            try {
+                val viewModel = newChatViewModel(app, store, ProviderRuntimeSource {
+                    loadStarted.complete(Unit)
+                    releaseProvider.await()
+                    ProviderRuntimeResult.Ready(config, "key")
+                }, { _, _ -> provider })
+                await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == id }
+                armOnCaller.set(true)
+                viewModel.resumeSession(id)
+                armOnCaller.remove()
+                val resume = withTimeout(5_000) { resumeRead.await() }
+
+                assertTrue(viewModel.send("Accepted while loading"))
+                withTimeout(5_000) { loadStarted.await() }
+                resume.run()
+                withTimeout(5_000) { readResumed.await(); requireNotNull(reloadJob).join() }
+                assertEquals(listOf("Earlier prompt", "Earlier reply", "Accepted while loading"),
+                    viewModel.uiState.value.messages.map { it.text })
+                releaseProvider.complete(Unit)
+                await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Replied" }
+                assertEquals(listOf("Earlier prompt", "Earlier reply", "Accepted while loading", "Replied"),
+                    store.load(id).messages.map { it.text })
+            } finally {
+                releaseProvider.complete(Unit)
+                models.last().viewModelScope.coroutineContext[Job]?.cancelAndJoin()
+                models.last().runRegistry.scope.coroutineContext[Job]?.cancelAndJoin()
+                Dispatchers.resetMain()
+                Dispatchers.setMain(UnconfinedTestDispatcher())
+            }
+        }
     }
 
     private val projectGrantFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
