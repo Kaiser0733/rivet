@@ -36,6 +36,19 @@ The shipped governor used a fixed 250 MB ceiling and fixed thresholds for observ
 - The Gradle wrapper could not fetch Gradle 8.13 because the HTTPS connection failed. The cached Gradle distribution then failed before running `:app:testDebugUnitTest` with `Could not receive a message from the daemon`. The direct JVM rerun used disk-backed temporary storage after the initial run exhausted the host's 512 MB temporary filesystem.
 - The Android device update, the Settings screen on a device, and live renderer memory were outside this local verification.
 
+## Browser governor test fix for CI run 46103865855
+
+The governor starts `ReaderFirst` at 80% of the selected limit and `NoRenderer` at 100%. With the 250 MB option, those thresholds are 200 MB and 250 MB, matching the original thresholds. The two fixtures have enough device headroom for `Normal`, and their observed costs of 229 MB and 260 MB also fall in `Normal` with the 2 GB default. [BrowserGovernor.kt](app/src/main/java/com/kaiser/rivet/browser/BrowserGovernor.kt#L72)
+
+Commit `99b78418` passes `BrowserMemoryLimit.Mb250` explicitly in both suites. That keeps the observed-cost cases on the same limit, where 100 MB stays `Normal` and 229 MB reaches `ReaderFirst`. The 260 MB same-UID renderer sample reaches `NoRenderer` under that limit. All fixture values and assertions are preserved. [BrowserObservedCostTest.kt](app/src/test/java/com/kaiser/rivet/browser/BrowserObservedCostTest.kt), [RendererPssSelectionTest.kt](app/src/test/java/com/kaiser/rivet/browser/RendererPssSelectionTest.kt)
+
+- On `e73e2c7e`, the direct JUnit run reproduced both CI failures across the six tests in the affected suites. The assertions failed in `theV9OwnGrowthPlusHeadroomDropBecomesTheObservedCost` and `aSameUidRendererProcessProvidesTheThirdSignal`.
+- After the fix, the direct JUnit/Robolectric run passed all 22 tests across `BrowserObservedCostTest`, `RendererPssSelectionTest`, `BrowserGovernorTest`, `BrowserMemoryGovernorTest`, and `BrowserSessionBudgetSamplingTest`.
+
+### Verification gaps
+
+Local Gradle still failed before running `:app:testDebugUnitTest` with `Could not receive a message from the daemon`. This round verified five browser suites directly. The full suite awaits CI.
+
 ---
 
 # Rivet flaw sweep, remainder
