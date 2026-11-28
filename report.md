@@ -1,3 +1,43 @@
+# Crash-on-send and browser memory
+
+Branch `fix/crash-cap` starts at the shipped head `2d871befdc28c97449a716024daed97f830ed7a4`. Line numbers in the cause paragraphs refer to that revision.
+
+## New chat crashes after send
+
+The reproducible failure is an uncaught JVM `Error` in the run-checkpoint path. A new conversation stores the selected project at creation (`ChatViewModel.kt:3788`). Its first send reaches `startRun` (`ChatViewModel.kt:2336`), which calls the checkpoint gate (`ChatViewModel.kt:1708`). The runtime prepares the project mirror (`RuntimeController.kt:530`) and the store scans and hashes its files, can build a JGit snapshot, and copies files into the delta (`RunCheckpointStore.kt:67`, `:247`, `:330`). All of that runs before the provider request. The gate and turn setup caught `Exception` (`RunCheckpointGate.kt:175`, `ChatViewModel.kt:3121`). The launch had a supervisor but no uncaught exception handler (`SessionRunRegistry.kt:18`, `ChatViewModel.kt:2114`), so a checkpoint `Error` reached the process's uncaught exception path.
+
+**Change in `8f6244a242a13e20b413200c1f2026369a75ac70`.** [RunCheckpointGate.kt](app/src/main/java/com/kaiser/rivet/runtime/RunCheckpointGate.kt#L155) makes checkpoint creation, maintenance, and history refresh optional even when the backend throws an `Error`. A failed mutation checkpoint still allows the mutation and disables Undo for that turn. Cancellation still propagates. [ChatViewModel.kt](app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt#L2105) contains failures from the rest of the turn setup and cleanup and releases the foreground turn token. The JiTTests are in [RunCheckpointGateTest.kt](app/src/test/java/com/kaiser/rivet/runtime/RunCheckpointGateTest.kt#L88) and [ChatViewModelTest.kt](app/src/test/java/com/kaiser/rivet/chat/ChatViewModelTest.kt#L320).
+
+**Device gap.** Fault injection establishes the escape and recovery in the shipped code path. The owner's exact exception and the operation that raised it remain unverified without the device stack or a device reproduction. The app-side boundary handles exceptions the JVM can deliver. Android process termination, such as a system memory kill or foreground-service watchdog, is outside that boundary. The foreground service starts before the project-binding guard (`ChatViewModel.kt:2212`). Automatic titling runs after a completed answer (`ChatViewModel.kt:2966`).
+
+## Old chat's sent bubble disappears
+
+Legacy rows could still have `workspace_id = NULL` after upgrade (`CodingSessions.kt:1309`, `:1318`). With a project selected, the binding rule returned `Mismatch` for those rows (`ProjectBinding.kt:13`). The send guard then removed the optimistic bubble and skipped persistence and provider dispatch (`ChatViewModel.kt:2298`, `:3388`).
+
+**Change in `2cf9999b2f763b34b2e84b66580341166676c1b8`.** [ProjectBinding.kt](app/src/main/java/com/kaiser/rivet/chat/ProjectBinding.kt#L13) treats NULL as unbound. [ChatViewModel.kt](app/src/main/java/com/kaiser/rivet/chat/ChatViewModel.kt#L2294) resolves the turn's project and keeps the mismatch rollback for an already bound conversation. [CodingSessions.kt](app/src/main/java/com/kaiser/rivet/storage/CodingSessions.kt#L132) adopts the project inside the transcript transaction and refuses a conflicting binding. The JiTTests are in [ChatViewModelTest.kt](app/src/test/java/com/kaiser/rivet/chat/ChatViewModelTest.kt#L366) and [ProjectBindingTest.kt](app/src/test/java/com/kaiser/rivet/chat/ProjectBindingTest.kt).
+
+## Browser memory setting
+
+The shipped governor used a fixed 250 MB ceiling and fixed thresholds for observed memory use (`BrowserGovernor.kt:62`, `:75`, `:81`).
+
+**Change in `45c5d9ac06f96d2e8b71d35c0cc77a3fddcbb9cd`.** [SettingsScreen.kt](app/src/main/java/com/kaiser/rivet/ui/provider/SettingsScreen.kt#L385) offers **250 MB** and **2 GB** under **Browser memory**. [BrowserMemorySettings.kt](app/src/main/java/com/kaiser/rivet/browser/BrowserMemorySettings.kt) saves the choice in SharedPreferences and defaults to 2 GB. [BrowserSession.kt](app/src/main/java/com/kaiser/rivet/browser/BrowserSession.kt#L558) reads it when a browser session opens and keeps that choice until the session ends. [BrowserGovernor.kt](app/src/main/java/com/kaiser/rivet/browser/BrowserGovernor.kt#L72) applies the chosen ceiling and scales the observed-use thresholds. Device headroom and the loopback preview exemption still apply. Browser tests cover the default, the selected ceiling, an already open session, and reopening after it ends.
+
+## Verification
+
+| JiTTest | Shipped head `2d871be` | Fixed branch |
+| --- | --- | --- |
+| First-run checkpoint and new conversation | An injected `OutOfMemoryError` escaped the gate. In the real send flow with a fault-injected backend, the error reached the uncaught coroutine path and the test timed out waiting for the reply. | The first send reached the provider, saved its reply and completed without a run checkpoint. The gate also recovered from injected stack overflow and linkage errors, and preserved cancellation. |
+| Checkpoint history and turn Undo | A history-refresh `LinkageError` and a mutation checkpoint `StackOverflowError` each escaped. | History refresh failure left the run available. The mutation proceeded with Undo disabled. |
+| Legacy conversation and project mismatch | The binding test returned `Mismatch` for NULL. The send test returned the wrong-project error before dispatch. | The provider got the prompt, the bubble survived, and reopening the record returned the adopted project. A send with a different project selected removed the bubble and made no additional provider call or transcript write. |
+| Browser memory | A fresh browser session reported 250 MB with 4 GB of available memory in the test. | A fresh session reported 2 GB. Saving 250 MB made the governor refuse the renderer at that threshold for new sessions. An active session retained its previous choice until it ended. |
+
+- Compiled the complete app Kotlin sources at the shipped head and on the fixed branch with the cached Kotlin 2.1.10 compiler and Android dependencies. Direct JUnit with Robolectric ran **237 tests across 14 suites, all passing**, including checkpoint storage, the browser governor and session, conversation persistence and settings, ChatViewModel, WorkspaceMirror, and conversation titles. The final legacy fixture was also run by itself against both revisions.
+- All **100 Python checks** passed with `python3 -m unittest discover -s scripts -p 'test_*.py'`. `git diff --check` passed.
+- The Gradle wrapper could not fetch Gradle 8.13 because the HTTPS connection failed. The cached Gradle distribution then failed before running `:app:testDebugUnitTest` with `Could not receive a message from the daemon`. The direct JVM rerun used disk-backed temporary storage after the initial run exhausted the host's 512 MB temporary filesystem.
+- The Android device update, the Settings screen on a device, and live renderer memory were outside this local verification.
+
+---
+
 # Rivet flaw sweep, remainder
 
 Branch `flaw-sweep-2` started from `origin/batch/surface-fix` at
