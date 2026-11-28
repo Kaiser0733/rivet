@@ -10,6 +10,8 @@
 
 **Device evidence gap.** There was no device attached to ADB and the available logs did not contain either refusal. A revoked grant by itself still goes through `turnSupport("project access")` and sends on the delivered revision, as the new- and old-conversation controls below show. Attributing either device refusal to client construction, the global mismatch, or another specific throwing expression would require the throwable from a failing tap.
 
+**Optional project context can reach the exact refusal.** After an accepted send, `ChatViewModel.kt:2850–2852` enters `AgentLoop.run`. `AgentLoop.kt:221` refreshes project context before the first request. In the callback at `ChatViewModel.kt:2834–2844`, `turnSupport("context capacity") { canSaveTurn(candidate + events, 0) } == false` lets a failed check through because the fence converts a throwable to null. `AgentLoop.kt:207` then evaluates `!canPersistToolOutput(messages + events, 0)` again, through the unguarded `canSaveTurn` at `ChatViewModel.kt:2779–2781`. A thrown `LinkageError` escapes the inner Exception handler and shows the generic start refusal at 3115–3122. A false result returns `SessionLimit` before dispatch even though the events are optional. `optionalProjectContextStorageFailureStillSends` refreshes a real document tree's AGENTS.md between reads and injects the Error into the store's capacity method only for the refreshed event. This sequence requires a readable tree at context refresh and cannot explain the isolated dead-grant reproduction.
+
 The delivered APK's embedded Git revision is `7840a9fd7bd448e5972bd79e22b8b1de9198679e`. The screenshots identify the catch and show that the two taps were accepted. They contain no throwable. I could not reproduce that catch with revoked grants, and there was no connected phone or logcat from either failing tap.
 
 | Reported case | Source path on the delivered revision |
@@ -27,6 +29,40 @@ Round 2's project access, instruction read, previous journal save and checkpoint
 `WorkspaceSelection.select` writes the single `workspace/tree` preference at `WorkspaceSelection.kt:86–95`. `ChatViewModel.kt:778,879–895` restores it independently of the stored chat. Lines 3872–3906 combine that viewed project with the target chat's binding. `ProjectBinding.kt:16–18` can then display the mismatch for a valid chat, and the two Send guards above can decline with the explicit mismatch message. The owner's successful mismatch-screen send is consistent with a banner evaluated from earlier UI state or with a state change before dispatch. A mismatch that remains true at dispatch cannot produce the pictured generic refusal. The stored chat row itself is preserved on project selection. The UI offers a new conversation at `ProjectsScreen.kt:72–79,123–134`, and `ChatViewModel.kt:1019–1040` creates one whenever the chosen folder differs. `changingTheFolderKeepsTheConversationAndItsTranscript` is red on `7840a9fd`: the active conversation ID changes after selecting the second folder.
 
 The global selection explains the directory defect and can independently stop a Send through the mismatch checks. It has no demonstrated causal link to the two generic refusals.
+
+## Fix commits
+
+- `7482e0b6` attaches the throwable class and message to an unexpected request error. Tapping the banner or Details opens a dialog. Copy places the diagnostic on the clipboard as plain text. Registered credential values and the active API key are redacted.
+- `e9ee83f3` gives optional coordinator context a single storage admission check. An unsuccessful check drops the refresh and lets the request continue. Tool-result admission keeps its existing durability checks. Browser and phone tool construction also have independent failure boundaries.
+- `55dea788` saves a folder change on the current conversation row. It uses the stored binding on startup and navigation and removes the global send mismatch and implicit adoption paths. A new conversation can inherit the current chat's folder at creation. Future picks affect only their owning conversation. A running turn uses the folder it captured, including for its command and preview callbacks. The next turn uses the new binding. Granted-folder paths continue to work across folders.
+- `32908cad` updates existing fixtures to model saved conversation bindings. Their approval, mutation, partial sync, storage-limit, and concurrent-turn checks still exercise the original behavior.
+- `a7aa1d11` makes the existing compaction test wait for the saved result to be published. A check for idle state alone could read the old projection and an empty summary before the compaction result arrived.
+
+## JiTTests
+
+| Test in `ChatViewModelTest` | Baseline `7840a9fd` | Branch assertion |
+| --- | --- | --- |
+| `changingTheFolderKeepsTheConversationAndItsTranscript` | Red. Choosing a new folder changed the conversation ID. | The ID and transcript are preserved and the new binding is saved. |
+| `deadFolderChatSendsWithAnotherFolderInTheLegacyPreference` | Red. Send declined with a project-mismatch error. | The provider receives `hey` and the original conversation stores the reply and its prior history. |
+| `unboundConversationSendsWithoutAdoptingAnotherFolder` | Red. A folder from the legacy preference appeared on the unbound chat. | The turn sends and saves the reply with a null binding. |
+| `commandAvailabilityFollowsTheRunningChatWhenTheViewedChatHasNoFolder` | Red. The command gate returned `workspace_unavailable`. | A running chat retains access to its captured project. |
+| `changingFolderDuringSendKeepsTheCurrentTurnAndMovesTheNextTurn` | Red. Selecting the second folder switched to another conversation while the first request was held. | The first request uses the first directory. The next request uses the replacement. Both replies are saved under the same conversation ID. |
+| `optionalProjectContextStorageFailureStillSends` | Red. The injected `LinkageError` produced the exact generic refusal. | The provider receives `hey` and the reply is saved after the refreshed context is dropped. |
+| `providerSetupRefusalOffersErrorDetailsAfterFolderGrantLoss` | Red. The refusal had a null action. | The banner has the details action and the state contains the actual exception class and message. |
+| `firstSendStillReachesProviderAfterTheFolderGrantIsRevoked` and `oldChatStillSendsAndSavesTheReplyAfterTheFolderGrantIsRevoked` | Green controls. Revocation alone allows the turn. | Both requests reach the provider and the replies are saved in their original conversations. |
+
+The baseline run used production classes for `7840a9fd` with the regression sources. The diagnostics test checked the missing action on the baseline. It also checks the new detail value on the branch.
+
+## Verification
+
+- All seven regressions marked red above passed on the branch. Both revoked-grant controls passed on both revisions.
+- The final targeted run passed 384 JVM tests using the compiled application sources and cached Robolectric dependencies. All 100 Python checks passed.
+
+## Honest gaps
+
+- The owner's device remains the acceptance check. The two original throwables are unavailable. The injected setup failures establish reachable boundaries and reproduce the copy of the generic banner under test. Both revoked-grant controls rule out revocation alone as a sufficient trigger in the test environment.
+- The refusal detail is tested through the real view-model send path. The dialog tap and system clipboard still need a phone check. The provider assertions use a test client and real Android test persistence.
+- A folder change or reply can remain in memory when app-private storage cannot save it. Persistence after restart requires writable SQLite storage. Android grants can still be revoked independently of the saved chat binding.
 
 <details>
 <summary>Previous send investigation and earlier work</summary>
