@@ -12,6 +12,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
+import java.net.URI
+import java.net.URISyntaxException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
@@ -27,7 +29,7 @@ class WorkspaceSelection(context: Context) {
             catch (_: WorkspaceFailure) { WorkspacePath.ROOT }
         val file = try { preferences.getString("file", null)?.let(WorkspacePath::parse) }
             catch (_: WorkspaceFailure) { null }
-        Triple(SafWorkspace(resolver, Uri.parse(stored)), path, file)
+        Triple(openTree(Uri.parse(stored)), path, file)
     }
 
     suspend fun currentIdentity(): String? = withContext(Dispatchers.IO) {
@@ -118,11 +120,18 @@ class WorkspaceSelection(context: Context) {
         if (flags != 0) resolver.releasePersistableUriPermission(uri, flags)
     }
 
+    internal suspend fun openTree(uri: Uri): SafWorkspace = withContext(Dispatchers.IO) {
+        val readable = resolver.persistedUriPermissions.filter { it.isReadPermission }
+        val granted = readable.firstOrNull { it.uri == uri }
+            ?: readable.firstOrNull { sameWorkspaceTree(it.uri.toString(), uri.toString()) }
+        SafWorkspace(resolver, granted?.uri ?: uri)
+    }
+
     /** Show an already-granted project as the viewed project without taking or releasing a grant. */
     suspend fun view(uri: Uri): SafWorkspace = withContext(Dispatchers.IO) {
-        val workspace = SafWorkspace(resolver, uri)
+        val workspace = openTree(uri)
         workspace.stat(WorkspacePath.ROOT)
-        if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").remove("file").commit()) {
+        if (!preferences.edit().putString("tree", workspace.tree.toString()).putString("directory", "").remove("file").commit()) {
             throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
         }
         workspace
@@ -138,4 +147,23 @@ class WorkspaceSelection(context: Context) {
             }
         }
     }
+}
+
+/** Document IDs are opaque and scoped to their authority. URI escaping is interchangeable. */
+internal fun sameWorkspaceTree(first: String?, second: String?): Boolean {
+    if (first == null || second == null) return false
+    if (first == second) return true
+    return try {
+        val a = URI(first)
+        val b = URI(second)
+        a.scheme == "content" && b.scheme == "content" && a.rawAuthority != null &&
+            a.rawAuthority == b.rawAuthority && a.isDocumentTree() && b.isDocumentTree() && a.path == b.path
+    } catch (_: URISyntaxException) {
+        false
+    }
+}
+
+private fun URI.isDocumentTree(): Boolean {
+    val id = rawPath?.removePrefix("/tree/") ?: return false
+    return rawPath.startsWith("/tree/") && id.isNotEmpty() && '/' !in id
 }

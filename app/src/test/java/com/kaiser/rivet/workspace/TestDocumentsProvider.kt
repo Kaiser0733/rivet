@@ -16,6 +16,7 @@ class TestDocumentsProvider : DocumentsProvider() {
     val nodes = linkedMapOf<String, Node>()
     var writable = true
     var rejectDelete = false
+    var beforeOpenDocument: ((String, String) -> Unit)? = null
     var rejectRead = false
     var rejectReadAfterFirstFor: String? = null
     private val readsByName = mutableMapOf<String, Int>()
@@ -78,6 +79,7 @@ class TestDocumentsProvider : DocumentsProvider() {
         }
     }
     override fun openDocument(documentId: String, mode: String, signal: CancellationSignal?): ParcelFileDescriptor {
+        beforeOpenDocument?.invoke(documentId, mode)
         if (rejectRead && mode == "r") throw java.io.FileNotFoundException("read refused")
         val node = nodes[documentId] ?: throw java.io.FileNotFoundException()
         if (mode == "r" && node.name == rejectReadAfterFirstFor) {

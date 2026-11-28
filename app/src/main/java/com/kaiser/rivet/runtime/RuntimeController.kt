@@ -943,8 +943,8 @@ class RuntimeController(
     }
 
     private suspend fun activeMirror(): WorkspaceMirror? {
-        val identity = currentCoroutineContext()[TurnRunContext]?.workspaceId
-        if (identity == null) return currentMirror()
+        val run = currentCoroutineContext()[TurnRunContext] ?: return currentMirror()
+        val identity = run.workspaceId ?: return null
         mirrorIdentity = identity
         return mirrorFor(identity)
     }

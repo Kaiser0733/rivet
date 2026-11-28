@@ -289,32 +289,37 @@ class ChatViewModelTest {
         assertSame("returning to a project restores its own browser", firstBrowser, viewModel.browser)
         assertEquals(tree.toString(), firstBrowser.projectKey)
     }
-    @Test fun lostProjectAccessStopsSendWithoutCallingTheProviderOrChangingConversation() = runBlocking {
+    @Test fun oldBoundConversationStillSendsWhenItsFolderWasMoved() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
-        val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.lost-project", "root")
+        val authority = "com.kaiser.rivet.moved-project"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val documents = projectDocuments(authority)
+        WorkspaceSelection(app).select(tree, projectGrantFlags)
+        val store = CodingSessions(app)
+        val id = requireNotNull(store.create(tree.toString()).id)
+        store.rename(id, "Existing chat")
+        store.save(listOf(AgentMessage.user("Earlier prompt"), AgentMessage.assistant("Earlier reply")),
+            interrupted = false)
+        documents.nodes.remove("root")
+
         val sessions = CodingSessions(app)
-        val original = sessions.create(tree.toString())
-        sessions.save(listOf(AgentMessage.user("Keep this conversation")), interrupted = false)
-        sessions.setPinned(original.id!!, true)
-        app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
-        val provider = QueueProvider(ArrayDeque())
-        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
-            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Continued without files"))))
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == original.id }
+        val ready = await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == id }
+        assertEquals(tree.toString(), ready.currentSessionWorkspaceId)
+        assertNull(ready.projectIdentity)
 
-        viewModel.send("Continue editing this project")
-        val failed = await(viewModel) { !it.streaming && it.error == PROJECT_ACCESS_LOST_MESSAGE }
-
-        assertEquals(ProjectBindingState.AccessLost,
-            projectBindingState(failed.currentSessionId, failed.currentSessionWorkspaceId,
-                failed.projectIdentity, failed.projectLoading))
-        assertTrue(PROJECT_ACCESS_LOST_MESSAGE.contains("Choose the folder again"))
-        assertEquals(original.id, failed.currentSessionId)
-        assertEquals(0, provider.requests.size)
-        assertNull(failed.pendingApproval)
+        assertTrue(viewModel.send("Continue the conversation"))
+        val done = await(viewModel) { !it.streaming && (it.error != null ||
+            it.messages.lastOrNull()?.text == "Continued without files") }
+        assertNull(done.error)
+        assertEquals("Continue the conversation", provider.requests.single().messages.last().text)
+        assertEquals(listOf("Earlier prompt", "Earlier reply", "Continue the conversation", "Continued without files"),
+            sessions.load(id).messages.filter { it.internalContext == null }.map { it.text })
+        assertEquals(tree.toString(), sessions.load(id).workspaceId)
     }
 
     @Test fun newProjectConversationSendsEvenWhenTheRunCheckpointThrows() = runBlocking {
@@ -363,6 +368,171 @@ class ChatViewModelTest {
         assertTrue(registry.sessions.load(id).messages.any { it.text == "Answered" })
     }
 
+    @Test fun upgradedProjectFirstSendSurvivesSafSetupMirrorAndCheckpointFailures() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        val authority = "com.kaiser.rivet.large-updated-project"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val documents = projectDocuments(authority)
+        val bytes = File.createTempFile("project-data", ".txt", app.cacheDir).apply { writeText("data") }
+        documents.nodes["instructions"] = TestDocumentsProvider.Node("AGENTS.md", "root", false, bytes)
+        documents.nodes["assets"] = TestDocumentsProvider.Node("assets", "root", true, bytes)
+        repeat(5_001) { index ->
+            documents.nodes["asset-$index"] = TestDocumentsProvider.Node("$index.txt", "assets", false, bytes)
+        }
+        WorkspaceSelection(app).select(tree, projectGrantFlags)
+        val oldStore = CodingSessions(app)
+        val oldId = requireNotNull(oldStore.create(tree.toString()).id)
+        oldStore.save(listOf(AgentMessage.user("Existing project conversation")), interrupted = false)
+
+        val registry = SessionRunRegistry(app)
+        val id = requireNotNull(registry.sessions.create(tree.toString()).id)
+        registry.sessions.rename(id, "New coding task")
+        val instructionsRead = CompletableDeferred<Unit>()
+        val mirrorFailure = CompletableDeferred<String>()
+        val checkpointAttempted = CompletableDeferred<Unit>()
+        val runtime = RuntimeController(app)
+        val realBackend = RuntimeControllerCheckpointBackend(runtime)
+        val backend = object : CheckpointBackend by realBackend {
+            override suspend fun beginRunCheckpoint(
+                workspaceId: String, runId: String, sequence: Int, summary: String, allowDirty: Boolean,
+            ): String? {
+                try {
+                    realBackend.beginRunCheckpoint(workspaceId, runId, sequence, summary, allowDirty)
+                } catch (failure: MirrorFailure) {
+                    mirrorFailure.complete(failure.code)
+                }
+                checkpointAttempted.complete(Unit)
+                throw LinkageError("snapshot backend unavailable")
+            }
+        }
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Hello back"))))
+        val viewModel = ChatViewModel(app, registry.sessions, ProviderRuntimeSource {
+            registry.active.value?.let { owner ->
+                if (owner.checkpoints == null) owner.checkpoints = RunCheckpointGate(backend)
+            }
+            ProviderRuntimeResult.Ready(config, "key")
+        }, { _, _ -> provider }, runRegistry = registry).also { models += it }
+        await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == id }
+        documents.beforeOpenDocument = { document, mode ->
+            if (document == "instructions" && mode == "r" && instructionsRead.complete(Unit)) {
+                throw AssertionError("SAF instruction cursor failed")
+            }
+        }
+
+        assertTrue(viewModel.send("hey"))
+        val done = awaitProject(viewModel) { !it.streaming && (it.error != null ||
+            it.messages.lastOrNull()?.text == "Hello back") }
+        assertTrue(instructionsRead.isCompleted)
+        assertNull(done.error)
+        assertTrue(checkpointAttempted.isCompleted)
+        assertEquals("materialize_failed", withTimeout(5_000) { mirrorFailure.await() })
+        assertEquals("hey", provider.requests.single().messages.last { it.role == com.kaiser.rivet.agent.AgentRole.User }.text)
+        assertEquals("Hello back", registry.sessions.load(id).messages.last().text)
+        assertEquals("Existing project conversation", registry.sessions.load(oldId).messages.single().text)
+    }
+
+    @Test fun foregroundServiceDispatchErrorStillReturnsAReleasableTurnToken() {
+        val context = object : android.content.ContextWrapper(app) {
+            override fun getApplicationContext() = this
+            override fun startForegroundService(service: Intent): android.content.ComponentName? {
+                throw LinkageError("foreground service unavailable")
+            }
+        }
+        val processes = com.kaiser.rivet.runtime.ManagedProcesses()
+        val token = processes.startTurn(context, "Existing project", {}, {})
+        assertEquals(1, processes.activeTurnCount())
+        processes.finishTurn(token)
+        assertEquals(0, processes.activeTurnCount())
+    }
+
+    @Test fun continuingAnUpdatedProjectSurvivesFailureToCloseItsPreviousRunJournal() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        val authority = "com.kaiser.rivet.updated-run-journal"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val documents = projectDocuments(authority)
+        WorkspaceSelection(app).select(tree, projectGrantFlags)
+        val registry = SessionRunRegistry(app)
+        val store = registry.sessions
+        val id = requireNotNull(store.create(tree.toString()).id)
+        store.rename(id, "Existing project chat")
+        store.save(listOf(AgentMessage.user("Previous task")), interrupted = true)
+        val run = com.kaiser.rivet.agent.RunMachine.run {
+            pause(start(begin("previous-run", tree.toString(), "Previous task", sessionId = id)),
+                RunPauseReason.User)
+        }
+        val key = com.kaiser.rivet.agent.InternalContext.digest(tree.toString())
+        val directory = File(app.filesDir, "run-journal/$key")
+        val journal = com.kaiser.rivet.agent.RunJournal(com.kaiser.rivet.agent.DirectoryRunStorage(directory))
+        journal.save(run)
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "New task answered"))))
+        val viewModel = ChatViewModel(app, store, ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
+            { _, _ -> provider }, runRegistry = registry).also { models += it }
+        await(viewModel) { it.ready && !it.projectLoading && it.run?.id == run.id }
+        // Replace the recovered run directory with a file, as can happen with damaged app storage.
+        val runFile = File(directory, "${com.kaiser.rivet.agent.RunJournal.ROOT}/${run.id}")
+        assertTrue(runFile.isDirectory)
+        assertTrue(runFile.deleteRecursively())
+        runFile.writeText("unusable directory")
+
+        assertTrue(viewModel.send("New task"))
+        val done = await(viewModel) { !it.streaming && (it.error != null ||
+            it.messages.lastOrNull()?.text == "New task answered") }
+        assertNull(done.error)
+        assertEquals("New task", provider.requests.single().messages.last().text)
+        assertEquals("New task answered", store.load(id).messages.last().text)
+        assertEquals("unusable directory", runFile.readText())
+        assertTrue(documents.nodes.containsKey("root"))
+    }
+
+    @Test fun repickedGrantForTheSameDocumentTreeStillSendsFromAnOldBoundConversation() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        val authority = "com.kaiser.rivet.repicked-project"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "primary:Projects/Rivet")
+        val oldUri = tree.toString().replace("%3A", "%3a").replace("%2F", "%2f")
+        assertFalse(tree.toString() == oldUri)
+        val documents = projectDocuments(authority)
+        documents.nodes["primary:Projects/Rivet"] = requireNotNull(documents.nodes.remove("root")).apply {
+            name = "Rivet renamed"
+        }
+        WorkspaceSelection(app).select(tree, projectGrantFlags)
+        val oldStore = CodingSessions(app)
+        val id = requireNotNull(oldStore.create(oldUri).id)
+        oldStore.rename(id, "Old project chat")
+        oldStore.save(listOf(AgentMessage.user("Before the update")), interrupted = false)
+
+        val store = CodingSessions(app)
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Continued on the same project"))))
+        val viewModel = newChatViewModel(app, store,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading && it.projectIdentity == tree.toString() }
+
+        assertTrue(viewModel.send("Continue after re-picking"))
+        val done = await(viewModel) { !it.streaming && (it.error != null ||
+            it.messages.lastOrNull()?.text == "Continued on the same project") }
+        assertNull(done.error)
+        assertEquals(id, done.currentSessionId)
+        assertEquals("Continue after re-picking", provider.requests.single().messages.last().text)
+        assertTrue(provider.requests.single().tools.any { it.name == "run_command" })
+        assertEquals("Continued on the same project", store.load(id).messages.last().text)
+    }
+
+    private val projectGrantFlags = Intent.FLAG_GRANT_READ_URI_PERMISSION or
+        Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION
+
+    private fun projectDocuments(authority: String): TestDocumentsProvider {
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        return Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+    }
+
     @Test fun legacyConversationSendsAndAdoptsTheSelectedProjectWhenSaved() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         val authority = "com.kaiser.rivet.legacy-chat"
@@ -407,7 +577,7 @@ class ChatViewModelTest {
         val owner = requireNotNull(viewModel.runRegistry.lastRun)
         val otherTree = DocumentsContract.buildTreeDocumentUri(authority, "other")
         owner.update { it.copy(projectIdentity = otherTree.toString()) }
-        assertTrue(viewModel.send("Wrong project"))
+        assertFalse(viewModel.send("Wrong project"))
         val mismatch = await(viewModel) { !it.streaming && it.error == PROJECT_BINDING_MISMATCH_MESSAGE }
 
         assertEquals(1, provider.requests.size)
@@ -2741,45 +2911,38 @@ class ChatViewModelTest {
         assertFalse(viewModel.managedProcesses.hasForegroundWork())
     }
 
-    @Test fun lostProjectAccessDoesNotPersistRefusedPromptIntoSqliteOrMessages() = runBlocking {
+    @Test fun initialSqliteWriteFailureStillSendsAndPersistsTheReplyWhenStorageRecovers() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
-        AgentSessionStore(app).clear()
-        val tree = DocumentsContract.buildTreeDocumentUri("com.kaiser.rivet.refused-access", "root")
-        val sessions = CodingSessions(app)
-        sessions.create(tree.toString())
-        sessions.save(listOf(AgentMessage.user("Existing prompt")), interrupted = false)
-        app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
-        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
-            baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = newChatViewModel(app, sessions,
-            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
-            { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready && !it.projectLoading }
-
-        viewModel.send("Refused prompt")
-        val failed = await(viewModel) { !it.streaming && it.error == PROJECT_ACCESS_LOST_MESSAGE }
-
-        assertEquals(listOf("Existing prompt"), failed.messages.map { it.text })
-        val persisted = sessions.load()
-        assertEquals(listOf("Existing prompt"), persisted.messages.map { it.text })
-        assertFalse(persisted.interrupted)
-    }
-
-    @Test fun oversizedPromptLimitRollsBackAcceptedBubbleAndSkipsFinallySave() = runBlocking {
-        val persistence = RejectingPersistence()
-        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
-            baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = newChatViewModel(app, persistence,
-            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
-            { _, _ -> QueueProvider(ArrayDeque()) })
-        await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
-
-        viewModel.send("oversized")
-        val limited = await(viewModel) { !it.streaming && it.error == ChatViewModel.CONTEXT_LIMIT_ERROR }
-
-        assertTrue(limited.messages.isEmpty())
-        assertEquals(0L, limited.acceptedMessageCount)
-        assertEquals(1, persistence.saveAttempts)
+        val store = CodingSessions(app)
+        val id = requireNotNull(store.create(null).id)
+        store.rename(id, "Existing chat")
+        store.save(listOf(AgentMessage.user("Earlier prompt"), AgentMessage.assistant("Earlier reply")),
+            interrupted = false)
+        val database = app.openOrCreateDatabase("coding-sessions.db", Context.MODE_PRIVATE, null)
+        database.use {
+            database.execSQL("CREATE TRIGGER initial_save_failure BEFORE INSERT ON events " +
+                "BEGIN SELECT RAISE(FAIL, 'simulated storage failure'); END")
+            val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+            val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Saved reply"))))
+            val recoveringProvider = object : ProviderClient by provider {
+                override suspend fun streamAgent(
+                    request: AgentRequest, onReasoning: (String) -> Unit, onDelta: (String) -> Unit,
+                ): AgentResponse {
+                    database.execSQL("DROP TRIGGER initial_save_failure")
+                    return provider.streamAgent(request, onReasoning, onDelta)
+                }
+            }
+            val viewModel = newChatViewModel(app, store,
+                ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> recoveringProvider })
+            await(viewModel) { it.ready && !it.projectLoading }
+            assertTrue(viewModel.send("Keep this message"))
+            val done = await(viewModel) { !it.streaming && (it.error != null ||
+                it.messages.lastOrNull()?.text == "Saved reply") }
+            assertNull(done.error)
+            assertEquals("Keep this message", provider.requests.single().messages.last().text)
+            assertEquals(listOf("Earlier prompt", "Earlier reply", "Keep this message", "Saved reply"),
+                store.load(id).messages.map { it.text })
+        }
     }
 
     @Test fun unknownSlashCommandShowsNoticeAndCreatesNoTurn() = runBlocking {

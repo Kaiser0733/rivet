@@ -8,7 +8,7 @@ import kotlin.coroutines.CoroutineContext
 
 internal class TurnRunContext(
     private val sessionId: String?,
-    val workspaceId: String? = null,
+    @Volatile var workspaceId: String? = null,
 ) : AbstractCoroutineContextElement(Key) {
     companion object Key : CoroutineContext.Key<TurnRunContext>
 

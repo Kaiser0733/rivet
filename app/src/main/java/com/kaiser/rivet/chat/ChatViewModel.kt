@@ -68,6 +68,7 @@ import com.kaiser.rivet.agent.recoveryMessage
 import com.kaiser.rivet.agent.parseGoalCommand
 import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.InternalContext
+import com.kaiser.rivet.agent.validatedContext
 import com.kaiser.rivet.browser.BrowserDrivingLease
 import com.kaiser.rivet.subagent.SubagentContext
 import com.kaiser.rivet.subagent.SubagentPoolState
@@ -145,6 +146,7 @@ import com.kaiser.rivet.storage.SpendStore
 import com.kaiser.rivet.storage.SubagentPoolStore
 import com.kaiser.rivet.workspace.SafWorkspace
 import com.kaiser.rivet.workspace.WorkspaceSelection
+import com.kaiser.rivet.workspace.sameWorkspaceTree
 import com.kaiser.rivet.workspace.WorkspacePath
 import com.kaiser.rivet.workspace.WorkspaceFailure
 import com.kaiser.rivet.workspace.FilePreviewResult
@@ -1015,7 +1017,7 @@ class ChatViewModel private constructor(
                         projectError = null) }
                 }
                 val current = selectedState.value
-                if (starter != null || current.currentSessionWorkspaceId != identity) {
+                if (starter != null || !sameWorkspaceTree(current.currentSessionWorkspaceId, identity)) {
                     sessions?.let { store ->
                         val selected = if (starter == null) store.create(identity) else store.create(
                             identity, starter.starter.name, StarterBrief.event(identity, starter.starter.brief),
@@ -1068,11 +1070,12 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun previewIdentityMatches(identity: String): Boolean =
-        workspaceSelection.currentIdentity() == identity && selectedState.value.currentSessionWorkspaceId == identity
+        sameWorkspaceTree(workspaceSelection.currentIdentity(), identity) &&
+            sameWorkspaceTree(selectedState.value.currentSessionWorkspaceId, identity)
 
     private suspend fun previewWorkspace(identity: String): SafWorkspace? {
         if (!previewIdentityMatches(identity)) return null
-        return workspaceSelection.restore()?.first?.takeIf { it.tree.toString() == identity }
+        return workspaceSelection.restore()?.first?.takeIf { sameWorkspaceTree(it.tree.toString(), identity) }
     }
 
     internal suspend fun previewProjectFile(
@@ -1163,6 +1166,12 @@ class ChatViewModel private constructor(
                 commandAckCount = it.commandAckCount + 1,
             ) }
             return true
+        }
+        val state = owner.value
+        if (projectBindingState(sessionId, state.currentSessionWorkspaceId, state.projectIdentity,
+                projectLoading = false) == ProjectBindingState.Mismatch) {
+            owner.update { it.copy(error = PROJECT_BINDING_MISMATCH_MESSAGE, errorAction = null) }
+            return false
         }
         // Acceptance is the tap: the bubble appears and the composer clears before the
         // transcript load, SAF stat, provider snapshot or persistence can block. Prep uses
@@ -1669,48 +1678,53 @@ class ChatViewModel private constructor(
         return updates
     }
 
-    private suspend fun SessionRun.startRun(workspaceId: String, title: String, originalPrompt: String,
-                                 sessionId: String?, resuming: Boolean): RunRecord? {
-        if (sessionId == null) return null
-        val journal = runJournal ?: projectState?.let { workspaceRunJournal(workspaceId, it) } ?: return null
+    private suspend fun SessionRun.startRun(workspace: SafWorkspace, workspaceId: String, title: String,
+                                            originalPrompt: String, sessionId: String?, resuming: Boolean) {
+        if (sessionId == null) return
+        val journal = turnSupport("run journal open") { workspaceRunJournal(workspaceId, ProjectStateFiles(workspace)) }
         runJournal = journal
         val priorRun = currentSessionRun()?.takeIf { it.workspaceId == workspaceId }
         val previous = priorRun.takeIf { resuming }
         if (!resuming && priorRun?.resumable == true) {
-            journal.save(RunMachine.finish(priorRun, RunPhase.Stopped, "A new user turn started."))
-            ChatSupervisorServices.dismissInterruptedWorkers(workerStore, priorRun.id)
+            turnSupport("previous run journal") {
+                journal?.save(RunMachine.finish(priorRun, RunPhase.Stopped, "A new user turn started."))
+            }
+            turnSupport("previous run workers") { ChatSupervisorServices.dismissInterruptedWorkers(workerStore, priorRun.id) }
         }
         val resumed = previous?.takeIf { it.phase == RunPhase.Paused }
         val next = if (resumed != null) RunMachine.resume(resumed)
         else RunMachine.start(RunMachine.begin(UUID.randomUUID().toString(), workspaceId, title, sessionId = sessionId))
             .copy(toolReceipts = previous?.toolReceipts.orEmpty(),
                 promptDigest = InternalContext.digest(originalPrompt.trim()))
-        saveRunProgress(next, mirrorToProject = false)
         currentRun = next
         runResumeContext = previous != null
-        if (resumed != null) PersistentProcessService.cancelBudgetPause(getApplication<Application>())
-        if (resumed == null) {
-            if (batteryAskStore.shouldAsk()) {
+        if (journal != null && !saveRunProgress(next, mirrorToProject = false)) runJournal = null
+        turnSupport("run notifications") {
+            if (resumed != null) PersistentProcessService.cancelBudgetPause(getApplication<Application>())
+            if (resumed == null && batteryAskStore.shouldAsk()) {
                 batteryAskStore.markAsked()
                 update { it.copy(batteryAsk = true) }
             }
-            spendLedger.resetRun(spendStore.month(), previous?.let { spendStore.runTotals(it.id) } ?: (0.0 to 0L))
-            update { it.copy(spendLabel = null, spendEstimate = null, spendWarning = null,
-                runSpendUsd = 0.0, budgetPaused = false) }
-        } else if (spendRunId == next.id) {
-            spendLedger.syncMonth(spendStore.month())
-        } else {
-            val totals = spendStore.runTotals(next.id)
-            spendLedger.resetRun(spendStore.month(), totals)
-            update { it.copy(runSpendUsd = totals.first, spendLabel = SpendGuard.liveLabel(totals.first)) }
+            managedProcesses.updateRunStatus(sessionDisplayName, "Getting ready…", next.startedAt)
         }
-        spendRunId = next.id
-        checkpointGate.startRun(workspaceId, next.id, title, resuming = resumed != null)
-        // Save on the first completed step, not at start: a run that never gets a
-        // step must not create project files or a checkpoint-sized journal.
-        managedProcesses.updateRunStatus(sessionDisplayName, "Getting ready…", next.startedAt)
+        turnSupport("run spend") {
+            if (resumed == null) {
+                spendLedger.resetRun(spendStore.month(), previous?.let { spendStore.runTotals(it.id) } ?: (0.0 to 0L))
+                update { it.copy(spendLabel = null, spendEstimate = null, spendWarning = null,
+                    runSpendUsd = 0.0, budgetPaused = false) }
+            } else if (spendRunId == next.id) {
+                spendLedger.syncMonth(spendStore.month())
+            } else {
+                val totals = spendStore.runTotals(next.id)
+                spendLedger.resetRun(spendStore.month(), totals)
+                update { it.copy(runSpendUsd = totals.first, spendLabel = SpendGuard.liveLabel(totals.first)) }
+            }
+            spendRunId = next.id
+        }
+        turnSupport("run checkpoint setup") {
+            checkpointGate.startRun(workspaceId, next.id, title, resuming = resumed != null)
+        }
         update { it.copy(run = next, runRecovery = null) }
-        return next
     }
 
     private suspend fun SessionRun.persistToolReceipt(key: String, receipt: RunToolReceipt) {
@@ -1752,15 +1766,11 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun SessionRun.saveRunProgress(run: RunRecord, mirrorToProject: Boolean = true): Boolean {
-        return try {
-            checkNotNull(runJournal).save(run, mirrorToProject)
+        val journal = runJournal ?: return false
+        return turnSupport("run journal save") {
+            journal.save(run, mirrorToProject)
             true
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            update { it.copy(notice = "Rivet couldn't save the latest run state. Recovery may be incomplete.") }
-            false
-        }
+        } ?: false
     }
 
     private fun SessionRun.recordSpend(config: ProviderConfig, usage: AgentUsage, estimated: Boolean) {
@@ -2187,13 +2197,29 @@ class ChatViewModel private constructor(
         }
     }
 
+    private inline fun <T> turnSupport(operation: String, work: () -> T): T? = try {
+        work()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (failure: Throwable) {
+        Log.w("RivetChat", "Turn $operation failed: ${failure.javaClass.name}: ${failure.message}")
+        null
+    }
+
     private fun SessionRun.startTurnNow(trimmed: String, retryingInterrupted: Boolean,
                          acceptedUser: AgentMessage? = null, starterOpening: Boolean = false,
                          notice: String? = null) {
         val owner = this
         if (!canStartRun(owner)) return
-        val sessionId = value.currentSessionId
-        val wasInterrupted = value.interruptedTurn
+        val current = value
+        val sessionId = current.currentSessionId
+        val wasInterrupted = current.interruptedTurn
+        if (projectBindingState(sessionId, current.currentSessionWorkspaceId, current.projectIdentity,
+                projectLoading = false) == ProjectBindingState.Mismatch) {
+            owner.update { it.copy(streaming = false, activity = null,
+                error = PROJECT_BINDING_MISMATCH_MESSAGE, errorAction = null) }
+            return
+        }
         owner.update { it.copy(streaming = true, turnStartedAt = SystemClock.elapsedRealtime(),
             turnStartedWallClock = System.currentTimeMillis(),
             streamingText = "", streamingReasoning = "",
@@ -2203,134 +2229,80 @@ class ChatViewModel private constructor(
         launchRun {
             var turnToken: String? = null
             var acceptedPersisted = false
-            var persistAcceptedOnExit = true
             var workspaceIdToAdopt: String? = null
+            var requestStarted = false
             fun releaseTurn() {
                 val token = turnToken ?: return
                 turnToken = null
-                runtimeController.finishTurn(token)
+                turnSupport("notification cleanup") { runtimeController.finishTurn(token) }
             }
             try {
-            val runPool = try {
-                subagentPoolStore.state.first()
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                SubagentPoolState()
-            }
+            val snapshot = providerSnapshot(wasInterrupted) ?: return@launchRun
+            currentCloud = !SpendStore.isLocal(snapshot.config.baseUrl)
+            providerKnown = true
+            val client = clientFactory(snapshot.config, snapshot.apiKey)
+            val runPool = turnSupport("worker settings") { subagentPoolStore.state.first() } ?: SubagentPoolState()
             _subagentPool.value = runPool
-            turnToken = runtimeController.startTurn(owner.sessionDisplayName,
-                onStop = { stopRun(owner) }, onPause = { pauseRun(owner, it) })
+            turnToken = turnSupport("notification startup") {
+                runtimeController.startTurn(owner.sessionDisplayName,
+                    onStop = { stopRun(owner) }, onPause = { pauseRun(owner, it) })
+            }
             // A failed result write can leave a committed mutation without durable
             // outcome evidence. Recover it before a new user event can bury the call.
             if (activeMessages.lastOrNull()?.let {
                     it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty()
                 } == true) {
-                val restored = try { loadRunSession(sessionId) }
-                    catch (e: CancellationException) { throw e }
-                    catch (_: Exception) {
-                        releaseTurn()
-                        owner.update { it.copy(streaming = false, activity = null,
-                            interruptedTurn = wasInterrupted,
-                            error = "Could not recover the previous task. Check available storage and try again.") }
-                        return@launchRun
-                    }
-                if (restored.messages.lastOrNull()?.let {
-                        it.role == AgentRole.Assistant && it.toolCalls.isNotEmpty()
-                    } == true) {
-                    releaseTurn()
-                    owner.update { it.copy(streaming = false, activity = null,
-                        interruptedTurn = wasInterrupted,
-                        error = "Could not recover the previous task. Restart Rivet before continuing.") }
-                    return@launchRun
-                }
-                activeMessages = restored.messages
-                activeSummary = restored.summary
-            }
-            val snapshot = providerSnapshot(wasInterrupted) ?: run {
-                releaseTurn()
-                return@launchRun
-            }
-            currentCloud = !SpendStore.isLocal(snapshot.config.baseUrl)
-            providerKnown = true
-            // A turn is bound to its own conversation's project, not to whichever project
-            // the user happens to be viewing when the coroutine actually starts.
-            val workspace = try {
-                (value.currentSessionWorkspaceId ?: value.projectIdentity)?.let {
-                    SafWorkspace(getApplication<Application>().contentResolver, Uri.parse(it))
-                } ?: workspaceSelection.restore()?.first
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                null
-            }
-            var workspaceId: String? = null
-            var workspaceAccessFailed = false
-            if (workspace != null) {
-                try {
-                    workspace.stat(WorkspacePath.ROOT)
-                    workspaceId = workspace.tree.toString()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    workspaceAccessFailed = true
+                val restored = turnSupport("previous task recovery") { loadRunSession(sessionId) }
+                if (restored != null) {
+                    activeMessages = restored.messages
+                    activeSummary = restored.summary
                 }
             }
-            val runBrowser = browserFor(workspaceId ?: owner.value.currentSessionWorkspaceId)
-            runBrowser.bindProject(workspaceId ?: owner.value.currentSessionWorkspaceId ?: "unbound")
-            val browserTools = BrowserTools(runBrowser)
-            if (!starterOpening && workspaceId != null && snapshot.config.type == ProviderType.Local) {
-                val local = com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
-                val block = local?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)
-                if (block != null) {
-                    persistAcceptedOnExit = false
-                    rollbackAcceptedUser(acceptedUser)
-                    releaseTurn()
-                    failBeforeStart(block, wasInterrupted)
-                    return@launchRun
+            val projectId = current.projectIdentity.takeIf {
+                sameWorkspaceTree(it, current.currentSessionWorkspaceId)
+            } ?: current.currentSessionWorkspaceId ?: current.projectIdentity
+            val selectedWorkspace = turnSupport("project access") {
+                val candidate = projectId?.let { workspaceSelection.openTree(Uri.parse(it)) }
+                    ?: workspaceSelection.restore()?.first
+                candidate?.takeIf { it.stat(WorkspacePath.ROOT).directory }
+            }
+            val localToolBlock = if (selectedWorkspace != null && snapshot.config.type == ProviderType.Local &&
+                !starterOpening) {
+                turnSupport("local tool support") {
+                    com.kaiser.rivet.local.LocalRuntime.models()?.entry(snapshot.config.model)
+                        ?.let(com.kaiser.rivet.local.LocalToolProtocol::agentBlockReason)
                 }
-            }
-            val current = owner.value
-            val binding = projectBindingState(current.currentSessionId,
-                current.currentSessionWorkspaceId, workspaceId?.let { current.projectIdentity ?: it },
-                projectLoading = false)
-            if (workspaceAccessFailed || binding == ProjectBindingState.AccessLost) {
-                persistAcceptedOnExit = false
-                rollbackAcceptedUser(acceptedUser)
-                releaseTurn()
-                owner.update { it.copy(projectName = null, projectIdentity = null, projectLoading = false,
-                    projectError = if (current.currentSessionWorkspaceId != null) null
-                    else "Rivet couldn't open this project. Choose the folder again.",
-                    streaming = false, activity = null,
-                    interruptedTurn = wasInterrupted,
-                    error = if (current.currentSessionWorkspaceId != null) PROJECT_ACCESS_LOST_MESSAGE else null) }
-                return@launchRun
-            }
-            if (sessions != null && binding == ProjectBindingState.Mismatch) {
-                persistAcceptedOnExit = false
-                rollbackAcceptedUser(acceptedUser)
-                releaseTurn()
-                owner.update { it.copy(streaming = false, activity = null,
-                    interruptedTurn = wasInterrupted,
-                    error = PROJECT_BINDING_MISMATCH_MESSAGE) }
-                return@launchRun
-            }
+            } else null
+            val workspace = selectedWorkspace.takeIf { localToolBlock == null }
+            val workspaceId = workspace?.tree?.toString()
+            owner.runtimeContext?.workspaceId = workspaceId
+            val projectNotice = localToolBlock ?: if (projectId != null && selectedWorkspace == null) {
+                PROJECT_ACCESS_LOST_MESSAGE
+            } else null
             if (sessionId != null && current.currentSessionWorkspaceId == null) {
                 workspaceIdToAdopt = workspaceId
             }
+            val runBrowser = turnSupport("browser setup") {
+                browserFor(workspaceId ?: current.currentSessionWorkspaceId).also {
+                    it.bindProject(workspaceId ?: current.currentSessionWorkspaceId ?: "unbound")
+                }
+            }
+            val browserTools = runBrowser?.let(::BrowserTools)
             val runtime = runtimeController
             val project = workspace?.let(::ProjectInstructions)
             val observedPaths = linkedMapOf(WorkspacePath.ROOT to true)
-            if (workspaceId != null) ProjectContext.current(activeMessages, workspaceId)
-                .values.filterNot { it.removed }.forEach { instruction ->
-                    observedPaths[WorkspacePath.parse(instruction.scope).parent()] = true
-                }
-            var omittedObservedPaths = ProjectInstructions.observe(observedPaths, emptyMap())
-            var instructions = project?.load(observedPaths, omittedObservedPaths)
-            // Skills rescan at the same lifecycle point as project instructions: turn
-            // start. Everywhere else (each model step) reads this turn's snapshot.
-            val agentWorkspace = workspace?.let(::SafAgentWorkspace)
-            val skills = agentWorkspace?.let { skillDiscovery.refresh(it, requireNotNull(workspaceId)) }
+            val omittedPaths = turnSupport("observed project paths") {
+                if (workspaceId != null) ProjectContext.current(activeMessages, workspaceId)
+                    .values.filterNot { it.removed }.forEach { instruction ->
+                        observedPaths[WorkspacePath.parse(instruction.scope).parent()] = true
+                    }
+                ProjectInstructions.observe(observedPaths, emptyMap())
+            }
+            var omittedObservedPaths = omittedPaths ?: false
+            var instructions = turnSupport("project instructions") { project?.load(observedPaths, omittedObservedPaths) }
+            val skills = turnSupport("project skills") {
+                workspace?.let { skillDiscovery.refresh(SafAgentWorkspace(it), requireNotNull(workspaceId)) }
+            }
             if (skills != null) {
                 _skillCatalog.value = skills
                 _userSkills.value = skills.skills.filter { it.userInvocable }
@@ -2339,56 +2311,68 @@ class ChatViewModel private constructor(
             // stays the task. Retries already carry the stripped task text.
             val gesture = if (retryingInterrupted || starterOpening) null else skillGesture(trimmed, skills)
             val prompt = gesture?.task ?: trimmed
-            if (workspaceId != null) {
-                startRun(workspaceId, prompt, trimmed, sessionId, retryingInterrupted)
-            } else if (!retryingInterrupted) {
-                spendRunId = null
-                spendLedger.resetRun(spendStore.month())
-                update { it.copy(spendLabel = null, spendWarning = null, runSpendUsd = 0.0, budgetPaused = false) }
+            turnSupport("run start") {
+                if (workspaceId != null && workspace != null) {
+                    startRun(workspace, workspaceId, prompt, trimmed, sessionId, retryingInterrupted)
+                } else if (!retryingInterrupted) {
+                    currentRun = null
+                    runResumeContext = false
+                    spendRunId = null
+                    spendLedger.resetRun(spendStore.month())
+                    update { it.copy(run = null, spendLabel = null, spendWarning = null, runSpendUsd = 0.0,
+                        budgetPaused = false) }
+                }
             }
-            updateSpendEstimate(snapshot.config)
+            turnSupport("spend estimate") { updateSpendEstimate(snapshot.config) }
+            val checkpoints = turnSupport("turn Undo setup") {
+                checkpointGate.also {
+                    it.beginTurn(workspaceId, currentSessionRun()?.takeIf { run -> run.workspaceId == workspaceId }?.id, sessionId)
+                }
+            }
+            suspend fun projectContext(messages: List<AgentMessage>): List<AgentMessage> = buildList {
+                if (workspaceId != null && workspace != null) {
+                    instructions?.let { addAll(ProjectContext.updates(messages, workspaceId, it)) }
+                    addAll(SkillContext.updates(messages, workspaceId, skills))
+                    turnSupport("toolchain context") {
+                        addAll(ToolchainContext.updates(messages, workspaceId, runtime.toolchainAvailability()))
+                    }
+                    turnSupport("worker context") {
+                        addAll(SubagentContext.poolUpdates(messages, workspaceId, runPool,
+                            providerSource.configs(), snapshot.config))
+                    }
+                    addAll(turnSupport("goal and memory context") {
+                        goalMemoryUpdates(messages, workspaceId, workspace)
+                    }.orEmpty())
+                } else {
+                    addAll(GoalMemoryContext.updates(messages, null,
+                        sessionGoal.ownedBy(sessionId), ""))
+                }
+            }
             suspend fun initialContext(messages: List<AgentMessage>): List<AgentMessage> = buildList {
                 if (activeSummary.isNotBlank() && messages.none { it.role == AgentRole.Context &&
                         it.internalContext?.kind == "summary" }) add(InternalContext.summary(activeSummary, workspaceId))
-                if (workspaceId != null && instructions != null) addAll(ProjectContext.updates(messages,
-                    workspaceId, requireNotNull(instructions)))
-                if (workspaceId != null) addAll(SkillContext.updates(messages, workspaceId, skills))
-                if (workspaceId != null) addAll(ToolchainContext.updates(messages, workspaceId,
-                    runtime.toolchainAvailability()))
-                if (workspaceId != null) addAll(SubagentContext.poolUpdates(
-                    messages,
-                    workspaceId,
-                    runPool,
-                    providerSource.configs(),
-                    snapshot.config,
-                ))
-                if (workspaceId != null && workspace != null) addAll(goalMemoryUpdates(
-                    messages, workspaceId, workspace))
-                else if (workspaceId == null) {
-                    addAll(GoalMemoryContext.updates(messages, null,
-                        sessionGoal.ownedBy(owner.value.currentSessionId), ""))
-                }
-                if (gesture != null && workspaceId != null) {
-                    add(SkillContext.invocation(gesture.skill, workspaceId))
-                }
+                addAll(projectContext(messages))
+                if (gesture != null && workspaceId != null) add(SkillContext.invocation(gesture.skill, workspaceId))
             }
             val phone = if (snapshot.config.type == ProviderType.Local) null else PhoneIntents(
                 app = getApplication<Application>(),
                 resolveFile = { rawPath -> resolvePhoneFile(rawPath, workspace) },
-                customTabOpener = { url -> runBrowser.customTabOpener?.invoke(url) == true },
+                customTabOpener = { url -> runBrowser?.customTabOpener?.invoke(url) == true },
             )
-            val grantTrees = if (phone == null) emptyMap() else grantedFolders.list().associate { it.id to it.treeUri }
+            val grantTrees = if (phone == null) emptyMap() else turnSupport("folder grants") {
+                grantedFolders.list().associate { it.id to it.treeUri }
+            }.orEmpty()
             suspend fun liveGrant(id: String, write: Boolean = false): SafWorkspace {
                 val expected = grantTrees[id] ?: throw com.kaiser.rivet.agent.AgentWorkspaceFailure("grant_missing")
                 return grantedFolders.resolve(id, write, expected)
             }
-            val termuxOwner = _uiState.value.currentSessionId ?: workspaceId.orEmpty()
+            val termuxOwner = sessionId ?: workspaceId.orEmpty()
             val prepareTermux = phone?.let {
                 { call: AgentToolCall -> termuxBridge.prepare(call, workspace, termuxOwner) { id -> liveGrant(id) } }
             }
             val capture = if (phone == null) null else (getApplication<Application>() as? RivetApplication)?.phoneCapture
             val saveCapture: (suspend (String) -> String)? = workspace?.takeIf {
-                it.tree.toString() == (current.currentSessionWorkspaceId ?: workspaceIdToAdopt)
+                sameWorkspaceTree(it.tree.toString(), current.currentSessionWorkspaceId ?: workspaceIdToAdopt)
             }?.let { selected ->
                 { capturePath ->
                     check(previewIdentityMatches(selected.tree.toString()))
@@ -2468,50 +2452,52 @@ class ChatViewModel private constructor(
                     currentTurnId = externalTurnId,
                 )
             }
-            val executor = createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty(), coordinator = true)
-            val subagentTools: SubagentTools?
+            val executor = turnSupport("project tools") {
+                createExecutor(gesture?.let { setOf(it.skill.name) }.orEmpty(), coordinator = true)
+            }
+            activeSupervisor = null
+            var subagentTools: SubagentTools? = null
             var supervisorScopeJob: Job? = null
             var supervisorCollector: Job? = null
-            if (workspaceId != null && workspace != null) {
-                val boundWorkspaceId = workspaceId ?: workspace.tree.toString()
-                val supervisorServices = ChatSupervisorServices.createServices(
-                    workspaceId = boundWorkspaceId, runId = currentSessionRun()?.id ?: UUID.randomUUID().toString(),
-                    parentSessionId = owner.value.currentSessionId, workerStore = workerStore,
-                    providerSource = providerSource, clientFactory = clientFactory, approvals = approvals,
-                    checkpointGate = owner.checkpointGate, coordinatorConfig = { snapshot.config },
-                    browserTools = browserTools, browserLease = browserLease,
-                    createExecutor = { createExecutor(it) },
-                    projectInstructions = project, skills = { skills }, workspace = workspace, runtime = runtime,
-                    managedProcesses = managedProcesses, browser = browser, workspaceSelection = workspaceSelection,
-                    secretValues = { secrets.sensitiveValues().toList() },
-                    turnSessionId = { sessionId }, sessions = { sessions },
-                    recordSpend = { config, usage, estimated -> owner.recordSpend(config, usage, estimated) },
-                    beforeModelRequest = { config -> owner.checkSpendBeforeRequest(config) },
-                    readAutonomyMode = ::readAutonomyMode,
-                    systemInstruction = { hasWorkspace, terminal, browserState ->
-                        systemInstruction(hasWorkspace, terminal, browserState, phoneAccess = false, presentAvailable = false)
-                    },
-                    activityFor = ::activityFor,
-                    poolState = { _subagentPool.value },
-                )
-                val scopeJob = SupervisorJob(viewModelScope.coroutineContext[Job])
-                val (supervisor, tools, collectorJob) = ChatSupervisorServices.initSupervisor(
-                    services = supervisorServices,
-                    parentScope = CoroutineScope(coroutineContext + scopeJob),
-                    retryingInterrupted = retryingInterrupted,
-                    currentRunId = currentSessionRun()?.id,
-                    onStateUpdate = { owner.workers.value = it },
-                    sessionId = { owner.value.currentSessionId },
-                )
-                supervisorScopeJob = scopeJob
-                supervisorCollector = collectorJob
-                activeSupervisor = supervisor
-                subagentTools = tools
-            } else {
-                activeSupervisor = null
-                subagentTools = null
+            if (workspaceId != null && workspace != null && browserTools != null && checkpoints != null) {
+                turnSupport("worker supervisor") {
+                    val scopeJob = SupervisorJob(viewModelScope.coroutineContext[Job])
+                    supervisorScopeJob = scopeJob
+                    val supervisorServices = ChatSupervisorServices.createServices(
+                        workspaceId = workspaceId, runId = currentSessionRun()?.id ?: UUID.randomUUID().toString(),
+                        parentSessionId = owner.value.currentSessionId, workerStore = workerStore,
+                        providerSource = providerSource, clientFactory = clientFactory, approvals = approvals,
+                        checkpointGate = checkpoints, coordinatorConfig = { snapshot.config },
+                        browserTools = browserTools, browserLease = browserLease,
+                        createExecutor = { createExecutor(it) },
+                        projectInstructions = project, skills = { skills }, workspace = workspace, runtime = runtime,
+                        managedProcesses = managedProcesses, browser = browser, workspaceSelection = workspaceSelection,
+                        secretValues = { secrets.sensitiveValues().toList() },
+                        turnSessionId = { sessionId }, sessions = { sessions },
+                        recordSpend = { config, usage, estimated -> owner.recordSpend(config, usage, estimated) },
+                        beforeModelRequest = { config -> owner.checkSpendBeforeRequest(config) },
+                        readAutonomyMode = ::readAutonomyMode,
+                        systemInstruction = { hasWorkspace, terminal, browserState ->
+                            systemInstruction(hasWorkspace, terminal, browserState, phoneAccess = false, presentAvailable = false)
+                        },
+                        activityFor = ::activityFor,
+                        poolState = { _subagentPool.value },
+                    )
+                    val (supervisor, tools, collectorJob) = ChatSupervisorServices.initSupervisor(
+                        services = supervisorServices,
+                        parentScope = CoroutineScope(coroutineContext + scopeJob),
+                        retryingInterrupted = retryingInterrupted,
+                        currentRunId = currentSessionRun()?.id,
+                        onStateUpdate = { owner.workers.value = it },
+                        sessionId = { owner.value.currentSessionId },
+                    )
+                    supervisorCollector = collectorJob
+                    activeSupervisor = supervisor
+                    subagentTools = tools
+                }
+                if (activeSupervisor == null) supervisorScopeJob?.cancel()
             }
-            runBrowser.previewStarter = { root, entry ->
+            runBrowser?.previewStarter = { root, entry ->
                 val selected = workspace
                     ?: throw com.kaiser.rivet.agent.AgentWorkspaceFailure("workspace_unavailable")
                 val identity = workspaceId ?: selected.tree.toString()
@@ -2521,35 +2507,39 @@ class ChatViewModel private constructor(
                 AgentToolExecutor.definitions.filter {
                     it.name !in AgentToolExecutor.phoneOnlyNames && (workspace != null || it.name in UNBOUND_FILE_TOOLS)
                 }
-            val tools = BrowserTools.definitions + workspaceTools +
+            val tools = if (localToolBlock != null) emptyList() else
+                (if (browserTools == null) emptyList() else BrowserTools.definitions) + workspaceTools +
                 (if (phone == null) emptyList() else AgentToolExecutor.definitions.filter {
                     it.name in AgentToolExecutor.phoneOnlyNames
                 }) +
                 (subagentTools?.let { SubagentTools.definitions }.orEmpty()) +
                 (if (sessions != null) listOf(ArchiveRecall.definition) else emptyList())
-            val client = clientFactory(snapshot.config, snapshot.apiKey)
             val turnId = UUID.randomUUID().toString()
-            val titleEligible = try {
+            val titleEligible = turnSupport("title claim") {
                 sessionId != null &&
                     (sessions?.claimAutoTitle(sessionId) == true || sessions?.hasPendingAutoTitle(sessionId) == true)
-            } catch (e: CancellationException) { throw e }
-            catch (_: Exception) { false }
+            } == true
             val archive = sessions?.takeIf { sessionId != null }
-            var pinnedArchive = if (archive != null) archive.archiveTail(requireNotNull(sessionId)) else ""
+            var pinnedArchive = turnSupport("archive pins") { archive?.archiveTail(requireNotNull(sessionId)) }.orEmpty()
             val recalling = !starterOpening && ArchiveRecall.required(prompt)
-            val recallQueries = if (recalling && archive != null)
-                expandArchiveQueries(client, snapshot.config, prompt, requireNotNull(sessionId), turnId) else emptyList()
-            val recallWindows: List<ArchiveWindow> = if (recalling && archive != null) {
-                val id = requireNotNull(sessionId)
-                archive.searchArchive(id, recallQueries, excludeLastUser = retryingInterrupted).also { hits ->
-                    archive.pinArchive(id, hits)
-                    pinnedArchive = archive.archiveTail(id)
-                }
+            val recallQueries = if (recalling && archive != null && sessionId != null) {
+                turnSupport("archive queries") {
+                    expandArchiveQueries(client, snapshot.config, prompt, sessionId, turnId)
+                }.orEmpty()
             } else emptyList()
+            val recallWindows = if (recalling && archive != null && sessionId != null) {
+                turnSupport("archive recall") {
+                    archive.searchArchive(sessionId, recallQueries, excludeLastUser = retryingInterrupted).also { hits ->
+                        archive.pinArchive(sessionId, hits)
+                        pinnedArchive = archive.archiveTail(sessionId)
+                    }
+                }.orEmpty()
+            } else emptyList()
+            val redactions = turnSupport("redactions") { secrets.sensitiveValues().toList() }.orEmpty()
             val context = ContextPreparation(sessions, sessionId, client, snapshot.config,
                 turnId, owner.activeSummary, workspaceId, currentRequest = acceptedUser?.text,
                 savedGoal = { owner.value.goal.ownedBy(sessionId)?.text }, useRequestEstimate = true,
-                redactions = secrets.sensitiveValues().toList(),
+                redactions = redactions,
                 onCompactionStarted = {
                     if (runRegistry.isActive(owner)) owner.update { it.copy(compacting = true) }
                 }) { messages, _ ->
@@ -2559,65 +2549,49 @@ class ChatViewModel private constructor(
             // A retry always re-runs the transcript that is already there. The failed
             // request left its user message in it, and a failure after partial output also
             // left the cut-off answer, so appending the prompt again sent it twice.
-            val reuseExistingTail = retryingInterrupted
+            val reuseExistingTail = retryingInterrupted ||
+                (acceptedUser != null && activeMessages.lastOrNull() === acceptedUser)
             val pendingUser = if (reuseExistingTail || starterOpening) emptyList()
                 else listOf(acceptedUser ?: AgentMessage.user(prompt))
-            if (!canSaveTurn(activeMessages + initialContext(activeMessages) + pendingUser, 0)) {
-                try {
-                    val reduced = try {
-                        context.prepare(activeMessages, force = true, reason = "storage_pressure")
+            val tail = activeMessages.lastOrNull()
+            var history = if (tail?.role == AgentRole.Assistant && tail.toolCalls.isNotEmpty()) {
+                activeMessages.dropLast(1)
+            } else activeMessages
+            var setupEvents = turnSupport("initial context") {
+                initialContext(history).filter { it.validatedContext() != null }
+            }.orEmpty()
+            if (turnSupport("transcript capacity") { canSaveTurn(history + setupEvents + pendingUser, 0) } == false) {
+                turnSupport("storage pressure compaction") {
+                    try {
+                        val reduced = context.prepare(history, force = true, reason = "storage_pressure")
+                        if (reduced != history) {
+                            activeMessages = reduced
+                            activeSummary = context.summary
+                            history = reduced
+                            setupEvents = initialContext(history).filter { it.validatedContext() != null }
+                            val meter = readContextMeter(snapshot.config, context.requestFor(reduced))
+                            if (runRegistry.isActive(owner)) owner.update { it.copy(contextMeter = meter) }
+                        }
                     } finally {
                         if (runRegistry.isActive(owner)) owner.update { it.copy(compacting = false) }
                     }
-                    if (reduced != activeMessages) {
-                        activeMessages = reduced
-                        activeSummary = context.summary
-                        val meter = readContextMeter(snapshot.config, context.requestFor(reduced))
-                        if (runRegistry.isActive(owner)) owner.update { it.copy(contextMeter = meter) }
-                    }
                 }
-                catch (e: CancellationException) { throw e
-                } catch (_: Exception) {
-                    releaseTurn()
-                    owner.update { it.copy(streaming = false, activity = null,
-                        interruptedTurn = wasInterrupted,
-                        error = "Rivet could not shorten this session's context. The conversation was kept.") }
-                    return@launchRun
+                if (turnSupport("transcript capacity") { canSaveTurn(history + setupEvents + pendingUser, 0) } == false) {
+                    setupEvents = emptyList()
                 }
             }
-            val durable = (activeMessages + initialContext(activeMessages) + pendingUser).toMutableList()
-            try {
-                persistTurn(durable, interrupted = true, workspaceIdIfUnbound = workspaceIdToAdopt)
-                acceptedPersisted = true
-            } catch (_: AgentSessionLimitException) {
-                persistAcceptedOnExit = false
-                rollbackAcceptedUser(acceptedUser)
-                releaseTurn()
-                if (runRegistry.isActive(owner)) {
-                    owner.update {
-                        it.copy(streaming = false, pendingApproval = null, activity = null,
-                            interruptedTurn = wasInterrupted,
-                            error = CONTEXT_LIMIT_ERROR)
-                    }
-                }
-                return@launchRun
-            } catch (e: CancellationException) { throw e
-            } catch (_: Exception) {
-                releaseTurn()
-                owner.update { it.copy(streaming = false, pendingApproval = null, activity = null,
-                    interruptedTurn = wasInterrupted,
-                    error = "Could not save the conversation. Check available storage and try again.") }
-                return@launchRun
-            }
-            val updatedHistory = if (workspaceIdToAdopt != null || (pendingUser.isNotEmpty() &&
-                owner.value.sessions.none { it.id == sessionId && it.hasMessages })) {
-                try {
-                    sessions?.list()
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    null
-                }
+            val durable = (history + setupEvents + pendingUser).toMutableList()
+            suspend fun saveTranscript(messages: List<AgentMessage>, interrupted: Boolean): Boolean =
+                turnSupport("transcript save") {
+                    persistTurn(messages, interrupted, workspaceIdIfUnbound = workspaceIdToAdopt)
+                    workspaceIdToAdopt = null
+                    true
+                } == true
+            var transcriptSaved = saveTranscript(durable, interrupted = true)
+            acceptedPersisted = transcriptSaved
+            val updatedHistory = if (transcriptSaved && pendingUser.isNotEmpty() &&
+                owner.value.sessions.none { it.id == sessionId && it.hasMessages }) {
+                turnSupport("conversation list") { sessions?.list() }
             } else null
             if (updatedHistory != null) publishHistory(updatedHistory)
             owner.update {
@@ -2626,7 +2600,7 @@ class ChatViewModel private constructor(
                     messages = it.messages,
                     sessions = updatedHistory ?: it.sessions,
                     streaming = true,
-                    error = null, errorAction = null, notice = notice, unsupportedReasoning = null,
+                    error = null, errorAction = null, notice = projectNotice ?: notice, unsupportedReasoning = null,
                     activity = "Working on it…",
                     lastTurnFiles = emptyList(), lastTurnFileCount = 0, undoCheckpointId = null,
                     externalUndo = null,
@@ -2642,7 +2616,6 @@ class ChatViewModel private constructor(
             // a few tens of milliseconds is invisible while text keeps arriving. Reasoning
             // cannot be held back that way, see its handler below.
             val textWindow = PreviewWindow()
-            owner.checkpointGate.beginTurn(workspaceId, currentSessionRun()?.takeIf { workspaceId != null }?.id, sessionId)
 
             suspend fun persistLearning(learning: com.kaiser.rivet.provider.ModelLimitLearning) {
                 runCatching {
@@ -2652,9 +2625,9 @@ class ChatViewModel private constructor(
                 }
             }
             val loop = AgentLoop(
-                secretValues = secrets.sensitiveValues().toList(),
+                secretValues = redactions,
                 requestModel = request@{ messages, _, onText ->
-                    checkSpendBeforeRequest(snapshot.config)
+                    turnSupport("spend check") { checkSpendBeforeRequest(snapshot.config) }
                     if (recalling) {
                         val quote = ArchiveRecall.directAnswer(recallWindows, recallQueries)
                         val goal = owner.value.goal.ownedBy(sessionId)
@@ -2671,6 +2644,7 @@ class ChatViewModel private constructor(
                         }
                     }
                     runtimePhase?.log("model request start")
+                    requestStarted = true
                     val response = try { client.streamAgent(
                         request = request,
                         onReasoning = { delta ->
@@ -2745,7 +2719,7 @@ class ChatViewModel private constructor(
                 },
                 prepareTool = { call ->
                     if (call.name == "delete_path" && !(phone != null && externalFileMutation(call))) {
-                        owner.checkpointGate.beginRunBoundary("Before deleting a file")
+                        checkpoints?.beginRunBoundary("Before deleting a file")
                     }
                     val prepared = if (call.name == ArchiveRecall.TOOL && archive != null) {
                         PreparedAgentTool(call, null, effect = AgentToolEffect.ReadOnly) {
@@ -2760,7 +2734,7 @@ class ChatViewModel private constructor(
                                 summary = "Searched the conversation archive")
                         }
                     } else subagentTools?.prepare(call)
-                        ?: browserTools.prepare(
+                        ?: browserTools?.prepare(
                             call = call,
                             owner = RunCheckpointGate.COORDINATOR,
                             lease = browserLease,
@@ -2794,7 +2768,7 @@ class ChatViewModel private constructor(
                 requestApproval = approvals::await,
                 resumeReceipts = currentSessionRun()?.toolReceipts.orEmpty(),
                 journalTool = { key, receipt ->
-                    if (workspaceId != null && sessionId != null) owner.persistToolReceipt(key, receipt)
+                    if (currentSessionRun() != null && runJournal != null) owner.persistToolReceipt(key, receipt)
                 },
                 writeMemoryBatch = workspace?.let { selected ->
                     { call, facts -> writeMemoryProposals(selected, call, facts) }
@@ -2818,10 +2792,10 @@ class ChatViewModel private constructor(
                     }
                 },
                 beforeMutation = { call ->
-                    if (phone != null && (externalFileMutation(call) || call.name == "termux_command")) null else owner.checkpointGate.beforeMutation(RunCheckpointGate.COORDINATOR, call)
+                    if (phone != null && (externalFileMutation(call) || call.name == "termux_command")) null else checkpoints?.beforeMutation(RunCheckpointGate.COORDINATOR, call)
                 },
                 afterMutation = { call, result ->
-                    if (!(phone != null && (externalFileMutation(call) || call.name == "termux_command"))) owner.checkpointGate.afterMutation(RunCheckpointGate.COORDINATOR, call, result)
+                    if (!(phone != null && (externalFileMutation(call) || call.name == "termux_command"))) checkpoints?.afterMutation(RunCheckpointGate.COORDINATOR, call, result)
                 },
                 onContextLimitObserved = { error, estimate ->
                     ModelLimitLearningPolicy.observeContext(
@@ -2839,7 +2813,9 @@ class ChatViewModel private constructor(
                 compactContext = compact@{ candidate, force ->
                     if (recalling && !force) return@compact candidate
                     val compacted = try {
-                        context.prepare(candidate, force)
+                        if (!requestStarted && !force) {
+                            turnSupport("request context preparation") { context.prepare(candidate, force) } ?: candidate
+                        } else context.prepare(candidate, force)
                     } finally {
                         if (runRegistry.isActive(owner)) owner.update { it.copy(compacting = false) }
                     }
@@ -2857,26 +2833,20 @@ class ChatViewModel private constructor(
                 contextFootprint = { candidate -> context.footprint(candidate) },
                 contextUpdates = { candidate ->
                     if (project == null || workspaceId == null) emptyList() else {
-                        instructions = project.load(observedPaths, omittedObservedPaths)
-                        val baseEvents = ProjectContext.updates(candidate, workspaceId, requireNotNull(instructions)) +
-                            SkillContext.updates(candidate, workspaceId, skills) +
-                            ToolchainContext.updates(candidate, workspaceId,
-                                runtime.toolchainAvailability()) +
-                            (workspace?.let { goalMemoryUpdates(candidate, workspaceId, it) }
-                                ?: emptyList())
-                        val subagentEvents = SubagentContext.poolUpdates(
-                            candidate,
-                            workspaceId,
-                            _subagentPool.value,
-                            providerSource.configs(),
-                            snapshot.config,
-                        ) + activeSupervisor?.drainUndeliveredResults(workspaceId).orEmpty()
-                        baseEvents + subagentEvents
+                        turnSupport("project instructions") { project.load(observedPaths, omittedObservedPaths) }
+                            ?.let { instructions = it }
+                        val events = (turnSupport("project context") { projectContext(candidate) }.orEmpty() +
+                            turnSupport("worker results") {
+                                activeSupervisor?.drainUndeliveredResults(workspaceId)
+                            }.orEmpty()).filter { it.validatedContext() != null }
+                        if (events.isEmpty() || turnSupport("context capacity") {
+                                canSaveTurn(candidate + events, 0)
+                            } == false) emptyList() else events
                     }
                 },
             )
             try {
-                runBrowser.beginAgentRun(sessionId)
+                turnSupport("browser run") { runBrowser?.beginAgentRun(sessionId) }
                 val runLoop: suspend () -> AgentRunResult = {
                     loop.run(
                         initial = durable,
@@ -2901,7 +2871,16 @@ class ChatViewModel private constructor(
                         onMessage = { message ->
                             if (runRegistry.isActive(owner)) {
                                 val candidate = durable + message
-                                persistTurn(candidate, interrupted = true)
+                                val startsToolCall = message.role == AgentRole.Assistant && message.toolCalls.isNotEmpty()
+                                if (startsToolCall || (transcriptSaved && message.role != AgentRole.Context)) {
+                                    persistTurn(candidate, interrupted = true, workspaceIdIfUnbound = workspaceIdToAdopt)
+                                    workspaceIdToAdopt = null
+                                    transcriptSaved = true
+                                    acceptedPersisted = true
+                                } else {
+                                    transcriptSaved = saveTranscript(candidate, interrupted = true)
+                                    acceptedPersisted = acceptedPersisted || transcriptSaved
+                                }
                                 durable += message
                                 activeMessages = durable.toList()
                                 streamPreview.setLength(0)
@@ -2976,7 +2955,8 @@ class ChatViewModel private constructor(
                 val result = runUntilIdle()
                 if (runRegistry.isActive(owner)) {
                     owner.runtimeContext?.finishStart()
-                    finish(result, durable, snapshot.config)
+                    finish(result, durable, snapshot.config, workspaceIdToAdopt)
+                    acceptedPersisted = true
                     if (!starterOpening && titleEligible && result.stopReason == AgentStopReason.Completed &&
                         owner.value.error == null) {
                         val firstUser = durable.firstOrNull {
@@ -3045,7 +3025,7 @@ class ChatViewModel private constructor(
                     // The model refused this effort. Offer the way down instead of a
                     // dead end, and keep the prompt so the user never retypes it.
                     releaseTurn()
-                    stableFailure(durable, UNSUPPORTED_REASONING_ERROR, null,
+                    stableFailure(durable, transcriptSaved, UNSUPPORTED_REASONING_ERROR, null,
                         UnsupportedReasoningNotice(snapshot.config.id, requested, recommended,
                             ALL_REASONING_LEVELS.filter { it != requested && it != recommended }))
                     return@launchRun
@@ -3064,15 +3044,15 @@ class ChatViewModel private constructor(
                     ChatErrorAction.OpenSettings
                 } else ChatErrorAction.RetryTurn
                 releaseTurn()
-                stableFailure(durable, message, action)
+                stableFailure(durable, transcriptSaved, message, action)
             } catch (e: Exception) {
                 Log.w("RivetChat", "agent turn failed: ${e.javaClass.simpleName}")
                 releaseTurn()
-                stableFailure(durable,
+                stableFailure(durable, transcriptSaved,
                     "Rivet couldn't finish this request. Completed project changes remain safe.",
                     ChatErrorAction.RetryTurn)
             } finally {
-                runBrowser.endAgentRun()
+                turnSupport("browser cleanup") { runBrowser?.endAgentRun() }
                 browserLease.clear()
                 approvals.cancelSession(sessionId)
                 withContext(NonCancellable) {
@@ -3086,7 +3066,7 @@ class ChatViewModel private constructor(
                     activeSupervisor = null
                 }
                 try {
-                    when (val outcome = owner.checkpointGate.finishTurnCheckpoint()) {
+                    when (val outcome = checkpoints?.finishTurnCheckpoint()) {
                             is TurnCheckpointOutcome.Finished -> {
                                 if (outcome.hasChanges && runRegistry.isActive(owner)) {
                                     val record = runtime.latestCheckpoint()
@@ -3106,7 +3086,7 @@ class ChatViewModel private constructor(
                                     if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
                                 }
                             }
-                            TurnCheckpointOutcome.None -> Unit
+                            TurnCheckpointOutcome.None, null -> Unit
                         }
                 } catch (e: CancellationException) {
                     throw e
@@ -3133,23 +3113,26 @@ class ChatViewModel private constructor(
                 }
                 throw e
             } catch (e: Throwable) {
-                Log.w("RivetChat", "agent setup failed: ${e.javaClass.simpleName}")
+                Log.w("RivetChat", "agent turn failed: ${e.javaClass.name}: ${e.message}")
                 releaseTurn()
                 if (runRegistry.isActive(owner)) owner.update { it.copy(streaming = false, streamingText = "",
                     streamingReasoning = "",
                     activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
-                    error = "Rivet couldn't start this request. Check the project and try again.") }
+                    error = if (requestStarted) "Rivet couldn't finish this request. Try again."
+                    else "Rivet couldn't start this request. Try again.") }
             } finally {
                 releaseTurn()
                 owner.runtimeContext?.finishStart()
                 val cancelled = !currentCoroutineContext().isActive || userCancelled || pauseRequested
                 val accepted = acceptedUser
-                if (accepted != null && persistAcceptedOnExit && !acceptedPersisted) {
+                if (accepted != null && !acceptedPersisted) {
                     withContext(NonCancellable) { persistAcceptedTail(accepted, workspaceIdToAdopt) }
                 }
                 withContext(NonCancellable) {
                     val live = currentSessionRun()
-                    if (cancelled || live?.phase == RunPhase.Running) owner.checkpointGate.abandonCheckpoints()
+                    if (cancelled || live?.phase == RunPhase.Running) {
+                        turnSupport("checkpoint cleanup") { owner.checkpoints?.abandonCheckpoints() }
+                    }
                     if (live != null && live.phase !in setOf(RunPhase.Done, RunPhase.Failed, RunPhase.Stopped, RunPhase.Paused)) {
                         try {
                             if (pauseRequested && live.phase == RunPhase.Running) {
@@ -3228,7 +3211,7 @@ class ChatViewModel private constructor(
                     }
                 }
             } catch (e: CancellationException) { throw e
-            } catch (_: Exception) {
+            } catch (_: Throwable) {
                 // The title request failed (timeout, network, provider). Leaving the marker
                 // pending lets the next successful turn try again instead of leaving this
                 // chat called "New session" for good. The title path only runs after a
@@ -3240,6 +3223,7 @@ class ChatViewModel private constructor(
 
     private suspend fun SessionRun.finish(
         result: AgentRunResult, durable: List<AgentMessage>, config: ProviderConfig,
+        workspaceIdIfUnbound: String? = null,
     ) {
         val error = when (result.stopReason) {
             AgentStopReason.Completed -> null
@@ -3252,17 +3236,21 @@ class ChatViewModel private constructor(
             AgentStopReason.ContextUnavailable -> contextUnavailableMessage()
             AgentStopReason.ContextTooSmall -> contextTooSmallMessage()
         }
-        when (result.stopReason) {
-            AgentStopReason.Completed -> finishRun(RunPhase.Done)
-            AgentStopReason.WorkspaceChanged, AgentStopReason.SessionLimit,
-            AgentStopReason.CheckpointUnavailable, AgentStopReason.ContextUnavailable,
-            AgentStopReason.ContextTooSmall,
-            AgentStopReason.EmptyResponse ->
-                finishRun(RunPhase.Failed, error)
+        turnSupport("run completion") {
+            when (result.stopReason) {
+                AgentStopReason.Completed -> finishRun(RunPhase.Done)
+                AgentStopReason.WorkspaceChanged, AgentStopReason.SessionLimit,
+                AgentStopReason.CheckpointUnavailable, AgentStopReason.ContextUnavailable,
+                AgentStopReason.ContextTooSmall,
+                AgentStopReason.EmptyResponse ->
+                    finishRun(RunPhase.Failed, error)
+            }
         }
-        val persisted = durable
-        persistTurn(persisted, interrupted = false)
-        activeMessages = persisted
+        val transcriptSaved = turnSupport("final transcript save") {
+            persistTurn(durable, interrupted = false, workspaceIdIfUnbound = workspaceIdIfUnbound)
+            true
+        } == true
+        activeMessages = durable
         val progressNote = result.messages.lastOrNull {
             it.role == AgentRole.Assistant && it.text.isNotBlank() && it.toolCalls.isEmpty()
         }?.text?.take(200)
@@ -3271,10 +3259,12 @@ class ChatViewModel private constructor(
                 else "Stopped: $progressNote") } catch (e: CancellationException) { throw e } catch (_: Exception) { }
         }
         val renameRevision = titleRenameRevision
-        val history = sessions?.list()
+        val history = turnSupport("conversation list") { sessions?.list() }
         if (renameRevision == titleRenameRevision && history != null) publishHistory(history)
-        val usage = value.currentSessionId?.let { sessions?.usage(it) }
-        val visible = value.currentSessionId?.let { sessions?.recent(it) } ?: persisted
+        val usage = turnSupport("conversation usage") { value.currentSessionId?.let { sessions?.usage(it) } }
+        val visible = if (transcriptSaved) turnSupport("recent messages") {
+            value.currentSessionId?.let { sessions?.recent(it) }
+        } ?: durable.takeLast(100) else value.messages
         val errorAction = error?.let { ChatErrorAction.RetryTurn }
         val startedWallClock = value.turnStartedWallClock
         var completedDuration: Long? = null
@@ -3308,7 +3298,8 @@ class ChatViewModel private constructor(
                 currentSessionTitle = if (unchanged && history != null) history.firstOrNull {
                     it.id == state.currentSessionId }?.title ?: state.currentSessionTitle
                 else state.currentSessionTitle,
-                usage = usage, error = error,
+                usage = usage, error = error ?: if (transcriptSaved) null else
+                    "Rivet couldn't save this reply. Check available storage.",
                 errorAction = errorAction, activity = null,
                 interruptedTurn = false, runRecovery = state.runRecovery)
         }
@@ -3399,27 +3390,14 @@ class ChatViewModel private constructor(
         }
     }
 
-    private fun SessionRun.rollbackAcceptedUser(accepted: AgentMessage?) {
-        if (accepted == null) return
-        update { state ->
-            val index = state.messages.indexOfLast { it === accepted }
-            if (index < 0) return@update state
-            val updated = state.messages.toMutableList().apply { removeAt(index) }
-            state.copy(
-                messages = updated,
-                acceptedMessageCount = (state.acceptedMessageCount - 1L).coerceAtLeast(0L),
-            )
-        }
-    }
-
     /** A pre-persist failure still leaves the accepted bubble durable for the next launch. */
     private suspend fun SessionRun.persistAcceptedTail(accepted: AgentMessage, workspaceIdIfUnbound: String?) {
         val durable = if (activeMessages.lastOrNull() == accepted) activeMessages
             else activeMessages + accepted
         activeMessages = durable
-        try { persistTurn(durable, interrupted = true, workspaceIdIfUnbound = workspaceIdIfUnbound) }
-        catch (e: CancellationException) { throw e }
-        catch (_: Exception) { }
+        turnSupport("accepted prompt save") {
+            persistTurn(durable, interrupted = true, workspaceIdIfUnbound = workspaceIdIfUnbound)
+        }
         update { state ->
             if (state.messages.lastOrNull() == accepted) state
             else state.copy(messages = (state.messages + accepted).takeLast(100))
@@ -3449,7 +3427,7 @@ class ChatViewModel private constructor(
         } else sessionStore.save(messages, interrupted)
     }
 
-    private suspend fun SessionRun.stableFailure(durable: List<AgentMessage>, message: String,
+    private suspend fun SessionRun.stableFailure(durable: List<AgentMessage>, transcriptSaved: Boolean, message: String,
                                       action: ChatErrorAction? = null,
                                       reasoningNotice: UnsupportedReasoningNotice? = null) {
         val persistenceError = try {
@@ -3458,9 +3436,11 @@ class ChatViewModel private constructor(
         } catch (e: CancellationException) { throw e }
             catch (_: Exception) { true }
         activeMessages = durable
-        val visible = try { value.currentSessionId?.let { sessions?.recent(it) } ?: durable }
-            catch (e: CancellationException) { throw e }
-            catch (_: Exception) { durable.takeLast(100) }
+        // The session database can still contain a prefix if the initial save failed.
+        val recent = if (transcriptSaved) turnSupport("recent messages") {
+            value.currentSessionId?.let { sessions?.recent(it) }
+        } else null
+        val visible = recent ?: durable.takeLast(100)
         update {
             // The turn is over, so nothing is running: leaving these set shows "a command is
             // running" and disables the Retry button on the row that just appeared.
@@ -3474,14 +3454,9 @@ class ChatViewModel private constructor(
     }
 
     private suspend fun SessionRun.providerSnapshot(interruptedTurn: Boolean = false): ProviderRuntimeResult.Ready? {
-        val loaded = try { providerSource.load() }
-            catch (e: CancellationException) { throw e }
-            catch (_: Exception) {
-                return failBeforeStart(
-                    "Rivet couldn't load the model settings. Open Settings and try again.",
-                    interruptedTurn,
-                )
-            }
+        val loaded = turnSupport("model settings") { providerSource.load() }
+            ?: return failBeforeStart("Rivet couldn't load the model settings. Open Settings and try again.",
+                interruptedTurn)
         return when (val result = loaded) {
             is ProviderRuntimeResult.Ready -> {
                 activeProviderIsLocal = SpendStore.isLocal(result.config.baseUrl)

@@ -3,6 +3,7 @@ package com.kaiser.rivet.runtime
 import android.content.Context
 import android.content.Intent
 import android.os.Build
+import android.util.Log
 import com.kaiser.rivet.RivetApplication
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.RunPauseReason
@@ -430,9 +431,9 @@ class ManagedProcesses {
                 else appContext.startService(intent)
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: Exception) {
-                // On Android 12+, starting a foreground service while backgrounded may be rejected;
-                // the turn still runs in-process.
+            } catch (failure: Throwable) {
+                // The turn token still belongs to the in-process run if Android rejects promotion.
+                Log.w("RivetChat", "Turn notification dispatch failed: ${failure.javaClass.name}: ${failure.message}")
             }
         }
         return id

@@ -442,11 +442,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     onStageAttachments = chatViewModel::stageComposerAttachments,
                     onDropAttachment = { name -> chatViewModel.removeComposerAttachment(state.currentSessionId, name) },
                     onPickerUnavailable = chatViewModel::attachmentPickerUnavailable,
-                    phoneAvailable = providers.configs.any { it.id == providers.activeId && it.type != ProviderType.Local },
                     ready = state.ready && !state.projectLoading && !state.undoing &&
                         !state.recoveringProjectChanges,
-                    hasProject = state.projectName != null && projectBinding == ProjectBindingState.Matched,
-                    hasProvider = providers.configs.isNotEmpty(),
                     acceptedMessageCount = state.acceptedMessageCount,
                     commandAckCount = state.commandAckCount,
                     error = state.error, notice = state.notice, sessionId = state.currentSessionId,
@@ -1847,7 +1844,6 @@ internal fun isGoalCommand(text: String): Boolean = SlashCommands.builtIn(text) 
 @Composable
 private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: Long,
                      commandAckCount: Long = 0,
-                     hasProject: Boolean = true, hasProvider: Boolean = true,
                      error: String?, notice: String?, sessionId: String?,
                      sharedDraft: SharedDraft? = null,
                      attachments: List<ComposerAttachment>,
@@ -1855,7 +1851,6 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
                      onStageAttachments: (String?, List<android.net.Uri>, Boolean, File?) -> Unit,
                      onDropAttachment: (String) -> Unit,
                      onPickerUnavailable: () -> Unit,
-                     phoneAvailable: Boolean = false,
                      skills: List<Skill> = emptyList(),
                      onRequestSkills: suspend () -> Unit = {},
                      folderName: String?,
@@ -1904,15 +1899,13 @@ private fun InputBar(streaming: Boolean, ready: Boolean, acceptedMessageCount: L
     // exists. Plain text still needs a project and a provider; without a provider the
     // send is allowed so the view model can explain what to choose instead of the
     // button silently refusing the tap.
-    val builtInCommand = SlashCommands.builtIn(draft) != null
-    fun canSubmit(text: String, builtIn: Boolean): Boolean =
-        ready && !streaming && !importingAttachments && (text.isNotBlank() || attachments.isNotEmpty()) && pendingText == null &&
-            (builtIn || ((hasProject || sharedDraft != null || attachments.isNotEmpty() || phoneAvailable) && hasProvider) ||
-                !hasProvider)
-    val canSend = canSubmit(draft, builtInCommand)
+    fun canSubmit(text: String): Boolean =
+        ready && !streaming && !importingAttachments && (text.isNotBlank() || attachments.isNotEmpty()) &&
+            pendingText == null
+    val canSend = canSubmit(draft)
     val submit = {
         val latest = draftFor(drafts, sessionId)
-        val allowed = canSubmit(latest, SlashCommands.builtIn(latest) != null)
+        val allowed = canSubmit(latest)
         val text = if (allowed && attachments.isNotEmpty() && latest.isBlank()) "" else draftToSend(latest, allowed)
         if (text != null) {
             pendingText = latest
