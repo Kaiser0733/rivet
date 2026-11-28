@@ -1,3 +1,80 @@
+# Send setup and old conversations
+
+## Pre-provider census at 5ca61af3
+
+The owner's build at `45acc84c` and the requested parent have identical send-path code. The intervening commit changes launcher resources.
+
+| Exit or failure boundary | Condition |
+| --- | --- |
+| ChatScreen.kt:438–459, 2027 and ChatViewModel.kt:1119–1165 | The UI prevents submission while loading the conversation/project, undoing, recovering files, streaming, or importing an attachment. Ordinary local chat without a working folder can also be disabled by the composer predicate. The VM declines empty input, imports, a busy or unready owner, and the two-run limit (2091–2098). A finishing turn defers Send and drops the deferred submission if the view switches first (1122–1130). Built-in and unknown slash commands are handled locally. |
+| ChatViewModel.kt:1170–1211, 2105–2186 and 2193–2203 | Composer and run registration happen outside the setup fence. Inbox/attachment construction or an unchecked runtime failure can escape there. A concurrent or already queued owner can return, a local turn can be queued, and Stop can cancel setup. The second slot check can fail after optimistic acceptance. The local-provider probe catches load failures and falls back to the local queue. |
+| ChatViewModel.kt:2214–2223, RuntimeController.kt:912–919, ManagedProcesses.kt:411–438 and PersistentProcessService.kt:31–84 | The pool load catches ordinary exceptions. Foreground startup catches ordinary Android rejection, including background launch restrictions, inside ManagedProcesses. Errors in registration or service dispatch can escape into setup. Service creation/promotion runs separately on the main thread. Android can kill the process if a started foreground service misses its promotion deadline. |
+| ChatViewModel.kt:2224–2248 and CodingSessions.kt:115–125 | A pending tool-call tail forces transcript recovery. A failed load or a tail still awaiting results refuses the send. Failed storage reads, incomplete tool receipts, and interrupted prior runs can reach this path. |
+| ChatViewModel.kt:2250–2255, 3476–3498 and ProviderRuntimeSource.kt:72–105 | A missing or unusable provider configuration stops before dispatch. Settings reads can throw. A client construction failure also exits via the outer catch at 2530. |
+| ChatViewModel.kt:2256–2320 and ProjectBinding.kt:9–16 | A stored tree URI or SAF root stat can fail on a revoked, moved, or inaccessible tree. A non-null stored ID and a different viewed ID trigger mismatch. Both guards roll back the accepted bubble and skip its save. The local model capability guard does the same for a local model that cannot use project tools. Browser scope construction/binding happens before these checks and can throw. |
+| ChatViewModel.kt:2322–2349, 1672–1713 and 1754–1763 | Project instructions, observed path parsing, and skill discovery access SAF before dispatch. Run setup builds a journal, closes an interrupted run, recovers worker state, writes the new record, updates preferences/spend state, and registers run status. The initial journal write only catches Exception. The prior-run journal save is unguarded. JVM Errors, app-private storage errors and project-copy failures can escape through these sites. |
+| RuntimeController.kt:530–537, 938–943, WorkspaceMirror.kt:96–108, 441–473, 562–587, RunCheckpointStore.kt:67–95, 330 and RunCheckpointGate.kt:155–188, 588–598 | Run checkpoint startup opens the SAF mirror, recursively materializes and compares the selected tree, then scans, hashes, snapshots Git and copies delta files. Missing grants, vanished files, duplicates, storage pressure, atomic-move failures, dirty worktrees, file-count limits and JVM Errors are possible. The existing gate absorbs Throwable from the backend and the history callback, so those failures alone cannot explain the reported setup banner. Gate construction and the surrounding run and turn initialization are outside its backend fence. |
+| ChatViewModel.kt:2350–2530 and ChatSupervisorServices.kt:133–149 | Project goal/memory, toolchain, provider catalog, granted-folder storage, browser tools, and worker recovery participate in setup. Ordinary SAF errors are handled in portions of this path. A thrown catalog/grant read or optional tool/supervisor setup failure can still reach the outer catch. |
+| ChatViewModel.kt:2532–2587 | The title claim catches Exception only. Archive-tail reads, recalls, secret reads and the storage-cap estimate can throw. Recall can make its own provider request or satisfy a supported recall locally. Failed storage-pressure compaction returns before the main request. |
+| ChatViewModel.kt:2588–2645 and CodingSessions.kt:132–173 | Initial transcript persistence can fail from a size limit, stale or invalid event prefix, a pending tool call, a competing workspace bind, or SQLite/I/O failure. The cap path erases the optimistic row. Other save failures refuse dispatch and only attempt to keep the prompt in cleanup. Run history refresh, state publication and undo initialization also precede dispatch. |
+| ChatViewModel.kt:2655–2674, 2805–2807, 2839–2905 and AgentLoop.kt:197–248 | Browser run entry, per-step project refresh, context event validation and persistence, compaction and request materialization still precede the first stream. Optional context can stop the loop at a storage or context limit. Local models also have a strict context capacity. Spend caps can pause before a request and cancellation can stop at suspension points. |
+| ChatViewModel.kt:2997–3186, 2105–2135 and 3191–3237 | Exceptions in the inner loop enter its specialized failure handlers. Other Throwables enter the setup banner at 3141. The outer launch fence catches cleanup failures after the inner finally. Title generation starts after the reply in a separate coroutine, where an Error can escape the title-only Exception handler. |
+
+## Reproduced failures
+
+### First send in an existing project
+
+The exact throwable on the owner's phone is still unknown. The banner shows that control reached the outer setup catch. The mirror and checkpoint backend are already inside a Throwable fence at this base, so a failure isolated to those operations cannot produce that banner.
+
+One reproduced path goes through the same SAF tree as the mirror and escapes through a separate read. Reading project AGENTS.md in `ChatViewModel.kt:2329` reaches `ProjectInstructions.kt:52` and `SafWorkspace.kt:95,606–616`. Those calls preserve JVM Errors. The parent turns that escape into the reported setup banner before constructing the main request. The integration test reopens existing SQLite data and a retained document tree. Its injected SAF Error models a failure at the app's read boundary. It makes the instruction read throw an Error, creates a directory with 5,001 entries so the real mirror hits the SAF listing limit, and forces a checkpoint backend Error. The mirror limit comes from `SafWorkspace.kt:519–524` through `WorkspaceMirror.kt:562–587`. The provider receives the original prompt and the reply is saved when all three failures occur on one turn.
+
+Another reachable refusal has a concrete storage reproducer. `ChatViewModel.kt:1680` writes a recovered run's stop record before starting a new run. `RunJournal.kt:223–229` must write the app-private record first. A file occupying its expected directory makes `DirectoryRunStorage` throw an IOException at `RunJournal.kt:182`. A successful earlier read of the recovered run does not prepare the later write or guarantee available storage, so continuing an existing project could hit the setup catch before dispatch.
+
+Foreground-service startup also registers the turn token before entering the Android service call at `ManagedProcesses.kt:411–438`. An Error in dispatch previously escaped and left the caller without the token to release. The change preserves the token and lets the in-process turn continue.
+
+### Old bound conversations
+
+- An old non-null binding can outlive its document root. With a valid recorded URI and a moved or unavailable tree, `ChatViewModel.kt:2258–2307` fails SAF access, removes the accepted row, and skips persistence. Persisting an Android URI grant does not keep the underlying document in place. The regression test creates the bound conversation while the grant works, removes the provider's old root, then starts a new VM against the existing database. The old conversation now sends in text mode and keeps its binding. [Android Storage Access Framework documentation](https://developer.android.com/training/data-storage/shared/documents-files#persist-permissions)
+- Different encodings of the same tree document ID previously compared as different strings at `ProjectBinding.kt:14–15`. `SafWorkspace.kt:35–37` requires an exact persisted grant. A re-picked grant can therefore be usable through the viewed URI even when the stored spelling fails validation. The regression uses a non-null historical binding and a newly granted spelling for the same authority and decoded document ID. A different authority or document ID remains a different project. Folder display names carry no identity.
+- `ChatViewModel.kt:3880–3896` took its active-owner decision before suspending for visible messages, usage, and turn durations. Reopening the selected session could save and publish an old result after Send accepted a new user message. A deterministic test pauses the reload with that old page in hand, accepts Send, then resumes the load while provider setup is held. The reload now checks for the live owner immediately before publishing.
+- `ChatViewModel.kt:2589–2610` refused on the initial transcript write and explicitly removed the row on a size exception. The later failure path at 3452–3472 could also replace the visible transcript with an older SQLite page. A regression uses a SQLite trigger to fail the initial insert and removes it when the request reaches the provider. The response save retries the full prefix and leaves the complete transcript.
+- The parent already addressed a NULL workspace binding. These reproduced old-chat paths also occur with a stored binding or with a transcript that is being loaded. A true mismatch is checked before acceptance, so the error is shown and the composer retains its draft.
+
+Android schedules service creation and promotion separately from the coroutine. The in-process fault tests cover synchronous service dispatch. Platform-level promotion deadlines require Android runtime verification. [Android foreground service troubleshooting](https://developer.android.com/develop/background-work/services/fgs/troubleshooting#foreground-service-exceptions)
+
+## Changes
+
+- `a354c848` makes foreground dispatch, project and browser preparation, journal and checkpoint setup, context enrichment, and transcript writes degrade independently in `ChatViewModel.kt`. The final catch logs the throwable class and message. A failed initial save keeps the prompt in memory and retries the full transcript when the reply arrives. Titling remains best effort. `ManagedProcesses.kt` returns the in-process token even if Android service dispatch throws.
+- The same commit resolves equivalent SAF grants in `WorkspaceSelection.kt` and `ProjectBinding.kt`. `TurnRunContext.kt` and `RuntimeController.kt` route worktree tools through the resolved grant for that turn. `ChatScreen.kt` allows ordinary text submission when project tools are unavailable. The test fixtures are in `ChatViewModelTest.kt` and `TestDocumentsProvider.kt`.
+- `8f3c827a` checks for the live owner after the database and SAF reads in `ChatViewModel.kt`, preserves the live transcript, and avoids recovery writes against an already running conversation. `ChatViewModelTest.kt` controls the reload and provider continuations to prove the ordering.
+- `719c2637` checks for the exact user prompt in the provider request. A successful retry of the optional instruction read can add a context message with the same provider wire role.
+
+## JiTTests
+
+All methods below are in `ChatViewModelTest`. The parent run compiled the application from `5ca61af3` and used the regression test sources against those classes.
+
+| Test | Failure on `5ca61af3` | Branch assertion |
+| --- | --- | --- |
+| `upgradedProjectFirstSendSurvivesSafSetupMirrorAndCheckpointFailures` | The SAF read surfaced the reported setup banner. | The actual mirror returned `materialize_failed`, the checkpoint backend threw a `LinkageError`, and the provider received `hey`. SQLite held the reply and the other chat's original transcript. |
+| `continuingAnUpdatedProjectSurvivesFailureToCloseItsPreviousRunJournal` | The journal write surfaced the setup banner. | The provider received the new request, and the reply was saved despite the unusable journal directory. |
+| `foregroundServiceDispatchErrorStillReturnsAReleasableTurnToken` | The dispatch `LinkageError` escaped. | The caller received and released the registered token. |
+| `repickedGrantForTheSameDocumentTreeStillSendsFromAnOldBoundConversation` | The exact grant-string check reported lost access. | The request used the equivalent granted tree and saved the reply in the original session. |
+| `oldBoundConversationStillSendsWhenItsFolderWasMoved` | The old root caused refusal and prompt rollback. | The request continued without project files and kept the original stored binding. |
+| `reopeningTheSelectedConversationCannotPublishAnOlderTranscriptOverSend` | The paused reload published the old page over the accepted row. | The new row stayed visible during the reload. The prompt and reply were each saved once. |
+| `initialSqliteWriteFailureStillSendsAndPersistsTheReplyWhenStorageRecovers` | The failed initial insert refused the turn. | The provider received the prompt, and the later save included the prompt, reply, and existing history. |
+| `legacyConversationSendsAndAdoptsTheSelectedProjectWhenSaved` | A genuine mismatch returned success from Send and then rolled back its accepted row. | The mismatched Send declined before acceptance and reported the binding error. The unbound case still sent and adopted the project. |
+
+## Local verification
+
+- JiTTests across the two revisions using the final test source. **8 failed on `5ca61af3` for the reasons listed above. 8 passed on `fix/send-root`.**
+- **1,930 distinct app JVM tests passed** using the cached Kotlin compiler and direct JUnit/Robolectric. `ChatViewModelTest` finished at **82 passed, 0 failed**. The other 323 suites ran 1,848 tests. The first invocation passed 1,805. Its 43 failures came from absent Gradle Android test configuration, a missing Espresso matcher dependency, and the updater test's working directory. The retry included all affected suites with the cached Android manifest and resources, Hamcrest Library 1.3, and the app working directory. **51 passed, 0 failed** on that retry, including all 43 initial failures.
+- **100 Python checks passed** with `python3 -m unittest discover -s scripts -p 'test_*.py'`. The terminal emulator's **2 ByteQueue JVM tests** and **1 native process-owner test** passed. `git diff --check` passed.
+- Gradle's `testDebugUnitTest` stopped before running tests with `Could not receive a message from the daemon`, including a retry with one worker, a smaller heap, and instrumentation disabled. Direct compilation and JUnit supplied the local results above. CI is pending.
+- No device was connected. Updating the installed app on the owner's phone, identifying its exact throwable, and verifying Android foreground-service deadlines remain outside these results. In-memory transcript retention covers a failed write while the session is live. Durability still requires writable conversation storage.
+
+<details>
+<summary>Previously recorded work at the base revision</summary>
+
 # Crash-on-send and browser memory
 
 Branch `fix/crash-cap` starts at the shipped head `2d871befdc28c97449a716024daed97f830ed7a4`. Line numbers in the cause paragraphs refer to that revision.
@@ -858,3 +935,5 @@ function, and parameter. This changes no recovery behavior; the existing
 No model-side rate-limit or stream-stall errors surfaced during this check.
 Time was dominated by the offline Gradle compile (about four minutes per
 run) and the manual JUnit harness; there were no unexplained stalls.
+
+</details>
