@@ -238,7 +238,7 @@ class ChatViewModelTest {
         assertTrue("viewing B must not stop A", back.streaming)
         assertEquals("project", back.projectName)
         assertEquals(tree.toString(), back.projectIdentity)
-        assertEquals(tree.toString(), RuntimeController(app).currentIdentity())
+        assertNull(RuntimeController(app).currentIdentity())
         assertEquals(tree.toString(), viewModel.browser.projectKey)
         releaseA.complete(Unit)
         awaitProject(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "A done" }
@@ -248,7 +248,7 @@ class ChatViewModelTest {
         assertTrue("A finishing must not stop B", bStill.streaming)
         assertEquals("Another project", bStill.projectName)
         assertEquals(other.toString(), bStill.projectIdentity)
-        assertEquals(other.toString(), RuntimeController(app).currentIdentity())
+        assertNull(RuntimeController(app).currentIdentity())
         assertEquals(other.toString(), viewModel.browser.projectKey)
         releaseB.complete(Unit)
         val finished = awaitProject(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "B done" }
@@ -926,7 +926,7 @@ class ChatViewModelTest {
         )), AgentResponse(text = "I didn't run the command"))))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = newChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(workspaceId = tree.toString()),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && it.projectIdentity == tree.toString() }
 
@@ -962,7 +962,7 @@ class ChatViewModelTest {
         documents.rejectWriteOnceFor = "b.txt"
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = newChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(workspaceId = tree.toString()),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") },
             { _, _ -> QueueProvider(ArrayDeque()) })
         await(viewModel) { it.ready && !it.projectLoading && it.projectIdentity == tree.toString() }
@@ -1021,7 +1021,7 @@ class ChatViewModelTest {
         )))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = newChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(workspaceId = tree.toString()),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && !it.projectLoading }
 
@@ -1407,6 +1407,8 @@ class ChatViewModelTest {
         store.save(previous, interrupted = false)
         var saveAttempts = 0
         val persistence = object : AgentSessionPersistence by store {
+            override suspend fun load() = store.load().copy(workspaceId = tree.toString())
+
             override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) {
                 saveAttempts++
                 store.save(messages, interrupted)
@@ -1505,7 +1507,7 @@ class ChatViewModelTest {
         )))
         val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
             baseUrl = "https://example.invalid/v1", model = "test-model")
-        val viewModel = newChatViewModel(app, RejectingPersistence(),
+        val viewModel = newChatViewModel(app, RejectingPersistence(workspaceId = tree.toString()),
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
         await(viewModel) { it.ready && !it.projectLoading && !it.recoveringProjectChanges }
 
@@ -3041,14 +3043,17 @@ class ChatViewModelTest {
     private suspend fun awaitProject(viewModel: ChatViewModel, predicate: (ChatUiState) -> Boolean): ChatUiState =
         withTimeout(15_000) { viewModel.uiState.first(predicate) }
 
-    private class RejectingPersistence(private val sessionId: String? = null) : AgentSessionPersistence {
+    private class RejectingPersistence(
+        private val sessionId: String? = null,
+        private val workspaceId: String? = null,
+    ) : AgentSessionPersistence {
         private var messages = emptyList<AgentMessage>()
         private var interrupted = false
         var saveAttempts = 0
         var markInterruptedCalls = 0
         var failOnAssistant: String? = null
 
-        override suspend fun load() = AgentSession(messages, interrupted, id = sessionId)
+        override suspend fun load() = AgentSession(messages, interrupted, id = sessionId, workspaceId = workspaceId)
 
         override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) {
             saveAttempts++
