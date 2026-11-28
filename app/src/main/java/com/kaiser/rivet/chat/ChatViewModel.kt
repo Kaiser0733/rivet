@@ -20,6 +20,7 @@ import com.kaiser.rivet.starter.starterSha256
 import com.kaiser.rivet.agent.AgentApprovalRequest
 import com.kaiser.rivet.agent.AgentLoop
 import com.kaiser.rivet.agent.AgentMessage
+import com.kaiser.rivet.agent.SecretRedactor
 import com.kaiser.rivet.agent.AgentRole
 import com.kaiser.rivet.agent.AgentRunResult
 import com.kaiser.rivet.agent.AgentStopReason
@@ -210,6 +211,7 @@ data class ChatUiState(
     val pendingApproval: AgentApprovalRequest? = null,
     val error: String? = null,
     val errorAction: ChatErrorAction? = null,
+    val errorDetails: String? = null,
     val unsupportedReasoning: UnsupportedReasoningNotice? = null,
     val sessions: List<CodingSessionHeader> = emptyList(),
     val currentSessionId: String? = null,
@@ -270,7 +272,7 @@ data class ChatUiState(
     val conversationActivity: Map<String, ConversationActivity> = emptyMap(),
 )
 
-enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn }
+enum class ChatErrorAction { OpenSettings, RetryProjectChanges, RetryTurn, ShowDetails }
 
 data class WorkerSheetState(
     val workerId: String? = null,
@@ -2127,12 +2129,15 @@ class ChatViewModel private constructor(
             } catch (e: CancellationException) {
                 throw e
             } catch (failure: Throwable) {
-                Log.w("RivetChat", "turn cleanup failed: ${failure.javaClass.simpleName}")
+                val details = requestFailureDetails(failure)
+                Log.w("RivetChat", "turn cleanup failed: $details")
                 update { state ->
                     state.copy(streaming = false, streamingText = "", streamingReasoning = "",
                         activity = null, pendingApproval = null, commandRunning = false,
                         toolLifecycle = emptyList(), interruptedTurn = true,
-                        error = state.error ?: "Rivet couldn't finish this request. Try again.")
+                        error = state.error ?: "Rivet couldn't finish this request. Try again.",
+                        errorAction = if (state.error == null) ChatErrorAction.ShowDetails else state.errorAction,
+                        errorDetails = if (state.error == null) details else state.errorDetails)
                 }
             } finally {
                 runtime.finishEnd()
@@ -2180,6 +2185,13 @@ class ChatViewModel private constructor(
         }
         // The model can be changed while a local turn runs. Resolve this turn's provider
         // before deciding whether it needs the local slot, so a cloud turn still starts.
+    private fun requestFailureDetails(failure: Throwable, apiKey: String? = null): String {
+        val type = failure.javaClass.name
+        val message = failure.message?.takeIf(String::isNotBlank) ?: return type
+        val credentials = runCatching { secrets.sensitiveValues().toList() }.getOrDefault(emptyList())
+        return "$type: ${SecretRedactor.redact(message, credentials + listOfNotNull(apiKey))}"
+    }
+
         val owner = this
         viewModelScope.launch {
             val loaded = try { providerSource.load() } catch (e: CancellationException) { throw e }
@@ -2198,6 +2210,7 @@ class ChatViewModel private constructor(
     }
 
     private inline fun <T> turnSupport(operation: String, work: () -> T): T? = try {
+            var apiKey: String? = null
         work()
     } catch (e: CancellationException) {
         throw e
@@ -2207,6 +2220,7 @@ class ChatViewModel private constructor(
     }
 
     private fun SessionRun.startTurnNow(trimmed: String, retryingInterrupted: Boolean,
+            apiKey = snapshot.apiKey
                          acceptedUser: AgentMessage? = null, starterOpening: Boolean = false,
                          notice: String? = null) {
         val owner = this
@@ -3079,6 +3093,7 @@ class ChatViewModel private constructor(
                                                 undoCheckpointId = row.checkpointId)
                                         }
                                     }
+                    errorAction = ChatErrorAction.ShowDetails, errorDetails = details,
                                 }
                             }
                             TurnCheckpointOutcome.Broken -> {
@@ -3113,7 +3128,8 @@ class ChatViewModel private constructor(
                 }
                 throw e
             } catch (e: Throwable) {
-                Log.w("RivetChat", "agent turn failed: ${e.javaClass.name}: ${e.message}")
+                val details = requestFailureDetails(e, apiKey)
+                Log.w("RivetChat", "agent turn failed: $details")
                 releaseTurn()
                 if (runRegistry.isActive(owner)) owner.update { it.copy(streaming = false, streamingText = "",
                     streamingReasoning = "",
@@ -3609,7 +3625,7 @@ class ChatViewModel private constructor(
     }
 
     fun clearError() {
-        selectedState.update { it.copy(error = null, errorAction = null, unsupportedReasoning = null) }
+        selectedState.update { it.copy(error = null, errorAction = null, errorDetails = null, unsupportedReasoning = null) }
     }
 
     // What the Undo row shows for one checkpoint: the regular files it touched, five named on

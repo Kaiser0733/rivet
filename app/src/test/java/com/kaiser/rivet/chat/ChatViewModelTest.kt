@@ -365,6 +365,7 @@ class ChatViewModelTest {
     private suspend fun sendWithRevokedGrant(existingChat: Boolean, anotherSelectedFolder: Boolean = false) {
         app.deleteDatabase("coding-sessions.db")
         val authority = "com.kaiser.rivet.revoked-grant"
+        assertEquals("java.lang.IllegalStateException: Provider client could not be initialized", failed.errorDetails)
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
         projectDocuments(authority)
         val selection = WorkspaceSelection(app)

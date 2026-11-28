@@ -817,14 +817,15 @@ internal fun MessageList(state: ChatUiState, onDismissError: () -> Unit,
                                 ChatErrorAction.OpenSettings -> "Open Settings"
                                 ChatErrorAction.RetryProjectChanges -> "Try again"
                                 ChatErrorAction.RetryTurn -> "Retry"
-                                null -> null
+                                ChatErrorAction.ShowDetails, null -> null
                             },
                             when (state.errorAction) {
                                 ChatErrorAction.OpenSettings -> onOpenSettings
                                 ChatErrorAction.RetryProjectChanges -> onRetryProjectChanges
                                 ChatErrorAction.RetryTurn -> onRetryTurn
-                                null -> null
-                            }, blockedReason = commandBusyReason(state.commandRunning), onDiscard = onDiscardProjectChanges.takeIf {
+                                ChatErrorAction.ShowDetails, null -> null
+                            }, details = state.errorDetails.takeIf { state.errorAction == ChatErrorAction.ShowDetails },
+                            blockedReason = commandBusyReason(state.commandRunning), onDiscard = onDiscardProjectChanges.takeIf {
                                 state.errorAction == ChatErrorAction.RetryProjectChanges && !state.streaming &&
                                     !state.projectLoading && !state.recoveringProjectChanges && !state.undoing &&
                                     state.projectIdentity != null &&
@@ -1811,13 +1812,28 @@ private fun CopyTextButton(text: String, label: String) {
 
 @Composable
 private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?, onAction: (() -> Unit)?,
-                     onDiscard: (() -> Unit)? = null, blockedReason: String? = null) {
+                     onDiscard: (() -> Unit)? = null, blockedReason: String? = null, details: String? = null) {
+    var showDetails by remember(details) { mutableStateOf(false) }
+    if (showDetails && details != null) {
+        val context = LocalContext.current
+        AlertDialog(
+            onDismissRequest = { showDetails = false },
+            title = { Text("Request details") },
+            text = { Text(displaySafeText(details), Modifier.heightIn(max = 320.dp).verticalScroll(rememberScrollState())) },
+            confirmButton = { TextButton(onClick = { copyToClipboard(context, details) }) { Text("Copy") } },
+            dismissButton = { TextButton(onClick = { showDetails = false }) { Text("Close") } },
+        )
+    }
     Surface(color = MaterialTheme.colorScheme.errorContainer, shape = RoundedCornerShape(6.dp)) {
         Column(Modifier.padding(horizontal = 12.dp, vertical = 8.dp)) {
             // Since F1 the banner can carry the provider's own words, which are untrusted text
             // like any other: a bidi control inside them reorders the line around Rivet's own
             // sentence. Every other foreign string on screen goes through displaySafeText.
-            Text(displaySafeText(error), color = MaterialTheme.colorScheme.onErrorContainer,
+            Text(displaySafeText(error),
+                modifier = if (details == null) Modifier else Modifier.fillMaxWidth()
+                    .clickable(onClickLabel = "Show request details") { showDetails = true },
+                color = MaterialTheme.colorScheme.onErrorContainer,
+                if (details != null) TextButton(onClick = { showDetails = true }) { Text("Details") }
                 style = MaterialTheme.typography.bodyMedium)
             if (onDiscard != null) TextButton(onClick = onDiscard) { Text("Discard pending changes") }
             if (blockedReason != null) Text(blockedReason, style = MaterialTheme.typography.bodySmall,
