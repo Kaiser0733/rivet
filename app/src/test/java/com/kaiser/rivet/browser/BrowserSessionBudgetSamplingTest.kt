@@ -2,6 +2,7 @@ package com.kaiser.rivet.browser
 
 import android.app.ActivityManager
 import android.app.Application
+import android.content.Context
 import android.webkit.WebView
 import java.util.concurrent.atomic.AtomicInteger
 import java.util.concurrent.atomic.AtomicLong
@@ -37,10 +38,44 @@ class BrowserSessionBudgetSamplingTest {
         val dispatcher = UnconfinedTestDispatcher()
         scheduler = dispatcher.scheduler
         Dispatchers.setMain(dispatcher)
+        RuntimeEnvironment.getApplication().getSharedPreferences("browser_memory", Context.MODE_PRIVATE)
+            .edit().putInt("limit_mb", 250).commit()
     }
 
     @After fun tearDown() {
         Dispatchers.resetMain()
+    }
+
+    @Test fun newBrowserSessionsUseTheSavedLimitAndDefaultToTwoGigabytes() {
+        val app: Application = RuntimeEnvironment.getApplication()
+        setAvailableMemory(app, availableMb = 4096)
+        val preferences = app.getSharedPreferences("browser_memory", Context.MODE_PRIVATE)
+        preferences.edit().clear().commit()
+        val original = BrowserSession(app, models = null)
+        try {
+            original.userOpen()
+            original.refreshBudget(ownGrowthBytes = 250L * 1024 * 1024)
+            assertEquals(2048, original.state.value.capMb)
+            assertEquals(BrowserTier.Normal, original.state.value.tier)
+
+            assertTrue(preferences.edit().putInt("limit_mb", 250).commit())
+            val next = BrowserSession(app, models = null)
+            try {
+                next.refreshBudget(ownGrowthBytes = 250L * 1024 * 1024)
+                assertEquals(250, next.state.value.capMb)
+                assertEquals(BrowserTier.NoRenderer, next.state.value.tier)
+                original.refreshBudget()
+                assertEquals(2048, original.state.value.capMb)
+            } finally {
+                next.endSession()
+            }
+            original.endSession()
+            original.userOpen()
+            original.refreshBudget(ownGrowthBytes = 250L * 1024 * 1024)
+            assertEquals(250, original.state.value.capMb)
+        } finally {
+            original.endSession()
+        }
     }
 
     @Test fun onPageFinishedSamplesMemoryAndRaisesNoticeWithoutWaitingFiveSeconds() = runBlocking {
@@ -127,11 +162,11 @@ class BrowserSessionBudgetSamplingTest {
         session.endSession()
     }
 
-    private fun setAvailableMemory(app: Application) {
+    private fun setAvailableMemory(app: Application, availableMb: Long = 1024) {
         val manager = requireNotNull(app.getSystemService(ActivityManager::class.java))
         val info = ActivityManager.MemoryInfo().apply {
-            availMem = 1024L * 1024 * 1024
-            totalMem = 2048L * 1024 * 1024
+            availMem = availableMb * 1024 * 1024
+            totalMem = availMem + 1024L * 1024 * 1024
             threshold = 0L
             lowMemory = false
         }

@@ -85,6 +85,8 @@ import com.kaiser.rivet.agent.AutonomyMode
 import com.kaiser.rivet.agent.Skill
 import com.kaiser.rivet.agent.SkillCatalog
 import com.kaiser.rivet.agent.SpendCaps
+import com.kaiser.rivet.browser.BrowserMemoryLimit
+import com.kaiser.rivet.browser.BrowserMemorySettings
 import com.kaiser.rivet.provider.ProviderConfig
 import com.kaiser.rivet.provider.ProviderType
 import com.kaiser.rivet.ui.RivetOutlinedButton
@@ -100,7 +102,8 @@ import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.launch
 
 internal enum class SettingsSection {
-    Providers, Appearance, Agent, Phone, PhoneAddOn, Subagents, Memory, GitHub, GitHubConnect, Skills, Updates, About, Usage, EditMemory,
+    Providers, Appearance, Agent, Phone, PhoneAddOn, Subagents, Memory, GitHub, GitHubConnect, Skills,
+    Updates, About, Usage, EditMemory, BrowserMemory,
 }
 
 @Composable
@@ -138,6 +141,9 @@ fun SettingsScreen(
     val subagentState by viewModel.subagentPoolState.collectAsState()
     val subagentError by viewModel.subagentPoolError.collectAsState()
     val gitHubState by viewModel.gitHubState.collectAsState()
+    val context = LocalContext.current
+    val browserMemory = remember(context) { BrowserMemorySettings(context) }
+    var browserLimit by remember(browserMemory) { mutableStateOf(browserMemory.limit()) }
     var section by rememberSaveable { mutableStateOf<SettingsSection?>(null) }
     var selectedSkill by rememberSaveable { mutableStateOf<String?>(null) }
     val shownSkill = skillCatalog?.skills?.firstOrNull { it.name == selectedSkill }
@@ -202,6 +208,7 @@ fun SettingsScreen(
                             subagentSummary = subagentSummary(subagentState, state.configs),
                             skillSummary = skillCountSummary(skillCatalog),
                             memorySummary = if (hasProject) "${memoryLines.size} saved" else "No project",
+                            browserMemorySummary = browserLimit.label,
                             versionSummary = versionName,
                             onSelect = { section = it },
                             onSendFeedback = onSendFeedback,
@@ -225,6 +232,10 @@ fun SettingsScreen(
                         onThemeChange = onThemeChange,
                         appearanceError = appearanceError,
                     )
+                    SettingsSection.BrowserMemory -> BrowserMemoryDetail(browserLimit) { limit ->
+                        browserMemory.setLimit(limit)
+                        browserLimit = limit
+                    }
                     SettingsSection.Memory -> MemoryDetail(
                         lines = memoryLines,
                         hasProject = hasProject,
@@ -313,6 +324,7 @@ private fun SettingsTopBar(section: SettingsSection?, title: String?, onBack: ()
 internal fun SettingsSection.title(): String = when (this) {
     SettingsSection.Providers -> "Account & providers"
     SettingsSection.Appearance -> "Appearance"
+    SettingsSection.BrowserMemory -> "Browser memory"
     SettingsSection.Agent -> "Permissions & spending"
     SettingsSection.Phone -> "Phone access"
     SettingsSection.PhoneAddOn -> "Phone access add-on"
@@ -334,6 +346,7 @@ private fun SectionList(
     subagentSummary: String,
     skillSummary: String,
     memorySummary: String,
+    browserMemorySummary: String,
     versionSummary: String,
     onSelect: (SettingsSection) -> Unit,
     onSendFeedback: () -> Unit,
@@ -358,12 +371,33 @@ private fun SectionList(
                     { onSelect(SettingsSection.Subagents) }, true)
                 SectionListItem(R.drawable.ic_appearance, SettingsSection.Appearance.title(), themeSummary,
                     { onSelect(SettingsSection.Appearance) }, true)
+                SectionListItem(R.drawable.ic_browser, SettingsSection.BrowserMemory.title(), browserMemorySummary,
+                    { onSelect(SettingsSection.BrowserMemory) }, true)
                 SectionListItem(R.drawable.ic_feedback, "Send feedback", "", onSendFeedback, true)
                 SectionListItem(R.drawable.ic_info, SettingsSection.About.title(), versionSummary,
                     { onSelect(SettingsSection.About) }, false)
             }
         },
     )
+}
+
+@Composable
+private fun BrowserMemoryDetail(selected: BrowserMemoryLimit, onSelect: (BrowserMemoryLimit) -> Unit) {
+    DetailScroll {
+        Text("Choose how much memory new browser sessions can use.", style = MaterialTheme.typography.bodyMedium)
+        Spacer(Modifier.height(12.dp))
+        BrowserMemoryLimit.entries.forEach { limit ->
+            Row(
+                Modifier.fillMaxWidth().heightIn(min = 56.dp)
+                    .selectable(selected == limit, role = Role.RadioButton, onClick = { onSelect(limit) })
+                    .padding(horizontal = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(limit.label, Modifier.weight(1f), style = MaterialTheme.typography.titleSmall)
+                RadioButton(selected = selected == limit, onClick = null)
+            }
+        }
+    }
 }
 
 @Composable

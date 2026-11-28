@@ -113,7 +113,7 @@ data class BrowserUiState(
     val chatBrowserWorking: Boolean = false,
     val visualScreenshot: String? = null,
     val tier: BrowserTier = BrowserTier.Normal,
-    val capMb: Int = 250,
+    val capMb: Int = 0,
     val modelLoaded: Boolean = false,
     val budgetLine: String = "",
     val domains: List<BrowserVisit> = emptyList(),
@@ -265,6 +265,8 @@ class BrowserSession(
     private val scope = CoroutineScope(SupervisorJob() + Dispatchers.Main.immediate)
     private val actionLock = Mutex()
     private val prefs = app.getSharedPreferences("browser", Context.MODE_PRIVATE)
+    private val memorySettings = BrowserMemorySettings(app)
+    private var sessionMemoryLimit: BrowserMemoryLimit? = null
     private val readerService = ReaderService()
     private val readerCache = ReaderCache()
     private val consoleBuffer = BrowserConsoleBuffer()
@@ -411,6 +413,7 @@ class BrowserSession(
     fun userOpen() = userOpen(activeUrl.ifBlank { _state.value.url })
 
     private fun userOpen(target: String) {
+        startMemoryBudget()
         idleJob?.cancel(); idleJob = null
         idleArming.onActivity()
         lastActivityAt = System.currentTimeMillis()
@@ -507,6 +510,7 @@ class BrowserSession(
 
     /** The visible Close control and browser_close: save, destroy, free, clear the card. */
     fun endSession() {
+        sessionMemoryLimit = null
         pendingRestart = null
         postLoadBudgetJob?.cancel()
         postLoadBudgetJob = null
@@ -555,6 +559,10 @@ class BrowserSession(
         else "$line$modes$valve"
     }
 
+    private fun startMemoryBudget() {
+        if (sessionMemoryLimit == null) sessionMemoryLimit = memorySettings.limit()
+    }
+
     fun refreshBudget(publish: Boolean = true, ownGrowthBytes: Long? = null) {
         if (ownGrowthBytes != null) lastOwnGrowthBytes = ownGrowthBytes.coerceAtLeast(0L)
         val manager = app.getSystemService(android.app.ActivityManager::class.java)
@@ -588,7 +596,7 @@ class BrowserSession(
         }
         val previousTier = budget.tier
         budget = BrowserGovernor.decide(BrowserMemorySignals(info.availMem, footprint,
-            observedBrowserBytes = observedBrowserBytes))
+            observedBrowserBytes = observedBrowserBytes), sessionMemoryLimit ?: memorySettings.limit())
         if (publish) {
             val visible = _state.value.visible
             val actions = if (_state.value.rendererVisible) {
@@ -716,6 +724,7 @@ class BrowserSession(
     suspend fun openText(rawUrl: String, newWindow: Boolean = false, projectPreview: Boolean = false): BrowserOpenResult =
         actionLock.withLock {
             val url = BrowserUrlPolicy.normalize(rawUrl)
+            startMemoryBudget()
             activeUrl = url
             elementRefs = emptyList()
             readerCache.navigate()
@@ -753,6 +762,7 @@ class BrowserSession(
             idleJob?.cancel(); idleJob = null
             idleArming.onActivity()
             val url = BrowserUrlPolicy.normalize(rawUrl)
+            startMemoryBudget()
             activeUrl = url
             pendingMainFrameError = null
             lastMainHttpStatus = null

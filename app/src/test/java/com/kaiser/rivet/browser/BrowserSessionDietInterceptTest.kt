@@ -35,6 +35,7 @@ class BrowserSessionDietInterceptTest {
     @Test fun strictDietNeverInterceptsMainFrameHtmlWithImageAcceptHeader() {
         val app: Application = RuntimeEnvironment.getApplication()
         setAvailableMemory(app)
+        BrowserMemorySettings(app).setLimit(BrowserMemoryLimit.Mb250)
         val session = BrowserSession(app, models = null)
         val webView = WebView(app)
         session.attach(webView)

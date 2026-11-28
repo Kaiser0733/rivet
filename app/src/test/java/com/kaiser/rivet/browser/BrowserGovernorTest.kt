@@ -19,8 +19,10 @@ class BrowserGovernorTest {
     }
 
     @Test fun capIsClampedAndLeavesTheWorkingMargin() {
-        val plenty = BrowserGovernor.decide(BrowserMemorySignals(2_000 * mb))
-        assertEquals(250 * mb, plenty.capBytes)
+        val plenty = BrowserGovernor.decide(BrowserMemorySignals(4_000 * mb))
+        assertEquals(2048 * mb, plenty.capBytes)
+        val limited = BrowserGovernor.decide(BrowserMemorySignals(4_000 * mb), BrowserMemoryLimit.Mb250)
+        assertEquals(250 * mb, limited.capBytes)
         val exact = BrowserGovernor.decide(BrowserMemorySignals(300 * mb + 150 * mb + 140 * mb))
         assertEquals(140 * mb, exact.capBytes)
         val none = BrowserGovernor.decide(BrowserMemorySignals(0))
@@ -31,7 +33,7 @@ class BrowserGovernorTest {
     @Test fun aLoadedModelReducesTheCapByFootprintAndSafety() {
         val noModel = BrowserGovernor.decide(BrowserMemorySignals(1_000 * mb))
         val model = BrowserGovernor.decide(BrowserMemorySignals(1_000 * mb, modelFootprintBytes = 400 * mb))
-        assertEquals(250 * mb, noModel.capBytes)
+        assertEquals(550 * mb, noModel.capBytes)
         assertEquals(150 * mb, model.capBytes)
         assertEquals(400 * mb + 300 * mb, model.reserveBytes)
         assertTrue(model.modelLoaded)
@@ -57,7 +59,7 @@ class BrowserGovernorTest {
 
     @Test fun leavingLoopbackRearmsTheSameBudgetDecision() {
         val web = BrowserGovernor.decide(BrowserMemorySignals(2_000 * mb,
-            observedBrowserBytes = 400 * mb, loopbackLive = false))
+            observedBrowserBytes = 400 * mb, loopbackLive = false), BrowserMemoryLimit.Mb250)
         assertEquals(BrowserTier.NoRenderer, web.tier)
     }
 

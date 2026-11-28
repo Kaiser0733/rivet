@@ -5,8 +5,7 @@ package com.kaiser.rivet.browser
  *
  * The renderer PSS is not visible to an in-app process (plan §1.1), so this object
  * never pretends to measure it. It computes the budget from device headroom and the
- * local model's measured own-process footprint, then decides behaviour. The memory
- * trace that proves the 250MB target is an adb acceptance item.
+ * local model's measured own-process footprint, then decides behaviour.
  */
 enum class BrowserTier {
     Normal,
@@ -35,6 +34,13 @@ data class BrowserMemorySignals(
 
 private const val BYTES_PER_MIB = 1024L * 1024L
 
+enum class BrowserMemoryLimit(val megabytes: Int, val label: String) {
+    Mb250(250, "250 MB"),
+    Gb2(2048, "2 GB");
+
+    val bytes: Long get() = megabytes * BYTES_PER_MIB
+}
+
 data class BrowserBudget(
     val capBytes: Long,
     val tier: BrowserTier,
@@ -59,12 +65,11 @@ data class BrowserTierInfo(
 )
 
 object BrowserGovernor {
-    const val MAX_BROWSER_BYTES = 250L * 1024 * 1024
     const val SAFETY_BYTES = 300L * 1024 * 1024
     const val WORKING_MARGIN_BYTES = 150L * 1024 * 1024
     const val MIB = BYTES_PER_MIB
 
-    fun decide(signals: BrowserMemorySignals): BrowserBudget {
+    fun decide(signals: BrowserMemorySignals, limit: BrowserMemoryLimit = BrowserMemoryLimit.Gb2): BrowserBudget {
         if (signals.loopbackLive) {
             return BrowserBudget(Long.MAX_VALUE, BrowserTier.Normal, 0L, 0L,
                 signals.modelFootprintBytes > 0L, 0L, loopbackExempt = true)
@@ -72,16 +77,16 @@ object BrowserGovernor {
         val model = signals.modelFootprintBytes.coerceAtLeast(0L)
         val reserve = model + SAFETY_BYTES
         val headroom = (signals.availableRamBytes.coerceAtLeast(0L) - reserve).coerceAtLeast(0L)
-        val cap = (headroom - WORKING_MARGIN_BYTES).coerceIn(0L, MAX_BROWSER_BYTES)
+        val cap = (headroom - WORKING_MARGIN_BYTES).coerceIn(0L, limit.bytes)
         val observed = signals.observedBrowserBytes.coerceAtLeast(0L)
-        val tier = moreSevere(tierFor(cap), observedTier(observed))
+        val tier = moreSevere(tierFor(cap), observedTier(observed, limit))
         return BrowserBudget(cap, tier, reserve, headroom, model > 0L, observed)
     }
 
-    fun observedTier(bytes: Long): BrowserTier = when {
-        bytes >= 250L * MIB -> BrowserTier.NoRenderer
-        bytes >= 200L * MIB -> BrowserTier.ReaderFirst
-        bytes >= 120L * MIB -> BrowserTier.StrictDiet
+    fun observedTier(bytes: Long, limit: BrowserMemoryLimit): BrowserTier = when {
+        bytes >= limit.bytes -> BrowserTier.NoRenderer
+        bytes >= limit.bytes * 80 / 100 -> BrowserTier.ReaderFirst
+        bytes >= limit.bytes * 48 / 100 -> BrowserTier.StrictDiet
         else -> BrowserTier.Normal
     }
 
@@ -117,18 +122,17 @@ object BrowserGovernor {
                 "Loopback preview: memory cap paused; full renderer, JS, and screenshots " +
                     "active (hang safety valve only)."
             tier == BrowserTier.Normal ->
-                "normal: >=200MB headroom and <120MB used. Full renderer, screenshots, " +
-                    "and diet mode active."
+                "normal: full renderer and screenshots available."
             tier == BrowserTier.StrictDiet ->
-                "strictdiet: 120-199MB cap/used. Heavy images replaced with 1x1 " +
+                "strictdiet: heavy images replaced with 1x1 " +
                     "placeholders (HTML/JS unaffected); screenshots allowed; inactive " +
                     "tabs may unload."
             tier == BrowserTier.ReaderFirst ->
-                "readerfirst: 60-119MB cap or >=200MB used. Renderer opens for one " +
+                "readerfirst: renderer opens for one " +
                     "interaction step then tears down; browser_shot blocked; prefer " +
                     "browser_read."
             else ->
-                "norenderer: <60MB cap or >=250MB used. Visual renderer and " +
+                "norenderer: visual renderer and " +
                     "screenshots blocked; browser_read/browser_find text mode only, or " +
                     "open in phone browser."
         }
