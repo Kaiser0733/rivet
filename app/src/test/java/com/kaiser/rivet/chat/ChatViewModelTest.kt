@@ -36,9 +36,12 @@ import com.kaiser.rivet.provider.TestResult
 import com.kaiser.rivet.agent.SpendCaps
 import com.kaiser.rivet.storage.SpendStore
 import com.kaiser.rivet.runtime.CheckpointFailure
+import com.kaiser.rivet.runtime.CheckpointBackend
 import com.kaiser.rivet.runtime.MirrorFailure
 import com.kaiser.rivet.runtime.PersistentProcessService
 import com.kaiser.rivet.runtime.RuntimeController
+import com.kaiser.rivet.runtime.RuntimeControllerCheckpointBackend
+import com.kaiser.rivet.runtime.RunCheckpointGate
 import com.kaiser.rivet.runtime.WorkspaceMirror
 import com.kaiser.rivet.storage.AgentSession
 import com.kaiser.rivet.storage.AgentSessionLimitException
@@ -312,6 +315,52 @@ class ChatViewModelTest {
         assertEquals(original.id, failed.currentSessionId)
         assertEquals(0, provider.requests.size)
         assertNull(failed.pendingApproval)
+    }
+
+    @Test fun newProjectConversationSendsEvenWhenTheRunCheckpointThrows() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        val authority = "com.kaiser.rivet.checkpoint-error-chat"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val info = ProviderInfo().apply {
+            this.authority = authority
+            exported = true
+            grantUriPermissions = true
+            readPermission = "android.permission.MANAGE_DOCUMENTS"
+            writePermission = "android.permission.MANAGE_DOCUMENTS"
+        }
+        Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
+        WorkspaceSelection(app).select(tree, Intent.FLAG_GRANT_READ_URI_PERMISSION or
+            Intent.FLAG_GRANT_WRITE_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION)
+        val registry = SessionRunRegistry(app)
+        val id = requireNotNull(registry.sessions.create(tree.toString()).id)
+        val attempted = CompletableDeferred<Unit>()
+        val backend = object : CheckpointBackend by RuntimeControllerCheckpointBackend(RuntimeController(app)) {
+            override suspend fun beginRunCheckpoint(
+                workspaceId: String, runId: String, sequence: Int, summary: String, allowDirty: Boolean,
+            ): String {
+                attempted.complete(Unit)
+                throw OutOfMemoryError("checkpoint allocation")
+            }
+        }
+        val config = ProviderConfig(id = "test", type = ProviderType.OpenAi, name = "Test",
+            baseUrl = "https://example.invalid/v1", model = "test-model")
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Answered"), AgentResponse(text = "A title"))))
+        val viewModel = ChatViewModel(app, registry.sessions, ProviderRuntimeSource {
+            registry.active.value?.let { owner ->
+                if (owner.checkpoints == null) owner.checkpoints = RunCheckpointGate(backend)
+            }
+            ProviderRuntimeResult.Ready(config, "key")
+        }, { _, _ -> provider }, runRegistry = registry).also { models += it }
+        await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == id }
+
+        assertTrue(viewModel.send("First prompt"))
+        val done = await(viewModel) { !it.streaming &&
+            (it.error != null || it.messages.any { message -> message.text == "Answered" }) }
+
+        assertTrue(attempted.isCompleted)
+        assertNull(done.error)
+        assertTrue(provider.requests.first().messages.any { it.text == "First prompt" })
+        assertTrue(registry.sessions.load(id).messages.any { it.text == "Answered" })
     }
 
     @Test fun reselectingTheExactBoundTreeAfterAccessLossKeepsTheConversation() = runBlocking {

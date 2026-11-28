@@ -2114,6 +2114,16 @@ class ChatViewModel private constructor(
         job = runRegistry.scope.launch(runtime, start = CoroutineStart.LAZY) {
             try {
                 body(this)
+            } catch (e: CancellationException) {
+                throw e
+            } catch (failure: Throwable) {
+                Log.w("RivetChat", "turn cleanup failed: ${failure.javaClass.simpleName}")
+                update { state ->
+                    state.copy(streaming = false, streamingText = "", streamingReasoning = "",
+                        activity = null, pendingApproval = null, commandRunning = false,
+                        toolLifecycle = emptyList(), interruptedTurn = true,
+                        error = state.error ?: "Rivet couldn't finish this request. Try again.")
+                }
             } finally {
                 runtime.finishEnd()
                 runtimeContext = null
@@ -2163,7 +2173,7 @@ class ChatViewModel private constructor(
         val owner = this
         viewModelScope.launch {
             val loaded = try { providerSource.load() } catch (e: CancellationException) { throw e }
-                catch (_: Exception) { null }
+                catch (_: Throwable) { null }
             val local = (loaded as? ProviderRuntimeResult.Ready)?.let {
                 activeProviderIsLocal = SpendStore.isLocal(it.config.baseUrl)
                 activeProviderIsLocal
@@ -2195,10 +2205,9 @@ class ChatViewModel private constructor(
             var acceptedPersisted = false
             var persistAcceptedOnExit = true
             fun releaseTurn() {
-                turnToken?.let {
-                    runtimeController.finishTurn(it)
-                    turnToken = null
-                }
+                val token = turnToken ?: return
+                turnToken = null
+                runtimeController.finishTurn(token)
             }
             try {
             val runPool = try {
@@ -3096,7 +3105,7 @@ class ChatViewModel private constructor(
                         }
                 } catch (e: CancellationException) {
                     throw e
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     if (runRegistry.isActive(owner) && !userCancelled) owner.update {
                         if (it.error == null) it.copy(notice = "Rivet couldn't prepare Undo for these changes. Check the project before continuing.") else it
                     }
@@ -3118,7 +3127,7 @@ class ChatViewModel private constructor(
                     }
                 }
                 throw e
-            } catch (e: Exception) {
+            } catch (e: Throwable) {
                 Log.w("RivetChat", "agent setup failed: ${e.javaClass.simpleName}")
                 releaseTurn()
                 if (runRegistry.isActive(owner)) owner.update { it.copy(streaming = false, streamingText = "",
@@ -3126,6 +3135,7 @@ class ChatViewModel private constructor(
                     activity = null, pendingApproval = null, interruptedTurn = wasInterrupted,
                     error = "Rivet couldn't start this request. Check the project and try again.") }
             } finally {
+                releaseTurn()
                 owner.runtimeContext?.finishStart()
                 val cancelled = !currentCoroutineContext().isActive || userCancelled || pauseRequested
                 val accepted = acceptedUser
@@ -3160,7 +3170,6 @@ class ChatViewModel private constructor(
                             }
                         } catch (_: Exception) { }
                     }
-                    releaseTurn()
                     if (runRegistry.isActive(owner) && owner.value.streaming) {
                         owner.update { it.copy(streaming = false, streamingText = "", streamingReasoning = "",
                             activity = null, pendingApproval = null,

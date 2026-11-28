@@ -6,12 +6,14 @@ import com.kaiser.rivet.subagent.ChangedFile
 import com.kaiser.rivet.subagent.FileChangeKind
 import com.kaiser.rivet.subagent.FileScopeRegistry
 import com.kaiser.rivet.workspace.WorkspacePath
+import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.async
 import kotlinx.coroutines.test.runTest
 import kotlinx.coroutines.yield
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNull
+import org.junit.Assert.assertSame
 import org.junit.Assert.assertTrue
 import org.junit.Test
 
@@ -27,7 +29,8 @@ class RunCheckpointGateTest {
     private class FakeCheckpointBackend : CheckpointBackend {
         var mirrorGeneration = 0
         var recordedPostGeneration: Int? = null
-        var throwOnBegin: MirrorFailure? = null
+        var throwOnBegin: Throwable? = null
+        var runCheckpointFailure: Throwable? = null
         var finishReturnsChanges = true
         var beginTurnCalls = 0
         var postCalls = 0
@@ -67,6 +70,7 @@ class RunCheckpointGateTest {
             summary: String,
             allowDirty: Boolean,
         ): String {
+            runCheckpointFailure?.let { throw it }
             val id = "run-cp-$sequence"
             runCheckpoints += RunCheckpointEntry(id, sequence, summary, allowDirty)
             return id
@@ -79,6 +83,58 @@ class RunCheckpointGateTest {
 
     private fun call(id: String, name: String = "write_file") = AgentToolCall(id, name, "{}")
     private fun ok(id: String, name: String = "write_file") = AgentToolResult(id, name, "ok")
+
+    @Test
+    fun firstRunCanContinueWithoutACheckpointAfterJvmErrors() = runTest {
+        for (failure in listOf(OutOfMemoryError(), StackOverflowError(), LinkageError())) {
+            val backend = FakeCheckpointBackend().apply { runCheckpointFailure = failure }
+            val gate = RunCheckpointGate(backend)
+
+            gate.startRun("ws-1", "run-1", "First message", resuming = false)
+            gate.beginTurn("ws-1", "run-1", "sess-1")
+            gate.finishRunCheckpoint()
+            assertTrue(backend.runCheckpoints.isEmpty())
+
+            backend.runCheckpointFailure = null
+            gate.startRun("ws-1", "run-2", "Next message", resuming = false)
+            gate.finishRunCheckpoint()
+            assertTrue(backend.runCheckpoints.single().finished)
+        }
+    }
+
+    @Test
+    fun checkpointCancellationStillPropagates() = runTest {
+        val cancelled = CancellationException("cancelled checkpoint")
+        val backend = FakeCheckpointBackend().apply { runCheckpointFailure = cancelled }
+        val gate = RunCheckpointGate(backend)
+
+        val result = runCatching { gate.startRun("ws-1", "run-1", "First message", resuming = false) }
+
+        assertSame(cancelled, result.exceptionOrNull())
+    }
+
+    @Test
+    fun checkpointRefreshErrorDoesNotStopTheFirstRun() = runTest {
+        val backend = FakeCheckpointBackend()
+        val gate = RunCheckpointGate(backend, onBoundaryChanged = { throw LinkageError() })
+
+        gate.startRun("ws-1", "run-1", "First message", resuming = false)
+        gate.finishRunCheckpoint()
+
+        assertTrue(backend.runCheckpoints.single().finished)
+    }
+
+    @Test
+    fun aTurnCheckpointErrorStillAllowsTheMutationAndDisablesUndo() = runTest {
+        val backend = FakeCheckpointBackend().apply { throwOnBegin = StackOverflowError() }
+        val gate = RunCheckpointGate(backend)
+        gate.beginTurn("ws-1", "run-1", "sess-1")
+
+        assertNull(gate.beforeMutation(call = call("c1")))
+        gate.afterMutation(call = call("c1"), result = ok("c1"))
+
+        assertEquals(TurnCheckpointOutcome.Broken, gate.finishTurnCheckpoint())
+    }
 
     @Test
     fun siblingMutationUpdatesPostManifestWithoutFalseUndoConflict() = runTest {

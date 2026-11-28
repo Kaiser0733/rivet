@@ -165,20 +165,16 @@ class RunCheckpointGate(
             } else {
                 runCheckpointSequence += 1
             }
-            runCheckpointId = try {
+            runCheckpointId = optionalCheckpoint {
                 backend.beginRunCheckpoint(
                     workspaceId,
                     runId,
                     runCheckpointSequence,
                     if (!resuming) "Before: ${title.take(120)}" else "Resumed run",
                 )
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-                null
             }
         }
-        onBoundaryChanged()
+        notifyBoundaryChanged()
     }
 
     fun beginTurn(workspaceId: String?, runId: String?, sessionId: String?) {
@@ -196,7 +192,7 @@ class RunCheckpointGate(
         val changed = writeLease.withLock {
             beginRunBoundaryLocked(summary, allowDirty)
         }
-        if (changed) onBoundaryChanged()
+        if (changed) notifyBoundaryChanged()
     }
 
     suspend fun finishRunCheckpoint(overrideWorkspaceId: String? = null) {
@@ -206,14 +202,9 @@ class RunCheckpointGate(
             targetWorkspace to current
         }
         if (id == null || ws == null) return
-        try {
-            backend.finishRunCheckpoint(ws, id)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-        }
+        optionalCheckpoint { backend.finishRunCheckpoint(ws, id) }
         writeLease.withLock { if (runCheckpointId == id) runCheckpointId = null }
-        onBoundaryChanged()
+        notifyBoundaryChanged()
     }
 
     suspend fun abandonCheckpoints() {
@@ -224,8 +215,8 @@ class RunCheckpointGate(
             }
         }
         if (ws == null) return
-        if (turn != null) try { backend.markCheckpointDesynced(ws, turn) } catch (_: Exception) { }
-        if (run != null) try { backend.markRunCheckpointDesynced(ws, run) } catch (_: Exception) { }
+        if (turn != null) optionalCheckpoint { backend.markCheckpointDesynced(ws, turn) }
+        if (run != null) optionalCheckpoint { backend.markRunCheckpointDesynced(ws, run) }
     }
 
     /**
@@ -268,7 +259,7 @@ class RunCheckpointGate(
                 boundaryRefreshPending = false
                 writeLease.unlock()
                 locked = false
-                if (refresh) onBoundaryChanged()
+                if (refresh) notifyBoundaryChanged()
                 return "workspace_unavailable"
             }
             try {
@@ -284,24 +275,16 @@ class RunCheckpointGate(
                 }
             } catch (e: CancellationException) {
                 throw e
-            } catch (_: MirrorFailure) {
+            } catch (_: Throwable) {
                 // Undo cannot be prepared from this state. Keep the workspace
                 // mutation available and report the missing Undo at turn end.
-                checkpointBroken = true
-            } catch (_: Exception) {
                 checkpointBroken = true
             }
 
             val currentCheckpointId = turnCheckpointId
-            val preManifest = if (currentCheckpointId != null) {
-                try {
-                    backend.readManifest(ws, currentCheckpointId, scanLive = false)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    null
-                }
-            } else null
+            val preManifest = currentCheckpointId?.let {
+                optionalCheckpoint { backend.readManifest(ws, it, scanLive = false) }
+            }
             activePreManifest = preManifest
 
             if (call.name != "run_command" && call.name != "create_directory") {
@@ -314,13 +297,7 @@ class RunCheckpointGate(
                         writerStates[writer]?.files?.containsKey(path) == true
                     }
                     val beforeBytes = if (!alreadyHasBytes) {
-                        try {
-                            backend.readFileBytes(ws, path, MAX_DIFF_SOURCE_BYTES)
-                        } catch (e: CancellationException) {
-                            throw e
-                        } catch (_: Exception) {
-                            null
-                        }
+                        optionalCheckpoint { backend.readFileBytes(ws, path, MAX_DIFF_SOURCE_BYTES) }
                     } else null
                     synchronized(attributionLock) {
                         val wState = writerStates.getOrPut(writer) { WriterState() }
@@ -364,10 +341,10 @@ class RunCheckpointGate(
                 } catch (e: CancellationException) {
                     checkpointBroken = true
                     withContext(NonCancellable) {
-                        try { backend.markCheckpointDesynced(ws, id) } catch (_: Exception) { }
+                        optionalCheckpoint { backend.markCheckpointDesynced(ws, id) }
                     }
                     throw e
-                } catch (_: Exception) {
+                } catch (_: Throwable) {
                     checkpointBroken = true
                     postFailed = true
                 }
@@ -375,13 +352,7 @@ class RunCheckpointGate(
             val preManifest = activePreManifest
             activePreManifest = null
             val postManifest = if (id != null && ws != null) {
-                try {
-                    backend.readManifest(ws, id, scanLive = postFailed)
-                } catch (e: CancellationException) {
-                    throw e
-                } catch (_: Exception) {
-                    null
-                }
+                optionalCheckpoint { backend.readManifest(ws, id, scanLive = postFailed) }
             } else null
 
             if (ws != null) {
@@ -393,7 +364,7 @@ class RunCheckpointGate(
             writeLease.unlock()
         }
         if (refresh) {
-            onBoundaryChanged()
+            notifyBoundaryChanged()
         }
     }
 
@@ -415,13 +386,7 @@ class RunCheckpointGate(
                 if ((oldEntry?.directory == true) && (newEntry == null || newEntry.directory)) continue
                 if ((newEntry?.directory == true) && (oldEntry == null || oldEntry.directory)) continue
                 val afterBytes = if (isFileTool && newEntry != null && !newEntry.directory) {
-                    try {
-                        backend.readFileBytes(ws, path, MAX_DIFF_SOURCE_BYTES)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        null
-                    }
+                    optionalCheckpoint { backend.readFileBytes(ws, path, MAX_DIFF_SOURCE_BYTES) }
                 } else null
                 synchronized(attributionLock) {
                     val wState = writerStates.getOrPut(writer) { WriterState() }
@@ -462,13 +427,7 @@ class RunCheckpointGate(
                 val deleted = call.name == "delete_path" ||
                     ((call.name == "move_path" || call.name == "rename_path") && index == 0 && targets.size > 1)
                 val afterBytes = if (deleted) null else {
-                    try {
-                        backend.readFileBytes(ws, path, MAX_DIFF_SOURCE_BYTES)
-                    } catch (e: CancellationException) {
-                        throw e
-                    } catch (_: Exception) {
-                        null
-                    }
+                    optionalCheckpoint { backend.readFileBytes(ws, path, MAX_DIFF_SOURCE_BYTES) }
                 }
                 val existsAfter = !deleted
                 synchronized(attributionLock) {
@@ -617,22 +576,26 @@ class RunCheckpointGate(
         val rId = runId ?: return false
         val old = runCheckpointId
         if (old != null) {
-            try {
-                backend.finishRunCheckpoint(ws, old)
-            } catch (e: CancellationException) {
-                throw e
-            } catch (_: Exception) {
-            }
+            optionalCheckpoint { backend.finishRunCheckpoint(ws, old) }
         }
         runCheckpointSequence += 1
-        runCheckpointId = try {
+        runCheckpointId = optionalCheckpoint {
             backend.beginRunCheckpoint(ws, rId, runCheckpointSequence, summary, allowDirty = allowDirty)
-        } catch (e: CancellationException) {
-            throw e
-        } catch (_: Exception) {
-            null
         }
         return true
+    }
+
+    private suspend fun notifyBoundaryChanged() {
+        optionalCheckpoint { onBoundaryChanged() }
+    }
+
+    private inline fun <T> optionalCheckpoint(block: () -> T): T? = try {
+        block()
+    } catch (e: CancellationException) {
+        throw e
+    } catch (_: Throwable) {
+        // Snapshotting is optional, including when the runtime or Git backend throws an Error.
+        null
     }
 
     companion object {
