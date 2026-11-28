@@ -432,6 +432,51 @@ class ChatViewModelTest {
         assertEquals(second.toString(), store.load(id).workspaceId)
     }
 
+    @Test fun optionalProjectContextStorageFailureStillSends() = runBlocking {
+        val authority = "com.kaiser.rivet.context-capacity"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        val documents = projectDocuments(authority)
+        val refreshed = "Refreshed project instructions"
+        val instructions = File.createTempFile("context", ".md", app.cacheDir)
+            .apply { writeText("Original project instructions") }
+        documents.nodes["instructions"] = TestDocumentsProvider.Node("AGENTS.md", "root", false, instructions)
+        WorkspaceSelection(app).select(tree, projectGrantFlags)
+        val reads = java.util.concurrent.atomic.AtomicInteger()
+        documents.beforeOpenDocument = { document, mode ->
+            if (document == "instructions" && mode == "r" && reads.incrementAndGet() == 2) {
+                instructions.writeText(refreshed)
+            }
+        }
+        var saved = AgentSession(workspaceId = tree.toString())
+        var storageFailed = false
+        val persistence = object : AgentSessionPersistence by AgentSessionStore(app) {
+            override suspend fun load() = saved
+            override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) {
+                saved = saved.copy(messages = messages, interrupted = interrupted)
+            }
+            override fun canSaveWithReserve(messages: List<AgentMessage>, reservedEncodedBytes: Int): Boolean {
+                if (messages.any { it.internalContext?.modelText()?.contains(refreshed) == true }) {
+                    storageFailed = true
+                    throw LinkageError("optional project context capacity")
+                }
+                return true
+            }
+        }
+        val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Hello!"))))
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val viewModel = newChatViewModel(app, persistence,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading }
+
+        assertTrue(viewModel.send("hey"))
+        val done = await(viewModel) { !it.streaming &&
+            (it.error != null || it.messages.lastOrNull()?.text == "Hello!") }
+        assertTrue("The refreshed instructions must reach the storage capacity check", storageFailed)
+        assertNull(done.error)
+        assertTrue(provider.requests.single().messages.any { it.text == "hey" })
+        assertEquals("Hello!", saved.messages.last().text)
+    }
+
     @Test fun newProjectConversationSendsEvenWhenTheRunCheckpointThrows() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         val authority = "com.kaiser.rivet.checkpoint-error-chat"

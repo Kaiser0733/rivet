@@ -70,6 +70,7 @@ class AgentLoop(
     private val writeMemoryBatch: (suspend (AgentToolCall, List<String>) -> AgentToolResult)? = null,
     private val resumeReceipts: Map<String, RunToolReceipt> = emptyMap(),
     private val journalTool: suspend (String, RunToolReceipt) -> Unit = { _, _ -> },
+    private val canPersistOptionalContext: (suspend (List<AgentMessage>) -> Boolean)? = null,
 ) {
     private data class MemoryProposal(val tool: PreparedAgentTool, val fact: String, val asksUser: Boolean)
 
@@ -204,10 +205,13 @@ class AgentLoop(
                 messages, AgentStopReason.ContextUnavailable, modelIterations, toolCalls,
                 mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted,
             )
-            if (!canPersistToolOutput(messages + events, 0)) return AgentRunResult(
-                messages, AgentStopReason.SessionLimit, modelIterations, toolCalls,
-                mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted,
-            )
+            val candidate = messages + events
+            if (canPersistOptionalContext != null) {
+                if (!canPersistOptionalContext(candidate)) return null
+            } else if (!canPersistToolOutput(candidate, 0)) {
+                return AgentRunResult(messages, AgentStopReason.SessionLimit, modelIterations, toolCalls,
+                    mutationsAttempted = mutationsAttempted, mutationsCompleted = mutationsCompleted)
+            }
             for (event in events) append(event)
             return null
         }

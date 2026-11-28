@@ -2301,7 +2301,7 @@ class ChatViewModel private constructor(
                     it.bindProject(workspaceId ?: current.currentSessionWorkspaceId ?: "unbound")
                 }
             }
-            val browserTools = runBrowser?.let(::BrowserTools)
+            val browserTools = turnSupport("browser tools") { runBrowser?.let(::BrowserTools) }
             val runtime = runtimeController
             val project = workspace?.let(::ProjectInstructions)
             val observedPaths = linkedMapOf(WorkspacePath.ROOT to true)
@@ -2368,11 +2368,13 @@ class ChatViewModel private constructor(
                 addAll(projectContext(messages))
                 if (gesture != null && workspaceId != null) add(SkillContext.invocation(gesture.skill, workspaceId))
             }
-            val phone = if (snapshot.config.type == ProviderType.Local) null else PhoneIntents(
-                app = getApplication<Application>(),
-                resolveFile = { rawPath -> resolvePhoneFile(rawPath, workspace) },
-                customTabOpener = { url -> runBrowser?.customTabOpener?.invoke(url) == true },
-            )
+            val phone = if (snapshot.config.type == ProviderType.Local) null else turnSupport("phone tools") {
+                PhoneIntents(
+                    app = getApplication<Application>(),
+                    resolveFile = { rawPath -> resolvePhoneFile(rawPath, workspace) },
+                    customTabOpener = { url -> runBrowser?.customTabOpener?.invoke(url) == true },
+                )
+            }
             val grantTrees = if (phone == null) emptyMap() else turnSupport("folder grants") {
                 grantedFolders.list().associate { it.id to it.treeUri }
             }.orEmpty()
@@ -2751,6 +2753,9 @@ class ChatViewModel private constructor(
                         ?: browserTools?.prepare(
                             call = call,
                             owner = RunCheckpointGate.COORDINATOR,
+                canPersistOptionalContext = { candidate ->
+                    turnSupport("context capacity") { canSaveTurn(candidate, 0) } == true
+                },
                             lease = browserLease,
                             visionSupport = { VisionCapability.assess(snapshot.config) },
                         )
@@ -2849,13 +2854,10 @@ class ChatViewModel private constructor(
                     if (project == null || workspaceId == null) emptyList() else {
                         turnSupport("project instructions") { project.load(observedPaths, omittedObservedPaths) }
                             ?.let { instructions = it }
-                        val events = (turnSupport("project context") { projectContext(candidate) }.orEmpty() +
+                        (turnSupport("project context") { projectContext(candidate) }.orEmpty() +
                             turnSupport("worker results") {
                                 activeSupervisor?.drainUndeliveredResults(workspaceId)
                             }.orEmpty()).filter { it.validatedContext() != null }
-                        if (events.isEmpty() || turnSupport("context capacity") {
-                                canSaveTurn(candidate + events, 0)
-                            } == false) emptyList() else events
                     }
                 },
             )
