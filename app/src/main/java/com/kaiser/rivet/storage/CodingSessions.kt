@@ -129,18 +129,18 @@ internal class CodingSessions(
     override suspend fun save(messages: List<AgentMessage>, interrupted: Boolean) =
         save(messages, interrupted, expectedSessionId = null)
 
+    suspend fun setWorkspace(id: String, workspaceId: String) = onDatabase { db ->
+        val values = ContentValues().apply { put("workspace_id", workspaceId) }
+        check(db.update("sessions", values, "id=?", arrayOf(id)) == 1) { "Unknown conversation" }
+    }
+
     suspend fun save(
         messages: List<AgentMessage>, interrupted: Boolean, expectedSessionId: String?,
-        workspaceIdIfUnbound: String? = null,
     ) =
         onDatabase { db ->
         val id = expectedSessionId ?: activeId(db)
         db.beginTransaction()
         try {
-            val boundWorkspaceId = header(db, id).workspaceId
-            check(workspaceIdIfUnbound == null || boundWorkspaceId == null || boundWorkspaceId == workspaceIdIfUnbound) {
-                "Session project binding changed"
-            }
             val count = db.rawQuery("SELECT COUNT(*) FROM active_events WHERE session_id=?", arrayOf(id)).use {
                 it.moveToFirst(); it.getInt(0)
             }
@@ -177,9 +177,9 @@ internal class CodingSessions(
                 })
             }
             trimCompactedHistory(db, id)
-            db.execSQL("UPDATE sessions SET interrupted=?, updated_at=?, workspace_id=COALESCE(workspace_id, ?) WHERE id=?",
+            db.execSQL("UPDATE sessions SET interrupted=?, updated_at=? WHERE id=?",
                 arrayOf(if (interrupted || hasPendingToolCall(messages.lastOrNull())) 1 else 0,
-                    System.currentTimeMillis(), workspaceIdIfUnbound, id))
+                    System.currentTimeMillis(), id))
             db.setTransactionSuccessful()
         } finally { db.endTransaction() }
     }
@@ -447,7 +447,6 @@ internal class CodingSessions(
     suspend fun delete(id: String): AgentSession = delete(id, liveSessionId = null)
 
     suspend fun delete(id: String, liveSessionId: String?): AgentSession = onDatabase { db ->
-        val workspaceId = WorkspaceSelection(context).currentIdentity()
         db.beginTransaction()
         try {
             db.delete("metadata", "key=?", arrayOf("auto_title-$id"))
@@ -457,7 +456,7 @@ internal class CodingSessions(
             val next = db.rawQuery("SELECT id FROM sessions ORDER BY updated_at DESC LIMIT 1", null).use {
                 if (it.moveToFirst()) it.getString(0) else null
             } ?: UUID.randomUUID().toString().also {
-                insertSession(db, it, "New session", workspaceId, false)
+                insertSession(db, it, "New session", null, false)
                 putMeta(db, "auto_title-$it", "eligible")
             }
             if (activeId(db) == id) setActive(db, next)

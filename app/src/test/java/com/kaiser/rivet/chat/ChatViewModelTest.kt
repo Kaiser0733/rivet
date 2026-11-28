@@ -46,6 +46,7 @@ import com.kaiser.rivet.runtime.PersistentProcessService
 import com.kaiser.rivet.runtime.RuntimeController
 import com.kaiser.rivet.runtime.RuntimeControllerCheckpointBackend
 import com.kaiser.rivet.runtime.RunCheckpointGate
+import com.kaiser.rivet.runtime.TurnRunContext
 import com.kaiser.rivet.runtime.WorkspaceMirror
 import com.kaiser.rivet.storage.AgentSession
 import com.kaiser.rivet.storage.AgentSessionLimitException
@@ -124,7 +125,7 @@ class ChatViewModelTest {
         Dispatchers.resetMain()
     }
 
-    @Test fun projectSelectionStartsBoundConversationAndHistoryKeepsItsProject() = runBlocking {
+    @Test fun eachConversationResumesItsSavedFolder() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         AgentSessionStore(app).clear()
         val authority = "com.kaiser.rivet.project-chat"
@@ -156,22 +157,22 @@ class ChatViewModelTest {
             it.currentSessionWorkspaceId == tree.toString() }
         val firstId = first.currentSessionId
         assertEquals(tree.toString(), first.projectIdentity)
-        assertEquals(tree.toString(), runtime.currentIdentity())
-        assertNull(runtime.commandBlocker())
+        assertNull(runtime.currentIdentity())
 
+        viewModel.newSession()
+        await(viewModel) { it.currentSessionId != firstId }
         viewModel.selectProject(other, flags)
         val second = await(viewModel) { it.projectName == "Another project" && !it.projectLoading &&
             it.currentSessionWorkspaceId == other.toString() }
         assertFalse(firstId == second.currentSessionId)
-        assertEquals(other.toString(), runtime.currentIdentity())
-        assertNull(runtime.commandBlocker())
+        assertNull(runtime.currentIdentity())
 
         viewModel.resumeSession(firstId!!)
         val resumed = await(viewModel) { it.currentSessionId == firstId }
         assertEquals("project", resumed.projectName)
         assertEquals(tree.toString(), resumed.currentSessionWorkspaceId)
         assertEquals(tree.toString(), resumed.projectIdentity)
-        assertEquals(tree.toString(), runtime.currentIdentity())
+        assertNull(runtime.currentIdentity())
     }
 
 
@@ -223,6 +224,8 @@ class ChatViewModelTest {
         viewModel.send("A")
         awaitProject(viewModel) { it.streaming }
 
+        viewModel.newSession()
+        awaitProject(viewModel) { it.currentSessionId != firstId }
         viewModel.selectProject(other, flags)
         val b = awaitProject(viewModel) { it.projectName == "Another project" && !it.projectLoading }
         assertFalse(firstId == b.currentSessionId)
@@ -281,6 +284,8 @@ class ChatViewModelTest {
         val firstBrowser = viewModel.browser
         assertEquals(tree.toString(), firstBrowser.projectKey)
 
+        viewModel.newSession()
+        awaitProject(viewModel) { it.currentSessionId != first.currentSessionId }
         viewModel.selectProject(other, flags)
         val second = awaitProject(viewModel) { it.projectName == "Another project" && !it.projectLoading }
         assertFalse("each project needs its own browser session", firstBrowser === viewModel.browser)
@@ -360,12 +365,12 @@ class ChatViewModelTest {
         val failed = await(viewModel) { !it.streaming && it.error != null }
         assertEquals("Rivet couldn't start this request. Try again.", failed.error)
         assertEquals("ShowDetails", failed.errorAction?.name)
+        assertEquals("java.lang.IllegalStateException: Provider client could not be initialized", failed.errorDetails)
     }
 
     private suspend fun sendWithRevokedGrant(existingChat: Boolean, anotherSelectedFolder: Boolean = false) {
         app.deleteDatabase("coding-sessions.db")
         val authority = "com.kaiser.rivet.revoked-grant"
-        assertEquals("java.lang.IllegalStateException: Provider client could not be initialized", failed.errorDetails)
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
         projectDocuments(authority)
         val selection = WorkspaceSelection(app)
@@ -430,6 +435,75 @@ class ChatViewModelTest {
         assertEquals(id, ready.currentSessionId)
         assertEquals(transcript, ready.messages)
         assertEquals(second.toString(), store.load(id).workspaceId)
+    }
+
+    @Test fun commandAvailabilityFollowsTheRunningChatWhenTheViewedChatHasNoFolder() = runBlocking {
+        val authority = "com.kaiser.rivet.background-chat-folder"
+        val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
+        projectDocuments(authority)
+        WorkspaceSelection(app).select(tree, projectGrantFlags)
+        app.getSharedPreferences("workspace", Context.MODE_PRIVATE).edit().clear().commit()
+        val runtime = RuntimeController(app)
+        assertEquals("workspace_unavailable", runtime.commandBlocker())
+        withContext(TurnRunContext("running-chat", tree.toString())) {
+            assertNull(runtime.commandBlocker())
+        }
+    }
+
+    @Test fun changingFolderDuringSendKeepsTheCurrentTurnAndMovesTheNextTurn() = runBlocking {
+        app.deleteDatabase("coding-sessions.db")
+        val firstAuthority = "com.kaiser.rivet.in-flight-original"
+        val secondAuthority = "com.kaiser.rivet.in-flight-replacement"
+        val first = DocumentsContract.buildTreeDocumentUri(firstAuthority, "root")
+        val second = DocumentsContract.buildTreeDocumentUri(secondAuthority, "root")
+        for ((authority, instruction) in listOf(firstAuthority to "First folder instructions",
+                secondAuthority to "Second folder instructions")) {
+            val file = File.createTempFile("instructions", ".md", app.cacheDir).apply { writeText(instruction) }
+            projectDocuments(authority).nodes["instructions"] =
+                TestDocumentsProvider.Node("AGENTS.md", "root", false, file)
+        }
+        WorkspaceSelection(app).select(first, projectGrantFlags)
+        val store = CodingSessions(app)
+        val id = requireNotNull(store.create(first.toString()).id)
+        store.rename(id, "Project chat")
+        val firstRequest = CompletableDeferred<AgentRequest>()
+        val secondRequest = CompletableDeferred<AgentRequest>()
+        val releaseFirst = CompletableDeferred<Unit>()
+        val provider = object : ProviderClient by QueueProvider(ArrayDeque()) {
+            override suspend fun streamAgent(
+                request: AgentRequest, onReasoning: (String) -> Unit, onDelta: (String) -> Unit,
+            ): AgentResponse {
+                if (firstRequest.complete(request)) {
+                    releaseFirst.await()
+                    return AgentResponse(text = "First reply")
+                }
+                secondRequest.complete(request)
+                return AgentResponse(text = "Second reply")
+            }
+        }
+        val config = ProviderConfig("test", ProviderType.OpenAi, "Test", "https://example.invalid/v1", "test-model")
+        val viewModel = newChatViewModel(app, store,
+            ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
+        await(viewModel) { it.ready && !it.projectLoading && it.currentSessionId == id }
+        assertTrue(viewModel.send("First prompt"))
+        val firstMessages = withTimeout(5_000) { firstRequest.await() }.messages
+        assertTrue(firstMessages.any { it.text.contains("First folder instructions") })
+
+        viewModel.selectProject(second, projectGrantFlags)
+        val rebound = await(viewModel) { !it.projectLoading && it.projectIdentity == second.toString() }
+        assertEquals(id, rebound.currentSessionId)
+        assertTrue(rebound.streaming)
+        releaseFirst.complete(Unit)
+        await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "First reply" }
+        assertTrue(viewModel.send("Second prompt"))
+        await(viewModel) { !it.streaming && it.messages.lastOrNull()?.text == "Second reply" }
+        val secondMessages = secondRequest.await().messages
+        assertTrue(secondMessages.any { it.text.contains("Second folder instructions") })
+        assertFalse(secondMessages.any { it.text.contains("First folder instructions") })
+        val saved = store.load(id)
+        assertEquals(second.toString(), saved.workspaceId)
+        assertEquals(listOf("First prompt", "First reply", "Second prompt", "Second reply"),
+            saved.messages.filter { it.internalContext == null }.map { it.text })
     }
 
     @Test fun optionalProjectContextStorageFailureStillSends() = runBlocking {
@@ -753,7 +827,7 @@ class ChatViewModelTest {
         return Robolectric.buildContentProvider(TestDocumentsProvider::class.java).create(info).get()
     }
 
-    @Test fun legacyConversationSendsAndAdoptsTheSelectedProjectWhenSaved() = runBlocking {
+    @Test fun unboundConversationSendsWithoutAdoptingAnotherFolder() = runBlocking {
         app.deleteDatabase("coding-sessions.db")
         val authority = "com.kaiser.rivet.legacy-chat"
         val tree = DocumentsContract.buildTreeDocumentUri(authority, "root")
@@ -777,7 +851,7 @@ class ChatViewModelTest {
         val provider = QueueProvider(ArrayDeque(listOf(AgentResponse(text = "Continued"))))
         val viewModel = newChatViewModel(app, sessions,
             ProviderRuntimeSource { ProviderRuntimeResult.Ready(config, "key") }, { _, _ -> provider })
-        val ready = await(viewModel) { it.ready && !it.projectLoading && it.projectIdentity == tree.toString() }
+        val ready = await(viewModel) { it.ready && !it.projectLoading }
         assertEquals(legacyId, ready.currentSessionId)
         assertNull(ready.currentSessionWorkspaceId)
 
@@ -788,23 +862,11 @@ class ChatViewModelTest {
         assertNull(done.error)
         assertTrue(provider.requests.single().messages.any { it.text == "New prompt" })
         assertTrue(done.messages.any { it.text == "New prompt" })
-        assertEquals(tree.toString(), done.currentSessionWorkspaceId)
+        assertNull(ready.projectIdentity)
+        assertNull(done.currentSessionWorkspaceId)
         val reloaded = CodingSessions(app).load(legacyId)
-        assertEquals(tree.toString(), reloaded.workspaceId)
+        assertNull(reloaded.workspaceId)
         assertTrue(reloaded.messages.any { it.text == "New prompt" })
-
-        viewModel.runRegistry.active.first { it == null }
-        val owner = requireNotNull(viewModel.runRegistry.lastRun)
-        val otherTree = DocumentsContract.buildTreeDocumentUri(authority, "other")
-        owner.update { it.copy(projectIdentity = otherTree.toString()) }
-        assertFalse(viewModel.send("Wrong project"))
-        val mismatch = await(viewModel) { !it.streaming && it.error == PROJECT_BINDING_MISMATCH_MESSAGE }
-
-        assertEquals(1, provider.requests.size)
-        assertFalse(mismatch.messages.any { it.text == "Wrong project" })
-        val unchanged = sessions.load(legacyId)
-        assertEquals(tree.toString(), unchanged.workspaceId)
-        assertFalse(unchanged.messages.any { it.text == "Wrong project" })
     }
 
     @Test fun reselectingTheExactBoundTreeAfterAccessLossKeepsTheConversation() = runBlocking {

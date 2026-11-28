@@ -15,7 +15,7 @@ class ProjectBindingTest {
     }
 
     @Test fun differentExactIdentityIsMismatchEvenIfDisplayNamesMightMatch() {
-        assertEquals(ProjectBindingState.Mismatch,
+        assertEquals(ProjectBindingState.AccessLost,
             projectBindingState("session", "content://provider/tree/one", "content://other/tree/one", false))
     }
 

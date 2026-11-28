@@ -9,6 +9,8 @@ import kotlinx.coroutines.currentCoroutineContext
 import kotlinx.coroutines.ensureActive
 import kotlinx.coroutines.sync.withLock
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.first
 import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.withContext
 import kotlinx.coroutines.suspendCancellableCoroutine
@@ -17,14 +19,15 @@ import java.net.URISyntaxException
 import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.coroutines.resume
 
-class WorkspaceSelection(context: Context) {
+class WorkspaceSelection(context: Context, private val viewedTree: StateFlow<String?>? = null) {
     private val persistence = AndroidGrantedFolders.permissionLock
     private val app = context.applicationContext
     private val preferences by lazy { app.getSharedPreferences("workspace", Context.MODE_PRIVATE) }
     private val resolver get() = app.contentResolver
 
     suspend fun restore(): Triple<SafWorkspace, WorkspacePath, WorkspacePath?>? = withContext(Dispatchers.IO) {
-        val stored = preferences.getString("tree", null) ?: return@withContext null
+        val stored = currentIdentity() ?: return@withContext null
+        if (viewedTree != null) return@withContext Triple(openTree(Uri.parse(stored)), WorkspacePath.ROOT, null)
         val path = try { WorkspacePath.parse(preferences.getString("directory", "") ?: "") }
             catch (_: WorkspaceFailure) { WorkspacePath.ROOT }
         val file = try { preferences.getString("file", null)?.let(WorkspacePath::parse) }
@@ -33,10 +36,14 @@ class WorkspaceSelection(context: Context) {
     }
 
     suspend fun currentIdentity(): String? = withContext(Dispatchers.IO) {
-        preferences.getString("tree", null)
+        if (viewedTree != null) viewedTree.value else preferences.getString("tree", null)
     }
 
     suspend fun awaitIdentityChange(expected: String) {
+        if (viewedTree != null) {
+            viewedTree.first { it != expected }
+            return
+        }
         suspendCancellableCoroutine { continuation ->
             val completed = AtomicBoolean(false)
             lateinit var listener: android.content.SharedPreferences.OnSharedPreferenceChangeListener
@@ -84,8 +91,8 @@ class WorkspaceSelection(context: Context) {
                     }
                     prepare?.invoke(candidate)
                     withContext(NonCancellable) {
-                        val previous = preferences.getString("tree", null)
-                        if (!preferences.edit().putString("tree", uri.toString()).putString("directory", "").remove("file").commit()) {
+                        if (viewedTree == null && !preferences.edit().putString("tree", uri.toString())
+                                .putString("directory", "").remove("file").commit()) {
                             throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
                         }
                         selected = true
@@ -127,17 +134,8 @@ class WorkspaceSelection(context: Context) {
         SafWorkspace(resolver, granted?.uri ?: uri)
     }
 
-    /** Show an already-granted project as the viewed project without taking or releasing a grant. */
-    suspend fun view(uri: Uri): SafWorkspace = withContext(Dispatchers.IO) {
-        val workspace = openTree(uri)
-        workspace.stat(WorkspacePath.ROOT)
-        if (!preferences.edit().putString("tree", workspace.tree.toString()).putString("directory", "").remove("file").commit()) {
-            throw WorkspaceFailure(WorkspaceFailure.Reason.PROVIDER)
-        }
-        workspace
-    }
-
     suspend fun rememberLocation(workspace: SafWorkspace, directory: WorkspacePath, file: WorkspacePath? = null) = withContext(Dispatchers.IO) {
+        if (viewedTree != null) return@withContext
         persistence.withLock {
             currentCoroutineContext().ensureActive()
             if (preferences.getString("tree", null) == workspace.tree.toString()) {

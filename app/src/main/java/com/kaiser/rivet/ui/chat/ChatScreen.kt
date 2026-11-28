@@ -174,7 +174,6 @@ import com.kaiser.rivet.chat.ChatErrorAction
 import com.kaiser.rivet.chat.ChatViewModel
 import com.kaiser.rivet.chat.ProjectBindingState
 import com.kaiser.rivet.chat.PROJECT_ACCESS_LOST_MESSAGE
-import com.kaiser.rivet.chat.PROJECT_BINDING_MISMATCH_MESSAGE
 import com.kaiser.rivet.chat.projectBindingState
 import com.kaiser.rivet.ui.FoldReveal
 import com.kaiser.rivet.ui.foldOutcomeProgress
@@ -201,7 +200,6 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
     val providers by providersViewModel.listState.collectAsState()
     val projectBinding = projectBindingState(state.currentSessionId, state.currentSessionWorkspaceId,
         state.projectIdentity, state.projectLoading)
-    val wrongProject = projectBinding == ProjectBindingState.Mismatch
     LaunchedEffect(state.ready, state.currentSessionId, state.projectIdentity, state.projectLoading, providers.activeId) {
         if (providers.activeId != null) chatViewModel.openPendingStarter()
     }
@@ -363,10 +361,8 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                 val setupNotice = when {
                     state.projectLoading -> "Opening your project…"
                     projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE
-                    wrongProject -> PROJECT_BINDING_MISMATCH_MESSAGE
                     state.projectError != null -> state.projectError
                     providers.configs.isEmpty() -> "Connect a model in Settings to start."
-                    state.projectName == null && !state.streaming -> "Choose a working folder to start."
                     else -> null
                 }
                 val emptyConversation = state.messages.isEmpty() && !state.streaming && state.error == null &&
@@ -442,8 +438,7 @@ fun ChatScreen(chatViewModel: ChatViewModel, providersViewModel: ProvidersViewMo
                     onStageAttachments = chatViewModel::stageComposerAttachments,
                     onDropAttachment = { name -> chatViewModel.removeComposerAttachment(state.currentSessionId, name) },
                     onPickerUnavailable = chatViewModel::attachmentPickerUnavailable,
-                    ready = state.ready && !state.projectLoading && !state.undoing &&
-                        !state.recoveringProjectChanges,
+                    ready = state.ready && !state.undoing && !state.recoveringProjectChanges,
                     acceptedMessageCount = state.acceptedMessageCount,
                     commandAckCount = state.commandAckCount,
                     error = state.error, notice = state.notice, sessionId = state.currentSessionId,
@@ -1833,12 +1828,12 @@ private fun ErrorRow(error: String, onDismiss: () -> Unit, actionLabel: String?,
                 modifier = if (details == null) Modifier else Modifier.fillMaxWidth()
                     .clickable(onClickLabel = "Show request details") { showDetails = true },
                 color = MaterialTheme.colorScheme.onErrorContainer,
-                if (details != null) TextButton(onClick = { showDetails = true }) { Text("Details") }
                 style = MaterialTheme.typography.bodyMedium)
             if (onDiscard != null) TextButton(onClick = onDiscard) { Text("Discard pending changes") }
             if (blockedReason != null) Text(blockedReason, style = MaterialTheme.typography.bodySmall,
                 color = MaterialTheme.colorScheme.onErrorContainer)
             Row {
+                if (details != null) TextButton(onClick = { showDetails = true }) { Text("Details") }
                 if (onAction != null && actionLabel != null)
                     TextButton(onClick = onAction, enabled = blockedReason == null) { Text(actionLabel) }
                 TextButton(onClick = onDismiss) { Text(stringResource(R.string.chat_error_dismiss)) }

@@ -12,7 +12,6 @@ import android.content.ActivityNotFoundException
 import android.content.Intent
 import android.net.Uri
 import android.provider.DocumentsContract
-import androidx.activity.compose.BackHandler
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.compose.foundation.clickable
@@ -39,7 +38,6 @@ import androidx.compose.runtime.Composable
 import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.collectAsState
 import androidx.compose.runtime.getValue
-import androidx.compose.runtime.mutableIntStateOf
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.saveable.rememberSaveable
 import androidx.compose.runtime.setValue
@@ -59,28 +57,18 @@ import kotlinx.coroutines.flow.first
 internal fun ProjectsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
     val state by viewModel.uiState.collectAsState()
     val context = LocalContext.current
-    val enabled = state.ready && !state.streaming && !state.projectLoading &&
+    val enabled = state.ready && !state.projectLoading &&
         !state.undoing && !state.recoveringProjectChanges
-    var pendingProject by rememberSaveable { mutableStateOf<String?>(null) }
-    var pendingFlags by rememberSaveable { mutableIntStateOf(0) }
     var opening by rememberSaveable { mutableStateOf(false) }
 
     fun openFolder(uri: Uri, flags: Int) {
         opening = true
         viewModel.selectProject(uri, flags)
     }
-    fun acceptFolder(uri: Uri, flags: Int) {
-        if (state.currentSessionWorkspaceId != uri.toString() && state.messages.isNotEmpty()) {
-            pendingProject = uri.toString()
-            pendingFlags = flags
-        } else {
-            openFolder(uri, flags)
-        }
-    }
     val picker = rememberLauncherForActivityResult(ActivityResultContracts.StartActivityForResult()) { result ->
         val uri = result.data?.data
         if (result.resultCode == Activity.RESULT_OK && uri != null) {
-            acceptFolder(uri, result.data?.flags ?: 0)
+            openFolder(uri, result.data?.flags ?: 0)
         }
     }
     fun chooseProject(initial: Uri? = null) {
@@ -98,7 +86,7 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
         if (permission?.isReadPermission == true) {
             val flags = Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION or
                 (if (permission.isWritePermission) Intent.FLAG_GRANT_WRITE_URI_PERMISSION else 0)
-            acceptFolder(uri, flags)
+            openFolder(uri, flags)
         } else {
             chooseProject(initial = uri)
         }
@@ -111,53 +99,37 @@ internal fun ProjectsScreen(viewModel: ChatViewModel, onBack: () -> Unit) {
             if (result.projectError == null && result.starterError == null) onBack()
         }
     }
-    BackHandler(enabled = pendingProject != null) { pendingProject = null }
     val recent = state.sessions.sortedByDescending { it.updatedAt }
         .mapNotNull { it.workspaceId }.distinct().filterNot { it == state.projectIdentity }
 
     Surface(Modifier.fillMaxSize()) {
         Column(Modifier.statusBarsPadding().navigationBarsPadding()) {
-            RivetPageHeader("Projects", onBack = {
-                if (pendingProject != null) pendingProject = null else onBack()
-            })
-            val pending = pendingProject
-            if (pending != null) {
-                Column(Modifier.padding(20.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Text("Start a new conversation?", style = MaterialTheme.typography.titleLarge)
-                    Text("This conversation is linked to another project. Start a new conversation for the folder you chose?")
-                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        TextButton(onClick = { pendingProject = null }) { Text("Cancel") }
-                        TextButton(enabled = enabled, onClick = {
-                            pendingProject = null
-                            openFolder(Uri.parse(pending), pendingFlags)
-                        }) { Text("Start new") }
-                    }
-                }
-            } else {
-                Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 10.dp)) {
-                    UtilityColumns(
-                        leading = {
-                            UtilityLead(R.drawable.ic_folder, state.projectName ?: "No folder selected",
-                                workspaceFolderPath(state.projectIdentity)) {
-                                state.projectError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
-                                if (state.projectLoading) Text("Opening folder…")
-                                RivetOutlinedButton(onClick = { chooseProject() }, enabled = enabled) {
-                                    Text("Open another folder")
-                                }
+            RivetPageHeader("Projects", onBack = onBack)
+            Column(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()).padding(horizontal = 20.dp, vertical = 10.dp)) {
+                UtilityColumns(
+                    leading = {
+                        UtilityLead(R.drawable.ic_folder, state.projectName ?: "No folder selected",
+                            workspaceFolderPath(state.projectIdentity ?: state.currentSessionWorkspaceId)) {
+                            state.projectError?.let { Text(it, color = MaterialTheme.colorScheme.error) }
+                            if (state.projectLoading) Text("Opening folder…")
+                            RivetOutlinedButton(onClick = {
+                                chooseProject(state.currentSessionWorkspaceId?.let(Uri::parse))
+                            }, enabled = enabled) {
+                                Text("Open another folder")
                             }
-                        },
-                        trailing = {
-                            if (recent.isNotEmpty()) {
-                                FolderHeading("Recent folders")
-                                recent.forEach { identity ->
-                                    val path = workspaceFolderPath(identity) ?: identity
-                                    FolderRow(path.trimEnd('/').substringAfterLast('/'), R.drawable.ic_files, enabled,
-                                        detail = path, onClick = { openRecent(identity) })
-                                }
+                        }
+                    },
+                    trailing = {
+                        if (recent.isNotEmpty()) {
+                            FolderHeading("Recent folders")
+                            recent.forEach { identity ->
+                                val path = workspaceFolderPath(identity) ?: identity
+                                FolderRow(path.trimEnd('/').substringAfterLast('/'), R.drawable.ic_files, enabled,
+                                    detail = path, onClick = { openRecent(identity) })
                             }
-                        },
-                    )
-                }
+                        }
+                    },
+                )
             }
         }
     }

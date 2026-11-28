@@ -79,8 +79,9 @@ class WorkspaceMirror(
     private val workspace: SafWorkspace,
     private val isSelected: suspend () -> Boolean,
 ) {
+    internal val workspaceIdentity = workspace.tree.toString()
     private val id = MessageDigest.getInstance("SHA-256")
-        .digest(workspace.tree.toString().toByteArray()).toHex()
+        .digest(workspaceIdentity.toByteArray()).toHex()
     private val base = File(context.filesDir, "runtime/workspaces/$id")
     private val current = File(base, "current")
     private val staging = File(base, "staging")

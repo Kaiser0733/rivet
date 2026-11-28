@@ -154,7 +154,7 @@ class RuntimeController(
         var refusal = "workspace_unavailable"
         val plan = operations.withLock {
             val active = activeMirror() ?: return@withLock null
-            val identity = requireNotNull(mirrorIdentity)
+            val identity = active.workspaceIdentity
             val readings = governor.readings()
             registry?.setActiveLimit(effectiveSlots(readings.thermalStatus))
             commandGate(timeoutMs, readings)?.let {
@@ -423,10 +423,10 @@ class RuntimeController(
         )
     }
 
-    internal suspend fun syncTerminal(identity: String): MirrorSyncResult? = operations.withLock {
-        if (mirrorIdentity != identity || selection.currentIdentity() != identity) return@withLock null
+    internal suspend fun syncTerminal(identity: String, turnOwned: Boolean = false): MirrorSyncResult? = operations.withLock {
+        if (!turnOwned && (mirrorIdentity != identity || selection.currentIdentity() != identity)) return@withLock null
         if (hasCommandIn(identity)) return@withLock MirrorSyncResult(MirrorSync.Conflict)
-        try { mirror?.sync() } catch (e: CancellationException) { throw e }
+        try { (if (turnOwned) mirrorFor(identity) else mirror)?.sync() } catch (e: CancellationException) { throw e }
         catch (e: MirrorFailure) { MirrorSyncResult(MirrorSync.Failed, e.path) }
         catch (_: Exception) { MirrorSyncResult(MirrorSync.Failed) }
     }
@@ -554,8 +554,8 @@ class RuntimeController(
         runCheckpoints(workspaceId).markDesynced(id)
     }
 
-    suspend fun runCheckpointHistory(limit: Int = 100): List<RunCheckpointInfo> = operations.withLock {
-        val identity = selection.currentIdentity() ?: return@withLock emptyList()
+    suspend fun runCheckpointHistory(limit: Int = 100, workspaceId: String? = null): List<RunCheckpointInfo> = operations.withLock {
+        val identity = workspaceId ?: selection.currentIdentity() ?: return@withLock emptyList()
         runCheckpoints(identity).history(limit)
     }
 
@@ -606,8 +606,8 @@ class RuntimeController(
             }
         }
 
-    suspend fun runCheckpointPruned(): Int = operations.withLock {
-        val identity = selection.currentIdentity() ?: return@withLock 0
+    suspend fun runCheckpointPruned(workspaceId: String? = null): Int = operations.withLock {
+        val identity = workspaceId ?: selection.currentIdentity() ?: return@withLock 0
         runCheckpoints(identity).lastPruned
     }
 
@@ -616,8 +616,8 @@ class RuntimeController(
         checkpoints(identity).history(limit)
     }
 
-    suspend fun latestCheckpoint(): CheckpointRecord? = operations.withLock {
-        val identity = selection.currentIdentity() ?: return@withLock null
+    suspend fun latestCheckpoint(workspaceId: String? = null): CheckpointRecord? = operations.withLock {
+        val identity = workspaceId ?: selection.currentIdentity() ?: return@withLock null
         checkpoints(identity).latest()
     }
 
@@ -676,7 +676,7 @@ class RuntimeController(
 
     suspend fun commandBlocker(): String? = operations.withLock {
         if (managedProcesses?.canStartCommand() == false) return@withLock "process_limit"
-        currentMirror() ?: return@withLock "workspace_unavailable"
+        activeMirror() ?: return@withLock "workspace_unavailable"
         // A pending mirror file is a warning, not a command gate. runCommand
         // settles what it can and runs in the current worktree.
         null
@@ -694,7 +694,7 @@ class RuntimeController(
         if (managedProcesses?.canStartBackground() == false) return@withLock "process_limit"
         if (managedProcesses?.canStartCommand() == false) return@withLock "process_limit"
         commandGate(Long.MAX_VALUE, governor.readings())?.let { return@withLock it }
-        currentMirror() ?: return@withLock "workspace_unavailable"
+        activeMirror() ?: return@withLock "workspace_unavailable"
         null
     }
 
@@ -711,13 +711,14 @@ class RuntimeController(
         if (readyWaitMs !in 0L..10_000L) throw MirrorFailure("invalid_arguments")
         val pattern = readyPattern?.takeIf { it.isNotBlank() }
         if (pattern != null && pattern.length > 256) throw MirrorFailure("invalid_arguments")
+        val turnOwned = currentCoroutineContext()[TurnRunContext] != null
         val launch: BackgroundPlan = operations.withLock {
-            val active = currentMirror() ?: throw MirrorFailure("workspace_unavailable")
+            val active = activeMirror() ?: throw MirrorFailure("workspace_unavailable")
             val readings = governor.readings()
             managedProcesses?.setActiveLimit(effectiveSlots(readings.thermalStatus))
             commandGate(Long.MAX_VALUE, readings)?.let { throw MirrorFailure(it) }
             if (managedProcesses?.canStartBackground() == false) throw MirrorFailure("process_limit")
-            val identity = requireNotNull(mirrorIdentity)
+            val identity = active.workspaceIdentity
             val ready = shellWorktree(active, identity)
             val toolchainWarning = toolchain.ensurePrepared()
             val directory = runtimeDirectory(ready.worktree, cwd)
@@ -766,7 +767,7 @@ class RuntimeController(
                     )
                 }
                 withContext(NonCancellable) {
-                    syncTerminal(identity)?.let { registry.setProjectSync(id, it) }
+                    syncTerminal(identity, turnOwned)?.let { registry.setProjectSync(id, it) }
                 }
             }
         }
@@ -780,11 +781,13 @@ class RuntimeController(
             registry.finishBackground(id, ManagedProcessStatus.Failed, null)
             throw MirrorFailure("foreground_service_unavailable")
         }
-        val guard = backgroundScope.launch {
-            selection.awaitIdentityChange(identity)
-            job?.cancel(CancellationException("Workspace changed"))
+        if (!turnOwned) {
+            val guard = backgroundScope.launch {
+                selection.awaitIdentityChange(identity)
+                job?.cancel(CancellationException("Workspace changed"))
+            }
+            runningJob.invokeOnCompletion { guard.cancel() }
         }
-        runningJob.invokeOnCompletion { guard.cancel() }
         val deadline = System.currentTimeMillis() + readyWaitMs
         var matched = false
         while (System.currentTimeMillis() < deadline) {
@@ -845,7 +848,9 @@ class RuntimeController(
         entry: String,
     ): PreviewLaunch {
         val registry = managedProcesses ?: throw MirrorFailure("runtime_unavailable")
-        if (selection.currentIdentity() != expectedWorkspace || workspace.tree.toString() != expectedWorkspace) {
+        val turn = currentCoroutineContext()[TurnRunContext]
+        val workspaceIdentity = if (turn == null) selection.currentIdentity() else turn.workspaceId
+        if (workspaceIdentity != expectedWorkspace || workspace.tree.toString() != expectedWorkspace) {
             throw MirrorFailure("workspace_changed")
         }
         val paths = try { PreviewPaths.parse(root, entry) }
@@ -860,7 +865,7 @@ class RuntimeController(
         } catch (e: CancellationException) { throw e
         } catch (e: WorkspaceFailure) { throw MirrorFailure(e.reason.name.lowercase()) }
 
-        registry.stopForOtherWorkspaces(expectedWorkspace)
+        if (turn == null) registry.stopForOtherWorkspaces(expectedWorkspace)
         val existing = registry.previewFor(expectedWorkspace, rootPath.value)
         if (existing?.url == null) registry.stopPreviewsForWorkspace(expectedWorkspace)
         if (existing?.url != null) {
@@ -878,7 +883,7 @@ class RuntimeController(
         val server = LocalPreviewServer(
             rootPath,
             entryPath,
-            workspaceIsCurrent = { selection.currentIdentity() == expectedWorkspace },
+            workspaceIsCurrent = { turn != null || selection.currentIdentity() == expectedWorkspace },
             stat = workspace::stat,
             copyTo = { path, output, limit -> workspace.copyFileTo(path, output, limit).size },
         )
@@ -945,7 +950,6 @@ class RuntimeController(
     private suspend fun activeMirror(): WorkspaceMirror? {
         val run = currentCoroutineContext()[TurnRunContext] ?: return currentMirror()
         val identity = run.workspaceId ?: return null
-        mirrorIdentity = identity
         return mirrorFor(identity)
     }
 

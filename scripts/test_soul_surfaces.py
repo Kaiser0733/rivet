@@ -8,10 +8,10 @@ UI = MAIN / "java/com/kaiser/rivet/ui"
 
 
 class SoulSurfaceTest(unittest.TestCase):
-    def test_chat_setup_copy_still_distinguishes_missing_models_and_folders(self):
+    def test_chat_setup_requires_a_model_and_explains_lost_folder_access(self):
         chat = (UI / "chat/ChatScreen.kt").read_text()
         self.assertIn('providers.configs.isEmpty() -> "Connect a model in Settings to start."', chat)
-        self.assertIn('state.projectName == null && !state.streaming -> "Choose a working folder to start."', chat)
+        self.assertNotIn("Choose a working folder to start.", chat)
         self.assertIn('projectBinding == ProjectBindingState.AccessLost -> PROJECT_ACCESS_LOST_MESSAGE', chat)
 
     def test_checkpoints_fold_full_title_kind_and_actions_under_one_line(self):
