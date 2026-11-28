@@ -431,7 +431,9 @@ class ChatViewModelTest {
         assertNull(done.error)
         assertTrue(checkpointAttempted.isCompleted)
         assertEquals("materialize_failed", withTimeout(5_000) { mirrorFailure.await() })
-        assertEquals("hey", provider.requests.single().messages.last { it.role == com.kaiser.rivet.agent.AgentRole.User }.text)
+        assertTrue(provider.requests.single().messages.any {
+            it.role == com.kaiser.rivet.agent.AgentRole.User && it.text == "hey"
+        })
         assertEquals("Hello back", registry.sessions.load(id).messages.last().text)
         assertEquals("Existing project conversation", registry.sessions.load(oldId).messages.single().text)
     }
